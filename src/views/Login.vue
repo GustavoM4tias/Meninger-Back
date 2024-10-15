@@ -1,19 +1,43 @@
 <template>
-  <div class="login-container">
-    <h1>Login</h1>
-    <form @submit.prevent="handleLogin">
-      <div>
-        <label for="email">Email:</label>
-        <input type="email" id="email" v-model="email" required />
-      </div>
-      <div>
-        <label for="password">Senha:</label>
-        <input type="password" id="password" v-model="password" required />
-      </div>
-      <button type="submit">Entrar</button>
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-    </form>
-  </div>
+
+  <body class="bg-gray-200 h-screen w-screen flex font-sans text-gray-700">
+    <div class="container m-auto p-8">
+        <div class="max-w-md w-full m-auto">
+            <h1 class="text-4xl text-center mb-8 font-thin">Meninger<i class="fa-solid fa-gear"></i></h1>
+
+            <div class="bg-white rounded-lg overflow-hidden shadow-2xl">
+                <div class="p-8">
+
+                  <form method="POST" class="" action="#" onsubmit="return false;" @submit.prevent="handleLogin">
+                <div class="mb-5">
+                  <label for="email" class="block mb-2 text-sm font-medium text-gray-600">Email</label>
+
+                  <input type="text" name="email" id="email" v-model="email" required
+                    class="block w-full p-3 rounded bg-gray-200 border border-transparent focus:outline-none">
+                </div>
+
+                <div class="mb-5">
+                  <label for="password" class="block mb-2 text-sm font-medium text-gray-600">Password</label>
+
+                  <input type="password" id="password" v-model="password" required
+                    class="block w-full p-3 rounded bg-gray-200 border border-transparent focus:outline-none" />
+                </div>
+
+                <button class="w-full p-3 mt-4 bg-indigo-600 text-white rounded shadow" type="submit">Login</button>
+                <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
+              </form>
+                </div>
+                
+                <div class="flex justify-between p-8 text-sm border-t border-gray-300 bg-gray-100">
+                    <a href="#" class="font-medium text-indigo-500">Create account</a>
+
+                    <a href="#" class="text-gray-600">Forgot password?</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
 </template>
 
 <script>
@@ -39,7 +63,7 @@ export default {
 
         const text = await response.text();
         const data = JSON.parse(text);
-        
+
         const user = data.users.find(
           (u) => u.email === email.value && u.senha === password.value
         );
@@ -68,14 +92,6 @@ export default {
 </script>
 
 <style scoped>
-.login-container {
-  max-width: 400px;
-  margin: auto;
-  padding: 20px;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-}
-
 .error {
   color: red;
 }
