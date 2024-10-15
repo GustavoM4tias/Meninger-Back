@@ -1,0 +1,221 @@
+{
+  "produtos": [
+    {
+      "id": 1,
+      "nome": "Produto A",
+      "foto": "https://www.menin.com.br/wp-content/uploads/2024/07/fachada-ipes-jacarezinho.jpg",
+      "cidade": "Marília",
+      "data_lancamento": "2023-10-01",
+      "previsao_entrega": "2023-11-15",
+      "responsavel": "João Silva",
+      "link_site1": "http://exemplo.com/produtoA",
+      "link_site2": "http://exemplo.com/produtoA2",
+      "comissao": "3%",
+      "tags": ["tecnologia", "inovação"],
+      "biblioteca_imagens": [
+        "url_da_foto_a1.jpg",
+        "url_da_foto_a2.jpg"
+      ],
+      "comentarios": [
+        {
+          "texto": "Ótimo produto!",
+          "data_publicacao": "2023-10-05",
+          "autor": "Gustavo",
+          "id_autor": 1
+        },
+        {
+          "texto": "Produto Bom!",
+          "data_publicacao": "2023-10-02",
+          "autor": "João",
+          "id_autor": 2
+        }
+      ],
+      "campanhas": [
+        {
+          "data_inicio": "2023-10-10",
+          "data_fim": "2023-10-20",
+          "status": "ativa"
+        }
+      ],
+      "descricao": "Descrição detalhada do Produto A.",
+      "preco": {
+        "preco_medio": 100,
+        "preco_m2": 50
+      }
+    },
+    {
+      "id": 2,
+      "nome": "Produto B",
+      "foto": "https://www.menin.com.br/wp-content/uploads/2024/06/fachada_nova_3-1.jpeg",
+      "cidade": "Bauru",
+      "data_lancamento": "2023-09-15",
+      "previsao_entrega": "2023-10-30",
+      "responsavel": "Maria Oliveira",
+      "link_site1": "http://exemplo.com/produtoB",
+      "link_site2": "http://exemplo.com/produtoB2",
+      "comissao": "3%",
+      "tags": ["saúde", "beleza"],
+      "biblioteca_imagens": [
+        "url_da_foto_b1.jpg",
+        "url_da_foto_b2.jpg"
+      ],
+      "comentarios": [],
+      "campanhas": [],
+      "descricao": "Descrição detalhada do Produto B.",
+      "preco": {
+        "preco_medio": 200,
+        "preco_m2": 100
+      }
+    },
+    {
+      "id": 3,
+      "nome": "Produto C",
+      "foto": "url_da_foto_c.jpg",
+      "cidade": "Jacarezinho",
+      "data_lancamento": "2023-08-20",
+      "previsao_entrega": "2023-09-30",
+      "responsavel": "Carlos Pereira",
+      "link_site1": "http://exemplo.com/produtoC",
+      "link_site2": "http://exemplo.com/produtoC2",
+      "comissao": "3%",
+      "tags": ["moda", "estilo"],
+      "biblioteca_imagens": [
+        "url_da_foto_c1.jpg",
+        "url_da_foto_c2.jpg"
+      ],
+      "comentarios": [],
+      "campanhas": [
+        {
+          "data_inicio": "2023-09-01",
+          "data_fim": "2023-09-15",
+          "status": "inativa"
+        }
+      ],
+      "descricao": "Descrição detalhada do Produto C.",
+      "preco": {
+        "preco_medio": 150,
+        "preco_m2": 75
+      }
+    },
+    {
+      "id": 4,
+      "nome": "Produto D",
+      "foto": "url_da_foto_d.jpg",
+      "cidade": "Bady Bassit",
+      "data_lancamento": "2023-07-10",
+      "previsao_entrega": "2023-08-20",
+      "responsavel": "Ana Souza",
+      "link_site1": "http://exemplo.com/produtoD",
+      "link_site2": "http://exemplo.com/produtoD2",
+      "comissao": "3%",
+      "tags": ["casa", "decoração"],
+      "biblioteca_imagens": [],
+      "comentarios": [
+        {
+          "texto": "Adorei!",
+          "data_publicacao": "2023-07-15"
+        }
+      ],
+      "campanhas": [],
+      "descricao": "Descrição detalhada do Produto D.",
+      "preco": {
+        "preco_medio": 80,
+        "preco_m2": 40
+      }
+    },
+    {
+      "id": 5,
+      "nome": "Produto E",
+      "foto": "url_da_foto_e.jpg",
+      "cidade": "Dourados",
+      "data_lancamento": "2023-06-01",
+      "previsao_entrega": "2023-07-15",
+      "responsavel": "Fernanda Lima",
+      "link_site1": "http://exemplo.com/produtoE",
+      "link_site2": "http://exemplo.com/produtoE2",
+      "comissao": "3%",
+      "tags": ["eletrônicos"],
+      "biblioteca_imagens": [
+        "url_da_foto_e1.jpg",
+        "url_da_foto_e2.jpg"
+      ],
+      "comentarios": [],
+      "campanhas": [],
+      "descricao": "Descrição detalhada do Produto E.",
+      "preco": {
+        "preco_medio": 120,
+        "preco_m2": 60
+      }
+    },
+    {
+      "id": 6,
+      "nome": "Produto F",
+      "foto": "url_da_foto_f.jpg",
+      "cidade": "Todos",
+      "data_lancamento": "2023-05-15",
+      "previsao_entrega": "2023-06-30",
+      "responsavel": "Lucas Almeida",
+      "link_site1": "http://exemplo.com/produtoF",
+      "link_site2": "http://exemplo.com/produtoF2",
+      "comissao": "3%",
+      "tags": ["automotivo"],
+      "biblioteca_imagens": [],
+      "comentarios": [],
+      "campanhas": [],
+      "descricao": "Descrição detalhada do Produto F.",
+      "preco": {
+        "preco_medio": 300,
+        "preco_m2": 150
+      }
+    },
+    {
+      "id": 7,
+      "nome": "Produto G",
+      "foto": "url_da_foto_g.jpg",
+      "cidade": "Marília",
+      "data_lancamento": "2023-04-01",
+      "previsao_entrega": "2023-05-15",
+      "responsavel": "João Silva",
+      "link_site1": "http://exemplo.com/produtoG",
+      "link_site2": "http://exemplo.com/produtoG2",
+      "comissao": "3%",
+      "tags": ["esporte"],
+      "biblioteca_imagens": [
+        "url_da_foto_g1.jpg",
+        "url_da_foto_g2.jpg"
+      ],
+      "comentarios": [],
+      "campanhas": [],
+      "descricao": "Descrição detalhada do Produto G.",
+      "preco": {
+        "preco_medio": 90,
+        "preco_m2": 45
+      }
+    },
+    {
+      "id": 8,
+      "nome": "Produto H",
+      "foto": "url_da_foto_h.jpg",
+      "cidade": "Bauru",
+      "data_lancamento": "2023-03-10",
+      "previsao_entrega": "2023-04-25",
+      "responsavel": "Maria Oliveira",
+      "link_site1": "http://exemplo.com/produtoH",
+      "link_site2": "http://exemplo.com/produtoH2",
+      "comissao": "3%",      "tags": ["livros", "educação"],
+      "biblioteca_imagens": [],
+      "comentarios": [
+        {
+          "texto": "Muito informativo!",
+          "data_publicacao": "2023-03-12"
+        }
+      ],
+      "campanhas": [],
+      "descricao": "Descrição detalhada do Produto H.",
+      "preco": {
+        "preco_medio": 50,
+        "preco_m2": 25
+      }
+    }
+  ]
+}
