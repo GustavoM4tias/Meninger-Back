@@ -2,7 +2,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import Home from '../views/Home.vue';
 import Login from '../views/Login.vue';
-import Produtos from '../views/Produtos.vue'; // Importe o novo componente
+import Produtos from '../views/Produtos.vue'; 
 import { useUserStore } from '../store/userStore';
 
 const routes = [
