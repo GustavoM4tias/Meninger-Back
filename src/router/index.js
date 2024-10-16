@@ -2,7 +2,8 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import Home from '../views/Home.vue';
 import Login from '../views/Login.vue';
-import Produtos from '../views/Produtos.vue'; 
+import Empreendimentos from '../views/Empreendimentos.vue'; 
+import Geradores from '../views/Geradores.vue'; 
 import { useUserStore } from '../store/userStore';
 
 const routes = [
@@ -18,9 +19,14 @@ const routes = [
     component: Login,
   },
   {
-    path: '/produtos',
-    name: 'Produtos',
-    component: Produtos,
+    path: '/empreendimentos',
+    name: 'Empreendimentos',
+    component: Empreendimentos,
+  },
+  {
+    path: '/geradores',
+    name: 'Geradores',
+    component: Geradores,
   },
 ];
 

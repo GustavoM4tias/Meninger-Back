@@ -2,8 +2,8 @@
 import { ref, onMounted, nextTick, computed } from 'vue';
 import { useUserStore } from '../store/userStore';
 import { useRouter } from 'vue-router';
-import Empreendimento from '../components/Empreendimento.vue';
-import Nav from '../components/Nav.vue';
+import Empreendimento from '../components/Empreendimentos/Empreendimento.vue';
+import Nav from '../components/Empreendimentos/Nav.vue';
 import Modal from '../components/Modal.vue';
 
 const produtos = ref([]);
