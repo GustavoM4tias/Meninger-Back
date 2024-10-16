@@ -13,17 +13,33 @@
       </div>
 
       <img src="/public/traçado.png" class="absolute left-5 top-2 w-10/12 opacity-50 z-0">
-      
+
       <div id="col-2" class="px-3 md:px-20 xl:py-64 xl:px-12 z-50">
-        <RouterLink class="rounded-lg flex border py-5 px-6 md:py-8 md:px-16 -mt-6 bg-gray-100 hover:bg-gray-200 duration-100 xl:-ml-24 xl:pl-8 xl:rounded-xl shadow-md" to="/produtos">
+        <RouterLink
+          class="rounded-lg flex border py-5 px-6 md:py-8 md:px-16 -mt-6 bg-gray-100 hover:bg-gray-200 duration-100 xl:-ml-24 xl:pl-8 xl:rounded-xl shadow-md"
+          to="/empreendimentos">
           <div id="circle" class="flex w-8 h-8 bg-blue-500 md:w-16 md:h-16 rounded-full">
-            <img src="/logo.png" class="object-contain p-1 md:p-3 m-auto"></div>
+            <img src="/logo.png" class="object-contain p-1 md:p-3 m-auto">
+          </div>
           <p class="pl-4 md:pl-12 text-2xl pt-1 font-semibold md:text-3xl md:pt-4" to="/produtos">
             Empreendimentos
           </p>
         </RouterLink>
 
-        <div class="rounded-md flex border py-5 px-6 md:py-8 md:px-16 mt-6 md:mt-12 bg-gray-100 hover:bg-gray-200 duration-100 xl:pl-8 xl:rounded-xl shadow-lg cursor-pointer" @click="logout">
+        <RouterLink
+          class="rounded-md flex border py-5 px-6 md:py-8 md:px-16 mt-6 md:mt-12 bg-gray-100 hover:bg-gray-200 duration-100 xl:-ml-16 xl:pl-8 xl:rounded-xl shadow-md cursor-pointer"
+          to="/geradores">
+          <div id="circle" class="flex w-8 h-8 bg-blue-500 md:w-16 md:h-16 rounded-full">
+            <img src="/logo.png" class="object-contain p-1 md:p-3 m-auto">
+          </div>
+          <p class="pl-4 md:pl-12 text-2xl pt-1 font-semibold md:text-3xl md:pt-4">
+            Gerador de Disparo
+          </p>
+        </RouterLink>
+
+        <div
+          class="rounded-md flex border py-5 px-6 md:py-8 md:px-16 mt-6 md:mt-12 bg-gray-100 hover:bg-gray-200 duration-100 xl:pl-8 xl:rounded-xl shadow-md cursor-pointer"
+          @click="logout">
           <div id="circle" class="flex w-8 h-8 bg-blue-500 md:w-16 md:h-16 rounded-full">
             <img src="/logo.png" class="object-contain p-1 md:p-3 m-auto">
           </div>
