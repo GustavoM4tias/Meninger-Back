@@ -1,6 +1,33 @@
+<script setup>
+import { withModifiers, computed } from 'vue';
+
+const props = defineProps({
+    produto: {
+        type: Object,
+        required: true,
+    },
+});
+
+const emit = defineEmits(['click']);
+
+// Função para verificar se há campanhas ativas
+const temCampanhaAtiva = computed(() => {
+    return props.produto.campanhas.some(campanha => campanha.status === true);
+});
+
+// Função para verificar se todas as campanhas estão inativas
+const semCampanhaAtiva = computed(() => {
+    return props.produto.campanhas.length > 0 && !temCampanhaAtiva.value;
+});
+
+const clique = withModifiers(() => {
+    emit('click', props.produto);
+}, ['stop']);
+</script>
+
 <template>
-    <div class="shadow-xl rounded-xl hover:shadow-2xl duration-300" @click="handleClick">
-        <a href="#" class="relative block rounded-xl overflow-hidden duration-300 transform hover:scale-105 h-full">
+    <div class="shadow-xl rounded-xl hover:shadow-2xl duration-300" @click="clique">
+        <a href="#"class="card h-full relative block rounded-xl overflow-hidden duration-300 transform hover:scale-105 h-full">
             <div class="h-full w-full overflow-hidden">
                 <img :src="produto.foto" alt="Imagem do produto" class="h-full w-full object-cover" />
             </div>
@@ -13,8 +40,6 @@
                 <p class="text-3xl font-semibold">R$ {{ produto.preco.preco_m2 }} <span
                         class="text-lg text-gray-300">M²</span></p> <!-- .toFixed(2).replace('.', ',') -->
             </div>
-
-
 
             <div class="absolute inset-0 flex justify-between text-white p-5">
                 <div class="">
@@ -40,33 +65,5 @@
     </div>
 </template>
 
-<script setup>
-import { defineProps, withModifiers, computed } from 'vue';
-
-const props = defineProps({
-    produto: {
-        type: Object,
-        required: true,
-    },
-});
-
-const emit = defineEmits(['click']);
-
-// Função para verificar se há campanhas ativas
-const temCampanhaAtiva = computed(() => {
-    return props.produto.campanhas.some(campanha => campanha.status === true);
-});
-
-// Função para verificar se todas as campanhas estão inativas
-const semCampanhaAtiva = computed(() => {
-    return props.produto.campanhas.length > 0 && !temCampanhaAtiva.value;
-});
-
-const handleClick = withModifiers(() => {
-    emit('click', props.produto);
-}, ['stop']);
-</script>
-
 <style scoped>
-/* Se precisar de ajustes adicionais, você pode adicionar aqui */
 </style>
