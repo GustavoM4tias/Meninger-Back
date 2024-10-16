@@ -1,5 +1,5 @@
 <template>
-  <router-view />
+  <router-view class="h-screen w-screen overflow-hidden" />
 </template>
 
 <script>
