@@ -12,7 +12,7 @@
         </p>
       </div>
 
-      <img src="/public/traçado.png" class="absolute left-5 top-2 w-10/12 opacity-50 z-0">
+      <img src="/traçado.png" class="absolute left-5 top-2 w-10/12 opacity-50 z-0">
 
       <div id="col-2" class="px-3 md:px-20 xl:py-64 xl:px-12 z-50">
         <RouterLink
