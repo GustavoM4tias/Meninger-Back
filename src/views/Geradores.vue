@@ -158,86 +158,98 @@ const exportarCSV = () => {
 </script>
 
 <template>
-    <Nav class="fixed top-20" />
-    <div class="flex items-center justify-center min-h-screen bg-gray-100">
-        <div class="bg-white shadow-lg rounded-lg p-8 max-w-4xl w-full">
+    <Nav class="fixed top-80 sm:top-20" />
+    <div class="flex items-center justify-center p-4 min-h-screen bg-gray-100">
+        <div class="bg-white shadow-lg rounded-lg p-5 sm:p-8 max-h-screen max-w-3xl w-full">
 
-            <div class="mb-8">
-                <h1 class="text-2xl font-bold text-center">Gerador de Disparo</h1>
-                <div class="flex space-x-2 mt-4">
+            <div class="relative mb-4">
+                <h1 class="text-2xl font-semibold text-center mb-4 sm:mb-8"><i class="far fa-comments mr-2 text-4xl"></i>Gerador de Disparo</h1>
+
+                <label class="text-lg text-gray-400 font-semibold mb-2">Buscar Clientes</label>
+                <div class="flex">
+
                     <input type="text" v-model="search" @input="updateSearchResults"
-                        class="w-full p-3 border rounded-lg" placeholder="Digite o nome do cliente" />
+                        class="w-full p-3 border rounded-l-lg" placeholder="Digite o nome do cliente" />
+
+
                     <select v-model="selectedEmpreendimento" @change="updateSearchResults"
-                        class="p-3 border rounded-lg bg-white">
+                        class=" p-3 text-center w-1/3  border rounded-r-lg bg-white">
                         <option value="">Todos</option>
                         <option v-for="empreendimento in empreendimentos" :key="empreendimento" :value="empreendimento">
                             {{ empreendimento }}
                         </option>
                     </select>
+
                 </div>
+
                 <ul v-show="showSearchResults && searchResults.length > 0"
-                    class="relative w-full bg-white shadow-lg rounded-lg max-h-48 overflow-y-auto">
+                    class="resultados absolute w-full bg-white shadow-lg rounded-lg max-h-48 overflow-y-auto">
                     <li v-for="(cliente, index) in searchResults" :key="index" @click="adicionarCliente(cliente)"
-                        class="p-3 cursor-pointer hover:bg-gray-200 border-b">
-                        <strong>{{ cliente.fullName }}</strong> - {{ cliente.empreendimento }}
+                        class="p-3 cursor-pointer hover:bg-gray-200 border-b flex justify-between">
+                        <strong>{{ cliente.fullName }}</strong> {{ cliente.empreendimento }}
                     </li>
                 </ul>
             </div>
 
-            <div class="mb-8">
-                <h2 class="text-xl font-semibold text-center">Adicionar Variáveis</h2>
-                <div class="flex space-x-2 mt-4">
-                    <input type="text" v-model="novaVariavel" class="w-full p-3 border rounded-lg"
+            <div class="mb-4">
+                <label class="text-lg text-gray-400 font-semibold mb-2">Adicionar Variáveis</label>
+
+                <div class="flex mb-4">
+
+                    <input type="text" v-model="novaVariavel" class="w-full p-3 border rounded-l-lg"
                         placeholder="Nova Variável" />
+
                     <button @click="adicionarNovaVariavel"
-                        class="bg-blue-500 text-white p-3 rounded-lg hover:bg-blue-600">
-                        + Variável
+                        class="bg-blue-500 w-1/3 text-white rounded-r-lg hover:bg-blue-600 duration-200 "> + Variável
                     </button>
+
                 </div>
-                <div class="flex flex-wrap justify-center mt-4 space-x-2">
+
+                <label class="text-lg text-gray-400 font-semibold mb-2">Mais Usadas</label>
+                <div class="flex flex-wrap justify-center border py-2 sm:py-4 rounded-2xl">
                     <button @click="adicionarVariavel('Nome Cliente')"
-                        class="bg-gray-200 hover:bg-gray-300 text-sm px-4 py-2 rounded-lg">
+                        class="bg-blue-500 hover:bg-blue-600  duration-200 text-md text-white px-3 py-1 sm:px-4 sm:py-2  rounded-lg m-1">
                         Nome Cliente
                     </button>
                     <button @click="adicionarVariavel('Empreendimento')"
-                        class="bg-gray-200 hover:bg-gray-300 text-sm px-4 py-2 rounded-lg">
+                        class="bg-blue-500 hover:bg-blue-600 duration-200 text-md text-white px-3 py-1 sm:px-4 sm:py-2  rounded-lg m-1">
                         Empreendimento
                     </button>
                     <button @click="adicionarVariavel('Menin Engenharia')"
-                        class="bg-gray-200 hover:bg-gray-300 text-sm px-4 py-2 rounded-lg">
+                        class="bg-blue-500 hover:bg-blue-600 duration-200 text-md text-white px-3 py-1 sm:px-4 sm:py-2  rounded-lg m-1">
                         Menin Engenharia
                     </button>
                     <button @click="adicionarVariavel('Construtora Menin')"
-                        class="bg-gray-200 hover:bg-gray-300 text-sm px-4 py-2 rounded-lg">
+                        class="bg-blue-500 hover:bg-blue-600 duration-200 text-md text-white px-3 py-1 sm:px-4 sm:py-2  rounded-lg m-1">
                         Construtora Menin
                     </button>
                 </div>
             </div>
 
-            <div class="mb-8">
-                <h4 class="text-lg font-semibold text-center mb-2">Variáveis Adicionadas:</h4>
-                <div class="flex flex-wrap justify-center">
+            <div class="mb-4">
+                <label class="text-lg text-gray-400 font-semibold mb-2">Variáveis Selecionadas</label>
+                <div class="flex flex-wrap justify-center border py-2 sm:py-4 rounded-2xl">
                     <div v-for="(variavel, index) in variaveis" :key="index"
-                        class="flex items-center bg-gray-300 text-gray-700 rounded-full px-3 py-1 m-1">
-                        <p class="text-sm mr-2">{{ variavel }}</p>
-                        <button @click="removerVariavel(index)" class="text-red-500">
+                        class="flex items-center bg-gray-400 hover:bg-gray-500 duration-200 cursor-pointer text-gray-500 rounded-full px-3 py-1 m-1">
+                        <p class="text-md text-white mr-2">{{ variavel }}</p>
+                        <button @click="removerVariavel(index)" class="text-white">
                             <i class="fas fa-xmark"></i>
                         </button>
                     </div>
                 </div>
             </div>
 
-            <h4 class="text-lg font-semibold text-center mb-4">Clientes Selecionados</h4>
-            <div class="max-h-56 overflow-y-auto">
+            <label class="text-lg text-gray-400 font-semibold mb-2">Clientes Selecionados</label>
+            <div class="clientes max-h-48 sm:max-h-56 overflow-y-auto">
                 <div v-for="(cliente, index) in clientesSelecionados" :key="index"
-                    class="bg-gray-100 p-3 rounded-lg mb-2">
-                    <div class="flex justify-between items-center">
-                        <p class="text-lg">{{ cliente.fullName }}</p>
-                        <p class="text-sm"><i class="fab fa-whatsapp"></i> {{ cliente.phoneNumber }}</p>
-                        <p class="text-sm"><i class="fas fa-building"></i> {{ cliente.empreendimento }}</p>
+                    class="bg-gray-100 rounded-lg mb-2">
+                    <div class="grid grid-cols-8 items-center">
+                        <p class="text-lg truncate col-span-3 pl-5 font-semibold">{{ cliente.fullName }}</p>
+                        <p class="text-sm truncate col-span-2 text-center font-semibold"><i class="fab fa-whatsapp"></i> {{ cliente.phoneNumber }}</p>
+                        <p class="text-sm truncate col-span-2 text-center font-semibold"><i class="far fa-building"></i> {{ cliente.empreendimento }}</p>
                         <button @click="removerCliente(index)"
-                            class="bg-red-500 text-white px-3 py-1 rounded-lg hover:bg-red-600">
-                            Remover
+                            class="bg-red-500 text-white py-3 rounded-r-lg hover:bg-red-600 duration-200">
+                            <i class="fas fa-trash-can fa-xl"></i>
                         </button>
                     </div>
                 </div>
@@ -245,29 +257,29 @@ const exportarCSV = () => {
 
             <div class="text-center">
                 <button @click="exportarCSV" :disabled="clientesSelecionados.length === 0"
-                    class="bg-green-500 text-white px-5 py-3 rounded-lg mt-4 hover:bg-green-600 disabled:bg-gray-400">
+                    class="bg-green-500 text-white px-4 py-2 rounded-lg mt-4 hover:bg-green-600 disabled:bg-gray-400">
                     Exportar Arquivo
                 </button>
             </div>
         </div>
     </div>
+
 </template>
 
 <style scoped>
-/* Estilo do Scroll da lista de Clientes */
 .resultados::-webkit-scrollbar,
-.clientes-container::-webkit-scrollbar {
+.clientes::-webkit-scrollbar {
     width: 12px;
 }
 
 .resultados::-webkit-scrollbar-thumb,
-.clientes-container::-webkit-scrollbar-thumb {
+.clientes::-webkit-scrollbar-thumb {
     background: #bdbdbd;
     border-radius: 8px;
 }
 
 .resultados::-webkit-scrollbar-thumb:hover,
-.clientes-container::-webkit-scrollbar-thumb:hover {
+.clientes::-webkit-scrollbar-thumb:hover {
     background: #afafaf;
 }
 
