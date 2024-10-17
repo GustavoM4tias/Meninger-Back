@@ -1,10 +1,12 @@
 // src/router/index.js
 import { createRouter, createWebHistory } from 'vue-router';
+import { useUserStore } from '../store/userStore';
 import Home from '../views/Home.vue';
 import Login from '../views/Login.vue';
 import Empreendimentos from '../views/Empreendimentos.vue'; 
 import Geradores from '../views/Geradores.vue'; 
-import { useUserStore } from '../store/userStore';
+import Automatico from '../components/Geradores/Automatico.vue'
+import Manual from '../components/Geradores/Manual.vue'
 
 const routes = [
   {
@@ -27,6 +29,18 @@ const routes = [
     path: '/geradores',
     name: 'Geradores',
     component: Geradores,
+    children: [
+      {
+        path: 'automatico',
+        name: 'Automatico',
+        component: Automatico,  
+      },
+      {
+        path: 'manual',
+        name: 'Manual',
+        component: Manual,  
+      },
+    ],
   },
 ];
 
