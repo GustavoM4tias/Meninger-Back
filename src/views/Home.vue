@@ -72,7 +72,7 @@ const loadUser = async () => {
   }
 
   try {
-    const response = await fetch('http://localhost:3001/api/auth/me', {
+    const response = await fetch('https://meninger-back.vercel.app/api/auth/me', {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -87,6 +87,7 @@ const loadUser = async () => {
     const usuario = await response.json();
     userStore.setUser(usuario); // Armazenar as informações no store
     user.value = usuario; // Atualiza a referência local
+    // Mostra dados usuario
     console.log(user)
   } catch (error) {
     console.error('Erro ao carregar usuário:', error);
