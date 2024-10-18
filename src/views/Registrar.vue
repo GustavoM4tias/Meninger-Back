@@ -96,10 +96,10 @@ const handleRegister = async () => {
 
         const data = await response.json();
 
-        if (response.ok) {
+        if (response.ok && data.token) { // Verifica se há token na resposta
             userStore.setUser(data);
-            localStorage.setItem('token', data.token);
-            router.push('/');
+            localStorage.setItem('token', data.token); // Armazena o token no localStorage
+            router.push('/'); // Redireciona para a página inicial
         } else {
             errorMessage.value = data.message || 'Erro ao criar a conta.';
         }
@@ -108,6 +108,7 @@ const handleRegister = async () => {
         errorMessage.value = 'Erro ao criar a conta. Tente novamente mais tarde.';
     }
 };
+
 </script>
 
 <style scoped></style>
