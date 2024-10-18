@@ -79,7 +79,7 @@ const handleRegister = async () => {
     errorMessage.value = ''; // Limpa mensagem de erro
 
     try {
-        const response = await fetch('http://localhost:3001/api/auth/register', {
+        const response = await fetch('https://meninger-back.vercel.app/api/auth/register', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
