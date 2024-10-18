@@ -79,4 +79,35 @@ router.post('/login', (req, res) => {
     });
 });
 
+// Rota para obter informações do usuário autenticado
+router.get('/me', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1]; // Obter o token do cabeçalho
+
+    if (!token) {
+        return res.status(401).json({ message: 'Token não fornecido' }); // Erro se o token não estiver presente
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(403).json({ message: 'Token inválido' }); // Erro se o token for inválido
+        }
+
+        // Buscar o usuário no banco de dados usando o ID do token
+        db.query('SELECT id, nome, sobrenome, email, cargo, cidade FROM usuarios WHERE id = ?', [decoded.id], (err, results) => {
+            if (err) return res.status(500).json({ message: 'Erro no servidor' });
+
+            if (results.length === 0) {
+                return res.status(404).json({ message: 'Usuário não encontrado' });
+            }
+
+            const usuario = results[0];
+            res.status(200).json(usuario); // Retornar as informações do usuário
+        });
+    });
+});
+
+
+
+
+
 module.exports = router;

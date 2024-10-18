@@ -1,12 +1,12 @@
-// src/router/index.js
 import { createRouter, createWebHistory } from 'vue-router';
 import { useUserStore } from '../store/userStore';
 import Home from '../views/Home.vue';
 import Login from '../views/Login.vue';
+import Registrar from '../views/Registrar.vue';
 import Empreendimentos from '../views/Empreendimentos.vue'; 
 import Geradores from '../views/Geradores.vue'; 
-import Automatico from '../components/Geradores/Automatico.vue'
-import Manual from '../components/Geradores/Manual.vue'
+import Automatico from '../components/Geradores/Automatico.vue';
+import Manual from '../components/Geradores/Manual.vue';
 
 const routes = [
   {
@@ -19,6 +19,11 @@ const routes = [
     path: '/login',
     name: 'Login',
     component: Login,
+  },
+  {
+    path: '/registrar',
+    name: 'Registrar',
+    component: Registrar,
   },
   {
     path: '/empreendimentos',
@@ -49,13 +54,15 @@ const router = createRouter({
   routes,
 });
 
+// Verificação de autenticação global antes de cada navegação
 router.beforeEach((to, from, next) => {
   const userStore = useUserStore();
-  const isAuthenticated = !!userStore.user;
-  if (to.meta.requiresAuth && !isAuthenticated) {
-    next({ name: 'Login' });
+
+  // Verifica se a rota requer autenticação e se o usuário não está autenticado
+  if (to.meta.requiresAuth && !userStore.isAuthenticated()) {
+    next({ name: 'Login' }); // Redireciona para a página de login
   } else {
-    next();
+    next(); // Continua para a rota desejada
   }
 });
 

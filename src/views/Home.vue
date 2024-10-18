@@ -8,7 +8,7 @@
           {{ user.nome }}
         </p>
         <p class="text-white text-normal md:text-4xl pt-3 md:pt-6 font-medium">
-          Cidade: {{ user?.cidade }}
+          Cidade: {{ user.cidade }}
         </p>
       </div>
 
@@ -21,7 +21,7 @@
           <div id="circle" class="flex w-8 h-8 bg-blue-500 md:w-16 md:h-16 rounded-full">
             <img src="/logo.png" class="object-contain p-1 md:p-3 m-auto">
           </div>
-          <p class="pl-4 md:pl-12 text-2xl pt-1 font-semibold md:text-3xl md:pt-4" to="/produtos">
+          <p class="pl-4 md:pl-12 text-2xl pt-1 font-semibold md:text-3xl md:pt-4">
             Empreendimentos
           </p>
         </RouterLink>
@@ -62,26 +62,45 @@ import { useRouter } from 'vue-router';
 
 const userStore = useUserStore();
 const router = useRouter();
-const user = ref(userStore.user); // Inicializa com o usuário do store
+const user = ref(null); // Inicializa como null
 
-const loadUser = () => {
-  if (!user.value) { // Verifica se o usuário já está carregado
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      userStore.setUser(JSON.parse(storedUser));
-      user.value = userStore.user; // Atualiza a referência local
-    } else {
-      router.push('/login'); // Redireciona para o login se não houver usuário
+const loadUser = async () => {
+  const token = localStorage.getItem('token'); // Obter o token do localStorage
+  if (!token) {
+    router.push('/login'); // Redireciona para o login se não houver token
+    return;
+  }
+
+  try {
+    const response = await fetch('http://localhost:3001/api/auth/me', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}` // Enviar o token no cabeçalho
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Erro ao buscar informações do usuário');
     }
+
+    const usuario = await response.json();
+    userStore.setUser(usuario); // Armazenar as informações no store
+    user.value = usuario; // Atualiza a referência local
+    console.log(user)
+  } catch (error) {
+    console.error('Erro ao carregar usuário:', error);
+    router.push('/login'); // Redireciona para o login em caso de erro
   }
 };
 
 onMounted(() => {
-  loadUser();
+  loadUser(); // Chama a função ao montar o componente
 });
 
 const logout = () => {
   userStore.clearUser(); // Limpa o usuário do store
+  localStorage.removeItem('token'); // Remove o token do localStorage
   router.push('/login'); // Redireciona para a página de login
 };
 </script>
