@@ -17,7 +17,6 @@ router.post('/register', async (req, res) => {
         return res.status(400).json({ message: 'Preencha todos os campos' });
     }
 
-    // Verificar se o email já existe
     db.query('SELECT * FROM usuarios WHERE email = ?', [email], async (err, results) => {
         if (err) {
             console.error('Erro no SELECT:', err);
@@ -28,19 +27,21 @@ router.post('/register', async (req, res) => {
             return res.status(400).json({ message: 'E-mail já cadastrado' });
         }
 
-        // Criptografar a senha
         try {
             const hashedPassword = await bcrypt.hash(senha, 10);
             const now = new Date();
 
-            // Inserir o novo usuário no banco de dados
             const query = 'INSERT INTO usuarios (nome, sobrenome, email, senha, cargo, cidade, status, data_criacao) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-            db.query(query, [nome, sobrenome, email, hashedPassword, cargo, cidade, 'ativo', now], (err) => {
+            db.query(query, [nome, sobrenome, email, hashedPassword, cargo, cidade, 'ativo', now], (err, result) => {
                 if (err) {
                     console.error('Erro no INSERT:', err);
                     return res.status(500).json({ message: 'Erro ao criar a conta' });
                 }
-                res.status(201).json({ message: 'Conta criada com sucesso!' });
+
+                // Gerar o token JWT após criar o usuário
+                const newUser = { id: result.insertId, email };
+                const token = generateToken(newUser); // Gerar token JWT
+                res.status(201).json({ message: 'Conta criada com sucesso!', token }); // Retorna o token
             });
         } catch (error) {
             console.error('Erro ao criptografar a senha:', error);
