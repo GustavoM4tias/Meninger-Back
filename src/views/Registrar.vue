@@ -123,10 +123,10 @@ const handleRegister = async () => {
 
         const data = await response.json();
 
-        if (response.ok && data.token) { // Verifica se há token na resposta
+        if (response.ok && data.token) { 
             userStore.setUser(data);
-            localStorage.setItem('token', data.token); // Armazena o token no localStorage
-            router.push('/'); // Redireciona para a página inicial
+            localStorage.setItem('token', data.token); 
+            router.push('/'); 
         } else {
             errorMessage.value = data.message || 'Erro ao criar a conta.';
         }
