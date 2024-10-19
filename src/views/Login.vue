@@ -1,10 +1,10 @@
 <template>
 
   <body class="bg-gray-200 h-screen w-screen flex font-sans text-gray-700">
-    <div class="container m-auto p-8">
+    <div class="container m-auto p-4 sm:p-8">
       <div class="max-w-md w-full m-auto">
         <div class="bg-white rounded-lg overflow-hidden shadow-2xl">
-          <div class="p-8">
+          <div class="p-5 sm:p-8">
             <form method="POST" @submit.prevent="handleLogin">
 
               <h1 class="text-4xl text-center mb-4 font-thin">Meninger<i class="fa-solid fa-gear"></i></h1>
