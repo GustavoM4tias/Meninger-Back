@@ -3,9 +3,10 @@
     <div id="wrapper" class="bg-blue-900 grid h-screen grid-cols-1 xl:grid-cols-2 xl:h-screen relative">
 
       <div id="col-1" class="px-12 pt-32 pb-48 md:px-32 xl:py-64 xl:px-32 z-50">
-        <p class="text-blue-500 font-extrabold text-6xl md:text-8xl">
+        <p class="text-blue-500  font-extrabold text-6xl md:text-8xl">
           Bem <br />
           Vindo <br />
+          {{ user.cargo }} <br />
           {{ user.nome }}
         </p>
         <p class="text-white text-normal text-3xl md:text-4xl pt-3 md:pt-6 font-medium">
