@@ -8,41 +8,57 @@
                     <div class="p-8">
                         <form @submit.prevent="handleRegister">
                             <div class="flex space-x-4">
-                                <div class="mb-5">
+                                <div class="mb-3">
                                     <label for="nome" class="block mb-2 text-sm font-medium text-gray-600">Nome</label>
                                     <input type="text" id="nome" v-model="nome" required
                                         class="block w-full p-3 rounded bg-gray-200 border border-transparent focus:outline-none" />
                                 </div>
-                                <div class="mb-5">
+                                <div class="mb-3">
                                     <label for="sobrenome"
                                         class="block mb-2 text-sm font-medium text-gray-600">Sobrenome</label>
                                     <input type="text" id="sobrenome" v-model="sobrenome" required
                                         class="block w-full p-3 rounded bg-gray-200 border border-transparent focus:outline-none" />
                                 </div>
                             </div>
-                            <div class="mb-5">
+                            <div class="mb-3">
                                 <label for="email" class="block mb-2 text-sm font-medium text-gray-600">Email</label>
                                 <input type="email" id="email" v-model="email" required
                                     class="block w-full p-3 rounded bg-gray-200 border border-transparent focus:outline-none" />
                             </div>
-                            <div class="mb-5">
+                            <div class="mb-3">
                                 <label for="senha" class="block mb-2 text-sm font-medium text-gray-600">Senha</label>
                                 <input type="password" id="senha" v-model="senha" required
                                     class="block w-full p-3 rounded bg-gray-200 border border-transparent focus:outline-none" />
                             </div>
 
                             <div class="flex space-x-4">
-                                <div class="mb-5">
+                                <div class="mb-3">
                                     <label for="cargo"
                                         class="block mb-2 text-sm font-medium text-gray-600">Cargo</label>
-                                    <input type="text" id="cargo" v-model="cargo" required
-                                        class="block w-full p-3 rounded bg-gray-200 border border-transparent focus:outline-none" />
+                                    <select id="cargo" v-model="cargo" required
+                                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg block w-full p-2.5">
+                                        <option value="" disabled selected>Selecione seu Cargo</option>
+                                        <option value="Assistente">Assistente</option>
+                                        <option value="Supervisor">Supervisor</option>
+                                        <option value="Gestor">Gestor</option>
+                                        <option value="Diretor">Diretor</option>
+                                    </select>
                                 </div>
-                                <div class="mb-5">
-                                    <label for="cidade"
+
+                                <div class="mb-3">
+                                    <label for="cargo"
                                         class="block mb-2 text-sm font-medium text-gray-600">Cidade</label>
-                                    <input type="text" id="cidade" v-model="cidade" required
-                                        class="block w-full p-3 rounded bg-gray-200 border border-transparent focus:outline-none" />
+                                    <select id="cargo" v-model="cidade" required
+                                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg block w-full p-2.5">
+                                        <option value="" disabled selected>Selecione sua cidade</option>
+                                        <option value="Marília">Marília</option>
+                                        <option value="Bauru">Bauru</option>
+                                        <option value="Bady Bassitt">Bady Bassitt</option>
+                                        <option value="Dourados">Dourados</option>
+                                        <option value="Guarátingueta">Guarátingueta</option>
+                                    </select>
+
+
                                 </div>
                             </div>
                             <button class="w-full p-3 mt-4 bg-indigo-600 text-white rounded shadow" type="submit">Criar
