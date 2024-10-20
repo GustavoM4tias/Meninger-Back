@@ -14,7 +14,6 @@
         </p>
       </div>
 
-
       <img src="/traçado.png"
         class="absolute left-1/2 md:left-1/3 transform -translate-x-1/2 top-10 w-11/12 sm:w-8/12 opacity-50 z-1">
 
