@@ -16,7 +16,7 @@ const visivelModal = ref(true); // Deixa itens ocultos ao abrir modal v-if="visi
 
 const paginatedProdutos = computed(() => {
     const start = (currentPage.value - 1) * itemsPagina;
-    return produtos.value.slice(start, start + itemsPagina);
+    return produtosFiltrados.value.slice(start, start + itemsPagina);
 });
 
 // Computed para o total de páginas
@@ -42,7 +42,6 @@ const fetchProdutos = async () => {
         const data = await response.json();
         produtos.value = data.produtos;
 
-        // Inicializa o Tippy.js após a carga de produtos
         nextTick(() => {
             tippy('[data-tippy-content]', {
                 placement: 'top',
@@ -59,7 +58,6 @@ const openModal = (produto) => {
     selectedProduct.value = produto;
     visivelModal.value = false;
 
-    // Re-inicializa os tooltips quando o modal é aberto
     nextTick(() => {
         tippy('[data-tippy-content]', {
             placement: 'top',
@@ -74,14 +72,13 @@ const closeModal = () => {
     visivelModal.value = true;
 };
 
-// Funções de paginação
-const nextPage = () => {
+const proximaPagina = () => {
     if (currentPage.value < totalPages.value) {
         currentPage.value++;
     }
 };
 
-const prevPage = () => {
+const paginaAnterior = () => {
     if (currentPage.value > 1) {
         currentPage.value--;
     }
@@ -91,6 +88,25 @@ onMounted(() => {
     loadUser();
     fetchProdutos();
 });
+
+// Tudo que você já tinha antes permanece
+const filtroNome = ref('');
+
+// Função para receber o valor de busca e atualizar o filtro
+const filtrarPorNome = (busca) => {
+    filtroNome.value = busca.toLowerCase();
+};
+
+// Computed que filtra os produtos pelo nome
+const produtosFiltrados = computed(() => {
+    if (!filtroNome.value) {
+        return produtos.value;
+    }
+    return produtos.value.filter(produto =>
+        produto.nome.toLowerCase().includes(filtroNome.value)
+    );
+});
+
 </script>
 
 <template>
@@ -99,21 +115,24 @@ onMounted(() => {
             <h1 class="font-bold m-auto text-4xl">Listagem de Empreendimentos</h1>
         </div>
 
-        <Nav id="nav" v-if="visivelModal" class="fixed top-20" />
+        <Nav id="nav" v-if="visivelModal" class="fixed top-20" :onFiltrar="filtrarPorNome" />
 
-        <section class="container px-16 sm:mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 justify-items-center justify-center gap-4">
-            <Empreendimento v-for="produto in paginatedProdutos" :key="produto.id" :produto="produto"
-                @click="openModal" />
+        <section class="container px-16 sm:mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <!-- Condição para verificar se há produtos -->
+            <template v-if="paginatedProdutos.length > 0">
+                <Empreendimento v-for="produto in paginatedProdutos" :key="produto.id" :produto="produto"
+                    @click="openModal" />
+            </template>
+            <p class="text-center text-gray-500 text-2xl col-span-3" v-else>Nenhum empreendimento encontrado.</p>
         </section>
 
-        <!-- Paginação -->
         <div class="paginacao flex">
             <div class="flex m-auto text-gray-500">
-                <i @click="prevPage" :disabled="currentPage === 1"
+                <i @click="paginaAnterior" :disabled="currentPage === 1"
                     class="fas p-3 bg-gray-200 hover:bg-gray-300 duration-200 cursor-pointer rounded-3xl mx-4 fa-chevron-left"></i>
                 <p class="my-auto text-lg"><span class="bg-gray-200 px-3 py-2 rounded-md">{{ currentPage }}</span>
                     ...<span class="ml-2">{{ totalPages }}</span></p>
-                <i @click="nextPage" :disabled="currentPage === totalPages"
+                <i @click="proximaPagina" :disabled="currentPage === totalPages"
                     class="fas p-3 bg-gray-200 hover:bg-gray-300 duration-200 cursor-pointer rounded-3xl mx-4 fa-chevron-right"></i>
             </div>
         </div>
@@ -128,6 +147,7 @@ onMounted(() => {
                 <p><strong>Data de Lançamento:</strong> {{ selectedProduct.data_lancamento }}</p>
                 <p><strong>Previsão de Entrega:</strong> {{ selectedProduct.previsao_entrega }}</p>
                 <p><strong>Responsável:</strong> {{ selectedProduct.responsavel }}</p>
+                <p><strong>Modelo:</strong> {{ selectedProduct.modelo }}</p>
                 <p><strong>Descrição:</strong> {{ selectedProduct.descricao }}</p>
                 <p><strong>Preço Médio:</strong> R$ {{ selectedProduct.preco.preco_medio }}</p>
                 <p><strong>Preço M²:</strong> R$ {{ selectedProduct.preco.preco_m2 }}</p>
@@ -161,8 +181,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-
-
 .topo {
     height: 10vh;
 }
