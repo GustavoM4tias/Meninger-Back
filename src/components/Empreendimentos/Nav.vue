@@ -1,7 +1,12 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
+
+const props = defineProps({
+  onFiltrar: Function, // Função passada como prop para ser chamada ao filtrar
+});
 
 const texto = ref(false);
+const busca = ref(''); // Estado para armazenar o valor do input
 let timeout;
 
 const mostraTexto = () => {
@@ -14,7 +19,13 @@ const escondeTexto = () => {
     clearTimeout(timeout);
     texto.value = false;
 };
+
+// Observa as mudanças no campo de busca e chama a função de filtro
+watch(busca, (novoValor) => {
+    props.onFiltrar(novoValor);
+});
 </script>
+
 
 
 <template>
@@ -23,7 +34,7 @@ const escondeTexto = () => {
         <ul class="text-white text-lg sm:text-xl">
             <li class="bg-blue-600 hover:bg-blue-700 duration-200 my-2 p-2 py-1 rounded-md cursor-pointer">
                 <i class="fas fa-magnifying-glass"></i>
-                <input type="text" class="busca w-3/4 ml-3 bg-transparent outline-none placeholder-white" placeholder="Buscar..." :style="{ display: texto ? 'inline' : 'none' }"></input>
+                <input v-model="busca" type="text" class="busca w-3/4 ml-3 bg-transparent outline-none placeholder-white" placeholder="Buscar..." :style="{ display: texto ? 'inline' : 'none' }"></input>
             </li>
             <li class="bg-blue-600 hover:bg-blue-700 duration-200 my-2 p-2 py-1 rounded-md cursor-pointer">
                 <RouterLink to="/">
