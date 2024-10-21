@@ -1,8 +1,8 @@
 <template>
-    <div class="bg-gray-100 h-screen w-screen flex font-sans text-gray-700 relative">
+    <div class="bg-gray-100 h-screen w-screen flex font-sans text-gray-700 relative overflow-hidden">
         <div class="container m-auto p-4 sm:p-8 z-10">
             <div class="max-w-md w-full m-auto">
-                <div class="bg-white rounded-lg overflow-hidden shadow-2xl">
+                <div class="bg-white rounded-lg shadow-2xl">
                     <div class="p-5 sm:p-8">
                         <form @submit.prevent="handleRegister">
 
