@@ -23,22 +23,21 @@
         },
         {
             "id": 2,
-            "nome": "Feira de Artesanato",
-            "descricao": "Uma feira com artesanato local e comidas típicas.",
-            "dataHoraOcorrencia": "2024-10-12T10:00:00Z",
-            "dataHoraPostagem": "2024-08-28T08:00:00Z",
+            "nome": "Noite do Hambúrguer",
+            "descricao": "Noite do Hambúrgues no Stando do Mond, para atrair possíveis clientes.",
+            "dataHoraOcorrencia": "2024-09-05T22:00:00Z",
+            "dataHoraPostagem": "2024-08-28T10:00:00Z",
             "imagem": [
-                "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT8NYxFY1NXMkQr49TMa7feK5Kuc2WU4y8_eQ&s",
-                "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRC0YowEkIqAFwnY1MY0wNeO__09goChz8ldA&s"
+                "https://www.menin.com.br/wp-content/uploads/2024/10/Imagem-do-WhatsApp-de-2024-10-21-as-16.45.02_51be611a.jpg"
             ],
-            "cidade": "Belo Horizonte",
-            "endereco": "Praça da Liberdade, 45, Belo Horizonte - MG",
+            "cidade": "Marília",
+            "endereco": "Av. João Procópio da Silva, 600",
             "atrativos": [
-                "Artesanato",
-                "Cultura",
-                "Gastronomia"
+                "Cross BBQ",
+                "Churrasco",
+                "Mond"
             ],
-            "criador": "Maria Oliveira"
+            "criador": "Daniel Garcia"
         },
         {
             "id": 3,
