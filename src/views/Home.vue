@@ -1,5 +1,5 @@
 <template>
-  <div class="bg-gray-50 cs-font" v-if="user">
+  <div class="bg-gray-50 cs-font overflow-hidden" v-if="user">
     <div id="wrapper" class="bg-blue-900 h-screen w-screen grid grid-cols-1 xl:grid-cols-2 relative">
 
       <div id="col-1" class="m-auto z-50">
@@ -26,10 +26,10 @@
             <img src="/logo.png" class="object-contain p-2 md:p-3 m-auto">
           </div>
           <p class="pl-4 md:pl-12 text-2xl pt-1 font-semibold md:text-3xl md:pt-4">
-            Warning
+            Dashboard's
           </p>
         </RouterLink>
- 
+
         <RouterLink
           class="rounded-md flex border pl-6 py-4 mt-6 md:mt-12 bg-gray-100 hover:bg-gray-200 duration-100 xl:-ml-32 xl:rounded-xl shadow-md cursor-pointer"
           to="/empreendimentos">
@@ -43,12 +43,12 @@
 
         <RouterLink
           class="rounded-md flex border pl-6 py-4 mt-6 md:mt-12 bg-gray-100 hover:bg-gray-200 duration-100 xl:-ml-32 xl:rounded-xl shadow-md cursor-pointer"
-          to="/#">
+          to="/blog">
           <div id="circle" class="flex w-12 h-12 bg-blue-500 md:w-16 md:h-16 rounded-full">
             <img src="/logo.png" class="object-contain p-2 md:p-3 m-auto">
           </div>
           <p class="pl-4 md:pl-12 text-2xl pt-1 font-semibold md:text-3xl md:pt-4">
-            Warning
+            Blog
           </p>
         </RouterLink>
 
@@ -59,7 +59,7 @@
             <img src="/logo.png" class="object-contain p-2 md:p-3 m-auto">
           </div>
           <p class="pl-4 md:pl-12 text-2xl pt-1 font-semibold md:text-3xl md:pt-4">
-            Gerador de Disparo
+            Contas a Receber
           </p>
         </RouterLink>
 
@@ -77,9 +77,7 @@
       </div>
 
     </div>
-  </div>
-  <div v-else>
-
+    <Carregamento />
   </div>
 </template>
 
@@ -87,20 +85,22 @@
 import { ref, onMounted } from 'vue';
 import { useUserStore } from '../store/userStore';
 import { useRouter } from 'vue-router';
+import { fetchComCarregamento } from '../utils/fetchComCarregamento';
+import Carregamento from '../components/Carregamento.vue';
 
 const userStore = useUserStore();
 const router = useRouter();
-const user = ref(null); 
+const user = ref(null);
 
 const loadUser = async () => {
-  const token = localStorage.getItem('token'); 
+  const token = localStorage.getItem('token');
   if (!token) {
-    router.push('/login'); 
+    router.push('/login');
     return;
   }
 
   try {
-    const response = await fetch('https://meninger-back.vercel.app/api/auth/me', {
+    const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/me', {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -113,22 +113,21 @@ const loadUser = async () => {
     }
 
     const usuario = await response.json();
-    userStore.setUser(usuario); 
-    user.value = usuario; 
-    // Mostra dados usuario    console.log(user)
+    userStore.setUser(usuario);
+    user.value = usuario;
   } catch (error) {
     console.error('Erro ao carregar usuário:', error);
-    router.push('/login'); 
+    router.push('/login');
   }
 };
 
 onMounted(() => {
-  loadUser(); 
+  loadUser();
 });
 
 const logout = () => {
-  userStore.clearUser(); 
-  localStorage.removeItem('token'); 
-  router.push('/login'); 
+  userStore.clearUser();
+  localStorage.removeItem('token');
+  router.push('/login');
 };
 </script>
