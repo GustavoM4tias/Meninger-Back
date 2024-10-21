@@ -4,7 +4,7 @@ import Home from '../views/Home.vue';
 import Login from '../views/Login.vue';
 import Registrar from '../views/Registrar.vue';
 import Empreendimentos from '../views/Empreendimentos.vue'; 
-import Blog from '../views/Blog.vue'; 
+import Eventos from '../views/Eventos.vue'; 
 import Geradores from '../views/Geradores.vue'; 
 import Automatico from '../components/Geradores/Automatico.vue';
 import Manual from '../components/Geradores/Manual.vue';
@@ -32,9 +32,9 @@ const routes = [
     component: Empreendimentos,
   },
   {
-    path: '/blog',
-    name: 'Blog',
-    component: Blog,
+    path: '/eventos',
+    name: 'Eventos',
+    component: Eventos,
   },
   {
     path: '/geradores',
