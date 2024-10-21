@@ -39,10 +39,10 @@ onMounted(fetchEventos);
 </script>
 
 <template>
-    <div class="container mx-auto my-10">
+    <div class="container md:mx-auto my-10">
         <h1 class="text-4xl text-center font-bold mb-5">Eventos Marketing</h1>
 
-        <Nav class="fixed top-80 sm:top-20 left-10" />
+        <Nav class="fixed top-80 sm:top-20 left-1 md:left-10" />
 
         <div class="mb-10">
             <h2 class="text-2xl font-semibold mb-3">Eventos em Andamento</h2>
