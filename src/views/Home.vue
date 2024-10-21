@@ -43,12 +43,12 @@
 
         <RouterLink
           class="rounded-md flex border pl-6 py-4 mt-6 md:mt-12 bg-gray-100 hover:bg-gray-200 duration-100 xl:-ml-32 xl:rounded-xl shadow-md cursor-pointer"
-          to="/blog">
+          to="/eventos">
           <div id="circle" class="flex w-12 h-12 bg-blue-500 md:w-16 md:h-16 rounded-full">
             <img src="/logo.png" class="object-contain p-2 md:p-3 m-auto">
           </div>
           <p class="pl-4 md:pl-12 text-2xl pt-1 font-semibold md:text-3xl md:pt-4">
-            Blog
+            Eventos
           </p>
         </RouterLink>
 
