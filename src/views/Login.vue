@@ -1,7 +1,6 @@
 <template>
-
-  <body class="bg-gray-200 h-screen w-screen flex font-sans text-gray-700">
-    <div class="container m-auto p-4 sm:p-8">
+  <div class="bg-gray-100 h-screen w-screen flex font-sans text-gray-700 relative">
+    <div class="container m-auto p-4 sm:p-8 z-10">
       <div class="max-w-md w-full m-auto">
         <div class="bg-white rounded-lg overflow-hidden shadow-2xl">
           <div class="p-5 sm:p-8">
@@ -9,7 +8,7 @@
 
               <h1 class="text-4xl text-center mb-4 font-thin">Meninger<i class="fa-solid fa-gear"></i></h1>
 
-              <div class="mb-3">
+              <div class="mb-2">
                 <label for="email" class="block m-1 text-sm font-medium text-gray-600">Email</label>
                 <input type="email" id="email" placeholder="Email" v-model="email" required
                   class="block w-full border p-3 rounded-md bg-gray-200 border border-transparent focus:outline-none" />
@@ -17,17 +16,13 @@
 
               <div class="mb-5">
                 <label for="senha" class="block m-1 text-sm font-medium text-gray-600">Senha</label>
-
                 <div class="relative">
-
                   <input placeholder="Senha" :type="senhaVisivel ? 'text' : 'password'" id="senha" v-model="senha"
                     required
                     class="block w-full p-3 rounded-md border bg-gray-200 border border-transparent focus:outline-none" />
-
                   <i id="eye" class="absolute top-1/3 right-0 p-0.5 pr-4"
                     :class="senhaVisivel ? 'fas fa-eye' : 'fas fa-eye-slash'" @mousedown="mostraSenha"
                     @mouseup="ocultaSenha" @mouseleave="ocultaSenha"></i>
-
                 </div>
               </div>
 
@@ -42,13 +37,17 @@
         </div>
       </div>
     </div>
-  </body>
+    <Carregamento />
+    <img class="absolute z-0 left-72" src="/traçado.png">
+  </div>
 </template>
 
 <script setup>
+import { useRouter } from 'vue-router';
 import { ref } from 'vue';
 import { useUserStore } from '../store/userStore';
-import { useRouter } from 'vue-router';
+import { fetchComCarregamento } from '../utils/fetchComCarregamento';
+import Carregamento from '../components/Carregamento.vue';
 
 const email = ref('');
 const senha = ref('');
@@ -59,7 +58,7 @@ const router = useRouter();
 
 const handleLogin = async () => {
   try {
-    const response = await fetch('https://meninger-back.vercel.app/api/auth/login', {
+    const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -98,4 +97,5 @@ const ocultaSenha = () => {
 .error {
   color: red;
 }
+
 </style>
