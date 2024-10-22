@@ -3,7 +3,7 @@ import { defineStore } from 'pinia';
 
 export const useCarregamentoStore = defineStore('carregamento', {
   state: () => ({
-    carregando: false, // Estado inicial
+    carregando: false, 
   }),
   actions: {
     iniciarCarregamento() {

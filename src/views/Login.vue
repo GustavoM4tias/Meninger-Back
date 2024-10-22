@@ -4,7 +4,7 @@
       <div class="max-w-md w-full m-auto">
         <div class="bg-white rounded-lg shadow-2xl">
           <div class="p-5 sm:p-8">
-            <form method="POST" @submit.prevent="handleLogin">
+            <form method="POST" @submit.prevent="login">
 
               <h1 class="text-4xl text-center mb-4 font-thin">Meninger<i class="fa-solid fa-gear"></i></h1>
 
@@ -56,7 +56,7 @@ const senhaVisivel = ref(false);
 const userStore = useUserStore();
 const router = useRouter();
 
-const handleLogin = async () => {
+const login = async () => {
   try {
     const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/login', {
       method: 'POST',

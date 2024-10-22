@@ -1,9 +1,11 @@
 <script setup>
 import { ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 const route = useRoute();
+const router = useRouter();
 const texto = ref(false);
+const busca = ref(''); // Valor da pesquisa
 let timeout;
 
 const mostraTexto = () => {
@@ -21,8 +23,12 @@ const escondeTexto = () => {
 const selecionado = (path) => {
     return route.path === path;
 };
-</script>
 
+// Função chamada a cada vez que o usuário digita algo
+const atualizarBusca = () => {
+    router.push({ query: { busca: busca.value } }); // Atualiza a URL com o termo de busca
+};
+</script>
 
 <template>
     <nav class="bg-blue-400 p-2 py-1 m-1 sm:m-4 rounded-lg duration-300 shadow-2xl z-50" @mouseenter="mostraTexto"
@@ -30,9 +36,10 @@ const selecionado = (path) => {
         <ul class="text-white text-lg sm:text-xl">
             <li class="bg-blue-600 hover:bg-blue-700 duration-200 my-2 p-2 py-1 rounded-md cursor-pointer">
                 <i class="fas fa-magnifying-glass"></i>
-                <input type="text" class="busca w-3/4 ml-3 bg-transparent outline-none placeholder-white"
-                    placeholder="Buscar..." :style="{ display: texto ? 'inline' : 'none' }"></input>
-            </li> 
+                <input type="text" v-model="busca" @input="atualizarBusca"
+                    class="busca w-3/4 ml-3 bg-transparent outline-none placeholder-white"
+                    placeholder="Buscar..." :style="{ display: texto ? 'inline' : 'none' }">
+            </li>
             <li
                 :class="['bg-blue-600 hover:bg-blue-700 duration-200 my-2 p-2 py-1 rounded-md cursor-pointer', selecionado('/') ? 'bg-blue-700' : '']">
                 <RouterLink to="/">
