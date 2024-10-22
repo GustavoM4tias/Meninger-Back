@@ -10,12 +10,12 @@ const props = defineProps({
 
 const emit = defineEmits(['click']);
 
-// Função para verificar se há campanhas ativas
+
 const temCampanhaAtiva = computed(() => {
     return props.produto.campanhas.some(campanha => campanha.status === true);
 });
 
-// Função para verificar se todas as campanhas estão inativas
+
 const semCampanhaAtiva = computed(() => {
     return props.produto.campanhas.length > 0 && !temCampanhaAtiva.value;
 });
