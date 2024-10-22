@@ -3,7 +3,7 @@
     <div class="bg-white sm:h-5/6 sm:w-8/12 w-11/12 rounded-lg mx-auto relative">
       <div class="content h-full grid grid-cols-1 lg:grid-cols-3">
 
-        <div class="img col-span-1 sm:col-span-2 relative rounded-t-lg lg:rounded-l-lg lg:rounded-tr-none bg-red-200 h-100 w-full h-full overflow-hidden" v-if="evento">
+        <div class="img col-span-1 sm:col-span-2 relative rounded-t-lg lg:rounded-l-lg lg:rounded-tr-none h-100 w-full h-full overflow-hidden" v-if="evento">
           <img :src="evento.imagem[imagemAtual]" class="h-full w-full object-cover" />
           <div class="absolute top-1/2 left-4 transform -translate-y-1/2">
             <i class="fas fa-chevron-left cursor-pointer text-2xl text-gray-200 hover:text-gray-400 duration-200" @click="anterior"></i>
@@ -25,7 +25,7 @@
           <div class="tags mb-2 md:mb-4">
             <p class="text-gray-600 font-bold mb-1 md:mb-2">Tags:</p>
             <ul class="flex flex-wrap">
-              <li class="bg-gray-100 hover:bg-gray-200 cursor-pointer duration-200 shadow px-2 py-1 m-1 rounded-xl"
+              <li class="bg-gray-100 hover:bg-gray-200 cursor-pointer duration-200 shadow px-2 py-1 m-1 rounded-full"
                 v-for="atrativo in evento.atrativos" :key="atrativo">{{ atrativo }}</li>
             </ul>
           </div>

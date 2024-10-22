@@ -1,5 +1,5 @@
 <template>
-  <router-view class="h-screen w-screen" />
+  <router-view />
 </template>
 
 <script setup>
@@ -9,6 +9,6 @@ import { useUserStore } from './store/userStore';
 const userStore = useUserStore();
 
 onMounted(() => {
-  userStore.loadUserFromLocalStorage(); // Carrega o usuário do localStorage ao iniciar a aplicação
+  userStore.loadUserFromLocalStorage(); 
 });
 </script>

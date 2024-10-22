@@ -4,25 +4,13 @@ import { useUserStore } from '../store/userStore';
 import { useRouter } from 'vue-router';
 import Empreendimento from '../components/Empreendimentos/Empreendimento.vue';
 import Nav from '../components/Empreendimentos/Nav.vue';
-import Modal from '../components/Modal.vue';
+import Modal from '../components/Empreendimentos/Modal.vue';
 
 const produtos = ref([]);
-const selectedProduct = ref(null);
+const empreendimento = ref(null);
 const userStore = useUserStore();
 const router = useRouter();
-const itemsPagina = 6;
-const currentPage = ref(1);
-const visivelModal = ref(true); // Deixa itens ocultos ao abrir modal v-if="visivelModal" 
-
-const paginatedProdutos = computed(() => {
-    const start = (currentPage.value - 1) * itemsPagina;
-    return produtosFiltrados.value.slice(start, start + itemsPagina);
-});
-
-// Computed para o total de páginas
-const totalPages = computed(() => {
-    return Math.ceil(produtos.value.length / itemsPagina);
-});
+const visivelModal = ref(false);
 
 const loadUser = () => {
     const storedUser = localStorage.getItem('user');
@@ -41,23 +29,24 @@ const fetchProdutos = async () => {
         }
         const data = await response.json();
         produtos.value = data.produtos;
-
-        nextTick(() => {
-            tippy('[data-tippy-content]', {
-                placement: 'top',
-                animation: 'fade',
-                delay: [100, 0],
-            });
-        });
     } catch (error) {
         console.error('Erro ao carregar os produtos:', error);
     }
 };
 
 const openModal = (produto) => {
-    selectedProduct.value = produto;
-    visivelModal.value = false;
+    empreendimento.value = produto;
+    visivelModal.value = true;
+};
 
+const closeModal = () => {
+    empreendimento.value = null;
+    visivelModal.value = false;
+};
+
+onMounted(() => {
+    loadUser();
+    fetchProdutos();
     nextTick(() => {
         tippy('[data-tippy-content]', {
             placement: 'top',
@@ -65,39 +54,14 @@ const openModal = (produto) => {
             delay: [100, 0],
         });
     });
-};
-
-const closeModal = () => {
-    selectedProduct.value = null;
-    visivelModal.value = true;
-};
-
-const proximaPagina = () => {
-    if (currentPage.value < totalPages.value) {
-        currentPage.value++;
-    }
-};
-
-const paginaAnterior = () => {
-    if (currentPage.value > 1) {
-        currentPage.value--;
-    }
-};
-
-onMounted(() => {
-    loadUser();
-    fetchProdutos();
 });
 
-// Tudo que você já tinha antes permanece
 const filtroNome = ref('');
 
-// Função para receber o valor de busca e atualizar o filtro
 const filtrarPorNome = (busca) => {
     filtroNome.value = busca.toLowerCase();
 };
 
-// Computed que filtra os produtos pelo nome
 const produtosFiltrados = computed(() => {
     if (!filtroNome.value) {
         return produtos.value;
@@ -106,97 +70,29 @@ const produtosFiltrados = computed(() => {
         produto.nome.toLowerCase().includes(filtroNome.value)
     );
 });
-
 </script>
 
 <template>
-    <div class="produtos bg-gray-100 flex flex-col justify-between h-auto sm:h-screen">
-        <div class="topo flex text-center">
-            <h1 class="font-bold m-auto text-4xl">Listagem de Empreendimentos</h1>
-        </div>
-
-        <Nav id="nav" v-if="visivelModal" class="fixed top-20" :onFiltrar="filtrarPorNome" />
-
-        <section class="container px-16 sm:mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <!-- Condição para verificar se há produtos -->
-            <template v-if="paginatedProdutos.length > 0">
-                <Empreendimento v-for="produto in paginatedProdutos" :key="produto.id" :produto="produto"
-                    @click="openModal" />
-            </template>
-            <p class="text-center text-gray-500 text-2xl col-span-3" v-else>Nenhum empreendimento encontrado.</p>
+    <div class="bg-gray-100 min-h-screen w-full relative overflow-x-hidden">
+      <img class="absolute z-0 left-72 top-0" src="/traçado.png">
+      <Nav id="nav" class="fixed top-20" :onFiltrar="filtrarPorNome" />
+  
+      <div class="topo flex text-center relative">
+        <h1 class="font-bold m-auto text-2xl md:text-4xl my-8">Empreendimentos</h1>
+      </div>
+  
+      <div class="produtos relative z-10 flex flex-col h-auto">
+        <section class="container px-12 md:px-20 mx-auto pb-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <Empreendimento v-for="produto in produtosFiltrados" :key="produto.id" :produto="produto"
+            @click="openModal(produto)" />
+          <p class="text-center text-gray-500 text-2xl col-span-3" v-if="produtosFiltrados.length === 0">
+            Nenhum empreendimento encontrado.
+          </p>
         </section>
-
-        <div class="paginacao flex">
-            <div class="flex m-auto text-gray-500">
-                <i @click="paginaAnterior" :disabled="currentPage === 1"
-                    class="fas p-3 bg-gray-200 hover:bg-gray-300 duration-200 cursor-pointer rounded-3xl mx-4 fa-chevron-left"></i>
-                <p class="my-auto text-lg"><span class="bg-gray-200 px-3 py-2 rounded-md">{{ currentPage }}</span>
-                    ...<span class="ml-2">{{ totalPages }}</span></p>
-                <i @click="proximaPagina" :disabled="currentPage === totalPages"
-                    class="fas p-3 bg-gray-200 hover:bg-gray-300 duration-200 cursor-pointer rounded-3xl mx-4 fa-chevron-right"></i>
-            </div>
-        </div>
-
-        <modal v-if="selectedProduct" @close="closeModal">
-            <template #header>
-                <h2>{{ selectedProduct.nome }}</h2>
-            </template>
-            <template #body>
-                <img :src="selectedProduct.foto" alt="Imagem do produto" />
-                <p><strong>Cidade:</strong> {{ selectedProduct.cidade }}</p>
-                <p><strong>Data de Lançamento:</strong> {{ selectedProduct.data_lancamento }}</p>
-                <p><strong>Previsão de Entrega:</strong> {{ selectedProduct.previsao_entrega }}</p>
-                <p><strong>Responsável:</strong> {{ selectedProduct.responsavel }}</p>
-                <p><strong>Modelo:</strong> {{ selectedProduct.modelo }}</p>
-                <p><strong>Descrição:</strong> {{ selectedProduct.descricao }}</p>
-                <p><strong>Preço Médio:</strong> R$ {{ selectedProduct.preco.preco_medio }}</p>
-                <p><strong>Preço M²:</strong> R$ {{ selectedProduct.preco.preco_m2 }}</p>
-                <p><strong>Comissão:</strong> R$ {{ selectedProduct.comissao }}</p>
-                <p><strong>Tags:</strong> {{ selectedProduct.tags.join(', ') }}</p>
-
-                <h3>Comentários</h3>
-                <ul>
-                    <li v-for="comentario in selectedProduct.comentarios" :key="comentario.data_publicacao">
-                        <strong>{{ comentario.autor }}: </strong> {{ comentario.texto }} <span style="color: gray;">{{
-                            comentario.data_publicacao }}</span>
-                    </li>
-                    <li v-if="selectedProduct.comentarios.length === 0">Nenhum comentário disponível.</li>
-                </ul>
-
-                <h3>Campanhas</h3>
-                <ul>
-                    <li v-for="campanha in selectedProduct.campanhas" :key="campanha.data_inicio">
-                        <strong>Status:</strong> {{ campanha.status }}<br />
-                        <strong>Data de Início:</strong> {{ campanha.data_inicio }}<br />
-                        <strong>Data de Fim:</strong> {{ campanha.data_fim }}
-                    </li>
-                    <li v-if="selectedProduct.campanhas.length === 0">Nenhuma campanha ativa.</li>
-                </ul>
-            </template>
-            <template #footer>
-                <button @click="closeModal">Fechar</button>
-            </template>
-        </modal>
+  
+        <!-- Modal de Produto -->
+        <Modal v-if="visivelModal" :empreendimento="empreendimento" @close="closeModal" />
+      </div>
     </div>
-</template>
-
-<style scoped>
-.topo {
-    height: 10vh;
-}
-
-.container {
-    height: auto;
-    max-width: 80vw;
-}
-
-.paginacao {
-    height: 10vh;
-}
-
-@media (max-width: 768px) {
-    .container {
-        max-width: 100vw;
-    }
-}
-</style>
+  </template>
+  
