@@ -1,9 +1,8 @@
-// src/store/userStore.js
 import { defineStore } from 'pinia';
 
 export const useUserStore = defineStore('user', {
   state: () => ({
-    user: null, // Inicializa o usuário como null
+    user: null, 
   }),
   actions: {
     // Este método é chamado ao iniciar a aplicação para definir o usuário do localStorage
