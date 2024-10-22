@@ -5,8 +5,8 @@
       "nome": "Paque dos Ipês",
       "foto": "https://www.menin.com.br/wp-content/uploads/2024/07/fachada-ipes-jacarezinho.jpg",
       "cidade": "Jacarezinho",
-      "data_lancamento": "2024-06-09",
-      "previsao_entrega": "2026-30-11",
+      "data_lancamento": "2024/06/09",
+      "previsao_entrega": "2026/30/11",
       "responsavel": "Thaís Noccioli",
       "modelo": "SBPE",
       "link_site1": "https://www.menin.com.br/parque-dos-ipes/",
@@ -20,22 +20,40 @@
       "comentarios": [
         {
           "texto": "Ótimo produto!",
-          "data_publicacao": "2023-10-05",
+          "data_publicacao": "2023/10/05",
           "autor": "Gustavo",
           "id_autor": 1
         },
         {
           "texto": "Produto Bom!",
-          "data_publicacao": "2023-10-02",
+          "data_publicacao": "2023/10/02",
           "autor": "João",
           "id_autor": 2
         }
       ],
       "campanhas": [
         {
+          "autor": "João",
+          "id_autor": 2,
           "descricao": "Campanha de R$ 750,00 por venda (Corretor).",
-          "data_inicio": "2023-10-10",
-          "data_fim": "2023-10-20",
+          "data_inicio": "2024/09/30",
+          "data_fim": "2024/10/23",
+          "status": true
+        },
+        {
+          "autor": "Gustavo Diniz",
+          "id_autor": 2,
+          "descricao": "TV 32 (Cliente).",
+          "data_inicio": "2024/08/28",
+          "data_fim": "2024/10/12",
+          "status": true
+        },
+        {
+          "autor": "Daniel Garcia",
+          "id_autor": 2,
+          "descricao": "Vendeu 10, ganhout 10mil (Imobiliaria).",
+          "data_inicio": "2024/10/22",
+          "data_fim": "2024/10/31",
           "status": true
         }
       ],
@@ -51,8 +69,8 @@
       "nome": "Drumond Residencial",
       "foto": "https://www.menin.com.br/wp-content/uploads/2024/06/imagens-5-.jpeg",
       "cidade": "Bauru",
-      "data_lancamento": "2024-04-12",
-      "previsao_entrega": "2026-25-06",
+      "data_lancamento": "2024/04/12",
+      "previsao_entrega": "2026/25/06",
       "responsavel": "Flávia Reis",
       "modelo": "MCMV",
       "link_site1": "https://www.menin.com.br/drumond/",
@@ -66,22 +84,24 @@
       "comentarios": [
         {
           "texto": "Ótimo produto!",
-          "data_publicacao": "2023-10-05",
+          "data_publicacao": "2023/10/05",
           "autor": "Gustavo",
           "id_autor": 1
         },
         {
           "texto": "Produto Bom!",
-          "data_publicacao": "2023-10-02",
+          "data_publicacao": "2023/10/02",
           "autor": "João",
           "id_autor": 2
         }
       ],
       "campanhas": [
         {
+          "autor": "João",
+          "id_autor": 2,
           "descricao": "Campanha de R$ 750,00 por venda (Corretor).",
-          "data_inicio": "2023-10-10",
-          "data_fim": "2023-10-20",
+          "data_inicio": "2023/10/10",
+          "data_fim": "2023/10/20",
           "status": true
         }
       ],
@@ -97,8 +117,8 @@
       "nome": "Terras de São Paulo Fase 2",
       "foto": "https://www.menin.com.br/wp-content/uploads/2024/06/fachada_nova_3.jpeg",
       "cidade": "Marília",
-      "data_lancamento": "2023-08-20",
-      "previsao_entrega": "2023-09-30",
+      "data_lancamento": "2023/08/20",
+      "previsao_entrega": "2023/09/30",
       "responsavel": "Willian Marcheti",
       "modelo": "MCMV",
       "link_site1": "http://exemplo.com/produtoC",
@@ -113,8 +133,8 @@
       "campanhas": [
         {
           "descricao": "Campanha de R$ 750,00 por venda (Corretor).",
-          "data_inicio": "2023-09-01",
-          "data_fim": "2023-09-15",
+          "data_inicio": "2023/09/01",
+          "data_fim": "2023/09/15",
           "status": false
         }
       ],
@@ -130,8 +150,8 @@
       "nome": "Produto D",
       "foto": "https://www.menin.com.br/wp-content/uploads/2024/07/fachada-ipes-jacarezinho.jpg",
       "cidade": "Bady Bassit",
-      "data_lancamento": "2023-07-10",
-      "previsao_entrega": "2023-08-20",
+      "data_lancamento": "2023/07/10",
+      "previsao_entrega": "2023/08/20",
       "responsavel": "Ana Souza",
       "modelo": "MCMV",
       "link_site1": "http://exemplo.com/produtoD",
@@ -142,7 +162,7 @@
       "comentarios": [
         {
           "texto": "Adorei!",
-          "data_publicacao": "2023-07-15"
+          "data_publicacao": "2023/07/15"
         }
       ],
       "campanhas": [],
@@ -158,8 +178,8 @@
       "nome": "Produto E",
       "foto": "https://www.menin.com.br/wp-content/uploads/2024/07/fachada-ipes-jacarezinho.jpg",
       "cidade": "Dourados",
-      "data_lancamento": "2023-06-01",
-      "previsao_entrega": "2023-07-15",
+      "data_lancamento": "2023/06/01",
+      "previsao_entrega": "2023/07/15",
       "responsavel": "Fernanda Lima",
       "modelo": "SBPE",
       "link_site1": "http://exemplo.com/produtoE",
@@ -184,8 +204,8 @@
       "nome": "Produto F",
       "foto": "https://www.menin.com.br/wp-content/uploads/2024/07/fachada-ipes-jacarezinho.jpg",
       "cidade": "Todos",
-      "data_lancamento": "2023-05-15",
-      "previsao_entrega": "2023-06-30",
+      "data_lancamento": "2023/05/15",
+      "previsao_entrega": "2023/06/30",
       "responsavel": "Lucas Almeida",
       "modelo": "SBPE",
       "link_site1": "http://exemplo.com/produtoF",
@@ -207,8 +227,8 @@
       "nome": "Produto G",
       "foto": "https://www.menin.com.br/wp-content/uploads/2024/07/fachada-ipes-jacarezinho.jpg",
       "cidade": "Marília",
-      "data_lancamento": "2023-04-01",
-      "previsao_entrega": "2023-05-15",
+      "data_lancamento": "2023/04/01",
+      "previsao_entrega": "2023/05/15",
       "responsavel": "João Silva",
       "modelo": "MCMV",
       "link_site1": "http://exemplo.com/produtoG",
@@ -233,8 +253,8 @@
       "nome": "Produto H",
       "foto": "https://www.menin.com.br/wp-content/uploads/2024/07/fachada-ipes-jacarezinho.jpg",
       "cidade": "Bauru",
-      "data_lancamento": "2023-03-10",
-      "previsao_entrega": "2023-04-25",
+      "data_lancamento": "2023/03/10",
+      "previsao_entrega": "2023/04/25",
       "responsavel": "Maria Oliveira",
       "modelo": "MCMV",
       "link_site1": "http://exemplo.com/produtoH",
@@ -244,7 +264,7 @@
       "comentarios": [
         {
           "texto": "Muito informativo!",
-          "data_publicacao": "2023-03-12"
+          "data_publicacao": "2023/03/12"
         }
       ],
       "campanhas": [],
