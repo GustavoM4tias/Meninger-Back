@@ -1,6 +1,6 @@
 <template>
     <div
-        class="shadow-lg bg-green-400 relative rounded-lg overflow-hidden duration-300 transform hover:scale-105 h-full">
+        class="shadow-2xl bg-green-400 relative rounded-lg overflow-hidden duration-300 transform hover:scale-105 h-full">
 
         <div v-if="evento.imagem && evento.imagem.length > 0" :style="{ backgroundImage: `url(${evento.imagem[0]})` }"
             class="w-full h-full bg-cover bg-center absolute z-0"></div>
@@ -14,7 +14,7 @@
                 <div class="flex justify-between">
                     <h1 class="text-xl truncate md:text-2xl font-semibold drop-shadow-md">{{ evento.nome }}</h1>
                     <p class="text-gray-300 cursor-pointer duration-200 hover:text-gray-100 text-wrap text-sm bottom-0 right-0 m-1 md:m-3">{{
-                        formatarData(evento?.dataHoraPostagem, false) }}</p>
+                        formatarData(evento?.dataHoraOcorrencia, false) }}</p>
                 </div>
                 <ul class="flex flex-wrap">
                     <li class="hover:bg-gray-100 hover:text-gray-800 text-gray-200 border border-gray-300 cursor-pointer duration-300 shadow px-2 py- m-1 rounded-lg"
