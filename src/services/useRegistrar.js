@@ -19,7 +19,7 @@ export const useRegistrar = () => {
 
     const criarConta = async () => {
         try {
-            const response = await fetchComCarregamento('https://meninger-back.vercel.app//api/auth/register', {// localhost retire http"s" api adicione https
+            const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/register', {// localhost retire http"s" api adicione https
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
