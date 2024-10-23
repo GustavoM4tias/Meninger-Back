@@ -43,7 +43,7 @@
 </template>
 
 <script setup>
-import { useLogin } from '../services/useLogin';
+import { useLogin } from '../utils/useLogin';
 import Carregamento from '../components/Carregamento.vue';
 
 const { email, senha, errorMessage, senhaVisivel, login, mostraSenha, ocultaSenha } = useLogin();
