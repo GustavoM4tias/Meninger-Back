@@ -4,8 +4,8 @@ import { onMounted, nextTick } from 'vue';
 
 // components
 import Nav from '../components/Empreendimentos/Nav.vue';
-import Empreendimento from '../components/Empreendimentos/Empreendimento.vue';
-import Modal from '../components/Empreendimentos/Modal.vue';
+import cardEmpreendimento from '../components/Empreendimentos/cardEmpreendimento.vue';
+import modalEmpreendimento from '../components/Empreendimentos/modalEmpreendimento.vue';
 import Carregamento from '../components/Carregamento.vue'; // carregamento fetch
 
 // components js
@@ -37,7 +37,7 @@ onMounted(() => {
 </script>
 
 <template>
-    <div class="bg-gray-100 min-h-screen w-full relative overflow-x-hidden">
+    <div class="bg-gray-100 w-full relative overflow-x-hidden">
       <img class="absolute z-0 left-72 top-0" src="/traçado.png">
       <Nav id="nav" class="fixed top-20" :onFiltrar="filtrarPorNome" />
   
@@ -45,10 +45,10 @@ onMounted(() => {
         <h1 class="font-bold m-auto text-2xl md:text-4xl my-8">Empreendimentos</h1>
       </div>
   
-      <div class="produtos relative z-10 flex flex-col h-auto">
+      <div class="produtos flex flex-col">
         <section class="container px-12 md:px-20 mx-auto pb-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <Empreendimento v-for="produto in itensFiltrados" :key="produto.id" :produto="produto"
-            @click="abrirModal(produto)" />
+          <cardEmpreendimento v-for="empreendimento in itensFiltrados" :key="empreendimento.id" :empreendimento="empreendimento"
+            @click="abrirModal(empreendimento)" />
           <p class="text-center text-gray-500 text-2xl col-span-3" v-if="itensFiltrados.length === 0">
             Nenhum empreendimento encontrado.
           </p>
@@ -56,7 +56,7 @@ onMounted(() => {
         </section>
   
         <!-- Modal de Produto -->
-        <Modal v-if="visivelModal" :empreendimento="empreendimento" @close="fecharModal" />
+        <modalEmpreendimento v-if="visivelModal" :empreendimento="empreendimento" @close="fecharModal" />
       </div>
       <Carregamento />
     </div>
