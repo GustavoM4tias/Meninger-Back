@@ -3,7 +3,7 @@ import { useRouter } from 'vue-router';
 import { useUserStore } from '../store/userStore';
 import { fetchComCarregamento } from '../utils/fetchComCarregamento';
 import apiConfig from '../config/apiConfig'
-const { apiUrl } = apiConfig();
+const { apiUrl } = apiConfig;
 
 export const useRegistrar = () => {
     const nome = ref('');
