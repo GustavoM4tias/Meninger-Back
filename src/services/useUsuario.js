@@ -49,5 +49,3 @@ export const useUsuario = () => {
 
     return { user, logout, usuario };
 }
-
-
