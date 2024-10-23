@@ -124,7 +124,7 @@ const criarConta = async () => {
     errorMessage.value = '';
 
     try {
-        const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/register', {
+        const response = await fetchComCarregamento('http://localhost:3001/api/auth/register', {// localhost retire http"s" api adicione https
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
