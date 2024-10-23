@@ -85,6 +85,6 @@
 import { useUsuario } from '../services/useUsuario';
 import Carregamento from '../components/Carregamento.vue';
 
-const { user, logout } = useUsuario();
+const { user, logout, usuario } = useUsuario();
 
 </script>
