@@ -5,7 +5,6 @@ const props = defineProps({
         required: true,
     }
 });
-
 const emit = defineEmits(['close']);
 </script>
 
@@ -42,8 +41,8 @@ const emit = defineEmits(['close']);
                         </div>
 
                         <div class="absolute bottom-10 left-0 precos tracking-tighter">
-                            <p class="font-bold text-xl md:text-4xl mt-1 tracking-tighter">R$ {{ empreendimento.preco.preco_m2 }}<span>m²</span></p>
-                            <h2 class="text-3xl md:text-7xl font-bold tracking-tighter">R$ {{ empreendimento.preco.preco_medio }}</h2>
+                            <p class="font-bold text-xl md:text-4xl mt-1 tracking-tighter">R$ {{ empreendimento.preco_m2 }}<span>m²</span></p>
+                            <h2 class="text-3xl md:text-7xl font-bold tracking-tighter">R$ {{ empreendimento.preco_medio }}</h2>
                         </div>
                     </div>
 
@@ -66,7 +65,7 @@ const emit = defineEmits(['close']);
                     </div>
                     </div>
 
-
+                    <!--
                     <div v-if="empreendimento.campanhas.length" class="mb-3">
                         <label class="text-lg font-bold text-gray-800">Campanhas</label>
                         <div class="border border border-gray-100 rounded-lg px-2 max-h-48 overflow-auto">
@@ -99,7 +98,7 @@ const emit = defineEmits(['close']);
 
                         </div>
                     </div>
-
+                    -->
 
                     <div class="flex mt-2 flex-wrap">
                         <span v-for="(tag, index) in empreendimento.tags" :key="index"
@@ -114,4 +113,3 @@ const emit = defineEmits(['close']);
     </div>
 
 </template>
-

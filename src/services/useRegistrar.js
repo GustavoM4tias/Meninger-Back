@@ -20,7 +20,7 @@ export const useRegistrar = () => {
 
     const criarConta = async () => {
         try {
-            const response = await fetchComCarregamento(`${apiUrl}/register`, {// localhost retire http"s" api adicione https
+            const response = await fetchComCarregamento(`${apiUrl}auth/register`, {// localhost retire http"s" api adicione https
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

@@ -14,7 +14,7 @@ export const useLogin = () => {
 
   const login = async () => {
     try {
-      const response = await fetchComCarregamento(`${apiUrl}/login`, {// localhost retire http"s" api adicione https
+      const response = await fetchComCarregamento(`${apiUrl}auth/login`, {// localhost retire http"s" api adicione https
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
