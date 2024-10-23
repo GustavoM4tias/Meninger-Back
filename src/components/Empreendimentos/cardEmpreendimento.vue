@@ -11,17 +11,21 @@ const props = defineProps({
 const emit = defineEmits(['click']);
 
 const temCampanhaAtiva = computed(() => {
-    return props.empreendimento.campanhas.some(campanha => campanha.status === true);
+    // Adicione verificação se 'campanhas' existe e é um array
+    return props.empreendimento.campanhas && Array.isArray(props.empreendimento.campanhas) 
+        ? props.empreendimento.campanhas.some(campanha => campanha.status === true) 
+        : false;
 });
 
 const semCampanhaAtiva = computed(() => {
-    return props.empreendimento.campanhas.length > 0 && !temCampanhaAtiva.value;
+    return props.empreendimento.campanhas && Array.isArray(props.empreendimento.campanhas) 
+        ? props.empreendimento.campanhas.length > 0 && !temCampanhaAtiva.value 
+        : false;
 });
 
 const clique = withModifiers(() => {
     emit('click', props.empreendimento);
 }, ['stop']);
-
 </script>
 
 <template>
@@ -36,7 +40,7 @@ const clique = withModifiers(() => {
             <div class="absolute inset-0 flex flex-col justify-end text-white p-5">
                 <span class="text-gray-300 uppercase text-sm">{{ empreendimento.cidade }}</span>
                 <p class="text-2xl font-bold truncate">{{ empreendimento.nome }}</p>
-                <p class="text-3xl font-semibold">R$ {{ empreendimento.preco.preco_m2 }} <span
+                <p class="text-3xl font-semibold">R$ {{ empreendimento.preco_m2 }} <span
                         class="text-lg text-gray-300">M²</span></p> <!-- .toFixed(2).replace('.', ',') -->
             </div>
 
@@ -63,6 +67,5 @@ const clique = withModifiers(() => {
         </a>
     </div>
 </template>
-
 <style scoped>
 </style>
