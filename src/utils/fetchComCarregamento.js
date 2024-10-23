@@ -1,5 +1,5 @@
 import { useCarregamentoStore } from '../store/carregamento';
-
+ 
 export async function fetchComCarregamento(url, options = {}) {
   const carregamentoStore = useCarregamentoStore();
 
