@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path'); // Necessário para trabalhar com caminhos de arquivos
 const authRoutes = require('./routes/auth'); // Importar as rotas de autenticação
 const clientRoutes = require('./routes/clientes'); // Corrigido aqui
+const empreendimentoRoutes = require('./routes/empreendimentos'); // Importar a rota de produtos
 
 app.use(cors()); // Permitir requisições de outros domínios
 app.use(express.json()); // Para processar JSON
@@ -13,6 +14,8 @@ app.use('/api/auth', authRoutes);
 
 // Use a rota de clientes
 app.use('/api', clientRoutes); // Usar a rota de clientes
+
+app.use('/api', empreendimentoRoutes); // Usar a rota de produtos
 
 // Iniciar o servidor
 const PORT = process.env.PORT || 3001;
