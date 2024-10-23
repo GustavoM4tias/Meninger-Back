@@ -1,21 +1,16 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
-import Card from '../components/Eventos/Card.vue';
-import Modal from '../components/Eventos/Modal.vue';
+import cardEventos from '../components/Eventos/cardEventos.vue';
+import modalEventos from '../components/Eventos/modalEventos.vue';
 import Nav from '../components/Eventos/Nav.vue';
 
-const eventos = ref([]);
-const eventoModal = ref(null);
 const dataAtual = new Date();
 const route = useRoute();
 
-const fetchEventos = async () => {
-    const response = await fetch('/Backend/eventos.json');
-    const data = await response.json();
-    eventos.value = data.eventos;
-};
+const  { eventos, erro, fetchEventos } = usefetchEventos();
 
+const eventoModal = ref(null);
 const abrirModal = (evento) => {
     eventoModal.value = evento;
 };
@@ -26,7 +21,7 @@ const eventosFiltrados = computed(() => {
         evento.nome.toLowerCase().includes(busca) ||
         evento.descricao.toLowerCase().includes(busca)
     );
-});
+}); 
 
 const eventosEmAndamento = computed(() => {
     return eventosFiltrados.value.filter(evento => new Date(evento.dataHoraOcorrencia) >= dataAtual);
@@ -61,7 +56,7 @@ onMounted(fetchEventos);
             <div v-if="route.query.busca && eventosFiltrados.length > 0" class="mb-10">
                 <h2 class="text-2xl font-semibold mb-3">Resultados da Pesquisa</h2>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <Card v-for="evento in eventosFiltrados" :key="evento.id" :evento="evento"
+                    <cardEventos v-for="evento in eventosFiltrados" :key="evento.id" :evento="evento"
                         @abrir-modal="abrirModal(evento)" />
                 </div>
             </div>
@@ -71,7 +66,7 @@ onMounted(fetchEventos);
                 <div class="mb-10">
                     <h2 class="text-2xl font-semibold m-3">Próximos Eventos</h2>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <Card v-for="evento in eventosEmAndamento" :key="evento.id" :evento="evento"
+                        <cardEventos v-for="evento in eventosEmAndamento" :key="evento.id" :evento="evento"
                             @abrir-modal="abrirModal(evento)" />
                     </div>
                 </div>
@@ -79,7 +74,7 @@ onMounted(fetchEventos);
                 <div class="mb-10">
                     <h2 class="text-2xl font-semibold m-3">Posts Recentes</h2>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <Card v-for="evento in eventosRecentes" :key="evento.id" :evento="evento"
+                        <cardEventos v-for="evento in eventosRecentes" :key="evento.id" :evento="evento"
                             @abrir-modal="abrirModal(evento)" />
                     </div>
                 </div>
@@ -87,12 +82,12 @@ onMounted(fetchEventos);
                 <div class="pb-20">
                     <h2 class="text-2xl font-semibold m-3">Eventos Finalizados</h2>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <Card v-for="evento in eventosFinalizados" :key="evento.id" :evento="evento"
+                        <cardEventos v-for="evento in eventosFinalizados" :key="evento.id" :evento="evento"
                             @abrir-modal="abrirModal(evento)" />
                     </div>
                 </div>
             </div>
         </div>
-        <Modal v-if="eventoModal" @fechar-modal="eventoModal = null" :evento="eventoModal" />
+        <modalEventos v-if="eventoModal" @fechar-modal="eventoModal = null" :evento="eventoModal" />
     </div>
 </template>

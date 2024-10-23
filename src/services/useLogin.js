@@ -2,6 +2,8 @@ import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useUserStore } from '../store/userStore';
 import { fetchComCarregamento } from '../utils/fetchComCarregamento';
+import apiConfig from '../config/apiConfig'
+const { apiUrl } = apiConfig();
 
 export const useLogin = () => {
   const email = ref('');
@@ -12,7 +14,7 @@ export const useLogin = () => {
 
   const login = async () => {
     try {
-      const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/login', {// localhost retire http"s" api adicione https
+      const response = await fetchComCarregamento(`${apiUrl}/login`, {// localhost retire http"s" api adicione https
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -1,3 +1,14 @@
+<script setup>
+const props = defineProps({
+    empreendimento: {
+        type: Object,
+        required: true,
+    }
+});
+
+const emit = defineEmits(['close']);
+</script>
+
 <template>
     <div v-if="empreendimento"
         class="fixed inset-0 bg-black p-6 sm:p-0 bg-opacity-50 flex items-center justify-center z-50">
@@ -104,13 +115,3 @@
 
 </template>
 
-<script setup>
-const props = defineProps({
-    empreendimento: {
-        type: Object,
-        required: true,
-    }
-});
-
-const emit = defineEmits(['close']);
-</script>

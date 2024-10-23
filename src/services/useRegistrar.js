@@ -2,7 +2,8 @@ import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useUserStore } from '../store/userStore';
 import { fetchComCarregamento } from '../utils/fetchComCarregamento';
-
+import apiConfig from '../config/apiConfig'
+const { apiUrl } = apiConfig();
 
 export const useRegistrar = () => {
     const nome = ref('');
@@ -19,7 +20,7 @@ export const useRegistrar = () => {
 
     const criarConta = async () => {
         try {
-            const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/register', {// localhost retire http"s" api adicione https
+            const response = await fetchComCarregamento(`${apiUrl}/register`, {// localhost retire http"s" api adicione https
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
