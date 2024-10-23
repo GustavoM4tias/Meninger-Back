@@ -3,7 +3,7 @@ import { useUserStore } from '../store/userStore';
 import { useRouter } from 'vue-router';
 import { fetchComCarregamento } from '../utils/fetchComCarregamento';
 import apiConfig from '../config/apiConfig'
-const { apiUrl } = apiConfig();
+const { apiUrl } = apiConfig;
 
 export const useUsuario = () => {
     const userStore = useUserStore();
