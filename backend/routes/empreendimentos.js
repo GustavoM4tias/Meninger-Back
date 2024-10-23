@@ -135,7 +135,6 @@ router.post('/', async (req, res) => {
 
 // Rota para buscar empreendimentos
 router.get('/', async (req, res) => {
-    console.log('Rota /api/empreendimentos acessada');
     try {
         const query = 'SELECT * FROM empreendimentos';
         db.query(query, (err, results) => {
@@ -150,5 +149,36 @@ router.get('/', async (req, res) => {
         res.status(500).json({ message: 'Erro no servidor' });
     }
 });
+
+// Rota para excluir um empreendimento
+router.delete('/:id', async (req, res) => {
+    const { id } = req.params; // Obtém o ID do empreendimento a ser excluído
+
+    // Verifica se o ID é válido
+    if (!id) {
+        return res.status(400).json({ message: 'ID do empreendimento é necessário.' });
+    }
+
+    // Consulta para excluir o empreendimento
+    const queryDeleteEmpreendimento = `
+        DELETE FROM empreendimentos WHERE id = ?;
+    `;
+
+    try {
+        // Executa a exclusão do empreendimento
+        const [result] = await db.promise().query(queryDeleteEmpreendimento, [id]);
+
+        // Verifica se o empreendimento foi realmente excluído
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Empreendimento não encontrado.' });
+        }
+
+        res.status(200).json({ message: 'Empreendimento excluído com sucesso!' });
+    } catch (err) {
+        console.error('Erro ao excluir empreendimento:', err);
+        res.status(500).json({ message: 'Erro ao excluir o empreendimento' });
+    }
+});
+
 
 module.exports = router;
