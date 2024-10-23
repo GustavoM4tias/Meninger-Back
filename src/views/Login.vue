@@ -16,7 +16,7 @@
 
               <div class="mb-5">
                 <label for="senha" class="block m-1 text-sm font-medium text-gray-600">Senha</label>
-                <div class="relative">
+                <div class="relative"> 
                   <input placeholder="Senha" :type="senhaVisivel ? 'text' : 'password'" id="senha" v-model="senha"
                     required
                     class="block w-full p-3 rounded-md border bg-gray-200 border border-transparent focus:outline-none" />
@@ -44,9 +44,11 @@
 
 <script setup>
 import { useLogin } from '../services/useLogin';
+import { useSenha } from '../utils/useSenha';
 import Carregamento from '../components/Carregamento.vue';
 
-const { email, senha, errorMessage, senhaVisivel, login, mostraSenha, ocultaSenha } = useLogin();
+const { senhaVisivel, mostraSenha, ocultaSenha } = useSenha();
+const { email, senha, errorMessage, login } = useLogin();
 </script>
 
 <style scoped>
