@@ -1,4 +1,3 @@
-// src/utils/useLogin.js
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useUserStore } from '../store/userStore';
@@ -8,13 +7,12 @@ export const useLogin = () => {
   const email = ref('');
   const senha = ref('');
   const errorMessage = ref('');
-  const senhaVisivel = ref(false);
   const userStore = useUserStore();
   const router = useRouter();
 
   const login = async () => {
     try {
-      const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/login', {
+      const response = await fetchComCarregamento('http://localhost:3001/api/auth/login', {// localhost retire http"s" api adicione https
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -37,13 +35,5 @@ export const useLogin = () => {
     }
   };
 
-  const mostraSenha = () => {
-    senhaVisivel.value = true;
-  };
-
-  const ocultaSenha = () => {
-    senhaVisivel.value = false;
-  };
-
-  return { email, senha, errorMessage, senhaVisivel, login, mostraSenha, ocultaSenha };
+  return { email, senha, errorMessage, login };
 };

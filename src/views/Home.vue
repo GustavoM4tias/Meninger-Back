@@ -100,7 +100,7 @@ const loadUser = async () => {
   }
 
   try {
-    const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/me', {
+    const response = await fetchComCarregamento('http://localhost:3001/api/auth/me', { // localhost retire http"s" api adicione https
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
