@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useUserStore } from '../store/userStore';
-import { fetchComCarregamento } from './fetchComCarregamento';
+import { fetchComCarregamento } from '../utils/fetchComCarregamento';
 
 export const useLogin = () => {
   const email = ref('');
