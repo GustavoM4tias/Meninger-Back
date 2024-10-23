@@ -1,52 +1,31 @@
 <script setup>
-import { ref, onMounted, nextTick, computed } from 'vue';
-import { useUserStore } from '../store/userStore';
-import { useRouter } from 'vue-router';
-import Empreendimento from '../components/Empreendimentos/Empreendimento.vue';
+// dependencias
+import { onMounted, nextTick } from 'vue';
+
+// components
 import Nav from '../components/Empreendimentos/Nav.vue';
+import Empreendimento from '../components/Empreendimentos/Empreendimento.vue';
 import Modal from '../components/Empreendimentos/Modal.vue';
+import Carregamento from '../components/Carregamento.vue'; // carregamento fetch
 
-const produtos = ref([]);
-const empreendimento = ref(null);
-const userStore = useUserStore();
-const router = useRouter();
-const visivelModal = ref(false);
+// components js
+import { useFiltroNome } from '../utils/filtrarPorNome'; // filtragem
+import { useModal } from '../utils/modalUtils'; // modal
+import { useFetchEmpreendimentos } from '../services/useEmpreendimentos'; // fetch
+import { useLocalUsuario } from '../utils/useLocalUsuario'; // carregar o usuário
 
-const loadUser = () => {
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-        userStore.setUser(JSON.parse(storedUser));
-    } else {
-        router.push('/login');
-    }
-};
-
-const fetchProdutos = async () => {
-    try {
-        const response = await fetch('/Backend/produtos.json');
-        if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-        }
-        const data = await response.json();
-        produtos.value = data.produtos;
-    } catch (error) {
-        console.error('Erro ao carregar os produtos:', error);
-    }
-};
-
-const openModal = (produto) => {
-    empreendimento.value = produto;
-    visivelModal.value = true;
-};
-
-const closeModal = () => {
-    empreendimento.value = null;
-    visivelModal.value = false;
-};
+// modal
+const { visivelModal, itemModal: empreendimento, abrirModal, fecharModal } = useModal();
+// fetch de empreendimentos
+const { empreendimentos, fetchEmpreendimentos, erro } = useFetchEmpreendimentos();
+// filtragem por nome
+const { filtroNome, filtrarPorNome, itensFiltrados } = useFiltroNome(empreendimentos);
+// carregar usuário
+const { localUsuario } = useLocalUsuario();
 
 onMounted(() => {
-    loadUser();
-    fetchProdutos();
+    localUsuario();
+    fetchEmpreendimentos(); 
     nextTick(() => {
         tippy('[data-tippy-content]', {
             placement: 'top',
@@ -54,21 +33,6 @@ onMounted(() => {
             delay: [100, 0],
         });
     });
-});
-
-const filtroNome = ref('');
-
-const filtrarPorNome = (busca) => {
-    filtroNome.value = busca.toLowerCase();
-};
-
-const produtosFiltrados = computed(() => {
-    if (!filtroNome.value) {
-        return produtos.value;
-    }
-    return produtos.value.filter(produto =>
-        produto.nome.toLowerCase().includes(filtroNome.value)
-    );
 });
 </script>
 
@@ -83,16 +47,17 @@ const produtosFiltrados = computed(() => {
   
       <div class="produtos relative z-10 flex flex-col h-auto">
         <section class="container px-12 md:px-20 mx-auto pb-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <Empreendimento v-for="produto in produtosFiltrados" :key="produto.id" :produto="produto"
-            @click="openModal(produto)" />
-          <p class="text-center text-gray-500 text-2xl col-span-3" v-if="produtosFiltrados.length === 0">
+          <Empreendimento v-for="produto in itensFiltrados" :key="produto.id" :produto="produto"
+            @click="abrirModal(produto)" />
+          <p class="text-center text-gray-500 text-2xl col-span-3" v-if="itensFiltrados.length === 0">
             Nenhum empreendimento encontrado.
           </p>
+          <p v-if="erro" class="text-red-500 text-center col-span-3">{{ erro }}</p>
         </section>
   
         <!-- Modal de Produto -->
-        <Modal v-if="visivelModal" :empreendimento="empreendimento" @close="closeModal" />
+        <Modal v-if="visivelModal" :empreendimento="empreendimento" @close="fecharModal" />
       </div>
+      <Carregamento />
     </div>
-  </template>
-  
+</template>
