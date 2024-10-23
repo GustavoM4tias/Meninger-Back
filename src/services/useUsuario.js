@@ -18,7 +18,7 @@ export const useUsuario = () => {
         }
 
         try {
-            const response = await fetchComCarregamento(`${apiUrl}/me`, { // localhost retire http"s" api adicione https
+            const response = await fetchComCarregamento(`${apiUrl}auth/me`, { // localhost retire http"s" api adicione https
                 method: 'GET',
                 headers: {
                     'Content-Type': 'application/json',
