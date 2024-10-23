@@ -103,62 +103,12 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
-import { useUserStore } from '../store/userStore';
-import { useRouter } from 'vue-router';
-import { fetchComCarregamento } from '../utils/fetchComCarregamento';
+import { useSenha } from '../utils/useSenha';
+import { useRegistrar } from '../services/useRegistrar';
 import Carregamento from '../components/Carregamento.vue';
 
-const nome = ref('');
-const sobrenome = ref('');
-const email = ref('');
-const senha = ref('');
-const cargo = ref('');
-const cidade = ref('');
-const errorMessage = ref('');
-const senhaVisivel = ref(false);
-const userStore = useUserStore();
-const router = useRouter();
 
-const criarConta = async () => {
-    errorMessage.value = '';
+const { senhaVisivel, mostraSenha, ocultaSenha } = useSenha();
+const { nome, sobrenome, email, senha, cargo, cidade, errorMessage, criarConta } = useRegistrar();
 
-    try {
-        const response = await fetchComCarregamento('http://localhost:3001/api/auth/register', {// localhost retire http"s" api adicione https
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                nome: nome.value,
-                sobrenome: sobrenome.value,
-                email: email.value,
-                senha: senha.value,
-                cargo: cargo.value,
-                cidade: cidade.value,
-            }),
-        });
-
-        const data = await response.json();
-
-        if (response.ok && data.token) {
-            userStore.setUser(data);
-            localStorage.setItem('token', data.token);
-            router.push('/');
-        } else {
-            errorMessage.value = data.message || 'Erro ao criar a conta.';
-        }
-    } catch (error) {
-        console.error('Erro ao criar conta:', error);
-        errorMessage.value = 'Erro ao criar a conta. Tente novamente mais tarde.';
-    }
-};
-
-const mostraSenha = () => {
-    senhaVisivel.value = true;
-};
-
-const ocultaSenha = () => {
-    senhaVisivel.value = false;
-};
 </script>

@@ -82,52 +82,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
-import { useUserStore } from '../store/userStore';
-import { useRouter } from 'vue-router';
-import { fetchComCarregamento } from '../utils/fetchComCarregamento';
+import { useUsuario } from '../services/useUsuario';
 import Carregamento from '../components/Carregamento.vue';
 
-const userStore = useUserStore();
-const router = useRouter();
-const user = ref(null);
+const { user, logout } = useUsuario();
 
-const loadUser = async () => {
-  const token = localStorage.getItem('token');
-  if (!token) {
-    router.push('/login');
-    return;
-  }
-
-  try {
-    const response = await fetchComCarregamento('http://localhost:3001/api/auth/me', { // localhost retire http"s" api adicione https
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error('Erro ao buscar informações do usuário');
-    }
-
-    const usuario = await response.json();
-    userStore.setUser(usuario);
-    user.value = usuario;
-  } catch (error) {
-    console.error('Erro ao carregar usuário:', error);
-    router.push('/login');
-  }
-};
-
-onMounted(() => {
-  loadUser();
-});
-
-const logout = () => {
-  userStore.clearUser();
-  localStorage.removeItem('token');
-  router.push('/login');
-};
 </script>

@@ -12,7 +12,7 @@ export const useLogin = () => {
 
   const login = async () => {
     try {
-      const response = await fetchComCarregamento('http://localhost:3001/api/auth/login', {// localhost retire http"s" api adicione https
+      const response = await fetchComCarregamento('https://meninger-back.vercel.app/api/auth/login', {// localhost retire http"s" api adicione https
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
