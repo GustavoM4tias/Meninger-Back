@@ -78,6 +78,13 @@
 import { ref } from 'vue';
 import { cadastrarEmpreendimento } from '../../services/useEmpreendimento'; // Importe o serviço
 
+// Define o emit
+const emit = defineEmits(['fecharModalCadastro']);
+
+const props = defineProps({
+  fetchEmpreendimentos: Function, // Define a prop para receber a função
+});
+
 const nome = ref('');
 const foto = ref('');
 const cidade = ref('');
@@ -119,6 +126,10 @@ const criarEmpreendimento = async () => {
         if (resultado.success) {
             console.log('Empreendimento cadastrado com sucesso:', resultado.dados);
             alert('Empreendimento cadastrado com sucesso!');
+
+            // Chamar a função fetchEmpreendimentos após o sucesso
+            props.fetchEmpreendimentos();
+            emit('fecharModalCadastro');
 
             // Limpar os campos após o cadastro
             nome.value = '';
