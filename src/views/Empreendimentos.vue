@@ -54,10 +54,12 @@ onMounted(() => {
     </div>
 
     <div class="produtos flex flex-col">
-      
-      <section class="container h-screen bg-blue-200 px-12 md:px-20 mx-auto pb-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+      <section
+        class="container h-screen bg-blue-200 px-12 md:px-20 mx-auto pb-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <cardEmpreendimento v-for="empreendimento in itensFiltrados" :key="empreendimento.id"
-          :empreendimento="empreendimento" @click="abrirModal(empreendimento)" :fetchEmpreendimentos="fetchEmpreendimentos" />
+          :empreendimento="empreendimento" @click="abrirModal(empreendimento)"
+          :fetchEmpreendimentos="fetchEmpreendimentos" />
         <p class="text-center text-gray-500 text-2xl col-span-3" v-if="itensFiltrados.length === 0">
           Nenhum empreendimento encontrado.
         </p>
@@ -73,7 +75,8 @@ onMounted(() => {
       <button @click="abrirModalCadastro" class="px-4 py-2 bg-green-600 text-white rounded">Novo Empreendimento</button>
 
       <!-- Modal de Cadastro de Empreendimento -->
-      <modalCadastrarEmpreendimento v-if="mostrarModalCadastro"  @fecharModalCadastro="fecharModalCadastro" />
+      <modalCadastrarEmpreendimento v-if="mostrarModalCadastro" @fecharModalCadastro="fecharModalCadastro"
+        :fetchEmpreendimentos="fetchEmpreendimentos" />
     </div>
 
     <Carregamento />
