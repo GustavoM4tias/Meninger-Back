@@ -78,10 +78,6 @@
 import { ref } from 'vue';
 import { cadastrarEmpreendimento } from '../../services/useEmpreendimento'; // Importe o serviço
 
-const props = defineProps({
-    fetchEmpreendimentos: Function // Recebe a função como prop
-});
-
 const nome = ref('');
 const foto = ref('');
 const cidade = ref('');
@@ -123,8 +119,6 @@ const criarEmpreendimento = async () => {
         if (resultado.success) {
             console.log('Empreendimento cadastrado com sucesso:', resultado.dados);
             alert('Empreendimento cadastrado com sucesso!');
-            // Chama a função de fetch passada como prop para atualizar a lista
-            props.fetchEmpreendimentos();
 
             // Limpar os campos após o cadastro
             nome.value = '';
