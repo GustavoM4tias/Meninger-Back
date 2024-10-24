@@ -1,8 +1,12 @@
 <template>
     <div class="modal">
-        <div class="modal-content">
+        <div class="modal-content relative">
             <h2>Cadastrar Empreendimento</h2>
+            <div class="absolute top-0 right-1 cursor-pointer text-2xl" @click="$emit('fecharModalCadastro')">
+                <i class="fas fa-xmark"></i>
+            </div>
             <form @submit.prevent="criarEmpreendimento">
+
                 <div>
                     <label>Nome: <span class="obrigatorio">*</span></label>
                     <input type="text" v-model="nome" required />
@@ -70,102 +74,86 @@
     </div>
 </template>
 
-<script>
+<script setup>
 import { ref } from 'vue';
 import { cadastrarEmpreendimento } from '../../services/useEmpreendimento'; // Importe o serviço
 
-export default {
-    setup() {
-        const nome = ref('');
-        const foto = ref('');
-        const cidade = ref('');
-        const data_lancamento = ref('');
-        const previsao_entrega = ref('');
-        const responsavel = ref('');
-        const modelo = ref('');
-        const link_site1 = ref('');
-        const link_site2 = ref('');
-        const comissao = ref('');
-        const tags = ref('');
-        const descricao = ref('');
-        const unidades = ref('');
-        const preco_medio = ref('');
-        const preco_m2 = ref('');
-        const erro = ref('');
+const props = defineProps({
+    fetchEmpreendimentos: Function // Recebe a função como prop
+});
 
-        const criarEmpreendimento = async () => {
-            console.log('Iniciando o cadastro do empreendimento...');
-            const novoEmpreendimento = {
-                nome: nome.value,
-                foto: foto.value,
-                cidade: cidade.value,
-                data_lancamento: data_lancamento.value,
-                previsao_entrega: previsao_entrega.value,
-                responsavel: responsavel.value,
-                modelo: modelo.value,
-                link_site1: link_site1.value,
-                link_site2: link_site2.value,
-                comissao: comissao.value,
-                tags: tags.value.split(',').map(tag => tag.trim()), // Converter para array
-                descricao: descricao.value,
-                unidades: unidades.value,
-                preco_medio: preco_medio.value,
-                preco_m2: preco_m2.value,
-            };
+const nome = ref('');
+const foto = ref('');
+const cidade = ref('');
+const data_lancamento = ref('');
+const previsao_entrega = ref('');
+const responsavel = ref('');
+const modelo = ref('');
+const link_site1 = ref('');
+const link_site2 = ref('');
+const comissao = ref('');
+const tags = ref('');
+const descricao = ref('');
+const unidades = ref('');
+const preco_medio = ref('');
+const preco_m2 = ref('');
+const erro = ref('');
+const criarEmpreendimento = async () => {
+    console.log('Iniciando o cadastro do empreendimento...');
+    const novoEmpreendimento = {
+        nome: nome.value,
+        foto: foto.value,
+        cidade: cidade.value,
+        data_lancamento: data_lancamento.value,
+        previsao_entrega: previsao_entrega.value,
+        responsavel: responsavel.value,
+        modelo: modelo.value,
+        link_site1: link_site1.value,
+        link_site2: link_site2.value,
+        comissao: comissao.value,
+        tags: tags.value.split(',').map(tag => tag.trim()), // Converter para array
+        descricao: descricao.value,
+        unidades: unidades.value,
+        preco_medio: preco_medio.value,
+        preco_m2: preco_m2.value,
+    };
 
-            try {
-                const resultado = await cadastrarEmpreendimento(novoEmpreendimento);
-                if (resultado.success) {
-                    console.log('Empreendimento cadastrado com sucesso:', resultado.dados);
-                    alert('Empreendimento cadastrado com sucesso!');
-                    // Limpar os campos após o cadastro
-                    nome.value = '';
-                    foto.value = '';
-                    cidade.value = '';
-                    data_lancamento.value = '';
-                    previsao_entrega.value = '';
-                    responsavel.value = '';
-                    modelo.value = '';
-                    link_site1.value = '';
-                    link_site2.value = '';
-                    comissao.value = '';
-                    tags.value = '';
-                    descricao.value = '';
-                    unidades.value = '';
-                    preco_medio.value = '';
-                    preco_m2.value = '';
-                } else {
-                    console.error('Erro ao cadastrar empreendimento:', resultado.error);
-                    erro.value = resultado.error;
-                }
-            } catch (error) {
-                console.error('Erro ao cadastrar empreendimento:', error);
-                erro.value = 'Erro ao se conectar com o servidor';
-            }
-        };
+    try {
+        const resultado = await cadastrarEmpreendimento(novoEmpreendimento);
+        if (resultado.success) {
+            console.log('Empreendimento cadastrado com sucesso:', resultado.dados);
+            alert('Empreendimento cadastrado com sucesso!');
+            // Chama a função de fetch passada como prop para atualizar a lista
+            props.fetchEmpreendimentos();
 
-        return {
-            nome,
-            foto,
-            cidade,
-            data_lancamento,
-            previsao_entrega,
-            responsavel,
-            modelo,
-            link_site1,
-            link_site2,
-            comissao,
-            tags,
-            descricao,
-            unidades,
-            preco_medio,
-            preco_m2,
-            erro,
-            criarEmpreendimento
-        };
+            // Limpar os campos após o cadastro
+            nome.value = '';
+            foto.value = '';
+            cidade.value = '';
+            data_lancamento.value = '';
+            previsao_entrega.value = '';
+            responsavel.value = '';
+            modelo.value = '';
+            link_site1.value = '';
+            link_site2.value = '';
+            comissao.value = '';
+            tags.value = '';
+            descricao.value = '';
+            unidades.value = '';
+            preco_medio.value = '';
+            preco_m2.value = '';
+        } else {
+            console.error('Erro ao cadastrar empreendimento:', resultado.error);
+            erro.value = resultado.error;
+        }
+    } catch (error) {
+        console.error('Erro ao cadastrar empreendimento:', error);
+        erro.value = 'Erro ao se conectar com o servidor';
     }
 };
+
 </script>
+
 
 <style>
 .modal {
