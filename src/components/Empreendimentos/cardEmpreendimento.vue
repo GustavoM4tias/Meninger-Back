@@ -29,7 +29,7 @@ const clique = withModifiers(() => {
 </script>
 
 <template>
-    <div class="shadow-xl rounded-xl hover:shadow-2xl duration-300" @click="clique">
+    <div class="shadow-xl rounded-xl hover:shadow-2xl duration-300 max-h-80" @click="clique">
         <a href="#"class="card h-full relative block rounded-xl overflow-hidden duration-300 transform hover:scale-105 h-full">
             <div class="h-full w-full overflow-hidden">
                 <img :src="empreendimento.foto" alt="Imagem do empreendimento" class="h-full w-full object-cover" />
