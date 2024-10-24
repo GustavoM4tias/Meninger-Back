@@ -42,6 +42,10 @@ watch(busca, (novoValor) => {
                     <span class="texto ml-3" :style="{ display: texto ? 'inline' : 'none' }">Home</span>
                 </RouterLink>
             </li>
+            <li class="bg-blue-600 hover:bg-blue-700 duration-200 my-2 p-2 py-1 rounded-md cursor-pointer" @click="$emit('abrirModalCadastro')">
+                <i class="fas fa-plus-circle"></i>
+                <span class="texto ml-3" :style="{ display: texto ? 'inline' : 'none' }">Novo</span>
+            </li>
             <li class="bg-blue-600 hover:bg-blue-700 duration-200 my-2 p-2 py-1 rounded-md cursor-pointer">
                 <i class="fas fa-hotel"></i>
                 <span class="texto ml-3" :style="{ display: texto ? 'inline' : 'none' }">SBPE</span>

@@ -150,31 +150,41 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Rota para excluir um empreendimento
+// Rota para excluir um empreendimento e seus registros associados
 router.delete('/:id', async (req, res) => {
-    const { id } = req.params; // Obtém o ID do empreendimento a ser excluído
+    const { id } = req.params;
 
-    // Verifica se o ID é válido
     if (!id) {
         return res.status(400).json({ message: 'ID do empreendimento é necessário.' });
     }
 
-    // Consulta para excluir o empreendimento
-    const queryDeleteEmpreendimento = `
-        DELETE FROM empreendimentos WHERE id = ?;
-    `;
+    // Consultas para deletar campanhas e comentários associados ao empreendimento
+    const queryDeleteCampanhas = `DELETE FROM campanhas WHERE empreendimento_id = ?;`;
+    const queryDeleteComentarios = `DELETE FROM comentarios WHERE empreendimento_id = ?;`;
+    const queryDeleteEmpreendimento = `DELETE FROM empreendimentos WHERE id = ?;`;
 
     try {
-        // Executa a exclusão do empreendimento
+        // Iniciar uma transação para garantir a integridade dos dados
+        await db.promise().beginTransaction();
+
+        // Deletar campanhas e comentários associados ao empreendimento
+        await db.promise().query(queryDeleteCampanhas, [id]);
+        await db.promise().query(queryDeleteComentarios, [id]);
+
+        // Deletar o empreendimento
         const [result] = await db.promise().query(queryDeleteEmpreendimento, [id]);
 
-        // Verifica se o empreendimento foi realmente excluído
         if (result.affectedRows === 0) {
+            await db.promise().rollback(); // Reverter a transação em caso de erro
             return res.status(404).json({ message: 'Empreendimento não encontrado.' });
         }
 
-        res.status(200).json({ message: 'Empreendimento excluído com sucesso!' });
+        // Confirmar a transação
+        await db.promise().commit();
+        res.status(200).json({ message: 'Empreendimento e registros associados excluídos com sucesso!' });
     } catch (err) {
+        // Reverter a transação em caso de erro
+        await db.promise().rollback();
         console.error('Erro ao excluir empreendimento:', err);
         res.status(500).json({ message: 'Erro ao excluir o empreendimento' });
     }

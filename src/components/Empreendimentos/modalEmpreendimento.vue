@@ -1,6 +1,9 @@
 <script setup>
 import { deletarEmpreendimento } from '../../services/useDeleteEmpreendimento'; // ajuste o caminho conforme necessário
 
+import { useFetchEmpreendimentos } from '../../services/useFetchEmpreendimentos'; // fetch
+const { empreendimentos, fetchEmpreendimentos, erro } = useFetchEmpreendimentos();// fetch de empreendimentos
+
 // Defina as propriedades esperadas para o componente
 const props = defineProps({
     empreendimento: {
@@ -15,18 +18,19 @@ const excluirEmpreendimento = async () => {
     const empreendimento = props.empreendimento; // Garanta que a variável está acessível
 
     console.log('Excluindo empreendimento com ID:', empreendimento.id);
-    
+
     if (!empreendimento || !empreendimento.id) {
         console.error('Empreendimento não encontrado ou ID não disponível.');
         return; // Adicione esta linha para prevenir execução se ID não estiver disponível
     }
-  
+
     const idEmpreendimento = empreendimento.id; // Certifique-se de que o ID está acessível na sua propriedade
 
     const resultado = await deletarEmpreendimento(idEmpreendimento);
     if (resultado.success) {
         console.log('Empreendimento excluído com sucesso!', resultado.dados);
         emit('close'); // Fecha o modal após a exclusão
+        fetchEmpreendimentos();
     } else {
         console.error('Erro ao excluir empreendimento:', resultado.error);
     }
@@ -87,15 +91,19 @@ const excluirEmpreendimento = async () => {
                         <label class="col-span-2 text-xl md:text-2xl font-bold">Detalhes</label>
                         <div class="detalhes grid grid-cols-2 gap-1 border border border-gray-100 rounded-lg p-2">
                             <p class="text-md text-center leading-4 sm:leading-3"><strong>Responsável:</strong> <br>
-                                <span class="text-lg md:text-xl">{{ empreendimento.responsavel }}</span> </p>
+                                <span class="text-lg md:text-xl">{{ empreendimento.responsavel }}</span>
+                            </p>
                             <p class="text-md text-center leading-4 sm:leading-3"><strong>Modelo:</strong> <br> <span
                                     class="text-md md:text-lg">{{ empreendimento.modelo }}</span> </p>
                             <p class="text-md text-center leading-4 sm:leading-3"><strong>Comissão Atual:</strong> <br>
-                                <span class="text-md md:text-lg">{{ empreendimento.comissao }}</span> </p>
+                                <span class="text-md md:text-lg">{{ empreendimento.comissao }}</span>
+                            </p>
                             <p class="text-md text-center leading-4 sm:leading-3"><strong>Qtd Unidades:</strong> <br>
-                                <span class="text-md md:text-lg">{{ empreendimento.unidades }}</span> </p>
+                                <span class="text-md md:text-lg">{{ empreendimento.unidades }}</span>
+                            </p>
                             <p class="text-md text-center leading-4 sm:leading-3"><strong>Lançamento:</strong> <br>
-                                <span class="text-md md:text-lg">{{ empreendimento.data_lancamento }}</span> </p>
+                                <span class="text-md md:text-lg">{{ empreendimento.data_lancamento }}</span>
+                            </p>
                             <p class="text-md text-center leading-4 sm:leading-3"><strong>Entrega:</strong> <br> <span
                                     class="text-md md:text-lg">{{ empreendimento.previsao_entrega }}</span> </p>
                         </div>
@@ -138,7 +146,8 @@ const excluirEmpreendimento = async () => {
 
 
                     <!-- Botão de exclusão -->
-                    <button @click="excluirEmpreendimento" class="mt-4 bg-red-600 text-white font-bold py-2 px-4 rounded hover:bg-red-700">
+                    <button @click="excluirEmpreendimento"
+                        class="mt-4 bg-red-600 text-white font-bold py-2 px-4 rounded hover:bg-red-700">
                         Excluir Empreendimento
                     </button>
 
