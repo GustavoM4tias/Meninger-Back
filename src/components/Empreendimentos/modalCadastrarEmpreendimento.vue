@@ -11,8 +11,7 @@ const props = defineProps({
     fetchEmpreendimentos: Function, // Define a prop para receber a função
 });
 
-const fotoPadrao = ('/empreendimento.jpg')
-
+// Campos do empreendimento
 const nome = ref('');
 const foto = ref('');
 const cidade = ref('');
@@ -30,11 +29,15 @@ const preco_medio = ref('');
 const preco_m2 = ref('');
 const erro = ref('');
 
+// Campos da campanha
+const textoCampanha = ref('');
+const dataInicio = ref('');
+const dataFim = ref('');
+
 const criarEmpreendimento = async () => {
-    // console.log('Iniciando o cadastro do empreendimento...');
     const novoEmpreendimento = {
         nome: nome.value,
-        foto: foto.value.trim() === '' ? fotoPadrao : foto.value, // Se foto estiver vazia, usa a padrão
+        foto: foto.value,
         cidade: cidade.value,
         data_lancamento: data_lancamento.value,
         previsao_entrega: previsao_entrega.value,
@@ -43,20 +46,24 @@ const criarEmpreendimento = async () => {
         link_site1: link_site1.value,
         link_site2: link_site2.value,
         comissao: comissao.value,
-        tags: tags.value.split(',').map(tag => tag.trim()), // Converter para array
+        tags: tags.value.split(',').map(tag => tag.trim()),
         descricao: descricao.value,
         unidades: unidades.value,
         preco_medio: preco_medio.value,
         preco_m2: preco_m2.value,
+        campanha: {
+            texto: textoCampanha.value,
+            data_inicio: dataInicio.value,
+            data_fim: dataFim.value,
+        },
     };
 
     try {
         const resultado = await cadastrarEmpreendimento(novoEmpreendimento);
         if (resultado.success) {
-            // console.log('Empreendimento cadastrado com sucesso:', resultado.dados);
             props.fetchEmpreendimentos();
             emit('fecharModalCadastro');
-            toast.success('Cadastrado com Sucesso!')
+            toast.success('Cadastrado com Sucesso!');
             // Limpar os campos após o cadastro
             nome.value = '';
             foto.value = '';
@@ -73,6 +80,9 @@ const criarEmpreendimento = async () => {
             unidades.value = '';
             preco_medio.value = '';
             preco_m2.value = '';
+            textoCampanha.value = '';
+            dataInicio.value = '';
+            dataFim.value = '';
         } else {
             toast.error('Erro ao cadastrar empreendimento:', resultado.error);
             erro.value = resultado.error;
@@ -94,6 +104,7 @@ const criarEmpreendimento = async () => {
             </div>
             <form @submit.prevent="criarEmpreendimento">
 
+                <!-- Campos do empreendimento -->
                 <div>
                     <label>Nome: <span class="obrigatorio">*</span></label>
                     <input type="text" v-model="nome" required />
@@ -120,8 +131,7 @@ const criarEmpreendimento = async () => {
                 </div>
                 <div>
                     <label>Modelo:</label>
-                    <!-- <input type="text" v-model="modelo" /> -->
-                    <select name="Modelo" id="">
+                    <select v-model="modelo">
                         <option value="SBPE">SBPE</option>
                         <option value="MCMV">MCMV</option>
                     </select>
@@ -158,6 +168,22 @@ const criarEmpreendimento = async () => {
                     <label>Preço m²:</label>
                     <input type="number" v-model="preco_m2" />
                 </div>
+
+                <!-- Campos da campanha -->
+                <h3>Adicionar Campanha</h3>
+                <div>
+                    <label>Texto da Campanha: <span class="obrigatorio">*</span></label>
+                    <input type="text" v-model="textoCampanha" required />
+                </div>
+                <div>
+                    <label>Data de Início: <span class="obrigatorio">*</span></label>
+                    <input type="date" v-model="dataInicio" required />
+                </div>
+                <div>
+                    <label>Data de Fim: <span class="obrigatorio">*</span></label>
+                    <input type="date" v-model="dataFim" required />
+                </div>
+
                 <button type="submit">Cadastrar Empreendimento</button>
                 <div v-if="erro" class="erro">{{ erro }}</div>
             </form>
