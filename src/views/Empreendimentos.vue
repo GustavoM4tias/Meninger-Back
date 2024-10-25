@@ -2,6 +2,10 @@
 // dependências
 import { onMounted, nextTick, ref } from 'vue';
 
+// carrega user 
+import { useUsuario } from '../services/useUsuario';
+const { user } = useUsuario();
+
 // components
 import Nav from '../components/Empreendimentos/Nav.vue';
 import cardEmpreendimento from '../components/Empreendimentos/cardEmpreendimento.vue';
