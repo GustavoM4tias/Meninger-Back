@@ -45,7 +45,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="bg-gray-800 w-full relative overflow-x-hidden overflow-hidden">
+  <div class="bg-gray-800 w-full relative overflow-x-hidden text-gray-200 overflow-hidden">
     <img class="absolute z-0 left-72 top-0 filter grayscale brightness-50" src="/traçado.png">
     <Nav id="nav" class="fixed top-20" :onFiltrar="filtrarPorNome" @abrirModalCadastro="abrirModalCadastro" />
 
@@ -60,7 +60,7 @@ onMounted(() => {
           Nenhum empreendimento encontrado.
         </p>
       </section>
-
+      <img src="" alt="">
       <!-- Modal de Visualizacao de Produto -->
       <modalEmpreendimento v-if="visivelModal" :empreendimento="empreendimento" @fecharModal="fecharModal"
         :fetchEmpreendimentos="fetchEmpreendimentos" />

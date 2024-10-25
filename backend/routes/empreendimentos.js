@@ -133,22 +133,85 @@ router.post('/', async (req, res) => {
     }
 });
 
-// Rota para buscar empreendimentos
+// Rota para buscar empreendimentos com comentários e campanhas
 router.get('/', async (req, res) => {
     try {
-        const query = 'SELECT * FROM empreendimentos';
-        db.query(query, (err, results) => {
-            if (err) {
-                console.error('Erro ao buscar empreendimentos:', err);
-                return res.status(500).json({ message: 'Erro ao buscar empreendimentos' });
-            }
-            res.json(results);
-        });
+        const queryEmpreendimentos = 'SELECT * FROM empreendimentos';
+        const [empreendimentos] = await db.promise().query(queryEmpreendimentos);
+
+        // Obter comentários e campanhas para cada empreendimento
+        const queryComentarios = 'SELECT * FROM comentarios WHERE empreendimento_id = ?';
+        const queryCampanhas = 'SELECT * FROM campanhas WHERE empreendimento_id = ?';
+
+        // Iterar sobre os empreendimentos e adicionar comentários e campanhas
+        for (const empreendimento of empreendimentos) {
+            const [comentarios] = await db.promise().query(queryComentarios, [empreendimento.id]);
+            const [campanhas] = await db.promise().query(queryCampanhas, [empreendimento.id]);
+
+            // Associar os dados ao empreendimento
+            empreendimento.comentarios = comentarios;
+            empreendimento.campanhas = campanhas;
+        }
+
+        res.json(empreendimentos);
     } catch (error) {
-        console.error('Erro geral:', error);
-        res.status(500).json({ message: 'Erro no servidor' });
+        console.error('Erro ao buscar empreendimentos:', error);
+        res.status(500).json({ message: 'Erro ao buscar empreendimentos' });
     }
 });
+
+
+// Rota para atualizar um empreendimento
+router.put('/:id', async (req, res) => {
+    const { id } = req.params;
+    const {
+        nome,
+        foto,
+        cidade,
+        data_lancamento,
+        previsao_entrega,
+        responsavel,
+        modelo,
+        link_site1,
+        link_site2,
+        comissao,
+        tags,
+        descricao,
+        unidades,
+        preco_medio,
+        preco_m2
+    } = req.body;
+
+    const queryUpdate = `
+        UPDATE empreendimentos SET
+            nome = ?, foto = ?, cidade = ?, 
+            data_lancamento = ?, previsao_entrega = ?, 
+            responsavel = ?, modelo = ?, link_site1 = ?, 
+            link_site2 = ?, comissao = ?, tags = ?, 
+            descricao = ?, unidades = ?, preco_medio = ?, 
+            preco_m2 = ? 
+        WHERE id = ?;
+    `;
+
+    try {
+        const [result] = await db.promise().query(queryUpdate, [
+            nome, foto, cidade, data_lancamento, previsao_entrega,
+            responsavel, modelo, link_site1, link_site2, comissao,
+            JSON.stringify(tags || []), descricao, unidades,
+            preco_medio, preco_m2, id
+        ]);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Empreendimento não encontrado.' });
+        }
+
+        res.status(200).json({ message: 'Empreendimento atualizado com sucesso!' });
+    } catch (err) {
+        console.error('Erro ao atualizar empreendimento:', err);
+        res.status(500).json({ message: 'Erro ao atualizar o empreendimento' });
+    }
+});
+
 
 // Rota para excluir um empreendimento e seus registros associados
 router.delete('/:id', async (req, res) => {
