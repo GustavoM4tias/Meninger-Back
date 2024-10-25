@@ -1,3 +1,90 @@
+<script setup>
+import { ref } from 'vue';
+import { cadastrarEmpreendimento } from '../../services/useEmpreendimento'; // Importe o serviço
+import { useToast } from 'vue-toastification'; // notificacoes maneiras
+const toast = useToast();
+
+// Define o emit
+const emit = defineEmits(['fecharModalCadastro']);
+
+const props = defineProps({
+    fetchEmpreendimentos: Function, // Define a prop para receber a função
+});
+
+const fotoPadrao = ('/empreendimento.jpg')
+
+const nome = ref('');
+const foto = ref('');
+const cidade = ref('');
+const data_lancamento = ref('');
+const previsao_entrega = ref('');
+const responsavel = ref('');
+const modelo = ref('');
+const link_site1 = ref('');
+const link_site2 = ref('');
+const comissao = ref('');
+const tags = ref('');
+const descricao = ref('');
+const unidades = ref('');
+const preco_medio = ref('');
+const preco_m2 = ref('');
+const erro = ref('');
+
+const criarEmpreendimento = async () => {
+    // console.log('Iniciando o cadastro do empreendimento...');
+    const novoEmpreendimento = {
+        nome: nome.value,
+        foto: foto.value.trim() === '' ? fotoPadrao : foto.value, // Se foto estiver vazia, usa a padrão
+        cidade: cidade.value,
+        data_lancamento: data_lancamento.value,
+        previsao_entrega: previsao_entrega.value,
+        responsavel: responsavel.value,
+        modelo: modelo.value,
+        link_site1: link_site1.value,
+        link_site2: link_site2.value,
+        comissao: comissao.value,
+        tags: tags.value.split(',').map(tag => tag.trim()), // Converter para array
+        descricao: descricao.value,
+        unidades: unidades.value,
+        preco_medio: preco_medio.value,
+        preco_m2: preco_m2.value,
+    };
+
+    try {
+        const resultado = await cadastrarEmpreendimento(novoEmpreendimento);
+        if (resultado.success) {
+            // console.log('Empreendimento cadastrado com sucesso:', resultado.dados);
+            props.fetchEmpreendimentos();
+            emit('fecharModalCadastro');
+            toast.success('Cadastrado com Sucesso!')
+            // Limpar os campos após o cadastro
+            nome.value = '';
+            foto.value = '';
+            cidade.value = '';
+            data_lancamento.value = '';
+            previsao_entrega.value = '';
+            responsavel.value = '';
+            modelo.value = '';
+            link_site1.value = '';
+            link_site2.value = '';
+            comissao.value = '';
+            tags.value = '';
+            descricao.value = '';
+            unidades.value = '';
+            preco_medio.value = '';
+            preco_m2.value = '';
+        } else {
+            toast.error('Erro ao cadastrar empreendimento:', resultado.error);
+            erro.value = resultado.error;
+        }
+    } catch (error) {
+        console.error('Erro ao cadastrar empreendimento:', error);
+        erro.value = 'Erro ao se conectar com o servidor';
+    }
+};
+
+</script>
+
 <template>
     <div class="modal">
         <div class="modal-content relative">
@@ -33,14 +120,18 @@
                 </div>
                 <div>
                     <label>Modelo:</label>
-                    <input type="text" v-model="modelo" />
+                    <!-- <input type="text" v-model="modelo" /> -->
+                    <select name="Modelo" id="">
+                        <option value="SBPE">SBPE</option>
+                        <option value="MCMV">MCMV</option>
+                    </select>
                 </div>
                 <div>
-                    <label>Link Site 1:</label>
+                    <label>Link CV:</label>
                     <input type="url" v-model="link_site1" />
                 </div>
                 <div>
-                    <label>Link Site 2:</label>
+                    <label>Link Site:</label>
                     <input type="url" v-model="link_site2" />
                 </div>
                 <div>
@@ -73,92 +164,6 @@
         </div>
     </div>
 </template>
-
-<script setup>
-import { ref } from 'vue';
-import { cadastrarEmpreendimento } from '../../services/useEmpreendimento'; // Importe o serviço
-
-// Define o emit
-const emit = defineEmits(['fecharModalCadastro']);
-
-const props = defineProps({
-  fetchEmpreendimentos: Function, // Define a prop para receber a função
-});
-
-const nome = ref('');
-const foto = ref('');
-const cidade = ref('');
-const data_lancamento = ref('');
-const previsao_entrega = ref('');
-const responsavel = ref('');
-const modelo = ref('');
-const link_site1 = ref('');
-const link_site2 = ref('');
-const comissao = ref('');
-const tags = ref('');
-const descricao = ref('');
-const unidades = ref('');
-const preco_medio = ref('');
-const preco_m2 = ref('');
-const erro = ref('');
-const criarEmpreendimento = async () => {
-    console.log('Iniciando o cadastro do empreendimento...');
-    const novoEmpreendimento = {
-        nome: nome.value,
-        foto: foto.value,
-        cidade: cidade.value,
-        data_lancamento: data_lancamento.value,
-        previsao_entrega: previsao_entrega.value,
-        responsavel: responsavel.value,
-        modelo: modelo.value,
-        link_site1: link_site1.value,
-        link_site2: link_site2.value,
-        comissao: comissao.value,
-        tags: tags.value.split(',').map(tag => tag.trim()), // Converter para array
-        descricao: descricao.value,
-        unidades: unidades.value,
-        preco_medio: preco_medio.value,
-        preco_m2: preco_m2.value,
-    };
-
-    try {
-        const resultado = await cadastrarEmpreendimento(novoEmpreendimento);
-        if (resultado.success) {
-            console.log('Empreendimento cadastrado com sucesso:', resultado.dados);
-            alert('Empreendimento cadastrado com sucesso!');
-
-            // Chamar a função fetchEmpreendimentos após o sucesso
-            props.fetchEmpreendimentos();
-            emit('fecharModalCadastro');
-
-            // Limpar os campos após o cadastro
-            nome.value = '';
-            foto.value = '';
-            cidade.value = '';
-            data_lancamento.value = '';
-            previsao_entrega.value = '';
-            responsavel.value = '';
-            modelo.value = '';
-            link_site1.value = '';
-            link_site2.value = '';
-            comissao.value = '';
-            tags.value = '';
-            descricao.value = '';
-            unidades.value = '';
-            preco_medio.value = '';
-            preco_m2.value = '';
-        } else {
-            console.error('Erro ao cadastrar empreendimento:', resultado.error);
-            erro.value = resultado.error;
-        }
-    } catch (error) {
-        console.error('Erro ao cadastrar empreendimento:', error);
-        erro.value = 'Erro ao se conectar com o servidor';
-    }
-};
-
-</script>
-
 
 <style>
 .modal {

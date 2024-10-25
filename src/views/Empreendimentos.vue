@@ -45,40 +45,31 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="bg-gray-100 w-full relative overflow-x-hidden">
-    <img class="absolute z-0 left-72 top-0" src="/traçado.png">
+  <div class="bg-gray-800 w-full relative overflow-x-hidden overflow-hidden">
+    <img class="absolute z-0 left-72 top-0 filter grayscale brightness-50" src="/traçado.png">
     <Nav id="nav" class="fixed top-20" :onFiltrar="filtrarPorNome" @abrirModalCadastro="abrirModalCadastro" />
 
-    <div class="topo flex text-center relative">
+    <div class="produtos min-h-screen relative z-10 flex flex-col h-auto">
       <h1 class="font-bold m-auto text-2xl md:text-4xl my-8">Empreendimentos</h1>
-    </div>
-
-    <div class="produtos flex flex-col">
-
-      <section
-        class="container h-screen bg-blue-200 px-12 md:px-20 mx-auto pb-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <section class="container px-12 md:px-20 mx-auto pb-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <cardEmpreendimento v-for="empreendimento in itensFiltrados" :key="empreendimento.id"
           :empreendimento="empreendimento" @click="abrirModal(empreendimento)"
           :fetchEmpreendimentos="fetchEmpreendimentos" />
+
         <p class="text-center text-gray-500 text-2xl col-span-3" v-if="itensFiltrados.length === 0">
           Nenhum empreendimento encontrado.
         </p>
-        <p v-if="erro" class="text-red-500 text-center col-span-3">{{ erro }}</p>
       </section>
 
-      <!-- Modal de Produto -->
-      <modalEmpreendimento v-if="visivelModal" :empreendimento="empreendimento" @close="fecharModal" />
-    </div>
-
-
-    <div>
-      <button @click="abrirModalCadastro" class="px-4 py-2 bg-green-600 text-white rounded">Novo Empreendimento</button>
+      <!-- Modal de Visualizacao de Produto -->
+      <modalEmpreendimento v-if="visivelModal" :empreendimento="empreendimento" @fecharModal="fecharModal"
+        :fetchEmpreendimentos="fetchEmpreendimentos" />
 
       <!-- Modal de Cadastro de Empreendimento -->
       <modalCadastrarEmpreendimento v-if="mostrarModalCadastro" @fecharModalCadastro="fecharModalCadastro"
         :fetchEmpreendimentos="fetchEmpreendimentos" />
-    </div>
 
-    <Carregamento />
+      <Carregamento /> <!-- Carregamento -->
+    </div>
   </div>
 </template>
