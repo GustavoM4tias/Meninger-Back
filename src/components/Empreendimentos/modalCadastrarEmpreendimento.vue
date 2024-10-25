@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue';
 import { cadastrarEmpreendimento } from '../../services/useEmpreendimento'; // Importe o serviço
-import { useToast } from 'vue-toastification'; // notificacoes maneiras
+import { useToast } from 'vue-toastification'; // Notificações
 const toast = useToast();
 
 // Define o emit
@@ -64,27 +64,9 @@ const criarEmpreendimento = async () => {
             props.fetchEmpreendimentos();
             emit('fecharModalCadastro');
             toast.success('Cadastrado com Sucesso!');
-            // Limpar os campos após o cadastro
-            nome.value = '';
-            foto.value = '';
-            cidade.value = '';
-            data_lancamento.value = '';
-            previsao_entrega.value = '';
-            responsavel.value = '';
-            modelo.value = '';
-            link_site1.value = '';
-            link_site2.value = '';
-            comissao.value = '';
-            tags.value = '';
-            descricao.value = '';
-            unidades.value = '';
-            preco_medio.value = '';
-            preco_m2.value = '';
-            textoCampanha.value = '';
-            dataInicio.value = '';
-            dataFim.value = '';
+            limparCampos();
         } else {
-            toast.error('Erro ao cadastrar empreendimento:', resultado.error);
+            toast.error(`Erro ao cadastrar empreendimento: ${resultado.error}`);
             erro.value = resultado.error;
         }
     } catch (error) {
@@ -93,6 +75,27 @@ const criarEmpreendimento = async () => {
     }
 };
 
+// Função para limpar os campos
+const limparCampos = () => {
+    nome.value = '';
+    foto.value = '';
+    cidade.value = '';
+    data_lancamento.value = '';
+    previsao_entrega.value = '';
+    responsavel.value = '';
+    modelo.value = '';
+    link_site1.value = '';
+    link_site2.value = '';
+    comissao.value = '';
+    tags.value = '';
+    descricao.value = '';
+    unidades.value = '';
+    preco_medio.value = '';
+    preco_m2.value = '';
+    textoCampanha.value = '';
+    dataInicio.value = '';
+    dataFim.value = '';
+};
 </script>
 
 <template>
@@ -105,84 +108,89 @@ const criarEmpreendimento = async () => {
             <form @submit.prevent="criarEmpreendimento">
 
                 <!-- Campos do empreendimento -->
-                <div>
-                    <label>Nome: <span class="obrigatorio">*</span></label>
-                    <input type="text" v-model="nome" required />
-                </div>
-                <div>
-                    <label>Foto:</label>
-                    <input type="text" v-model="foto" />
-                </div>
-                <div>
-                    <label>Cidade: <span class="obrigatorio">*</span></label>
-                    <input type="text" v-model="cidade" required />
-                </div>
-                <div>
-                    <label>Data de Lançamento: <span class="obrigatorio">*</span></label>
-                    <input type="date" v-model="data_lancamento" required />
-                </div>
-                <div>
-                    <label>Previsão de Entrega: <span class="obrigatorio">*</span></label>
-                    <input type="date" v-model="previsao_entrega" required />
-                </div>
-                <div>
-                    <label>Responsável: <span class="obrigatorio">*</span></label>
-                    <input type="text" v-model="responsavel" required />
-                </div>
-                <div>
-                    <label>Modelo:</label>
-                    <select v-model="modelo">
-                        <option value="SBPE">SBPE</option>
-                        <option value="MCMV">MCMV</option>
-                    </select>
-                </div>
-                <div>
-                    <label>Link CV:</label>
-                    <input type="url" v-model="link_site1" />
-                </div>
-                <div>
-                    <label>Link Site:</label>
-                    <input type="url" v-model="link_site2" />
-                </div>
-                <div>
-                    <label>Comissão: <span class="obrigatorio">*</span></label>
-                    <input type="text" v-model="comissao" required />
-                </div>
-                <div>
-                    <label>Tags:</label>
-                    <input type="text" v-model="tags" placeholder="Separe por vírgula" />
-                </div>
-                <div>
-                    <label>Descrição:</label>
-                    <textarea v-model="descricao"></textarea>
-                </div>
-                <div>
-                    <label>Unidades:</label>
-                    <input type="number" v-model="unidades" />
-                </div>
-                <div>
-                    <label>Preço Médio: <span class="obrigatorio">*</span></label>
-                    <input type="number" v-model="preco_medio" required />
-                </div>
-                <div>
-                    <label>Preço m²:</label>
-                    <input type="number" v-model="preco_m2" />
-                </div>
+                <section>
+                    <h3>Dados do Empreendimento</h3>
+                    <div>
+                        <label>Nome: <span class="obrigatorio">*</span></label>
+                        <input type="text" v-model="nome" required />
+                    </div>
+                    <div>
+                        <label>Foto:</label>
+                        <input type="text" v-model="foto" />
+                    </div>
+                    <div>
+                        <label>Cidade: <span class="obrigatorio">*</span></label>
+                        <input type="text" v-model="cidade" required />
+                    </div>
+                    <div>
+                        <label>Data de Lançamento: <span class="obrigatorio">*</span></label>
+                        <input type="date" v-model="data_lancamento" required />
+                    </div>
+                    <div>
+                        <label>Previsão de Entrega: <span class="obrigatorio">*</span></label>
+                        <input type="date" v-model="previsao_entrega" required />
+                    </div>
+                    <div>
+                        <label>Responsável: <span class="obrigatorio">*</span></label>
+                        <input type="text" v-model="responsavel" required />
+                    </div>
+                    <div>
+                        <label>Modelo:</label>
+                        <select v-model="modelo">
+                            <option value="SBPE">SBPE</option>
+                            <option value="MCMV">MCMV</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Link CV:</label>
+                        <input type="url" v-model="link_site1" />
+                    </div>
+                    <div>
+                        <label>Link Site:</label>
+                        <input type="url" v-model="link_site2" />
+                    </div>
+                    <div>
+                        <label>Comissão: <span class="obrigatorio">*</span></label>
+                        <input type="text" v-model="comissao" required />
+                    </div>
+                    <div>
+                        <label>Tags:</label>
+                        <input type="text" v-model="tags" placeholder="Separe por vírgula" />
+                    </div>
+                    <div>
+                        <label>Descrição:</label>
+                        <textarea v-model="descricao"></textarea>
+                    </div>
+                    <div>
+                        <label>Unidades:</label>
+                        <input type="number" v-model="unidades" />
+                    </div>
+                    <div>
+                        <label>Preço Médio: <span class="obrigatorio">*</span></label>
+                        <input type="number" v-model="preco_medio" required />
+                    </div>
+                    <div>
+                        <label>Preço m²:</label>
+                        <input type="number" v-model="preco_m2" />
+                    </div>
+                </section>
 
                 <!-- Campos da campanha -->
-                <h3>Adicionar Campanha</h3>
-                <div>
-                    <label>Texto da Campanha: <span class="obrigatorio">*</span></label>
-                    <input type="text" v-model="textoCampanha" required />
-                </div>
-                <div>
-                    <label>Data de Início: <span class="obrigatorio">*</span></label>
-                    <input type="date" v-model="dataInicio" required />
-                </div>
-                <div>
-                    <label>Data de Fim: <span class="obrigatorio">*</span></label>
-                    <input type="date" v-model="dataFim" required />
-                </div>
+                <section>
+                    <h3>Adicionar Campanha</h3>
+                    <div>
+                        <label>Texto da Campanha: <span class="obrigatorio">*</span></label>
+                        <input type="text" v-model="textoCampanha" required />
+                    </div>
+                    <div>
+                        <label>Data de Início: <span class="obrigatorio">*</span></label>
+                        <input type="date" v-model="dataInicio" required />
+                    </div>
+                    <div>
+                        <label>Data de Fim: <span class="obrigatorio">*</span></label>
+                        <input type="date" v-model="dataFim" required />
+                    </div>
+                </section>
 
                 <button type="submit">Cadastrar Empreendimento</button>
                 <div v-if="erro" class="erro">{{ erro }}</div>
