@@ -1,40 +1,46 @@
 <script setup>
-import { deletarEmpreendimento } from '../../services/useDeleteEmpreendimento'; // ajuste o caminho conforme necessário
+import { deletarEmpreendimento } from '../../services/useDeleteEmpreendimento' // ajuste o caminho conforme necessário
 
-import { useFetchEmpreendimentos } from '../../services/useFetchEmpreendimentos'; // fetch
-const { empreendimentos, fetchEmpreendimentos, erro } = useFetchEmpreendimentos();// fetch de empreendimentos
+import { useFetchEmpreendimentos } from '../../services/useFetchEmpreendimentos' // fetch
+const { empreendimentos, fetchEmpreendimentos, erro } = useFetchEmpreendimentos()// fetch de empreendimentos
+
+import { useToast } from 'vue-toastification' // notificacoes maneiras
+const toast = useToast()
 
 // Defina as propriedades esperadas para o componente
 const props = defineProps({
     empreendimento: {
         type: Object,
         required: true,
-    }
-});
-const emit = defineEmits(['close']);
+    },
+    fetchEmpreendimentos: Function, // Define a prop para receber a função
+})
+
+const emit = defineEmits(['fecharModal'])
 
 const excluirEmpreendimento = async () => {
     // Acesse a propriedade 'empreendimento' do props
-    const empreendimento = props.empreendimento; // Garanta que a variável está acessível
+    const empreendimento = props.empreendimento // Garanta que a variável está acessível
 
-    console.log('Excluindo empreendimento com ID:', empreendimento.id);
+    // console.log('Excluindo empreendimento com ID:', empreendimento.id)
 
     if (!empreendimento || !empreendimento.id) {
-        console.error('Empreendimento não encontrado ou ID não disponível.');
-        return; // Adicione esta linha para prevenir execução se ID não estiver disponível
+        toast.error('Estamos com problemas, contate o seu suporte.') //Empreendimento não encontrado ou ID não disponível
+        return // Adicione esta linha para prevenir execução se ID não estiver disponível
     }
 
-    const idEmpreendimento = empreendimento.id; // Certifique-se de que o ID está acessível na sua propriedade
+    const idEmpreendimento = empreendimento.id // Certifique-se de que o ID está acessível na sua propriedade
 
-    const resultado = await deletarEmpreendimento(idEmpreendimento);
+    const resultado = await deletarEmpreendimento(idEmpreendimento)
     if (resultado.success) {
-        console.log('Empreendimento excluído com sucesso!', resultado.dados);
-        emit('close'); // Fecha o modal após a exclusão
-        fetchEmpreendimentos();
+        // console.log('Empreendimento excluído com sucesso!', resultado.dados)
+        toast.success(`Empreendimento ${empreendimento.nome} Excluído!`)
+        emit('fecharModal') // Fecha o modal após a exclusão
+        props.fetchEmpreendimentos()
     } else {
-        console.error('Erro ao excluir empreendimento:', resultado.error);
+        toast.error('Erro ao excluir empreendimento:', resultado.error)
     }
-};
+}
 </script>
 
 
@@ -85,7 +91,7 @@ const excluirEmpreendimento = async () => {
                 <div class="text flex flex-col py-4 px-4 md:px-6 relative">
 
                     <i class="fas fa-xmark absolute text-2xl top-0 right-0 m-5 cursor-pointer text-gray-800 hover:text-gray-700 duration-200"
-                        @click="$emit('close')"></i>
+                        @click="$emit('fecharModal')"></i>
 
                     <div class="my-3 text-gray-800">
                         <label class="col-span-2 text-xl md:text-2xl font-bold">Detalhes</label>
