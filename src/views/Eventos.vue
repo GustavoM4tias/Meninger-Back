@@ -3,12 +3,13 @@ import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import cardEventos from '../components/Eventos/cardEventos.vue';
 import modalEventos from '../components/Eventos/modalEventos.vue';
+import { useFetchEventos } from '../services/useFetchEventos';
 import Nav from '../components/Eventos/Nav.vue';
 
 const dataAtual = new Date();
 const route = useRoute();
 
-const  { eventos, erro, fetchEventos } = usefetchEventos();
+const  { eventos, erro, fetchEventos } = useFetchEventos();
 
 const eventoModal = ref(null);
 const abrirModal = (evento) => {
