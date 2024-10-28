@@ -1,0 +1,218 @@
+
+/Node Api (login e register)
+  /config
+    db.js: 
+// api/config/db.js
+const mysql = require('mysql2/promise');
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+const db = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_DATABASE,
+});
+
+// Testando a conexão ao banco de dados
+db.getConnection()
+  .then(() => {
+    console.log('Conexão com o banco de dados estabelecida com sucesso.');
+  })
+  .catch((error) => {
+    console.error('Erro ao conectar ao banco de dados:', error.message);
+  });
+
+module.exports = db;
+
+
+
+    jwtConfig.js:
+    // api/config/jwtConfig.js
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+const jwtConfig = {
+  secret: process.env.JWT_SECRET,
+  expiresIn: '30d', // Token expiration
+};
+
+module.exports = jwtConfig;
+  /controllers
+    authController.js:
+   // api/controllers/authController.js
+const User = require('../models/userModel');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const jwtConfig = require('../config/jwtConfig');
+const responseHandler = require('../utils/responseHandler');
+
+const registerUser = async (req, res) => {
+  const { username, password, email } = req.body;
+  try {
+    const existingUser = await User.findByUsername(req.db, username);
+    if (existingUser) {
+      return responseHandler.error(res, 'User already exists');
+    }
+    await User.register(req.db, username, password, email);
+    responseHandler.success(res, 'User registered successfully');
+  } catch (error) {
+    responseHandler.error(res, error);
+  }
+};
+
+const loginUser = async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const user = await User.findByUsername(req.db, username);
+    if (!user) {
+      return responseHandler.error(res, 'Usuário não encontrado');
+    }
+
+    // console.log('Senha no banco:', user.password);
+    // console.log('Senha fornecida:', password);
+
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+      return responseHandler.error(res, 'Senha incorreta');
+    }
+
+    const token = jwt.sign({ id: user.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+    responseHandler.success(res, { token });
+  } catch (error) {
+    console.error('Erro no login:', error);
+    responseHandler.error(res, 'Erro ao processar o login');
+  }
+};
+
+
+module.exports = { registerUser, loginUser };
+
+
+  /middlewares
+    authMiddleware.js:
+    // api/middlewares/authMiddleware.js
+const jwt = require('jsonwebtoken');
+const jwtConfig = require('../config/jwtConfig');
+
+const authenticate = async (req, res, next) => {
+  const token = req.header('Authorization');
+  if (!token) return res.status(401).json({ message: 'Access denied. No token provided.' });
+
+  try {
+    const decoded = jwt.verify(token, jwtConfig.secret);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    res.status(400).json({ message: 'Invalid token.' });
+  }
+};
+
+module.exports = authenticate;
+
+  /models
+    userModel.js:
+    
+// api/models/userModel.js
+const bcrypt = require('bcryptjs');
+
+const User = {
+  // Registrar um novo usuário
+  register: async (db, username, password, email) => {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    // console.log('Senha hasheada:', hashedPassword);  // Verifique se está correto
+    const sql = 'INSERT INTO users (username, password, email) VALUES (?, ?, ?)';
+    const [result] = await db.execute(sql, [username, hashedPassword, email]);
+    return result;
+  },
+
+  // Encontrar usuário pelo nome de usuário
+  findByUsername: async (db, username) => {
+    const sql = 'SELECT * FROM users WHERE username = ?';
+    const [rows] = await db.execute(sql, [username]);
+    return rows[0];
+  },
+};
+
+module.exports = User;
+
+
+  /routes
+    authRoutes.js:// api/controllers/authController.js
+const User = require('../models/userModel');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const jwtConfig = require('../config/jwtConfig');
+const responseHandler = require('../utils/responseHandler');
+
+const registerUser = async (req, res) => {
+  const { username, password, email } = req.body;
+  try {
+    const existingUser = await User.findByUsername(req.db, username);
+    if (existingUser) {
+      return responseHandler.error(res, 'User already exists');
+    }
+    await User.register(req.db, username, password, email);
+    responseHandler.success(res, 'User registered successfully');
+  } catch (error) {
+    responseHandler.error(res, error);
+  }
+};
+
+const loginUser = async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    // Verifica se o usuário existe no banco de dados
+    const user = await User.findByUsername(req.db, username);
+    if (!user) {
+      return responseHandler.error(res, 'Usuário não encontrado');
+    }
+
+    // Log para verificar o hash da senha armazenada e a senha fornecida
+    console.log('Senha no banco:', user.password);
+    console.log('Senha fornecida:', password);
+
+    // Compara a senha
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+      return responseHandler.error(res, 'Senha incorreta');
+    }
+
+    // Gera o token JWT
+    const token = jwt.sign({ id: user.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+    responseHandler.success(res, { token });
+  } catch (error) {
+    console.error('Erro no login:', error);
+    responseHandler.error(res, 'Erro ao processar o login');
+  }
+};
+
+module.exports = { registerUser, loginUser };
+
+server.js:
+// api/server.js
+const express = require('express');
+const dotenv = require('dotenv');
+const db = require('./config/db');
+const authRoutes = require('./routes/authRoutes');
+
+dotenv.config();
+
+const app = express();
+app.use(express.json());
+
+// Middleware para adicionar `req.db` em cada requisição
+app.use((req, res, next) => {
+  req.db = db;
+  next();
+});
+
+// Rotas
+app.use('/api/auth', authRoutes);  // Certifique-se de que isso está presente
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
