@@ -1,9 +1,9 @@
 // api/server.js
-const express = require('express');
-const dotenv = require('dotenv');
-const cors = require('cors');
-const db = require('./config/db');
-const authRoutes = require('./routes/authRoutes');
+import express from 'express';
+import dotenv from 'dotenv';
+import cors from 'cors';
+import db from './config/db.js';
+import authRoutes from './routes/authRoutes.js';
 
 dotenv.config();
 
@@ -12,9 +12,9 @@ app.use(express.json());
 
 // Usar CORS
 app.use(cors({
-  origin: 'http://localhost:5173', // Permite apenas este domínio
-  methods: ['GET', 'POST', 'PUT', 'DELETE'], // Métodos permitidos
-  credentials: true, // Permitir cookies se necessário
+  origin: 'http://localhost:5173',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true,
 }));
 
 // Middleware para adicionar `req.db` em cada requisição
@@ -24,7 +24,7 @@ app.use((req, res, next) => {
 });
 
 // Rotas
-app.use('/api/auth', authRoutes);  // Certifique-se de que isso está presente
+app.use('/api/auth', authRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {

@@ -1,12 +1,15 @@
 // api/controllers/authController.js
-const User = require('../models/userModel');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-const jwtConfig = require('../config/jwtConfig');
-const responseHandler = require('../utils/responseHandler');
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import User from '../models/userModel.js';
+import jwtConfig from '../config/jwtConfig.js';
+import responseHandler from '../utils/responseHandler.js';
 
-const registerUser = async (req, res) => {
+export const registerUser = async (req, res) => {
   const { username, password, email } = req.body;
+  if (!username || !password || !email) {
+    return responseHandler.error(res, 'Todos os campos são obrigatórios');
+  }  
   try {
     const existingUser = await User.findByUsername(req.db, username);
     if (existingUser) {
@@ -14,7 +17,7 @@ const registerUser = async (req, res) => {
     }
     await User.register(req.db, username, password, email);
 
-    const newUser = await User.findByUsername(req.db, username); // Obtenha o novo usuário
+    const newUser = await User.findByUsername(req.db, username);
     const token = jwt.sign({ id: newUser.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
     responseHandler.success(res, { token });
   } catch (error) {
@@ -22,16 +25,13 @@ const registerUser = async (req, res) => {
   }
 };
 
-const loginUser = async (req, res) => {
+export const loginUser = async (req, res) => {
   const { username, password } = req.body;
   try {
     const user = await User.findByUsername(req.db, username);
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
-
-    // console.log('Senha no banco:', user.password);
-    // console.log('Senha fornecida:', password);
 
     const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
@@ -46,5 +46,14 @@ const loginUser = async (req, res) => {
   }
 };
 
-
-module.exports = { registerUser, loginUser };
+export const getUserInfo = async (req, res) => {
+  try {
+    const user = await User.findById(req.db, req.user.id); // Usando o ID decodificado do token
+    if (!user) {
+      return responseHandler.error(res, new Error('Usuário não encontrado'));
+    }
+    responseHandler.success(res, { username: user.username, email: user.email });
+  } catch (error) {
+    responseHandler.error(res, error);
+  }
+};

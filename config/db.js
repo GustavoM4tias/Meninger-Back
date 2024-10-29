@@ -1,6 +1,6 @@
 // api/config/db.js
-const mysql = require('mysql2/promise');
-const dotenv = require('dotenv');
+import mysql from 'mysql2/promise';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
@@ -12,12 +12,13 @@ const db = mysql.createPool({
 });
 
 // Testando a conexão ao banco de dados
-db.getConnection()
-  .then(() => {
+(async () => {
+  try {
+    await db.getConnection();
     console.log('Conexão com o banco de dados estabelecida com sucesso.');
-  })
-  .catch((error) => {
+  } catch (error) {
     console.error('Erro ao conectar ao banco de dados:', error.message);
-  });
+  }
+})();
 
-module.exports = db;
+export default db;
