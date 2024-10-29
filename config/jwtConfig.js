@@ -1,11 +1,11 @@
 // api/config/jwtConfig.js
-const dotenv = require('dotenv');
+import dotenv from 'dotenv';
 
 dotenv.config();
 
 const jwtConfig = {
   secret: process.env.JWT_SECRET,
-  expiresIn: '30d', // Token expiration
+  expiresIn: '30d',
 };
 
-module.exports = jwtConfig;
+export default jwtConfig;
