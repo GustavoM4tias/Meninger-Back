@@ -1,9 +1,13 @@
 // api/routes/authRoutes.js
-const express = require('express');
+import express from 'express';
+import { registerUser, loginUser, getUserInfo } from '../controllers/authController.js';
+import authenticate from '../middlewares/authMiddleware.js';
+
 const router = express.Router();
-const { registerUser, loginUser } = require('../controllers/authController');
 
 router.post('/register', registerUser);
 router.post('/login', loginUser);
+// Rota para obter informações do usuário
+router.get('/user', authenticate, getUserInfo);
 
-module.exports = router;
+export default router;
