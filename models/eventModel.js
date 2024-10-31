@@ -1,35 +1,37 @@
 // api/models/eventModel.js
 const Event = {
-    addEvent: async (db, { title, description, eventDate, tags, images }) => {
+    addEvent: async (db, { title, description, eventDate, tags, images, address }) => {
         console.log('Tags:', JSON.stringify(tags)); // Confirma a conversão
         console.log('Images:', JSON.stringify(images)); // Confirma a conversão
-        const sql = `INSERT INTO events (title, description, event_date, tags, images)
-                   VALUES (?, ?, ?, ?, ?)`;
+        console.log('Address:', JSON.stringify(address)); // Confirma a conversão
+        const sql = `INSERT INTO events (title, description, event_date, tags, images, address)
+                   VALUES (?, ?, ?, ?, ?, ?)`;
         const [result] = await db.execute(sql, [
             title,
             description,
             eventDate,
             JSON.stringify(tags),
-            JSON.stringify(images)
+            JSON.stringify(images),
+            JSON.stringify(address)
         ]);
         return result;
     },
 
     getEvents: async (db) => {
-        const sql = `SELECT id, title, description, post_date, event_date, tags, images FROM events ORDER BY event_date ASC`;
+        const sql = `SELECT id, title, description, post_date, event_date, tags, images, address FROM events ORDER BY event_date ASC`;
         const [rows] = await db.execute(sql);
 
         return rows.map(event => ({
             ...event,
             tags: typeof event.tags === 'string' ? JSON.parse(event.tags) : event.tags,
-            images: typeof event.images === 'string' ? JSON.parse(event.images) : event.images
+            images: typeof event.images === 'string' ? JSON.parse(event.images) : event.images,
+            address: typeof event.address === 'string' ? JSON.parse(event.address) : event.address
         }));
-
     },
 
-    updateEvent: async (db, id, { title, description, eventDate, tags, images }) => {
+    updateEvent: async (db, id, { title, description, eventDate, tags, images, address }) => {
         const sql = `UPDATE events 
-                     SET title = ?, description = ?, event_date = ?, tags = ?, images = ? 
+                     SET title = ?, description = ?, event_date = ?, tags = ?, images = ?, address = ? 
                      WHERE id = ?`;
         const [result] = await db.execute(sql, [
             title,
@@ -37,6 +39,7 @@ const Event = {
             eventDate,
             JSON.stringify(tags),
             JSON.stringify(images),
+            JSON.stringify(address), 
             id
         ]);
         return result;
