@@ -12,7 +12,11 @@ const app = express();
 app.use(express.json());
 
 // Usar CORS
-app.use(cors());
+app.use(cors({
+  origin: 'https://node-back-eight.vercel.app/',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true,
+}));
 
 // Middleware para adicionar `req.db` em cada requisição
 app.use((req, res, next) => {
