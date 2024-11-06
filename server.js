@@ -13,7 +13,7 @@ app.use(express.json());
 
 // Usar CORS
 app.use(cors({
-  origin: 'https://node-back-eight.vercel.app/',
+  origin: 'https://meninger.vercel.app', 
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
 }));
