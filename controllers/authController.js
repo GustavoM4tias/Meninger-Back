@@ -13,7 +13,7 @@ export const registerUser = async (req, res) => {
   try {
     const existingUser = await User.findByUsername(req.db, username);
     if (existingUser) {
-      return responseHandler.error(res, 'User already exists');
+      return responseHandler.error(res, 'Nome já existente');
     }
     await User.register(req.db, username, password, email);
 
@@ -26,9 +26,9 @@ export const registerUser = async (req, res) => {
 };
 
 export const loginUser = async (req, res) => {
-  const { username, password } = req.body;
+  const { email, password } = req.body;
   try {
-    const user = await User.findByUsername(req.db, username);
+    const user = await User.findByEmail(req.db, email);
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
