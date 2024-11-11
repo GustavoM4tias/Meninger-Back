@@ -1,24 +1,25 @@
 // api/models/eventModel.js
 const Event = {
-    addEvent: async (db, { title, description, eventDate, tags, images, address }) => {
+    addEvent: async (db, { title, description, eventDate, tags, images, address, created_by }) => {
         console.log('Tags:', JSON.stringify(tags)); // Confirma a conversão
         console.log('Images:', JSON.stringify(images)); // Confirma a conversão
         console.log('Address:', JSON.stringify(address)); // Confirma a conversão
-        const sql = `INSERT INTO events (title, description, event_date, tags, images, address)
-                   VALUES (?, ?, ?, ?, ?, ?)`;
+        const sql = `INSERT INTO events (title, description, event_date, tags, images, address, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)`;
         const [result] = await db.execute(sql, [
             title,
             description,
             eventDate,
             JSON.stringify(tags),
             JSON.stringify(images),
-            JSON.stringify(address)
+            JSON.stringify(address),
+            created_by
         ]);
         return result;
     },
 
     getEvents: async (db) => {
-        const sql = `SELECT id, title, description, post_date, event_date, tags, images, address FROM events ORDER BY event_date ASC`;
+        const sql = `SELECT id, title, description, post_date, event_date, tags, images, address, created_by FROM events ORDER BY event_date ASC`;
         const [rows] = await db.execute(sql);
 
         return rows.map(event => ({

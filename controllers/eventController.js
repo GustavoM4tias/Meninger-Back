@@ -3,7 +3,7 @@ import Event from '../models/eventModel.js';
 import responseHandler from '../utils/responseHandler.js';
 
 export const addEvent = async (req, res) => {
-    const { title, description, eventDate, tags, images, address } = req.body;
+    const { title, description, eventDate, tags, images, address, created_by } = req.body;
 
     try {
         const newEvent = await Event.addEvent(req.db, {
@@ -12,7 +12,8 @@ export const addEvent = async (req, res) => {
             eventDate,
             tags: tags || [], // Array de tags (adjetivos)
             images: images || [], // Array de URLs de imagens
-            address: address || [] // Array de endereco
+            address: address || [], // Array de endereco
+            created_by
         });
         responseHandler.success(res, { message: 'Evento criado com sucesso', eventId: newEvent.insertId });
     } catch (error) {
