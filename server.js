@@ -12,17 +12,17 @@ const app = express();
 app.use(express.json());
 
 // Usar CORS
-app.use(cors({
-  origin: 'http://localhost:5173', 
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true,
-}));
-
 // app.use(cors({
-//   origin: 'https://meninger.vercel.app', 
+//   origin: 'http://localhost:5173', 
 //   methods: ['GET', 'POST', 'PUT', 'DELETE'],
 //   credentials: true,
 // }));
+
+app.use(cors({
+  origin: 'https://meninger.vercel.app', 
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true,
+}));
 
 // Middleware para adicionar `req.db` em cada requisição
 app.use((req, res, next) => {
