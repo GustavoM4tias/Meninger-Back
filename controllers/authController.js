@@ -33,6 +33,11 @@ export const loginUser = async (req, res) => {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
 
+    // Verifica se o usuário está ativo (status TRUE)
+    if (!user.status) {
+      return responseHandler.error(res, 'Conta inativa. Entre em contato com o administrador.');
+    }
+
     const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
       return responseHandler.error(res, 'Senha incorreta');
@@ -52,7 +57,7 @@ export const getUserInfo = async (req, res) => {
     if (!user) {
       return responseHandler.error(res, new Error('Usuário não encontrado'));
     }
-    responseHandler.success(res, { username: user.username, email: user.email, position: user.position, city: user.city, created_at: user.created_at });
+    responseHandler.success(res, { username: user.username, email: user.email, position: user.position, city: user.city, created_at: user.created_at, status: user.status });
   } catch (error) {
     responseHandler.error(res, error);
   }
@@ -80,15 +85,17 @@ export const updateMe = async (req, res) => {
 };
 
 export const updateUser = async (req, res) => {
-  const { id, username, email, position, city } = req.body;
+  const { id, username, email, position, city, status } = req.body;
 
-  if (!id || !username || !email || !position || !city) {
+  if (!id || !username || !email || !position || !city || status === undefined) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
 
+  // Garantir que status seja 0 ou 1
+  const validStatus = status === 0 || status === 1 ? status : 1;
+
   try {
-    // Atualizando as informações do usuárioMas 
-    const updatedUser = await User.updateById(req.db, req.body.id, { username, email, position, city });
+    const updatedUser = await User.updateById(req.db, req.body.id, { username, email, position, city, status: validStatus  });
 
     if (!updatedUser) {
       return responseHandler.error(res, 'Usuário não encontrado');
