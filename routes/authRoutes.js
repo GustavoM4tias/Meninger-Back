@@ -1,6 +1,6 @@
 // api/routes/authRoutes.js
 import express from 'express';
-import { registerUser, loginUser, getUserInfo, updateUser } from '../controllers/authController.js';
+import { registerUser, loginUser, getUserInfo, updateMe, updateUser, getAllUsers } from '../controllers/authController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
@@ -8,6 +8,9 @@ const router = express.Router();
 router.post('/register', registerUser);
 router.post('/login', loginUser);
 router.get('/user', authenticate, getUserInfo);
-router.put('/user', authenticate, updateUser); // Nova rota para atualização
+router.put('/user', authenticate, updateMe); // Nova rota para atualização
+router.get('/users', authenticate, getAllUsers);  // Rota para obter todos os usuários
+router.put('/users', authenticate, updateUser);  // Rota para obter todos os usuários
+
 
 export default router;

@@ -58,7 +58,7 @@ export const getUserInfo = async (req, res) => {
   }
 };
 
-export const updateUser = async (req, res) => {
+export const updateMe = async (req, res) => {
   const { username, email, position, city } = req.body;
 
   if (!username || !email || !position || !city) {
@@ -79,45 +79,35 @@ export const updateUser = async (req, res) => {
   }
 };
 
-// export const updateUser = async (req, res) => {
-//   const { username, email, position, city } = req.body;
+export const updateUser = async (req, res) => {
+  const { id, username, email, position, city } = req.body;
 
-//   // Validações básicas para cada campo
-//   if (!username || !email || !position || !city) {
-//     return responseHandler.error(res, 'Todos os campos são obrigatórios');
-//   }
+  if (!id || !username || !email || !position || !city) {
+    return responseHandler.error(res, 'Todos os campos são obrigatórios');
+  }
 
-//   // Verificação do formato do e-mail
-//   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-//   if (!emailRegex.test(email)) {
-//     return responseHandler.error(res, 'Formato de e-mail inválido');
-//   }
+  try {
+    // Atualizando as informações do usuárioMas 
+    const updatedUser = await User.updateById(req.db, req.body.id, { username, email, position, city });
 
-//   // Verificação do tamanho do nome de usuário (exemplo: entre 3 e 20 caracteres)
-//   if (username.length < 3 || username.length > 20) {
-//     return responseHandler.error(res, 'O nome de usuário deve ter entre 3 e 20 caracteres');
-//   }
+    if (!updatedUser) {
+      return responseHandler.error(res, 'Usuário não encontrado');
+    }
 
-//   // Verificação do campo position para garantir que não esteja vazio
-//   if (position.trim().length === 0) {
-//     return responseHandler.error(res, 'O campo posição não pode estar vazio');
-//   }
+    responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
+  } catch (error) {
+    responseHandler.error(res, error);
+  }
+};
 
-//   // Verificação do campo city para garantir que não esteja vazio
-//   if (city.trim().length === 0) {
-//     return responseHandler.error(res, 'O campo cidade não pode estar vazio');
-//   }
-
-//   try {
-//     // Atualizando as informações do usuário
-//     const updatedUser = await User.updateById(req.db, req.user.id, { username, email, position, city });
-
-//     if (!updatedUser) {
-//       return responseHandler.error(res, 'Usuário não encontrado');
-//     }
-
-//     responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
-//   } catch (error) {
-//     responseHandler.error(res, error);
-//   }
-// };
+export const getAllUsers = async (req, res) => {
+  try {
+    const users = await User.findAll(req.db);
+    if (!users.length) {
+      return responseHandler.error(res, 'Nenhum usuário encontrado');
+    }
+    responseHandler.success(res, users);
+  } catch (error) {
+    responseHandler.error(res, error);
+  }
+};
