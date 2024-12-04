@@ -14,7 +14,7 @@ const User = {
     const [rows] = await db.execute(sql, [username]);
     return rows[0];
   },
-  
+
   findByEmail: async (db, email) => {
     const sql = 'SELECT * FROM users WHERE email = ?';
     const [rows] = await db.execute(sql, [email]);
@@ -32,6 +32,13 @@ const User = {
     const sql = 'UPDATE users SET username = ?, email = ?, position = ?, city = ? WHERE id = ?';
     const [result] = await db.execute(sql, [username, email, position, city, id]);
     return result.affectedRows > 0;
+  },
+  
+  // Método para buscar todos os usuários
+  findAll: async (db) => {
+    const sql = 'SELECT id, username, email, position, city FROM users'; // Selecione apenas os campos necessários
+    const [rows] = await db.execute(sql);
+    return rows;
   },
 };
 
