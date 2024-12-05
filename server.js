@@ -5,6 +5,7 @@ import cors from 'cors';
 import db from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
+import buildingRoutes from './routes/buildingRoutes.js';
 
 dotenv.config();
 
@@ -28,6 +29,8 @@ app.use((req, res, next) => {
 app.use('/api/auth', authRoutes);
 
 app.use('/api/events', eventRoutes);
+
+app.use('/api/buildings', buildingRoutes);
 
 
 const PORT = process.env.PORT || 5000;
