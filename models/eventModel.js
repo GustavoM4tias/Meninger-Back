@@ -44,8 +44,8 @@ const Event = {
             id
         ]);
         return result;
-    },
-
+    }, 
+    
     deleteEvent: async (db, id) => {
         const sql = `DELETE FROM events WHERE id = ?`;
         const [result] = await db.execute(sql, [id]);
