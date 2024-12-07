@@ -1,8 +1,9 @@
 // api/controllers/authController.js
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import User from '../models/userModel.js';
+import User from '../models/authModel.js';
 import jwtConfig from '../config/jwtConfig.js';
+import { sendEmail } from '../utils/emailService.js';
 import responseHandler from '../utils/responseHandler.js';
 
 export const registerUser = async (req, res) => {
@@ -19,6 +20,7 @@ export const registerUser = async (req, res) => {
 
     const newUser = await User.findByUsername(req.db, username);
     const token = jwt.sign({ id: newUser.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+
     responseHandler.success(res, { token });
   } catch (error) {
     responseHandler.error(res, error);
@@ -44,6 +46,13 @@ export const loginUser = async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+
+    // Envio de e-mail de boas-vindas
+    await sendEmail(
+      email,
+      'Bem-vindo ao Meninger!',
+      `<h1>Olá, ${user.username}!</h1><p>Obrigado por fazer login no nosso sistema.</p><p>Estamos felizes por tê-lo conosco novamente!</p>`
+    );
     responseHandler.success(res, { token });
   } catch (error) {
     console.error('Erro no login:', error);
@@ -95,7 +104,7 @@ export const updateUser = async (req, res) => {
   const validStatus = status === 0 || status === 1 ? status : 1;
 
   try {
-    const updatedUser = await User.updateById(req.db, req.body.id, { username, email, position, city, status: validStatus  });
+    const updatedUser = await User.updateById(req.db, req.body.id, { username, email, position, city, status: validStatus });
 
     if (!updatedUser) {
       return responseHandler.error(res, 'Usuário não encontrado');
