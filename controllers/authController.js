@@ -3,7 +3,6 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import User from '../models/authModel.js';
 import jwtConfig from '../config/jwtConfig.js';
-import { sendEmail } from '../utils/emailService.js';
 import responseHandler from '../utils/responseHandler.js';
 
 export const registerUser = async (req, res) => {
@@ -47,12 +46,6 @@ export const loginUser = async (req, res) => {
 
     const token = jwt.sign({ id: user.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
 
-    // Envio de e-mail de boas-vindas
-    await sendEmail(
-      email,
-      'Bem-vindo ao Meninger!',
-      `<h1>Olá, ${user.username}!</h1><p>Obrigado por fazer login no nosso sistema.</p><p>Estamos felizes por tê-lo conosco novamente!</p>`
-    );
     responseHandler.success(res, { token });
   } catch (error) {
     console.error('Erro no login:', error);
