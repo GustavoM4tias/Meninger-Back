@@ -1,6 +1,7 @@
 // api/controllers/eventController.js
 import Event from '../models/eventModel.js';
 import responseHandler from '../utils/responseHandler.js';
+import { sendEmailWithTemplate } from '../utils/emailService.js';
 
 export const addEvent = async (req, res) => {
     const { title, description, eventDate, tags, images, address, created_by } = req.body;
@@ -16,6 +17,26 @@ export const addEvent = async (req, res) => {
             created_by
         });
         responseHandler.success(res, { message: 'Evento criado com sucesso', eventId: newEvent.insertId });
+
+        // Combina os dados do novo evento com os dados recebidos
+        const replacements = {
+            title,
+            description,
+            eventDate,
+            tags: tags || [], // Array de tags (adjetivos)
+            images: images || [], // Array de URLs de imagens
+            address: address || [], // Array de endereco
+            created_by
+        };
+
+        // Envio do e-mail com o template
+        await sendEmailWithTemplate(
+            'gustavodiniz200513@gmail.com', // E-mail do destinatário
+            'Novo Evento Criado', // Assunto do e-mail
+            './templates/emailEventTemplate.html', // Caminho para o template
+            replacements // Dados a serem inseridos no template
+        );
+
     } catch (error) {
         responseHandler.error(res, error);
     }
@@ -36,7 +57,7 @@ export const updateEvent = async (req, res) => {
 
     try {
         const result = await Event.updateEvent(req.db, id, { title, description, eventDate, tags, images, address });
-        
+
         if (result.affectedRows === 0) {
             return responseHandler.error(res, 'Evento não encontrado');
         }
