@@ -14,6 +14,10 @@ const transporter = nodemailer.createTransport({
         user: process.env.EMAIL_USER, // Usuário SMTP
         pass: process.env.EMAIL_PASS, // Senha SMTP
     },
+    tls: {
+        rejectUnauthorized: false, // Ignora problemas de certificado
+    },
+    debug: true, // Log detalhado
 });
 
 // Verifica conexão com o servidor SMTP

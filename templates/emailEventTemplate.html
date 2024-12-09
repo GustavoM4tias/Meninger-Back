@@ -75,6 +75,19 @@
             color: #777;
             padding: 20px;
         }
+
+        @media (max-width: 768px) {
+            
+        .content {
+            padding: 30px 10px 10px 10px;
+            position: relative;
+        }
+
+        .event {
+            padding: 5px;
+        }
+
+        }
     </style>
 </head>
 
@@ -93,7 +106,7 @@
                 <table class="event" role="presentation">
                     <tr>
                         <td>
-                            <h1>{{title}}</h1>
+                            <h2>{{title}}</h2>
                             <p class="description" style="font-size: 18px; line-height: 1.3rem;">{{description}}</p>
                             <img src="{{images[0]}}" alt="Evento" style="width: 100%; height: 350px; object-fit: cover; border-radius: 15px;">
                             <p class="address" style="color: rgb(185, 185, 185);">{{address.street}}, {{address.number}}. {{address.city}}/{{address.state}}</p>
