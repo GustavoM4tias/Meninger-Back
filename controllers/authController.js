@@ -66,15 +66,18 @@ export const getUserInfo = async (req, res) => {
 };
 
 export const updateMe = async (req, res) => {
-  const { username, email, position, city, birth_date } = req.body;
+  const { username, email, position, city, status , birth_date } = req.body;
 
-  if (!username || !email || !position || !city || !birth_date) {
+  if (!username || !email || !position || !city || !birth_date || status === undefined) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
 
+  // Garantir que status seja 0 ou 1
+  const validStatus = status === 0 || status === 1 ? status : 1;
+
   try {
     // Atualizando as informações do usuárioMas 
-    const updatedUser = await User.updateById(req.db, req.user.id, { username, email, position, city, birth_date });
+    const updatedUser = await User.updateById(req.db, req.user.id, { username, email, position, city, birth_date, status: validStatus });
 
     if (!updatedUser) {
       return responseHandler.error(res, 'Usuário não encontrado');
