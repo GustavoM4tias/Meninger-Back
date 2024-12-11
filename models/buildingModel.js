@@ -1,11 +1,11 @@
 // api/models/buildingModel.js
 const Building = {
-    addBuilding: async (db, { title, description, buildingDate, tags, images, address, created_by }) => {
+    addBuilding: async (db, { title, description, buildingDate, tags, images, address, created_by, stage }) => {
         console.log('Tags:', JSON.stringify(tags)); // Confirma a conversão
         console.log('Images:', JSON.stringify(images)); // Confirma a conversão
         console.log('Address:', JSON.stringify(address)); // Confirma a conversão
-        const sql = `INSERT INTO buildings (title, description, building_date, tags, images, address, created_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)`;
+        const sql = `INSERT INTO buildings (title, description, building_date, tags, images, address, created_by, stage)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
         const [result] = await db.execute(sql, [
             title,
             description,
@@ -13,13 +13,14 @@ const Building = {
             JSON.stringify(tags),
             JSON.stringify(images),
             JSON.stringify(address),
-            created_by
+            created_by,
+            stage
         ]);
         return result;
     },
 
     getBuildings: async (db) => {
-        const sql = `SELECT id, title, description, post_date, building_date, tags, images, address, created_by FROM buildings ORDER BY building_date ASC`;
+        const sql = `SELECT id, title, description, post_date, building_date, tags, images, address, created_by, stage FROM buildings ORDER BY building_date ASC`;
         const [rows] = await db.execute(sql);
 
         return rows.map(building => ({
@@ -30,9 +31,9 @@ const Building = {
         }));
     },
 
-    updateBuilding: async (db, id, { title, description, buildingDate, tags, images, address }) => {
+    updateBuilding: async (db, id, { title, description, buildingDate, tags, images, address, stage }) => {
         const sql = `UPDATE buildings 
-                     SET title = ?, description = ?, building_date = ?, tags = ?, images = ?, address = ? 
+                     SET title = ?, description = ?, building_date = ?, tags = ?, images = ?, address = ?, stage = ? 
                      WHERE id = ?`;
         const [result] = await db.execute(sql, [
             title,
@@ -41,6 +42,7 @@ const Building = {
             JSON.stringify(tags),
             JSON.stringify(images),
             JSON.stringify(address), 
+            stage,
             id
         ]);
         return result;

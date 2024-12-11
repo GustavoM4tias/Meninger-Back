@@ -4,7 +4,7 @@ import responseHandler from '../utils/responseHandler.js';
 import { sendEmailWithTemplate } from '../utils/emailService.js';
 
 export const addEvent = async (req, res) => {
-    const { title, description, eventDate, tags, images, address, created_by } = req.body;
+    const { title, description, eventDate, tags, images, address, created_by, notification } = req.body;
 
     try {
         const newEvent = await Event.addEvent(req.db, {
@@ -18,24 +18,18 @@ export const addEvent = async (req, res) => {
         });
         responseHandler.success(res, { message: 'Evento criado com sucesso', eventId: newEvent.insertId });
 
-        // Combina os dados do novo evento com os dados recebidos
-        const replacements = {
-            title,
-            description,
-            eventDate,
-            tags: tags || [], // Array de tags (adjetivos)
-            images: images || [], // Array de URLs de imagens
-            address: address || [], // Array de endereco
-            created_by
-        };
-
-        // Envio do e-mail com o template
-        await sendEmailWithTemplate(
-            'gustavodiniz200513@gmail.com', // E-mail do destinatário
-            'Novo Evento Criado', // Assunto do e-mail
-            './templates/emailEventTemplate.html', // Caminho para o template
-            replacements // Dados a serem inseridos no template
-        );
+        if (notification) {
+            try {
+                await sendEmailWithTemplate(
+                    'gustavodiniz200513@gmail.com', // E-mail do destinatário
+                    'Novo Evento Criado', // Assunto do e-mail
+                    './templates/emailEventTemplate.html', // Caminho para o template
+                    { title, description, eventDate, tags, images, address, created_by }
+                );
+            } catch (emailError) {
+                console.error('Erro ao enviar e-mail:', emailError.message);
+            }
+        }
 
     } catch (error) {
         responseHandler.error(res, error);

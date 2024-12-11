@@ -3,10 +3,10 @@ import Building from '../models/buildingModel.js';
 import responseHandler from '../utils/responseHandler.js';
 
 export const addBuilding = async (req, res) => {
-    const { title, description, buildingDate, tags, images, address, created_by } = req.body;
+    const { title, description, buildingDate, tags, images, address, created_by, stage } = req.body;
 
     // Validação
-    if (!title || !description || !buildingDate || !created_by) {
+    if (!title || !description || !buildingDate || !created_by || !stage) {
         return res.status(400).json({ success: false, error: 'Todos os campos obrigatórios devem ser preenchidos.' });
     }
     
@@ -18,7 +18,8 @@ export const addBuilding = async (req, res) => {
             tags: tags || [], // Array de tags (adjetivos)
             images: images || [], // Array de URLs de imagens
             address: address || [], // Array de endereco
-            created_by
+            created_by,
+            stage
         });
         responseHandler.success(res, { message: 'Empreendimento criado com sucesso', buildingId: newBuilding.insertId });
     } catch (error) {
@@ -37,10 +38,10 @@ export const getBuildings = async (req, res) => {
 
 export const updateBuilding = async (req, res) => {
     const { id } = req.params;
-    const { title, description, buildingDate, tags, images, address } = req.body;
+    const { title, description, buildingDate, tags, images, address, stage } = req.body;
 
     try {
-        const result = await Building.updateBuilding(req.db, id, { title, description, buildingDate, tags, images, address });
+        const result = await Building.updateBuilding(req.db, id, { title, description, buildingDate, tags, images, address, stage });
         
         if (result.affectedRows === 0) {
             return responseHandler.error(res, 'Empreendimento não encontrado');
