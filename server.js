@@ -6,6 +6,7 @@ import db from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
 import buildingRoutes from './routes/buildingRoutes.js';
+import favoriteRoutes from './routes/favoriteRoutes.js';
 
 dotenv.config();
 
@@ -31,6 +32,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 
 app.use('/api/buildings', buildingRoutes);
+
+app.use('/api/favorite', favoriteRoutes);
 
 
 const PORT = process.env.PORT || 5000;
