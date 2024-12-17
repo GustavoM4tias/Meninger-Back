@@ -15,7 +15,7 @@ app.use(express.json());
 
 // Usar CORS
 app.use(cors({
-  origin: ['https://meninger.vercel.app'], //'http://localhost:5173', 
+  origin: ['http://localhost:5173', 'https://node-back-eight.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true,
 }));
