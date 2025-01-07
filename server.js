@@ -22,7 +22,7 @@ app.use(cors({
 
 // Middleware para adicionar `req.db` em cada requisição
 app.use((req, res, next) => {
-  req.db = db;
+  req.db = db; // Aqui você estará adicionando o objeto da pool de conexões em cada requisição
   next();
 });
 
