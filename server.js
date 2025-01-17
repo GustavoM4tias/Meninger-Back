@@ -7,6 +7,8 @@ import authRoutes from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
 import buildingRoutes from './routes/buildingRoutes.js';
 import favoriteRoutes from './routes/favoriteRoutes.js';
+import externalApiRoutes from './routes/externalApiRoutes.js';
+
 
 dotenv.config();
 
@@ -35,6 +37,8 @@ app.use('/api/buildings', buildingRoutes);
 
 app.use('/api/favorite', favoriteRoutes);
 
+// Outras rotas...
+app.use('/api/external', externalApiRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
