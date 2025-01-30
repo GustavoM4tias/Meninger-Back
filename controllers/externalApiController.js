@@ -16,7 +16,7 @@ export const fetchReservations = async (req, res) => {
             method: 'GET',
             headers: {
                 email: 'gustavo.diniz@menin.com.br',
-                token: 'e857a8b83b6c7172c224babdb75175b3b8ecd565',
+                token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
                 Accept: 'application/json',
             },
         });
@@ -31,5 +31,33 @@ export const fetchReservations = async (req, res) => {
     } catch (error) {
         console.error('Erro ao buscar reservas:', error.message);
         res.status(500).json({ error: 'Erro ao buscar reservas na API externa' });
+    }
+};
+
+// New function for fetching distracts
+export const fetchDistracts = async (req, res) => {
+    try {
+        const url = `https://menin.cvcrm.com.br/api/v1/cv/gestoes-distrato?limit=300`;
+
+        // Make the request to the external API
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                email: 'gustavo.diniz@menin.com.br',
+                token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
+                Accept: 'application/json',
+            },
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            res.status(200).json(data);
+        } else {
+            const errorData = await response.json();
+            res.status(response.status).json(errorData);
+        }
+    } catch (error) {
+        console.error('Erro ao buscar distratos:', error);
+        res.status(500).json({ error: 'Erro ao buscar distratos na API externa' });
     }
 };
