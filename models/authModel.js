@@ -29,15 +29,15 @@ const User = {
   },
 
   // Método para atualizar usuário por ID, incluindo data de nascimento
-  updateById: async (db, id, { username, email, position, city, status, birth_date }) => {
-    const sql = 'UPDATE users SET username = ?, email = ?, position = ?, city = ?, status = ?, birth_date = ? WHERE id = ?';
-    const [result] = await db.execute(sql, [username, email, position, city, status, birth_date, id]);
+  updateById: async (db, id, { username, email, position, manager, city, status, birth_date }) => {
+    const sql = 'UPDATE users SET username = ?, email = ?, position = ?, manager = ?, city = ?, status = ?, birth_date = ? WHERE id = ?';
+    const [result] = await db.execute(sql, [username, email, position, manager, city, status, birth_date, id]);
     return result.affectedRows > 0;
   },
 
   // Método para buscar todos os usuários
   findAll: async (db) => {
-    const sql = 'SELECT id, username, email, position, city, status, birth_date FROM users'; // Selecione apenas os campos necessários
+    const sql = 'SELECT id, username, email, position, manager, city, status, birth_date FROM users'; // Selecione apenas os campos necessários
     const [rows] = await db.execute(sql);
     return rows;
   },
