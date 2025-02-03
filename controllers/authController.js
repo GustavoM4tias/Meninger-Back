@@ -59,7 +59,7 @@ export const getUserInfo = async (req, res) => {
     if (!user) {
       return responseHandler.error(res, new Error('Usuário não encontrado'));
     }
-    responseHandler.success(res, { username: user.username, email: user.email, position: user.position, city: user.city, birth_date: user.birth_date, created_at: user.created_at, status: user.status });
+    responseHandler.success(res, { username: user.username, email: user.email, position: user.position, manager: user.manager, city: user.city, birth_date: user.birth_date, created_at: user.created_at, status: user.status });
   } catch (error) {
     responseHandler.error(res, error);
   }
@@ -90,9 +90,9 @@ export const updateMe = async (req, res) => {
 };
 
 export const updateUser = async (req, res) => {
-  const { id, username, email, position, city, birth_date, status } = req.body;
+  const { id, username, email, position, manager, city, birth_date, status } = req.body;
 
-  if (!id || !username || !email || !position || !city || !birth_date || status === undefined) {
+  if (!id || !username || !email || !position || !manager || !city || !birth_date || status === undefined) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
 
@@ -100,7 +100,7 @@ export const updateUser = async (req, res) => {
   const validStatus = status === 0 || status === 1 ? status : 1;
 
   try {
-    const updatedUser = await User.updateById(req.db, req.body.id, { username, email, position, city, birth_date, status: validStatus });
+    const updatedUser = await User.updateById(req.db, req.body.id, { username, email, position, manager, city, birth_date, status: validStatus });
 
     if (!updatedUser) {
       return responseHandler.error(res, 'Usuário não encontrado');
@@ -119,6 +119,18 @@ export const getAllUsers = async (req, res) => {
       return responseHandler.error(res, 'Nenhum usuário encontrado');
     }
     responseHandler.success(res, users);
+  } catch (error) {
+    responseHandler.error(res, error);
+  }
+};
+
+export const getUserById = async (req, res) => {
+  try {
+    const user = await User.findById(req.db, req.params.id); 
+    if (!user) {
+      return responseHandler.error(res, new Error('Usuário não encontrado'));
+    }
+    responseHandler.success(res, { username: user.username, email: user.email, position: user.position, manager: user.manager, city: user.city, birth_date: user.birth_date, created_at: user.created_at, status: user.status });
   } catch (error) {
     responseHandler.error(res, error);
   }
