@@ -3,6 +3,41 @@ import fetch from 'node-fetch'; // Certifique-se de ter instalado o node-fetch: 
 // Função para buscar reservas na API externa
 export const fetchReservations = async (req, res) => {
     try { 
+
+        const { idempreendimento } = req.query;
+ 
+        if (!idempreendimento) {
+            return res.status(400).json({ error: "O parâmetro 'idempreendimento' é obrigatório." });
+        }
+ 
+        const url = `https://menin.cvcrm.com.br/api/cvio/reserva?situacao=todas&condicao_completa=true&idempreendimento=${idempreendimento}`;
+
+        // Fazer a requisição para a API externa
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                email: 'gustavo.diniz@menin.com.br',
+                token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
+                Accept: 'application/json',
+            },
+        });
+
+        if (response.ok) {
+            const data = await response.json(); 
+            res.status(200).json(data);
+        } else {
+            const errorData = await response.json();
+            res.status(response.status).json(errorData);
+        }
+    } catch (error) {
+        console.error('Erro ao buscar reservas:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar reservas na API externa' });
+    }
+};
+
+// Função para buscar reservas na API externa
+export const fetchReservationsOLD = async (req, res) => {
+    try { 
         const { situacao } = req.query;
  
         if (!situacao) {
