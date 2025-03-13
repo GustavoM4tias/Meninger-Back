@@ -92,7 +92,7 @@ export const updateMe = async (req, res) => {
 export const updateUser = async (req, res) => {
   const { id, username, email, position, manager, city, birth_date, status } = req.body;
 
-  if (!id || !username || !email || !position || !manager || !city || !birth_date || status === undefined) {
+  if (!id || !username || !email || !position || !manager == null || !city || !birth_date || status === undefined) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
 
