@@ -8,6 +8,7 @@ import eventRoutes from './routes/eventRoutes.js';
 import buildingRoutes from './routes/buildingRoutes.js';
 import favoriteRoutes from './routes/favoriteRoutes.js';
 import externalApiRoutes from './routes/externalApiRoutes.js';
+// import plannerRoutes from './routes/plannerRoutes.js';
 
 
 dotenv.config();
@@ -39,6 +40,10 @@ app.use('/api/favorite', favoriteRoutes);
 
 // Outras rotas...
 app.use('/api/external', externalApiRoutes);
+
+// Nova rota para planner de ata
+// app.use('/api/ata', plannerRoutes);
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
