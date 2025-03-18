@@ -4,8 +4,7 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import db from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
-import eventRoutes from './routes/eventRoutes.js';
-import buildingRoutes from './routes/buildingRoutes.js';
+import eventRoutes from './routes/eventRoutes.js'; 
 import favoriteRoutes from './routes/favoriteRoutes.js';
 import externalApiRoutes from './routes/externalApiRoutes.js';
 // import plannerRoutes from './routes/plannerRoutes.js';
@@ -33,8 +32,6 @@ app.use((req, res, next) => {
 app.use('/api/auth', authRoutes);
 
 app.use('/api/events', eventRoutes);
-
-app.use('/api/buildings', buildingRoutes);
 
 app.use('/api/favorite', favoriteRoutes);
 
