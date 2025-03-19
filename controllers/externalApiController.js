@@ -1,5 +1,65 @@
 import fetch from 'node-fetch'; // Certifique-se de ter instalado o node-fetch: npm install node-fetch
 
+// Função para buscar repasses com paginação, caso o total retornado seja menor que o totalConteudo
+export const fetchRepasses = async (req, res) => {
+    try {
+        let allRepasses = [];
+        let offset = 0;
+        const limit = 5000;
+        let totalConteudo = 0;
+
+        do {
+            const url = `https://menin.cvcrm.com.br/api/v1/cv/repasses?total=${limit}&limit=${limit}&offset=${offset}`;
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    email: 'gustavo.diniz@menin.com.br',
+                    token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
+                    Accept: 'application/json',
+                },
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                return res.status(response.status).json(errorData);
+            }
+
+            const data = await response.json();
+
+            // Concatena os repasses retornados à lista total, se houver
+            if (data.repasses && Array.isArray(data.repasses)) {
+                allRepasses = allRepasses.concat(data.repasses);
+            }
+
+            // Define o total de conteúdo esperado
+            totalConteudo = data.totalConteudo;
+
+            // Se não houver novos repasses, interrompe o loop para evitar loop infinito
+            if (!data.repasses || data.repasses.length === 0) {
+                break;
+            }
+
+            // Atualiza o offset para buscar os próximos registros
+            offset += data.repasses.length;
+        } while (allRepasses.length < totalConteudo);
+
+        // Prepara o resultado final
+        const result = {
+            total: allRepasses.length,
+            limit: `${limit}`,
+            offset: 0,
+            totalConteudo: totalConteudo,
+            repasses: allRepasses,
+        };
+
+        console.log(result);
+        res.status(200).json(result);
+    } catch (error) {
+        console.error('Erro ao buscar repasses:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar repasses na API externa' });
+    }
+};
+
 // Função para buscar reservas na API externa
 export const fetchReservations = async (req, res) => {
     try {
@@ -232,7 +292,7 @@ export const fetchLeads = async (req, res) => {
                 const dataCad = new Date(lead.data_cad);
                 // Verifica se a data de cadastro está dentro do período
                 if (!(dataCad >= data_inicio && dataCad <= data_fim)) return false;
-                
+
                 // Se não for pra mostrar todos, filtra as origens indesejadas
                 if (!mostrarTodos) {
                     const origensExcluidas = ["Painel Gestor", "Painel Corretor", "Painel Imobiliária"];

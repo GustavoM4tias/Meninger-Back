@@ -1,7 +1,10 @@
 import express from 'express';
-import { fetchReservations, fetchDistracts, fetchBuildings, fetchBuildingById, fetchFilas, fetchLeads } from '../controllers/externalApiController.js';
+import { fetchRepasses, fetchReservations, fetchDistracts, fetchBuildings, fetchBuildingById, fetchFilas, fetchLeads } from '../controllers/externalApiController.js';
 
 const router = express.Router();
+
+// Endpoint para buscar repasses
+router.get('/repasses', fetchRepasses);
 
 // Endpoint para buscar reservas
 router.get('/reservas', fetchReservations);
