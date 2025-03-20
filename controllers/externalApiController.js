@@ -1,22 +1,42 @@
-import fetch from 'node-fetch'; // Certifique-se de ter instalado o node-fetch: npm install node-fetch
+import fetch from 'node-fetch';
+import { getEmpreendimentos } from '../services/empreendimentoService.js';
+import { getRepasseWorkflow, contarRepassesPorSituacao, contarRepassesPorGrupo } from '../services/repasseWorkflowService.js';
 
-// Função para buscar repasses com paginação, caso o total retornado seja menor que o totalConteudo
+// Modificação na função fetchRepasses em paste-3.txt
 export const fetchRepasses = async (req, res) => {
     try {
+        // Obtém o empreendimento e parâmetros de filtro do query parameter
+        const { empreendimento, mostrarCancelados, mostrarDistratos, mostrarCessoes } = req.query;
+
+        // Converte os parâmetros de string para boolean
+        const exibirCancelados = mostrarCancelados === 'true';
+        const exibirDistratos = mostrarDistratos === 'true';
+        const exibirCessoes = mostrarCessoes === 'true';
+
         let allRepasses = [];
         let offset = 0;
         const limit = 5000;
         let totalConteudo = 0;
 
+        // Busca os dados do workflow de repasses
+        const workflowData = await getRepasseWorkflow();
+
         do {
-            const url = `https://menin.cvcrm.com.br/api/v1/cv/repasses?total=${limit}&limit=${limit}&offset=${offset}`;
+            // Constrói a URL base
+            let url = `https://menin.cvcrm.com.br/api/v1/cv/repasses?total=${limit}&limit=${limit}&offset=${offset}`;
+
+            // Adiciona o filtro de empreendimento à URL, se fornecido
+            if (empreendimento) {
+                url += `&empreendimento=${encodeURIComponent(empreendimento)}`;
+            }
+
             const response = await fetch(url, {
                 method: 'GET',
                 headers: {
-                    email: 'gustavo.diniz@menin.com.br',
-                    token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
                     Accept: 'application/json',
-                },
+                    email: 'gustavo.diniz@menin.com.br',
+                    token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad'
+                }
             });
 
             if (!response.ok) {
@@ -26,9 +46,17 @@ export const fetchRepasses = async (req, res) => {
 
             const data = await response.json();
 
-            // Concatena os repasses retornados à lista total, se houver
+            // Filtra os repasses de acordo com as preferências do usuário
             if (data.repasses && Array.isArray(data.repasses)) {
-                allRepasses = allRepasses.concat(data.repasses);
+                const repassesFiltrados = data.repasses.filter(repasse => {
+                    // Filtra por status cancelado, distrato ou cessão
+                    if (repasse.status_repasse === 'Cancelado' && !exibirCancelados) return false;
+                    if (repasse.status_repasse === 'Distrato' && !exibirDistratos) return false;
+                    if (repasse.status_repasse === 'Cessão' && !exibirCessoes) return false;
+                    return true;
+                });
+
+                allRepasses = allRepasses.concat(repassesFiltrados);
             }
 
             // Define o total de conteúdo esperado
@@ -43,20 +71,62 @@ export const fetchRepasses = async (req, res) => {
             offset += data.repasses.length;
         } while (allRepasses.length < totalConteudo);
 
+        // Busca empreendimentos usando o serviço dedicado
+        const empreendimentos = await getEmpreendimentos();
+
+        // Inverte a ordem dos repasses antes de montar o resultado final
+        allRepasses = allRepasses.reverse();
+
+        // Calcula as contagens de repasses por situação e grupo
+        const contagemSituacoes = contarRepassesPorSituacao(allRepasses);
+        const contagemGrupos = contarRepassesPorGrupo(allRepasses, workflowData);
+
         // Prepara o resultado final
         const result = {
             total: allRepasses.length,
             limit: `${limit}`,
             offset: 0,
             totalConteudo: totalConteudo,
+            filtroAplicado: empreendimento || null,
+            filtros: {
+                mostrarCancelados: exibirCancelados,
+                mostrarDistratos: exibirDistratos,
+                mostrarCessoes: exibirCessoes
+            },
+            empreendimentos: empreendimentos,
             repasses: allRepasses,
+            statusConfig: workflowData.situacoes,
+            grupos: workflowData.grupos,
+            contagemSituacoes: contagemSituacoes,
+            contagemGrupos: contagemGrupos
         };
 
-        console.log(result);
         res.status(200).json(result);
     } catch (error) {
         console.error('Erro ao buscar repasses:', error.message);
         res.status(500).json({ error: 'Erro ao buscar repasses na API externa' });
+    }
+};
+// Endpoint para buscar apenas o workflow de repasses
+
+export const fetchRepasseWorkflow = async (req, res) => {
+    try {
+        const workflowData = await getRepasseWorkflow();
+        res.status(200).json(workflowData);
+    } catch (error) {
+        console.error('Erro ao buscar workflow de repasses:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar workflow de repasses na API externa' });
+    }
+};
+
+// Endpoint para buscar apenas a lista de empreendimentos
+export const fetchEmpreendimentos = async (req, res) => {
+    try {
+        const empreendimentos = await getEmpreendimentos();
+        res.status(200).json({ empreendimentos });
+    } catch (error) {
+        console.error('Erro ao buscar empreendimentos:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar empreendimentos na API externa' });
     }
 };
 

@@ -1,10 +1,23 @@
 import express from 'express';
-import { fetchRepasses, fetchReservations, fetchDistracts, fetchBuildings, fetchBuildingById, fetchFilas, fetchLeads } from '../controllers/externalApiController.js';
+import {
+    fetchRepasses,
+    fetchReservations,
+    fetchDistracts,
+    fetchBuildings,
+    fetchBuildingById,
+    fetchFilas,
+    fetchLeads,
+    fetchEmpreendimentos,
+    fetchRepasseWorkflow
+} from '../controllers/externalApiController.js';
 
 const router = express.Router();
 
 // Endpoint para buscar repasses
 router.get('/repasses', fetchRepasses);
+
+// Endpoint para buscar apenas empreendimentos
+router.get('/listagem-empreendimentos', fetchEmpreendimentos);
 
 // Endpoint para buscar reservas
 router.get('/reservas', fetchReservations);
@@ -21,5 +34,8 @@ router.get('/filas', fetchFilas);
 
 router.get('/leads', fetchLeads);
 
-export default router;
+// Nova rota para workflow de repasses
+router.get('/repasse-workflow', fetchRepasseWorkflow);
 
+
+export default router;
