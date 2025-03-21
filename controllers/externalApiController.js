@@ -2,7 +2,6 @@ import fetch from 'node-fetch';
 import { getEmpreendimentos } from '../services/empreendimentoService.js';
 import { getRepasseWorkflow, contarRepassesPorSituacao, contarRepassesPorGrupo } from '../services/repasseWorkflowService.js';
 
-// Modificação na função fetchRepasses em paste-3.txt
 export const fetchRepasses = async (req, res) => {
     try {
         // Obtém o empreendimento e parâmetros de filtro do query parameter
@@ -13,63 +12,102 @@ export const fetchRepasses = async (req, res) => {
         const exibirDistratos = mostrarDistratos === 'true';
         const exibirCessoes = mostrarCessoes === 'true';
 
-        let allRepasses = [];
-        let offset = 0;
         const limit = 5000;
+        let allRepasses = [];
         let totalConteudo = 0;
 
-        // Busca os dados do workflow de repasses
-        const workflowData = await getRepasseWorkflow();
+        // Função para buscar repasses para um único empreendimento
+        const buscarPorEmpreendimento = async (emp) => {
+            let offset = 0;
+            let repassesEmp = [];
+            let totalEmp = 0;
+            do {
+                // Constrói a URL base para o empreendimento atual
+                let url = `https://menin.cvcrm.com.br/api/v1/cv/repasses?total=${limit}&limit=${limit}&offset=${offset}`;
+                url += `&empreendimento=${encodeURIComponent(emp)}`;
 
-        do {
-            // Constrói a URL base
-            let url = `https://menin.cvcrm.com.br/api/v1/cv/repasses?total=${limit}&limit=${limit}&offset=${offset}`;
-
-            // Adiciona o filtro de empreendimento à URL, se fornecido
-            if (empreendimento) {
-                url += `&empreendimento=${encodeURIComponent(empreendimento)}`;
-            }
-
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    Accept: 'application/json',
-                    email: 'gustavo.diniz@menin.com.br',
-                    token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad'
-                }
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                return res.status(response.status).json(errorData);
-            }
-
-            const data = await response.json();
-
-            // Filtra os repasses de acordo com as preferências do usuário
-            if (data.repasses && Array.isArray(data.repasses)) {
-                const repassesFiltrados = data.repasses.filter(repasse => {
-                    // Filtra por status cancelado, distrato ou cessão
-                    if (repasse.status_repasse === 'Cancelado' && !exibirCancelados) return false;
-                    if (repasse.status_repasse === 'Distrato' && !exibirDistratos) return false;
-                    if (repasse.status_repasse === 'Cessão' && !exibirCessoes) return false;
-                    return true;
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        Accept: 'application/json',
+                        email: 'gustavo.diniz@menin.com.br',
+                        token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad'
+                    }
                 });
 
-                allRepasses = allRepasses.concat(repassesFiltrados);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`Erro na requisição para empreendimento ${emp}: ${JSON.stringify(errorData)}`);
+                }
+
+                const data = await response.json();
+
+                // Filtra os repasses conforme os filtros informados
+                if (data.repasses && Array.isArray(data.repasses)) {
+                    const repassesFiltrados = data.repasses.filter(repasse => {
+                        if (repasse.status_repasse === 'Cancelado' && !exibirCancelados) return false;
+                        if (repasse.status_repasse === 'Distrato' && !exibirDistratos) return false;
+                        if (repasse.status_repasse === 'Cessão' && !exibirCessoes) return false;
+                        return true;
+                    });
+                    repassesEmp = repassesEmp.concat(repassesFiltrados);
+                }
+
+                totalEmp = data.totalConteudo;
+                if (!data.repasses || data.repasses.length === 0) break;
+                offset += data.repasses.length;
+            } while (repassesEmp.length < totalEmp);
+
+            return { repasses: repassesEmp, total: totalEmp };
+        };
+
+        // Se o parâmetro empreendimento for informado
+        if (empreendimento) {
+            // Separa os valores por vírgula e remove espaços
+            const listaEmpreendimentos = empreendimento.split(',').map(emp => emp.trim()).filter(emp => emp);
+
+            // Para cada empreendimento, faz a requisição e une os resultados
+            for (const emp of listaEmpreendimentos) {
+                const { repasses, total } = await buscarPorEmpreendimento(emp);
+                allRepasses = allRepasses.concat(repasses);
+                totalConteudo += total;
             }
+        } else {
+            // Se não houver filtro de empreendimento, faz a requisição única sem esse filtro
+            let offset = 0;
+            do {
+                let url = `https://menin.cvcrm.com.br/api/v1/cv/repasses?total=${limit}&limit=${limit}&offset=${offset}`;
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        Accept: 'application/json',
+                        email: 'gustavo.diniz@menin.com.br',
+                        token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad'
+                    }
+                });
 
-            // Define o total de conteúdo esperado
-            totalConteudo = data.totalConteudo;
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    return res.status(response.status).json(errorData);
+                }
 
-            // Se não houver novos repasses, interrompe o loop para evitar loop infinito
-            if (!data.repasses || data.repasses.length === 0) {
-                break;
-            }
+                const data = await response.json();
 
-            // Atualiza o offset para buscar os próximos registros
-            offset += data.repasses.length;
-        } while (allRepasses.length < totalConteudo);
+                if (data.repasses && Array.isArray(data.repasses)) {
+                    const repassesFiltrados = data.repasses.filter(repasse => {
+                        if (repasse.status_repasse === 'Cancelado' && !exibirCancelados) return false;
+                        if (repasse.status_repasse === 'Distrato' && !exibirDistratos) return false;
+                        if (repasse.status_repasse === 'Cessão' && !exibirCessoes) return false;
+                        return true;
+                    });
+                    allRepasses = allRepasses.concat(repassesFiltrados);
+                }
+
+                totalConteudo = data.totalConteudo;
+                if (!data.repasses || data.repasses.length === 0) break;
+                offset += data.repasses.length;
+            } while (allRepasses.length < totalConteudo);
+        }
 
         // Busca empreendimentos usando o serviço dedicado
         const empreendimentos = await getEmpreendimentos();
@@ -78,6 +116,7 @@ export const fetchRepasses = async (req, res) => {
         allRepasses = allRepasses.reverse();
 
         // Calcula as contagens de repasses por situação e grupo
+        const workflowData = await getRepasseWorkflow();
         const contagemSituacoes = contarRepassesPorSituacao(allRepasses);
         const contagemGrupos = contarRepassesPorGrupo(allRepasses, workflowData);
 
@@ -107,6 +146,7 @@ export const fetchRepasses = async (req, res) => {
         res.status(500).json({ error: 'Erro ao buscar repasses na API externa' });
     }
 };
+
 // Endpoint para buscar apenas o workflow de repasses
 
 export const fetchRepasseWorkflow = async (req, res) => {
@@ -165,10 +205,10 @@ export const fetchReservations = async (req, res) => {
     }
 };
 
-// New function for fetching distracts
-export const fetchDistracts = async (req, res) => {
+// New function for fetching login banners
+export const fetchBanners = async (req, res) => {
     try {
-        const url = `https://menin.cvcrm.com.br/api/v1/cv/gestoes-distrato?limit=300`;
+        const url = `https://menin.cvcrm.com.br/api/v1/cliente/banners/login`;
 
         // Make the request to the external API
         const response = await fetch(url, {
@@ -182,11 +222,14 @@ export const fetchDistracts = async (req, res) => {
 
         if (response.ok) {
             const data = await response.json();
+            return res.json(data);
         } else {
             const errorData = await response.json();
+            return res.status(response.status).json(errorData);
         }
     } catch (error) {
-        console.error('Erro ao buscar distratos:', error);
+        console.error('Erro ao buscar banners:', error);
+        return res.status(500).json({ error: 'Erro ao buscar banners' });
     }
 };
 
