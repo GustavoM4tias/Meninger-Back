@@ -2,7 +2,7 @@ import express from 'express';
 import {
     fetchRepasses,
     fetchReservations,
-    fetchDistracts,
+    fetchBanners,
     fetchBuildings,
     fetchBuildingById,
     fetchFilas,
@@ -22,8 +22,8 @@ router.get('/listagem-empreendimentos', fetchEmpreendimentos);
 // Endpoint para buscar reservas
 router.get('/reservas', fetchReservations);
 
-// New route for distracts
-router.get('/distratos', fetchDistracts);
+// New route for banners
+router.get('/banners', fetchBanners);
 
 // New route for buildings
 router.get('/empreendimentos', fetchBuildings);
