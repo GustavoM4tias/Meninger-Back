@@ -334,7 +334,6 @@ export const fetchFilas = async (req, res) => {
  * - Se a lista da página estiver ordenada (por exemplo, do mais recente para o mais antigo)
  *   e o último lead da página tiver data anterior ao início do período, a busca é interrompida.
  */
-
 export const fetchLeads = async (req, res) => {
     try {
         // Recupera os parâmetros de data (esperando um formato que o JavaScript entenda, como YYYY-MM-DD)
@@ -370,6 +369,13 @@ export const fetchLeads = async (req, res) => {
         // Determina se deve mostrar todos os leads (desconsiderar filtro de origem)
         const mostrarTodos = mostrar_todos === "true";
 
+        // Otimização: pré-calcular os timestamps para comparação mais rápida
+        const dataInicioTime = data_inicio.getTime();
+        const dataFimTime = data_fim.getTime();
+
+        // Otimização: usar um Set para verificação de origens mais rápida
+        const origensExcluidas = new Set(["Painel Gestor", "Painel Corretor", "Painel Imobiliária"]);
+
         const headers = {
             'Accept': 'application/json',
             'email': 'gustavo.diniz@menin.com.br',
@@ -377,57 +383,113 @@ export const fetchLeads = async (req, res) => {
         };
 
         let allLeads = [];
-        let offset = 0;
+
+        // Otimização: paralelizar as requisições em batches
         const limit = 300;
+        const batchSize = 3; // Número de requisições paralelas por vez
+        let offset = 0;
         let continuar = true;
 
         while (continuar) {
-            const url = `https://menin.cvcrm.com.br/api/cvio/lead?limit=${limit}&offset=${offset}`;
-            const response = await fetch(url, {
-                method: 'GET',
-                headers
-            });
+            // Preparar múltiplas requisições para executar em paralelo
+            const batchPromises = [];
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                return res.status(response.status).json(errorData);
+            for (let i = 0; i < batchSize && continuar; i++) {
+                const currentOffset = offset + (i * limit);
+
+                // Criar uma promessa para cada requisição do batch
+                batchPromises.push(
+                    (async () => {
+                        const url = `https://menin.cvcrm.com.br/api/cvio/lead?limit=${limit}&offset=${currentOffset}`;
+
+                        // Adicionar timeout para evitar requisições travadas
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 segundos
+
+                        try {
+                            const response = await fetch(url, {
+                                method: 'GET',
+                                headers,
+                                signal: controller.signal
+                            });
+
+                            clearTimeout(timeoutId);
+
+                            if (!response.ok) {
+                                throw new Error(`Erro na requisição: ${response.status}`);
+                            }
+
+                            return {
+                                data: await response.json(),
+                                offset: currentOffset
+                            };
+                        } catch (error) {
+                            clearTimeout(timeoutId);
+                            console.error(`Erro na página offset=${currentOffset}: ${error.message}`);
+                            return { data: { leads: [] }, offset: currentOffset };
+                        }
+                    })()
+                );
             }
 
-            const data = await response.json();
-            const leads = data.leads || [];
+            // Executar todas as requisições do batch em paralelo
+            const results = await Promise.all(batchPromises);
 
-            // Se não houver leads na página, encerra a busca
-            if (leads.length === 0) break;
+            // Processar cada resultado e verificar se devemos continuar
+            let shouldStopSearch = false;
+            let maxOffsetProcessed = offset;
 
-            // Filtra os leads que estão dentro do período desejado e, se não for mostrar todos, exclui os de origem específica
-            const leadsFiltrados = leads.filter(lead => {
-                if (!lead.data_cad) return false;
-                const dataCad = new Date(lead.data_cad);
-                // Verifica se a data de cadastro está dentro do período
-                if (!(dataCad >= data_inicio && dataCad <= data_fim)) return false;
+            for (const result of results) {
+                const leads = result.data.leads || [];
+                maxOffsetProcessed = Math.max(maxOffsetProcessed, result.offset);
 
-                // Se não for pra mostrar todos, filtra as origens indesejadas
-                if (!mostrarTodos) {
-                    const origensExcluidas = ["Painel Gestor", "Painel Corretor", "Painel Imobiliária"];
-                    if (origensExcluidas.includes(lead.origem)) return false;
+                // Se não houver leads, marcar para parar a busca na próxima iteração
+                if (leads.length === 0) {
+                    shouldStopSearch = true;
+                    continue;
                 }
-                return true;
-            });
 
-            allLeads = allLeads.concat(leadsFiltrados);
+                // Filtrar leads com otimizações de performance
+                const leadsFiltrados = [];
 
-            // Se os leads estiverem ordenados decrescentemente (mais recentes primeiro)
-            // e o último lead da página tiver data anterior ao início do período, podemos interromper a busca
-            const ultimoLead = leads[leads.length - 1];
-            if (ultimoLead && ultimoLead.data_cad) {
-                const dataUltimoLead = new Date(ultimoLead.data_cad);
-                if (dataUltimoLead < data_inicio) {
-                    break;
+                for (let j = 0; j < leads.length; j++) {
+                    const lead = leads[j];
+
+                    if (!lead.data_cad) continue;
+
+                    // Usar timestamp para comparação mais eficiente
+                    const dataCadTime = new Date(lead.data_cad).getTime();
+                    if (dataCadTime < dataInicioTime || dataCadTime > dataFimTime) continue;
+
+                    // Verificar origem com Set para melhor performance
+                    if (!mostrarTodos && origensExcluidas.has(lead.origem)) continue;
+
+                    leadsFiltrados.push(lead);
+                }
+
+                // Adicionar leads filtrados ao resultado
+                if (leadsFiltrados.length > 0) {
+                    allLeads = allLeads.concat(leadsFiltrados);
+                }
+
+                // Verificar se o último lead está antes do período de início
+                const ultimoLead = leads[leads.length - 1];
+                if (ultimoLead && ultimoLead.data_cad) {
+                    const dataUltimoLead = new Date(ultimoLead.data_cad).getTime();
+                    if (dataUltimoLead < dataInicioTime) {
+                        shouldStopSearch = true;
+                        break;
+                    }
                 }
             }
 
-            // Incrementa o offset para buscar a próxima página
-            offset += limit;
+            // Determinar se devemos continuar a busca
+            if (shouldStopSearch) {
+                continuar = false;
+            } else {
+                // Avançar para o próximo conjunto de offsets
+                offset = maxOffsetProcessed + limit;
+            }
         }
 
         // Retorna os leads filtrados
@@ -447,4 +509,3 @@ export const fetchLeads = async (req, res) => {
         res.status(500).json({ error: 'Erro ao buscar leads na API externa' });
     }
 };
-
