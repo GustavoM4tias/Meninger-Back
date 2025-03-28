@@ -349,9 +349,9 @@ export const fetchLeads = async (req, res) => {
             // Último dia do mês atual: cria uma data para o primeiro dia do próximo mês e subtrai 1 segundo
             data_fim = new Date(ano, mes + 1, 0, 23, 59, 59);
         } else {
-            // Converte as strings para objetos Date
-            data_inicio = new Date(data_inicio);
-            data_fim = new Date(data_fim);
+            // Converte as strings para objetos Date, adicionando o horário para evitar discrepâncias de fuso
+            data_inicio = new Date(data_inicio + "T00:00:00");
+            data_fim = new Date(data_fim + "T23:59:59");
         }
 
         // Validação: data_inicio não pode ser depois de data_fim
