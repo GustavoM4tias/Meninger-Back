@@ -404,7 +404,7 @@ export const fetchLeads = async (req, res) => {
 
                         // Adicionar timeout para evitar requisições travadas
                         const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), 18000); // 15 segundos
+                        const timeoutId = setTimeout(() => controller.abort(), 25000); // 15 segundos
 
                         try {
                             const response = await fetch(url, {
