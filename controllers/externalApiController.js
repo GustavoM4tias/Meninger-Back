@@ -147,7 +147,37 @@ export const fetchRepasses = async (req, res) => {
     }
 };
 
-// Endpoint para buscar apenas o workflow de repasses
+export const fetchReservaPagamentos = async (req, res) => {
+    try {
+        const { idreserva } = req.query;
+        
+        if (!idreserva) {
+            return res.status(400).json({ error: 'ID da reserva é obrigatório' });
+        }
+
+        const url = `https://menin.cvcrm.com.br/api/v1/cv/reserva-condicao-pagamentos?idreserva=${idreserva}`;
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                Accept: 'application/json',
+                email: 'gustavo.diniz@menin.com.br',
+                token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad'
+            }
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            return res.status(response.status).json(errorData);
+        }
+
+        const data = await response.json();
+        res.status(200).json(data);
+    } catch (error) {
+        console.error('Erro ao buscar condições de pagamento:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar condições de pagamento na API externa' });
+    }
+};
 
 export const fetchRepasseWorkflow = async (req, res) => {
     try {
