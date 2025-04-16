@@ -147,16 +147,152 @@ export const fetchRepasses = async (req, res) => {
     }
 };
 
+export const fetchReservas = async (req, res) => {
+    try {
+        // Obtém parâmetros do query parameter com valores padrão
+        const { idempreendimento, a_partir_de, faturar = 'false' } = req.query;
+
+        // Define a data de início convertendo para o formato dia/mês/ano (dd/mm/yyyy)
+        let dataInicio = a_partir_de;
+        // Se não foi informado, define como o primeiro dia do mês corrente
+        if (!dataInicio) {
+            const hoje = new Date();
+            dataInicio = `01/${(hoje.getMonth() + 1).toString().padStart(2, '0')}/${hoje.getFullYear()}`;
+        } else if (dataInicio.includes('-')) {
+            // Se o valor veio no formato "yyyy-mm-dd", converte para "dd/mm/yyyy"
+            const [year, month, day] = dataInicio.split('-');
+            dataInicio = `${day}/${month}/${year}`;
+        }
+
+        // Configura o tamanho máximo de registros por página
+        const registrosPorPagina = 500; // Máximo permitido pela API
+        let allReservas = [];
+        let totalRegistros = 0;
+        let pagina = 1;
+        let maisRegistros = true;
+
+        // Função auxiliar para construir a URL com os parâmetros
+        const construirURL = (pag) => {
+            // Parâmetros essenciais
+            let url = `https://menin.cvcrm.com.br/api/cvio/reserva?registros_por_pagina=${registrosPorPagina}&pagina=${pag}`;
+
+            // Se "faturar" foi especificada, a priorizamos e buscamos todas as unidades disponiveis para faturamento ou ja faturadas
+            if (faturar === 'true') {
+                url += `&retornar_integradas=${faturar}&situacao=todas`;
+            } else { // se não, rusamos faturar=false "api do CV retorna por padrão true, deixando somente resultados disponiveis para faturamento, nao o necessario"
+                url += `&faturar=${faturar}`;
+            }
+
+            // Adiciona o parâmetro de empreendimento, se fornecido
+            if (idempreendimento) {
+                url += `&idempreendimento=${idempreendimento}`;
+            }
+
+            // Adiciona filtro de data de início no formato dia/mês/ano (codificado)
+            if (dataInicio) {
+                url += `&a_partir_de=${encodeURIComponent(dataInicio)}`;
+            }
+
+            return url;
+        };
+
+        // Loop para buscar todas as páginas de reservas
+        while (maisRegistros) {
+            const url = construirURL(pagina);
+            console.log(`\n➡️ Requisição para URL: ${url}`);
+
+            try {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        Accept: 'application/json',
+                        email: 'gustavo.diniz@menin.com.br',
+                        token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
+                        'User-Agent': 'Mozilla/5.0 (Node.js Server)' // Para caso a API exija
+                    }
+                });
+
+                const status = response.status;
+                console.log(`📡 Status da resposta: ${status}`);
+
+                const responseText = await response.text();
+                let data;
+                try {
+                    data = JSON.parse(responseText);
+                } catch (parseError) {
+                    console.error('❌ Erro ao fazer parse do JSON:', parseError.message);
+                    console.error('🧾 Resposta bruta:', responseText);
+                    throw new Error('Resposta da API não é um JSON válido');
+                }
+
+                if (status !== 200) {
+                    console.error('🚨 Erro da API:', data);
+                    throw new Error(`Erro na requisição: ${status} - ${JSON.stringify(data)}`);
+                }
+
+                // Ajuste para extrair as reservas
+                let reservasPagina = [];
+                if (data.reservas && Array.isArray(data.reservas)) {
+                    reservasPagina = data.reservas;
+                    console.log(`✅ Página ${pagina} retornou ${reservasPagina.length} reservas (usando data.reservas)`);
+                } else {
+                    reservasPagina = Object.keys(data)
+                        .filter(key => !isNaN(Number(key)))
+                        .map(key => data[key]);
+                    console.log(`✅ Página ${pagina} retornou ${reservasPagina.length} reservas (extraídas das chaves numéricas)`);
+                }
+
+                // Se houver reservas na página, processa-as
+                if (reservasPagina.length > 0) {
+                    allReservas = allReservas.concat(reservasPagina);
+                    totalRegistros = data.total || totalRegistros;
+                    maisRegistros = reservasPagina.length === registrosPorPagina;
+                    pagina++;
+                } else {
+                    console.warn(`⚠️ Nenhuma reserva encontrada na página ${pagina}`);
+                    maisRegistros = false;
+                }
+            } catch (err) {
+                console.error(`❌ Falha na requisição da página ${pagina}:`, err.message);
+                throw err;
+            }
+        }
+
+        // Busca empreendimentos usando o serviço dedicado
+        const empreendimentos = await getEmpreendimentos();
+
+        // Prepara o resultado final
+        const result = {
+            total: allReservas.length,
+            registrosPorPagina,
+            totalRegistros,
+            filtros: {
+                idempreendimento: idempreendimento || null,
+                a_partir_de: dataInicio, 
+                faturar: faturar
+            },
+            empreendimentos,
+            reservas: allReservas
+        };
+
+        console.log('✅ Resultado final preparado:', { total: allReservas.length });
+        res.status(200).json(result);
+    } catch (error) {
+        console.error('Erro ao buscar reservas:', error.message);
+        res.status(500).json({ error: 'Erro ao buscar reservas na API externa' });
+    }
+};
+
 export const fetchReservaPagamentos = async (req, res) => {
     try {
         const { idreserva } = req.query;
-        
+
         if (!idreserva) {
             return res.status(400).json({ error: 'ID da reserva é obrigatório' });
         }
 
         const url = `https://menin.cvcrm.com.br/api/v1/cv/reserva-condicao-pagamentos?idreserva=${idreserva}`;
-        
+
         const response = await fetch(url, {
             method: 'GET',
             headers: {
@@ -197,41 +333,6 @@ export const fetchEmpreendimentos = async (req, res) => {
     } catch (error) {
         console.error('Erro ao buscar empreendimentos:', error.message);
         res.status(500).json({ error: 'Erro ao buscar empreendimentos na API externa' });
-    }
-};
-
-// Função para buscar reservas na API externa
-export const fetchReservations = async (req, res) => {
-    try {
-
-        const { idempreendimento } = req.query;
-
-        if (!idempreendimento) {
-            return res.status(400).json({ error: "O parâmetro 'idempreendimento' é obrigatório." });
-        }
-
-        const url = `https://menin.cvcrm.com.br/api/cvio/reserva?situacao=todas&condicao_completa=true&idempreendimento=${idempreendimento}`;
-
-        // Fazer a requisição para a API externa
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                email: 'gustavo.diniz@menin.com.br',
-                token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
-                Accept: 'application/json',
-            },
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            res.status(200).json(data);
-        } else {
-            const errorData = await response.json();
-            res.status(response.status).json(errorData);
-        }
-    } catch (error) {
-        console.error('Erro ao buscar reservas:', error.message);
-        res.status(500).json({ error: 'Erro ao buscar reservas na API externa' });
     }
 };
 
@@ -323,7 +424,6 @@ export const fetchBuildingById = async (req, res) => {
         res.status(500).json({ error: 'Erro ao buscar empreendimento na API externa' });
     }
 };
-
 
 // New function for fetching buildings
 export const fetchFilas = async (req, res) => {

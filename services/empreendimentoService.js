@@ -1,5 +1,5 @@
 // services/empreendimentosService.js
-import fetch from 'node-fetch'; 
+import fetch from 'node-fetch';
 
 // Cache para armazenar os empreendimentos por um período
 let empreendimentosCache = {
@@ -13,15 +13,16 @@ let empreendimentosCache = {
  */
 export const getEmpreendimentos = async () => {
     try {
-        // Verifica se o cache é válido
         const agora = Date.now();
-        if (empreendimentosCache.dados.length > 0 &&
-            (agora - empreendimentosCache.timestamp) < empreendimentosCache.expiracaoMs) {
+
+        if (
+            empreendimentosCache.dados.length > 0 &&
+            (agora - empreendimentosCache.timestamp) < empreendimentosCache.expiracaoMs
+        ) {
             console.log('Retornando dados de empreendimentos do cache');
             return empreendimentosCache.dados;
         }
 
-        // Se o cache expirou ou não existe, busca na API
         const url = 'https://menin.cvcrm.com.br/api/v1/cvbot/empreendimentos';
         const response = await fetch(url, {
             method: 'GET',
@@ -38,20 +39,23 @@ export const getEmpreendimentos = async () => {
 
         const dados = await response.json();
 
-        // Extrai apenas os nomes dos empreendimentos e ordena
-        const nomes = dados
-            .map(emp => emp.nome)
-            .filter(Boolean)
-            .sort();
+        // Mapeia os empreendimentos para um array de { id, nome }
+        const empreendimentos = dados
+            .filter(emp => emp.idempreendimento && emp.nome)
+            .map(emp => ({
+                id: emp.idempreendimento,
+                nome: emp.nome
+            }))
+            .sort((a, b) => a.nome.localeCompare(b.nome));
 
         // Atualiza o cache
         empreendimentosCache = {
-            dados: nomes,
+            dados: empreendimentos,
             timestamp: agora,
             expiracaoMs: 3600000
         };
 
-        return nomes;
+        return empreendimentos;
     } catch (error) {
         console.error('Erro ao buscar empreendimentos:', error);
         throw error;
