@@ -146,11 +146,11 @@ export const fetchRepasses = async (req, res) => {
         res.status(500).json({ error: 'Erro ao buscar repasses na API externa' });
     }
 };
-
+ 
 export const fetchReservas = async (req, res) => {
     try {
         // Obtém parâmetros do query parameter com valores padrão
-        const { idempreendimento, a_partir_de, faturar = 'false' } = req.query;
+        const { idempreendimento, a_partir_de, ate, faturar = 'false' } = req.query;
 
         // Define a data de início convertendo para o formato dia/mês/ano (dd/mm/yyyy)
         let dataInicio = a_partir_de;
@@ -258,6 +258,26 @@ export const fetchReservas = async (req, res) => {
             }
         }
 
+        // Filtra reservas pelo campo "ate" se estiver presente
+        if (ate) {
+            // Converte a data final para um formato que permita comparação
+            // Formato esperado: yyyy-mm-dd (do input type="date")
+            const dataFim = new Date(ate);
+            dataFim.setHours(23, 59, 59, 999); // Define para o final do dia
+
+            console.log(`🔍 Filtrando reservas até: ${dataFim.toISOString()}`);
+            
+            // Filtra reservas cuja data é anterior ou igual à data final
+            allReservas = allReservas.filter(reserva => {
+                if (!reserva.data) return true; // Se não tem data, mantém
+                
+                const dataReserva = new Date(reserva.data);
+                return dataReserva <= dataFim;
+            });
+            
+            console.log(`📊 Após filtro por data, restaram ${allReservas.length} reservas`);
+        }
+
         // Busca empreendimentos usando o serviço dedicado
         const empreendimentos = await getEmpreendimentos();
 
@@ -265,10 +285,11 @@ export const fetchReservas = async (req, res) => {
         const result = {
             total: allReservas.length,
             registrosPorPagina,
-            totalRegistros,
+            totalRegistros: allReservas.length, // Atualizando para refletir o total após o filtro
             filtros: {
                 idempreendimento: idempreendimento || null,
-                a_partir_de: dataInicio, 
+                a_partir_de: dataInicio,
+                ate: ate || null,
                 faturar: faturar
             },
             empreendimentos,
