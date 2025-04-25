@@ -146,8 +146,11 @@ export const fetchRepasses = async (req, res) => {
         res.status(500).json({ error: 'Erro ao buscar repasses na API externa' });
     }
 };
- 
+
 export const fetchReservas = async (req, res) => {
+    // Flag para controlar que apenas uma resposta seja enviada
+    let responseWasSent = false;
+
     try {
         // Obtém parâmetros do query parameter com valores padrão
         const { idempreendimento, a_partir_de, ate, faturar = 'false' } = req.query;
@@ -166,26 +169,30 @@ export const fetchReservas = async (req, res) => {
 
         // Configura o tamanho máximo de registros por página
         const registrosPorPagina = 500; // Máximo permitido pela API
-        let allReservas = [];
-        let totalRegistros = 0;
-        let pagina = 1;
-        let maisRegistros = true;
+
+        // Processa múltiplos empreendimentos se fornecidos
+        let empreendimentosList = [];
+        if (idempreendimento) {
+            empreendimentosList = idempreendimento.split(',').filter(id => id.trim());
+        }
 
         // Função auxiliar para construir a URL com os parâmetros
-        const construirURL = (pag) => {
+        const construirURL = (pag, idEmpreendimento = null, useFaturar = true) => {
             // Parâmetros essenciais
             let url = `https://menin.cvcrm.com.br/api/cvio/reserva?registros_por_pagina=${registrosPorPagina}&pagina=${pag}`;
 
-            // Se "faturar" foi especificada, a priorizamos e buscamos todas as unidades disponiveis para faturamento ou ja faturadas
-            if (faturar === 'true') {
-                url += `&retornar_integradas=${faturar}&situacao=todas`;
-            } else { // se não, rusamos faturar=false "api do CV retorna por padrão true, deixando somente resultados disponiveis para faturamento, nao o necessario"
-                url += `&faturar=${faturar}`;
+            // Parâmetros de filtragem baseados no flag faturar
+            if (useFaturar) {
+                if (faturar === 'true') {
+                    url += `&retornar_integradas=${faturar}&situacao=todas`;
+                } else {
+                    url += `&faturar=${faturar}`;
+                }
             }
 
             // Adiciona o parâmetro de empreendimento, se fornecido
-            if (idempreendimento) {
-                url += `&idempreendimento=${idempreendimento}`;
+            if (idEmpreendimento) {
+                url += `&idempreendimento=${idEmpreendimento}`;
             }
 
             // Adiciona filtro de data de início no formato dia/mês/ano (codificado)
@@ -196,67 +203,120 @@ export const fetchReservas = async (req, res) => {
             return url;
         };
 
-        // Loop para buscar todas as páginas de reservas
-        while (maisRegistros) {
-            const url = construirURL(pagina);
-            console.log(`\n➡️ Requisição para URL: ${url}`);
+        // Função para fazer requisição para um único empreendimento ou todos
+        const fetchEmpreendimentoReservas = async (empreendimentoId = null, useFaturar = true) => {
+            let allReservas = [];
+            let pagina = 1;
+            let maisRegistros = true;
+            let empreendimentoInfo = empreendimentoId ? ` (empreendimento ${empreendimentoId})` : '';
+            let faturarInfo = useFaturar ? (faturar === 'true' ? ' com faturar=true' : ' com faturar=false') : '';
 
-            try {
-                const response = await fetch(url, {
-                    method: 'GET',
-                    headers: {
-                        Accept: 'application/json',
-                        email: 'gustavo.diniz@menin.com.br',
-                        token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
-                        'User-Agent': 'Mozilla/5.0 (Node.js Server)' // Para caso a API exija
-                    }
-                });
+            while (maisRegistros) {
+                const url = construirURL(pagina, empreendimentoId, useFaturar);
+                console.log(`\n➡️ Requisição para URL${empreendimentoInfo}${faturarInfo}: ${url}`);
 
-                const status = response.status;
-                console.log(`📡 Status da resposta: ${status}`);
-
-                const responseText = await response.text();
-                let data;
                 try {
-                    data = JSON.parse(responseText);
-                } catch (parseError) {
-                    console.error('❌ Erro ao fazer parse do JSON:', parseError.message);
-                    console.error('🧾 Resposta bruta:', responseText);
-                    throw new Error('Resposta da API não é um JSON válido');
-                }
+                    const response = await fetch(url, {
+                        method: 'GET',
+                        headers: {
+                            Accept: 'application/json',
+                            email: 'gustavo.diniz@menin.com.br',
+                            token: '2c6a67629efc93cfa16cf77dc8fbbdd92ee500ad',
+                            'User-Agent': 'Mozilla/5.0 (Node.js Server)' // Para caso a API exija
+                        }
+                    });
 
-                if (status !== 200) {
-                    console.error('🚨 Erro da API:', data);
-                    throw new Error(`Erro na requisição: ${status} - ${JSON.stringify(data)}`);
-                }
+                    const status = response.status;
+                    console.log(`📡 Status da resposta${empreendimentoInfo}${faturarInfo}: ${status}`);
 
-                // Ajuste para extrair as reservas
-                let reservasPagina = [];
-                if (data.reservas && Array.isArray(data.reservas)) {
-                    reservasPagina = data.reservas;
-                    console.log(`✅ Página ${pagina} retornou ${reservasPagina.length} reservas (usando data.reservas)`);
-                } else {
-                    reservasPagina = Object.keys(data)
-                        .filter(key => !isNaN(Number(key)))
-                        .map(key => data[key]);
-                    console.log(`✅ Página ${pagina} retornou ${reservasPagina.length} reservas (extraídas das chaves numéricas)`);
-                }
+                    // Se status for 204 (No Content), significa que não há reservas para este empreendimento
+                    if (status === 204) {
+                        console.log(`ℹ️ Nenhuma reserva encontrada${empreendimentoInfo}${faturarInfo}`);
+                        return []; // Retorna array vazio, sem erro
+                    }
 
-                // Se houver reservas na página, processa-as
-                if (reservasPagina.length > 0) {
-                    allReservas = allReservas.concat(reservasPagina);
-                    totalRegistros = data.total || totalRegistros;
-                    maisRegistros = reservasPagina.length === registrosPorPagina;
-                    pagina++;
-                } else {
-                    console.warn(`⚠️ Nenhuma reserva encontrada na página ${pagina}`);
-                    maisRegistros = false;
+                    if (status !== 200) {
+                        console.error(`🚨 Erro da API${empreendimentoInfo}${faturarInfo}: status ${status}`);
+                        return []; // Retorna array vazio em caso de erro
+                    }
+
+                    const responseText = await response.text();
+
+                    // Verifica se a resposta está vazia
+                    if (!responseText || responseText.trim() === '') {
+                        console.log(`ℹ️ Resposta vazia recebida${empreendimentoInfo}${faturarInfo}`);
+                        return [];
+                    }
+
+                    let data;
+                    try {
+                        data = JSON.parse(responseText);
+                    } catch (parseError) {
+                        console.error(`❌ Erro ao fazer parse do JSON${empreendimentoInfo}${faturarInfo}:`, parseError.message);
+                        console.error('🧾 Resposta bruta:', responseText);
+                        return []; // Retorna array vazio em caso de erro no parse
+                    }
+
+                    // Ajuste para extrair as reservas
+                    let reservasPagina = [];
+                    if (data.reservas && Array.isArray(data.reservas)) {
+                        reservasPagina = data.reservas;
+                        console.log(`✅ Página ${pagina}${empreendimentoInfo}${faturarInfo} retornou ${reservasPagina.length} reservas (usando data.reservas)`);
+                    } else {
+                        reservasPagina = Object.keys(data)
+                            .filter(key => !isNaN(Number(key)))
+                            .map(key => data[key]);
+                        console.log(`✅ Página ${pagina}${empreendimentoInfo}${faturarInfo} retornou ${reservasPagina.length} reservas (extraídas das chaves numéricas)`);
+                    }
+
+                    // Se houver reservas na página, processa-as
+                    if (reservasPagina.length > 0) {
+                        allReservas = allReservas.concat(reservasPagina);
+                        maisRegistros = reservasPagina.length === registrosPorPagina;
+                        pagina++;
+                    } else {
+                        console.warn(`⚠️ Nenhuma reserva encontrada na página ${pagina}${empreendimentoInfo}${faturarInfo}`);
+                        maisRegistros = false;
+                    }
+                } catch (err) {
+                    console.error(`❌ Falha na requisição da página ${pagina}${empreendimentoInfo}${faturarInfo}:`, err.message);
+                    return []; // Retorna array vazio em caso de erro na requisição
                 }
-            } catch (err) {
-                console.error(`❌ Falha na requisição da página ${pagina}:`, err.message);
-                throw err;
             }
-        }
+
+            console.log(`✅ Total de ${allReservas.length} reservas encontradas${empreendimentoInfo}${faturarInfo}`);
+            return allReservas;
+        };
+
+        // Função para buscar todas as reservas, tentando com diferentes parâmetros
+        const buscarTodasAsReservas = async () => {
+            let allReservas = [];
+            
+            // Primeiro, tenta com o parâmetro faturar normalmente
+            console.log(`🔍 Iniciando busca com parâmetro faturar=${faturar}`);
+            
+            if (empreendimentosList.length > 0) {
+                // Primeiro, busca com os parâmetros normais
+                const promessasNormais = empreendimentosList.map(id => 
+                    fetchEmpreendimentoReservas(id, true).catch(() => [])
+                );
+                
+                const resultadosNormais = await Promise.all(promessasNormais);
+                allReservas = resultadosNormais.flat();
+                
+                console.log(`📊 Total após busca normal: ${allReservas.length} reservas encontradas`);
+            } else {
+                // Busca sem filtro de empreendimento
+                console.log('🔍 Buscando todas as reservas sem filtro de empreendimento');
+                allReservas = await fetchEmpreendimentoReservas(null, true).catch(() => []);
+                console.log(`📊 Total após busca sem filtro: ${allReservas.length} reservas encontradas`);
+            }
+            
+            return allReservas;
+        };
+
+        // Busca as reservas
+        let allReservas = await buscarTodasAsReservas();
 
         // Filtra reservas pelo campo "ate" se estiver presente
         if (ate) {
@@ -266,17 +326,18 @@ export const fetchReservas = async (req, res) => {
             dataFim.setHours(23, 59, 59, 999); // Define para o final do dia
 
             console.log(`🔍 Filtrando reservas até: ${dataFim.toISOString()}`);
-            
+
             // Filtra reservas cuja data é anterior ou igual à data final
             allReservas = allReservas.filter(reserva => {
                 if (!reserva.data) return true; // Se não tem data, mantém
-                
+
                 const dataReserva = new Date(reserva.data);
                 return dataReserva <= dataFim;
             });
-            
+
             console.log(`📊 Após filtro por data, restaram ${allReservas.length} reservas`);
         }
+
 
         // Busca empreendimentos usando o serviço dedicado
         const empreendimentos = await getEmpreendimentos();
@@ -295,12 +356,33 @@ export const fetchReservas = async (req, res) => {
             empreendimentos,
             reservas: allReservas
         };
-
+        
         console.log('✅ Resultado final preparado:', { total: allReservas.length });
-        res.status(200).json(result);
+        
+        if (!responseWasSent) {
+            responseWasSent = true;
+            res.status(200).json(result);
+            // Verifica se há reservas após todos os filtros
+            if (allReservas.length <= 0) {
+                throw new Error('Nenhuma reserva encontrada com os filtros aplicados');
+            }
+    
+        }
     } catch (error) {
         console.error('Erro ao buscar reservas:', error.message);
-        res.status(500).json({ error: 'Erro ao buscar reservas na API externa' });
+        
+        if (!responseWasSent) {
+            responseWasSent = true;
+            res.status(404).json({ 
+                error: error.message || 'Erro ao buscar reservas na API externa',
+                filtros: {
+                    idempreendimento: req.query.idempreendimento || null,
+                    a_partir_de: req.query.a_partir_de || null,
+                    ate: req.query.ate || null,
+                    faturar: req.query.faturar || 'false'
+                }
+            });
+        }
     }
 };
 
