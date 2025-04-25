@@ -338,7 +338,6 @@ export const fetchReservas = async (req, res) => {
             console.log(`📊 Após filtro por data, restaram ${allReservas.length} reservas`);
         }
 
-
         // Busca empreendimentos usando o serviço dedicado
         const empreendimentos = await getEmpreendimentos();
 
@@ -356,17 +355,12 @@ export const fetchReservas = async (req, res) => {
             empreendimentos,
             reservas: allReservas
         };
-        
+
         console.log('✅ Resultado final preparado:', { total: allReservas.length });
         
         if (!responseWasSent) {
             responseWasSent = true;
             res.status(200).json(result);
-            // Verifica se há reservas após todos os filtros
-            if (allReservas.length <= 0) {
-                throw new Error('Nenhuma reserva encontrada com os filtros aplicados');
-            }
-    
         }
     } catch (error) {
         console.error('Erro ao buscar reservas:', error.message);
