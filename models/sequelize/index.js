@@ -10,7 +10,22 @@ const __dirname = path.dirname(__filename);
 
 const env = process.env.NODE_ENV || 'development';
 const cfg = config[env];
-const sequelize = new Sequelize(cfg.database, cfg.username, cfg.password, cfg);
+const sequelize = new Sequelize(
+  cfg.database,
+  cfg.username,
+  cfg.password,
+  {
+    host:     cfg.host,
+    port:     cfg.port,
+    dialect:  cfg.dialect,
+    define:   cfg.define,
+    pool:     cfg.pool || {
+      max: 5, min: 0, acquire: 30000, idle: 10000
+    },
+    logging: false      // opcional, mas evita logs verbosos em produção
+  }
+);
+
 
 const db = {};
 const modelsDir = __dirname;
