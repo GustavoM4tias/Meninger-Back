@@ -9,12 +9,23 @@ import externalApiRoutes from './routes/externalApiRoutes.js';
 
 dotenv.config();
 const app = express();
+
+const corsOptions = {
+  origin: [
+    'http://localhost:5173',
+    'https://meninger.vercel.app'
+  ],
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  credentials: true
+};
+
 app.use(express.json());
-app.use(cors({
-  origin: ['http://localhost:5173','https://meninger.vercel.app'],
-  methods: ['GET','POST','PUT','DELETE'],
-  credentials: true,
-}));
+
+// 1️⃣ Responde sempre OPTIONS em todas as rotas
+app.options('*', cors(corsOptions));
+
+// 2️⃣ Aplica o CORS normal
+app.use(cors(corsOptions));
 
 // Rotas
 app.use('/api/auth', authRoutes);
