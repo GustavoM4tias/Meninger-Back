@@ -1,3 +1,4 @@
+// /models/sequelize/favorite.js
 import { Model } from 'sequelize';
 
 export default (sequelize, DataTypes) => {

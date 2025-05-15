@@ -1,3 +1,4 @@
+// /models/sequelize/user.js
 import bcrypt from 'bcryptjs';
 
 export default (sequelize, DataTypes) => {
