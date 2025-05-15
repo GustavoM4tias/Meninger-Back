@@ -1,9 +1,11 @@
 // api/controllers/authController.js
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import User from '../models/authModel.js';
+import db from '../models/sequelize/index.js';
 import jwtConfig from '../config/jwtConfig.js';
 import responseHandler from '../utils/responseHandler.js';
+
+const { User } = db;
 
 export const registerUser = async (req, res) => {
   const { username, password, email, position, city, birth_date } = req.body;
@@ -11,30 +13,26 @@ export const registerUser = async (req, res) => {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
   try {
-    const existingUser = await User.findByUsername(req.db, username);
+    const existingUser = await User.findOne({ where: { username } });
     if (existingUser) {
       return responseHandler.error(res, 'Nome já existente');
     }
-    await User.register(req.db, username, password, email, position, city, birth_date);
 
-    const newUser = await User.findByUsername(req.db, username);
-    const token = jwt.sign({ id: newUser.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
-
-    responseHandler.success(res, { token });
+    const user = await User.create({ username, password, email, position, city, birth_date });
+    const token = jwt.sign({ id: user.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+    return responseHandler.success(res, { token });
   } catch (error) {
-    responseHandler.error(res, error);
+    return responseHandler.error(res, error);
   }
 };
 
 export const loginUser = async (req, res) => {
   const { email, password } = req.body;
   try {
-    const user = await User.findByEmail(req.db, email);
+    const user = await User.findOne({ where: { email } });
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
-
-    // Verifica se o usuário está ativo (status TRUE)
     if (!user.status) {
       return responseHandler.error(res, 'Conta inativa. Entre em contato com o administrador.');
     }
@@ -44,94 +42,87 @@ export const loginUser = async (req, res) => {
       return responseHandler.error(res, 'Senha incorreta');
     }
 
-    const token = jwt.sign({ id: user.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+    user.last_login = new Date();
+    await user.save();
 
-    responseHandler.success(res, { token });
+    const token = jwt.sign({ id: user.id }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+    return responseHandler.success(res, { token });
   } catch (error) {
     console.error('Erro no login:', error);
-    responseHandler.error(res, error);
+    return responseHandler.error(res, error);
   }
 };
 
 export const getUserInfo = async (req, res) => {
   try {
-    const user = await User.findById(req.db, req.user.id); // Usando o ID decodificado do token
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['username', 'email', 'position', 'city', 'birth_date', 'created_at', 'status']
+    });
     if (!user) {
-      return responseHandler.error(res, new Error('Usuário não encontrado'));
+      return responseHandler.error(res, 'Usuário não encontrado');
     }
-    responseHandler.success(res, { username: user.username, email: user.email, position: user.position, manager: user.manager, city: user.city, birth_date: user.birth_date, created_at: user.created_at, status: user.status });
+    return responseHandler.success(res, user);
   } catch (error) {
-    responseHandler.error(res, error);
+    return responseHandler.error(res, error);
   }
 };
 
 export const updateMe = async (req, res) => {
-  const { username, email, position, city, status , birth_date } = req.body;
-
-  if (!username || !email || !position || !city || !birth_date || status === undefined) {
+  const { username, email, position, city, status, birth_date } = req.body;
+  if (!username || !email || !position || !city || status === undefined || !birth_date) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
-
-  // Garantir que status seja 0 ou 1
-  const validStatus = status === 0 || status === 1 ? status : 1;
-
+  const validStatus = (status === 0 || status === 1) ? status : 1;
   try {
-    // Atualizando as informações do usuárioMas 
-    const updatedUser = await User.updateById(req.db, req.user.id, { username, email, position, city, birth_date, status: validStatus });
-
-    if (!updatedUser) {
+    const [affectedRows] = await User.update({ username, email, position, city, status: validStatus, birth_date }, { where: { id: req.user.id } });
+    if (affectedRows === 0) {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
-
-    responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
+    return responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
   } catch (error) {
-    responseHandler.error(res, error);
+    return responseHandler.error(res, error);
   }
 };
 
 export const updateUser = async (req, res) => {
-  const { id, username, email, position, manager, city, birth_date, status } = req.body;
-
-  if (!id || !username || !email || !position || !manager == null || !city || !birth_date || status === undefined) {
+  const { id, username, email, position, city, status, birth_date } = req.body;
+  if (!id || !username || !email || !position || !city || status === undefined || !birth_date) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
-
-  // Garantir que status seja 0 ou 1
-  const validStatus = status === 0 || status === 1 ? status : 1;
-
+  const validStatus = (status === 0 || status === 1) ? status : 1;
   try {
-    const updatedUser = await User.updateById(req.db, req.body.id, { username, email, position, manager, city, birth_date, status: validStatus });
-
-    if (!updatedUser) {
+    const [affectedRows] = await User.update({ username, email, position, city, status: validStatus, birth_date }, { where: { id } });
+    if (affectedRows === 0) {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
-
-    responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
+    return responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
   } catch (error) {
-    responseHandler.error(res, error);
+    return responseHandler.error(res, error);
   }
 };
 
 export const getAllUsers = async (req, res) => {
   try {
-    const users = await User.findAll(req.db);
-    if (!users.length) {
+    const users = await User.findAll({ attributes: ['id', 'username', 'email', 'position', 'city', 'status', 'birth_date'] });
+    if (users.length === 0) {
       return responseHandler.error(res, 'Nenhum usuário encontrado');
     }
-    responseHandler.success(res, users);
+    return responseHandler.success(res, users);
   } catch (error) {
-    responseHandler.error(res, error);
+    return responseHandler.error(res, error);
   }
 };
 
 export const getUserById = async (req, res) => {
   try {
-    const user = await User.findById(req.db, req.params.id); 
+    const user = await User.findByPk(req.params.id, {
+      attributes: ['username', 'email', 'position', 'city', 'birth_date', 'created_at', 'status']
+    });
     if (!user) {
-      return responseHandler.error(res, new Error('Usuário não encontrado'));
+      return responseHandler.error(res, 'Usuário não encontrado');
     }
-    responseHandler.success(res, { username: user.username, email: user.email, position: user.position, manager: user.manager, city: user.city, birth_date: user.birth_date, created_at: user.created_at, status: user.status });
+    return responseHandler.success(res, user);
   } catch (error) {
-    responseHandler.error(res, error);
+    return responseHandler.error(res, error);
   }
 };
