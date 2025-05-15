@@ -1,3 +1,4 @@
+// /models/sequelize/index.js
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -25,7 +26,6 @@ const sequelize = new Sequelize(
     logging: false      // opcional, mas evita logs verbosos em produção
   }
 );
-
 
 const db = {};
 const modelsDir = __dirname;
