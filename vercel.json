@@ -7,8 +7,8 @@
             "config": {
                 "includeFiles": [
                     "routes/**/*",
-                    "models/**/*",
-                    "config/**/*"
+                    "config/**/*",
+                    "models/sequelize/**/*"
                 ]
             }
         }
