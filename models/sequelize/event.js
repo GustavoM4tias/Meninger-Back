@@ -1,3 +1,4 @@
+// /models/sequelize/event.js
 import { Model } from 'sequelize';
 
 export default (sequelize, DataTypes) => {
