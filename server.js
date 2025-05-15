@@ -1,4 +1,5 @@
 // /server.js
+import 'mysql2';            // <- força inclusão no bundle
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
