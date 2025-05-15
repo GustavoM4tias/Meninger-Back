@@ -29,5 +29,7 @@ app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
 app.use('/api/external', externalApiRoutes);
 
-
-export default app;
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta: ${PORT}`);
+});
