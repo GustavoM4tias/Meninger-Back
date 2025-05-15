@@ -2,13 +2,14 @@
     "version": 2,
     "builds": [
         {
-            "src": "server.js",
+            "src": "api/index.js",
             "use": "@vercel/node",
             "config": {
                 "includeFiles": [
                     "routes/**/*",
                     "config/**/*",
-                    "models/sequelize/**/*"
+                    "models/sequelize/**/*",
+                    "node_modules/mysql2/**/*"
                 ]
             }
         }
@@ -16,7 +17,7 @@
     "routes": [
         {
             "src": "/(.*)",
-            "dest": "server.js"
+            "dest": "api/index.js"
         }
     ]
 }
