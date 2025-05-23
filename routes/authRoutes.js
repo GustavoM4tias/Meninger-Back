@@ -12,6 +12,5 @@ router.get('/user/:id', authenticate, getUserById);  // Rota para obter usuario 
 router.put('/user', authenticate, updateMe); // Nova rota para atualização
 router.get('/users', authenticate, getAllUsers);  // Rota para obter todos os usuários
 router.put('/users', authenticate, updateUser);  // Rota para obter todos os usuários
-
-
+ 
 export default router;
