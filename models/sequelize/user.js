@@ -11,6 +11,14 @@ export default (sequelize, DataTypes) => {
     status:     { type: DataTypes.BOOLEAN, defaultValue: true },
     birth_date: DataTypes.DATEONLY,
     last_login: DataTypes.DATE,
+    manager_id: {  // <- Novo campo
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id'
+      },
+    },
   }, {
     tableName: 'users',
     underscored: true,
@@ -25,5 +33,18 @@ export default (sequelize, DataTypes) => {
   //   User.hasMany(models.Favorite, { foreignKey: 'user_id', as: 'favorites' });
   // };
   
+
+  User.associate = models => {
+    User.belongsTo(models.User, {
+      as: 'manager',
+      foreignKey: 'manager_id',
+    });
+
+    User.hasMany(models.User, {
+      as: 'subordinates',
+      foreignKey: 'manager_id',
+    });
+  };
+
   return User;
 };
