@@ -6,7 +6,8 @@ import cors from 'cors';
 import authRoutes from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
 import favoriteRoutes from './routes/favoriteRoutes.js';
-import externalApiRoutes from './routes/externalApiRoutes.js';
+import cvRoutes from './routes/cvRoutes.js';
+import siengeRoutes from './routes/siengeRoutes.js';
 
 dotenv.config();
 const app = express();
@@ -28,7 +29,8 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
-app.use('/api/external', externalApiRoutes);
+app.use('/api/cv', cvRoutes);
+app.use('/api/sienge', siengeRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
