@@ -1,145 +1,173 @@
 // src/controllers/sienge/contratos.js
 import apiSienge from '../../lib/apiSienge.js';
 import dayjs from 'dayjs';
+import isBetween from 'dayjs/plugin/isBetween.js';
+dayjs.extend(isBetween);
 
-// Cache em memória com tempo de expiração
-const contratosCache = new Map()
-const CACHE_TTL = 1000 * 60 * 5 // 5 minutos
-/**
- * Utilitário para buscar contratos de venda do Sienge com paginação automática
- * e filtros por data, situação, empresa, empreendimento e distrato.
- */
+const contratosCache = new Map();
+const CACHE_TTL = 1000 * 60 * 10; // 10 minutos
+const BLOCK_SIZE = 200;
+
 export const fetchContratos = async (req, res) => {
   try {
-    const {
-      companyId,
-      enterpriseId,
-      enterpriseName,
-      situation, // array de strings, ex: ['0', '1']
-      initialIssueDate,
-      finalIssueDate,
-      initialCancelDate,
-      finalCancelDate,
-      distrato = false
-    } = req.query;
+    const { companyId, enterpriseId, enterpriseName, startDate, endDate, linkedEnterprises } = req.query;
+    const hoje = dayjs();
+    const start = startDate ? dayjs(startDate) : hoje.startOf('month');
+    const end = endDate ? dayjs(endDate) : hoje;
+    // linkedEnterprises = "78001:17004,10101:18915"
 
-    const today = dayjs().format('YYYY-MM-DD');
-    const firstDayOfMonth = dayjs().startOf('month').format('YYYY-MM-DD');
+    console.log(`🔍 Busca solicitada: ${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`);
 
-    // Define as datas padrão com base no tipo de busca (normal ou distrato)
-    const defaultInitialDate = initialIssueDate || firstDayOfMonth;
-    const defaultFinalDate = finalIssueDate || today;
-    const defaultInitialCancel = initialCancelDate || firstDayOfMonth;
-    const defaultFinalCancel = finalCancelDate || today;
+    // cache por startDate
+    // única cache global
+    let cache = contratosCache.get('global');
 
-    // Cria uma chave única para o cache
-    const cacheKey = JSON.stringify({
-      companyId,
-      enterpriseId,
-      enterpriseName,
-      situation,
-      defaultInitialDate,
-      defaultFinalDate,
-      defaultInitialCancel,
-      defaultFinalCancel,
-      distrato,
-    })
-
-    // Verifica o cache
-    if (contratosCache.has(cacheKey)) {
-      const { timestamp, data } = contratosCache.get(cacheKey)
-      if (Date.now() - timestamp < CACHE_TTL) {
-        return res.status(200).json(data)
-      } else {
-        contratosCache.delete(cacheKey) // expira
-      }
+    // expira cache se velho
+    if (cache && Date.now() - cache.timestamp > CACHE_TTL) {
+      console.log('🕑 Cache expirado, limpando...');
+      contratosCache.delete('global');
+      cache = undefined;
     }
 
-    const limit = 200;
-    let offset = 0;
-    let allResults = [];
-    let keepFetching = true;
-
-    while (keepFetching) {
-      const params = {
-        limit,
-        offset,
-        ...(companyId && { companyId }),
-        ...(enterpriseId && { enterpriseId }),
-        ...(enterpriseName && { enterpriseName }),
-        ...(situation && { situation: Array.isArray(situation) ? situation : [situation] }),
-        ...(distrato === 'true'
-          ? {
-            initialCancelDate: defaultInitialCancel,
-            finalCancelDate: defaultFinalCancel
-          }
-          : {
-            initialIssueDate: defaultInitialDate,
-            finalIssueDate: defaultFinalDate
-          })
+    // inicializa cache vazio se necessário
+    if (!cache) {
+      console.log('📭 Cache vazio. Criando novo global...');
+      cache = {
+        raw: [],               // todos contratos já carregados
+        timestamp: Date.now(), // último fetch
+        earliest: hoje,        // data mais antiga carregada
       };
-
-      const { data } = await apiSienge.get('/v1/sales-contracts', { params });
-
-      if (data?.results?.length) {
-        allResults = allResults.concat(data.results);
-        offset += limit;
-        keepFetching = data.results.length === limit;
-      } else {
-        keepFetching = false;
-      }
+      contratosCache.set('global', cache);
     }
 
-    const result = { count: allResults.length, results: allResults }
+    // calcula blocos necessários com nova lógica
+    const BASE_BLOCKS = 10;
+    const DIAS_POR_BLOCO_EXTRA = 60;
+    const diasNoPassado = hoje.diff(start, 'day');
 
-    // Salva no cache
-    contratosCache.set(cacheKey, { timestamp: Date.now(), data: result })
+    const blocosExtras = Math.floor(diasNoPassado / DIAS_POR_BLOCO_EXTRA);
+    const neededBlocks = BASE_BLOCKS + blocosExtras;
 
-    res.status(200).json(result)
-  } catch (error) {
-    console.error('Erro ao buscar contratos:', error);
-    res.status(500).json({ error: 'Erro ao buscar contratos do Sienge.' });
+    console.log(`📊 ${diasNoPassado} dias no passado → ${neededBlocks} blocos (base=${BASE_BLOCKS}, extra=${blocosExtras})`);
+
+    // quantos blocos já carregamos
+    let loadedBlocks = Math.ceil(cache.raw.length / BLOCK_SIZE);
+
+    // se precisamos de mais blocos, busca apenas os faltantes
+    if (loadedBlocks < neededBlocks) {
+      const toLoad = neededBlocks - loadedBlocks;
+      console.log(`🆕 Carregando blocos faltantes: ${toLoad}`);
+      for (let i = 0; i < toLoad; i++) {
+        const offset = cache.raw.length;
+        console.log(`🔁 Buscando bloco ${loadedBlocks + i + 1}/${neededBlocks} (offset=${offset})`);
+        const { data } = await apiSienge.get('/v1/sales-contracts', {
+          params: { limit: BLOCK_SIZE, offset, situation: '2' }
+        });
+        console.log({ limit: BLOCK_SIZE, offset, situation: '2' })
+        const bloc = data.results || [];
+        cache.raw.push(...bloc);
+        cache.timestamp = Date.now();
+        console.log(`📥 Recebidos ${bloc.length} contratos`);
+        if (bloc.length < BLOCK_SIZE) break;
+      }
+      console.log(`📦 Cache global agora tem ${cache.raw.length} contratos`);
+    } else {
+      console.log(`✅ Cache global já possui ${cache.raw.length} contratos`);
+    }
+
+    const filtered = cache.raw.filter(c => {
+      let dataReferencia = null;
+
+      if (c.financialInstitutionDate && dayjs(c.financialInstitutionDate).isValid()) {
+        dataReferencia = dayjs(c.financialInstitutionDate);
+      } else if (c.contractDate && dayjs(c.contractDate).isValid()) {
+        dataReferencia = dayjs(c.contractDate);
+        c.__usouDataContrato = true;
+      } else {
+        return false;
+      }
+
+      if (!dataReferencia.isBetween(start, end, null, '[]')) return false;
+
+      if (companyId) {
+        const ids = Array.isArray(companyId) ? companyId : [companyId];
+        if (!ids.includes(String(c.companyId))) return false;
+      }
+
+      // 🔥 Filtro com expansão de pares vinculados
+      if (enterpriseId) {
+        const rawIds = Array.isArray(enterpriseId) ? enterpriseId : [enterpriseId];
+        let expandedEnterpriseIds = rawIds;
+
+        if (linkedEnterprises) {
+          const linkPairs = linkedEnterprises.split(',').map(pair => pair.split(':'));
+          const linkSet = new Set();
+
+          for (const id of rawIds) {
+            for (const [a, b] of linkPairs) {
+              if (a === id || b === id) {
+                linkSet.add(a);
+                linkSet.add(b);
+              }
+            }
+          }
+
+          expandedEnterpriseIds = Array.from(new Set([...rawIds, ...linkSet]));
+        }
+
+        if (!expandedEnterpriseIds.includes(String(c.enterpriseId))) return false;
+      }
+
+      if (enterpriseName) {
+        const nomes = Array.isArray(enterpriseName) ? enterpriseName : [enterpriseName];
+        if (!nomes.some(n => c.enterpriseName.includes(n))) return false;
+      }
+
+      return true;
+    });
+    // agrupa contratos vinculados por cliente e linkedEnterprises
+    const linkMap = new Map();
+    if (linkedEnterprises) {
+      linkedEnterprises.split(',').forEach(pair => {
+        const [a, b] = pair.split(':');
+        linkMap.set(a, a);
+        linkMap.set(b, a);
+      });
+    }
+    const groups = new Map();
+    for (const c of filtered) {
+      const cust = c.salesContractCustomers?.[0];
+      if (!cust) continue;
+      const custId = cust.id;
+      const entKey = linkMap.get(String(c.enterpriseId)) || String(c.enterpriseId);
+      const key = `${custId}#${entKey}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          customerId: custId,
+          customerName: cust.name,
+          groupEnterprise: entKey,
+          enterpriseIds: new Set(),
+          contracts: []
+        });
+      }
+      const g = groups.get(key);
+      g.enterpriseIds.add(String(c.enterpriseId));
+      g.contracts.push(c);
+    }
+
+    // prepara resultado unificado
+    const results = Array.from(groups.values()).map(g => ({
+      customerId: g.customerId,
+      customerName: g.customerName,
+      groupEnterprise: g.groupEnterprise,
+      enterpriseIds: Array.from(g.enterpriseIds),
+      contracts: g.contracts
+    }));
+
+    console.log(`🔄 Retornando ${results.length} grupos de contratos`);
+    return res.json({ count: results.length, results }); ({ count: resultGroups.length, results: resultGroups }); ({ count: filtered.length, results: filtered });
+  } catch (err) {
+    console.error('❌ Erro ao buscar contratos:', err);
+    return res.status(500).json({ error: 'Erro ao buscar contratos do Sienge.' });
   }
 };
-
-
-
-// Nenhum é obrigatório, mas se não houver datas, o sistema usará:
-
-// initialIssueDate = 1º dia do mês atual
-
-// finalIssueDate = hoje
-
-// | Parâmetro           | Tipo       | Exemplo             | Observações                                                |
-// | ------------------- | ---------- | ------------------- | ---------------------------------------------------------- |
-// | `companyId`         | `integer`  | `1`                 | Código da empresa                                          |
-// | `enterpriseId`      | `integer`  | `10`                | ID do empreendimento                                       |
-// | `enterpriseName`    | `string`   | `\"Residencial X\"` | Nome do empreendimento (busca parcial)                     |
-// | `situation`         | `string[]` | `['0','1','2']`     | Situação do contrato: 0 = Solicitado, 1 = Autorizado, etc. |
-// | `initialIssueDate`  | `string`   | `2025-06-01`        | Padrão: primeiro dia do mês                                |
-// | `finalIssueDate`    | `string`   | `2025-06-13`        | Padrão: hoje                                               |
-// | `initialCancelDate` | `string`   | `2025-06-01`        | Usado somente se `distrato=true`                           |
-// | `finalCancelDate`   | `string`   | `2025-06-13`        | Usado somente se `distrato=true`                           |
-// | `distrato`          | `boolean`  | `true`              | Se true, busca por contratos cancelados                    |
-
-// 📌 Exemplos de uso da URL:
-// Buscar contratos do mês atual (padrão):
-
-// bash
-// GET /api/sienge/contratos
-// Buscar contratos de uma empresa e empreendimento:
-
-// bash
-// GET /api/sienge/contratos?companyId=1&enterpriseId=10
-// Buscar contratos emitidos entre duas datas:
-
-// bash
-// GET /api/sienge/contratos?initialIssueDate=2025-05-01&finalIssueDate=2025-05-31
-// Buscar distratos do mês atual:
-
-// bash
-// GET /api/sienge/contratos?distrato=true
-// Buscar apenas contratos na situação 'Emitido' (2) ou 'Cancelado' (3):
-
-// bash
-// GET /api/sienge/contratos?situation=2&situation=3
