@@ -1,8 +1,9 @@
 // /server.js
-import 'mysql2';            // <- força inclusão no bundle
+// import 'mysql2';            // <- força inclusão no bundle
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import db from './models/sequelize/index.js';
 import authRoutes from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
 import favoriteRoutes from './routes/favoriteRoutes.js';
@@ -37,6 +38,25 @@ app.use('/api/sienge', siengeRoutes);
 app.use('/api/ai', validatorAI);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta: ${PORT}`);
-});
+
+db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar dados
+  .then(() => {
+    console.log('Banco sincronizado com sucesso!');
+    app.listen(PORT, () => {
+      console.log(`Servidor rodando na porta: ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Erro ao sincronizar o banco:', err);
+  });
+
+//   | Ambiente        | Método recomendado            | Observações                             |
+// | --------------- | ----------------------------- | --------------------------------------- |
+// | Desenvolvimento | `sync({ force: true })`       | Recria do zero sempre, útil para testar |
+// | Desenvolvimento | `sync({ alter: true })`       | Adapta estrutura sem perder dados       |
+// | Produção        | `sync()` ou migrações via CLI | Use migrações para controle total       |
+
+
+// app.listen(PORT, () => {
+//   console.log(`Servidor rodando na porta: ${PORT}`);
+// });

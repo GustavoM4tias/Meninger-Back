@@ -23,16 +23,16 @@ router.get('/total', async (req, res, next) => {
  */
 router.get('/mensal', async (req, res, next) => {
     try {
-        // Exemplo MySQL: agrupa por YYYY-MM e modelo
+        // Exemplo: agrupa por YYYY-MM e modelo
         const [results] = await TokenUsage.sequelize.query(`
-      SELECT 
-        DATE_FORMAT(created_at, '%Y-%m') AS month,
-        model,
-        SUM(tokens_used)    AS totalTokens
-      FROM token_usages
-      GROUP BY month, model
-      ORDER BY month DESC;
-    `);
+  SELECT 
+    TO_CHAR(created_at, 'YYYY-MM') AS month,
+    model,
+    SUM(tokens_used) AS totalTokens
+  FROM token_usages
+  GROUP BY month, model
+  ORDER BY month DESC;
+`);
         res.json(results);
     } catch (err) {
         next(err);
