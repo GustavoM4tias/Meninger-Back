@@ -8,6 +8,7 @@ import eventRoutes from './routes/eventRoutes.js';
 import favoriteRoutes from './routes/favoriteRoutes.js';
 import cvRoutes from './routes/cvRoutes.js';
 import siengeRoutes from './routes/siengeRoutes.js';
+import validatorAI from './validatorAI/index.js';
 
 dotenv.config();
 const app = express();
@@ -31,6 +32,9 @@ app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
 app.use('/api/cv', cvRoutes);
 app.use('/api/sienge', siengeRoutes);
+
+// chatbot ai
+app.use('/api/ai', validatorAI);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
