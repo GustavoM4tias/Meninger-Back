@@ -15,7 +15,7 @@ export const fetchRepasses = async (req, res) => {
     const exibirDistratos = mostrarDistratos === 'true';
     const exibirCessoes = mostrarCessoes === 'true';
 
-    const limit = 5000;
+    const limit = 0;
     let allRepasses = [];
     let totalConteudo = 0;
 
