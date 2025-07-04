@@ -10,6 +10,8 @@ import favoriteRoutes from './routes/favoriteRoutes.js';
 import cvRoutes from './routes/cvRoutes.js';
 import siengeRoutes from './routes/siengeRoutes.js';
 import validatorAI from './validatorAI/index.js';
+import contractAutomationRoutes from './routes/contractAutomationRoutes.js';
+import contractScheduler from './scheduler/contractScheduler.js';
 
 dotenv.config();
 const app = express();
@@ -36,6 +38,13 @@ app.use('/api/sienge', siengeRoutes);
 
 // chatbot ai
 app.use('/api/ai', validatorAI);
+
+app.use('/api/contracts', contractAutomationRoutes);
+
+// verifica se esta autorizado a iniciar contador para avaliação de contratos
+if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') {
+  contractScheduler.start();
+}
 
 const PORT = process.env.PORT || 5000;
 
