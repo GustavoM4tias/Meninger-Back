@@ -85,9 +85,9 @@ export class DocumentValidator {
     ]);
 
     // tentar extrair cliente e empreendimento do contrato
-    const empMatch = txtF.match(/empreendimento denominado\s+(.+?)[,\.]/i);
-    const clMatch = txtF.match(/Comprador\(a\),\s*([A-Z\s]+),/i);
+    const empMatch = txtF.match(/empreendimento denominado\s+([A-Z\sÇÃÁÉÍÓÚÂÊÔÜ\-]+)[,\.]/i);
     const empreendimento = empMatch ? empMatch[1].trim() : 'Desconhecido';
+    const clMatch = txtF.match(/Comprador\(a\),\s*([A-ZÀ-Ÿ\s']+),/i);
     const cliente = clMatch ? clMatch[1].trim() : 'Desconhecido';
 
     const contratoSnippet = slicePages(txtC, 6, 6);
