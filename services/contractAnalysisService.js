@@ -14,6 +14,7 @@ class ContractAnalysisService {
     constructor() {
         this.targetStatus = 'Analise Contratos';
         this.targetSituationId = 47;
+        this.reprovedSituationId = 66;
         this.requiredDocTypes = ['CONFISSÃO DE DÍVIDA', 'CONTRATO CEF'];
         this.tempDir = path.join(__dirname, '../temp');
 
@@ -119,7 +120,7 @@ class ContractAnalysisService {
             await this.logAnalysisResult(repasse.ID, analysisResult);
 
             // 7. Alterar situação do repasse
-            await this.updateRepasseSituation(repasse.ID);
+            await this.updateRepasseSituation(repasse.ID, analysisResult);
 
             // 8. Limpar arquivos temporários
             await this.cleanupTempFiles(downloadedDocs);
@@ -248,7 +249,7 @@ class ContractAnalysisService {
     async logAnalysisResult(idRepasse, analysisResult) {
         try {
             let mensagem = `🤖 ANÁLISE AUTOMÁTICA DE CONTRATOS\n\n`;
-            mensagem += `📊 Resultado: ${analysisResult.resultado}\n\n`;
+            mensagem += `📊 Resultado: ${analysisResult.status}\n\n`;
 
             if (analysisResult.mensagens && analysisResult.mensagens.length > 0) {
                 mensagem += `📋 Detalhes da Análise:\n`;
@@ -291,65 +292,73 @@ class ContractAnalysisService {
     /**
      * Atualizar situação do repasse
      */
-    async updateRepasseSituation(idRepasse) {
+    async updateRepasseSituation(idRepasse, analysisResult) {
+        const status = analysisResult.status?.toUpperCase();
+        let targetId;
+
+        if (status === 'APROVADO') {
+            targetId = this.targetSituationId;   // 47
+        } else if (status === 'REPROVADO') {
+            targetId = this.reprovedSituationId;   // 66 ou conforme definição
+        } else {
+            targetId = this.reprovedSituationId;    // fallback (ainda 66)
+        }
+
+        const urlTarget = `/v1/cv/repasses/${idRepasse}/alterar-situacao/${targetId}`;
         try {
-            const response = await apiCv.post(
-                `/v1/cv/repasses/${idRepasse}/alterar-situacao/${this.targetSituationId}`
-            );
-
-            console.log(`🔄 Situação do repasse ${idRepasse} alterada para ID: ${this.targetSituationId}`);
+            const response = await apiCv.post(urlTarget);
+            console.log(`🔄 Situação do repasse ${idRepasse} alterada para ID: ${targetId}`);
             return response.data;
-
         } catch (error) {
             console.error(`❌ Erro ao alterar situação do repasse ${idRepasse}:`, error.message);
             throw new Error(`Falha ao alterar situação: ${error.message}`);
         }
-    }
+    } 
 
     /**
      * Registrar erro no repasse
      */
     async logErrorToRepasse(idRepasse, errorMessage) {
-        try {
-            const mensagem = `❌ ERRO NA ANÁLISE AUTOMÁTICA\n\n` +
-                `🔴 Erro: ${errorMessage}\n\n` +
-                `⏰ Ocorrido em: ${new Date().toLocaleString('pt-BR')}\n\n` +
-                `⚠️ Necessária análise manual`;
+    try {
+        const mensagem = `❌ ERRO NA ANÁLISE AUTOMÁTICA\n\n` +
+            `🔴 Erro: ${errorMessage}\n\n` +
+            `⏰ Ocorrido em: ${new Date().toLocaleString('pt-BR')}\n\n` +
+            `⚠️ Necessária análise manual`;
 
-            await this.sendMessageToRepasse(idRepasse, mensagem);
+        await this.sendMessageToRepasse(idRepasse, mensagem);
 
-        } catch (error) {
-            console.error(`❌ Erro ao registrar erro no repasse ${idRepasse}:`, error.message);
-        }
+    } catch (error) {
+        console.error(`❌ Erro ao registrar erro no repasse ${idRepasse}:`, error.message);
     }
+}
 
     /**
      * Limpar arquivos temporários
      */
     async cleanupTempFiles(docs) {
-        for (const [tipo, doc] of Object.entries(docs)) {
-            try {
-                if (fs.existsSync(doc.path)) {
-                    fs.unlinkSync(doc.path);
-                    console.log(`🗑️ Arquivo temporário removido: ${tipo}`);
-                }
-            } catch (error) {
-                console.error(`⚠️ Erro ao remover arquivo temporário ${tipo}:`, error.message);
+    for (const [tipo, doc] of Object.entries(docs)) {
+        try {
+            if (fs.existsSync(doc.path)) {
+                fs.unlinkSync(doc.path);
+                console.log(`🗑️ Arquivo temporário removido: ${tipo}`);
             }
+        } catch (error) {
+            console.error(`⚠️ Erro ao remover arquivo temporário ${tipo}:`, error.message);
         }
     }
+}
 
-    /**
-     * Obter emoji baseado no nível da mensagem
-     */
-    getEmojiForLevel(nivel) {
-        switch (nivel) {
-            case 'correto': return '✅';
-            case 'alerta': return '⚠️';
-            case 'incorreto': return '❌';
-            default: return '📋';
-        }
+/**
+ * Obter emoji baseado no nível da mensagem
+ */
+getEmojiForLevel(nivel) {
+    switch (nivel) {
+        case 'correto': return '✅';
+        case 'alerta': return '⚠️';
+        case 'incorreto': return '❌';
+        default: return '📋';
     }
+}
 }
 
 export default ContractAnalysisService;
