@@ -1,8 +1,10 @@
 import express from 'express';
  
-import { fetchContratos } from '../controllers/sienge/contratos.js' 
+import { fetchContratos, clearContratosCache } from '../controllers/sienge/contratos.js' 
 const router = express.Router();
  
 router.get('/contratos', fetchContratos);
+
+router.post('/contratos/cache/clear', clearContratosCache);
 
 export default router;
