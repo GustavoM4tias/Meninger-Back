@@ -17,7 +17,7 @@ Para cada contrato, verifique e compare de forma objetiva:
 
 1. **Dados Pessoais**
    - Todos os compradores (e seus cônjuges/associados) listados no Contrato Caixa devem constar na Confissão de Dívida.
-   - Dados pessoais sensiveis como documentos, nomes diferentes causam (incorreto), já data de nascimento, nacionalidade, informações pessoais e etc. podem causar (alerta) caso haja divergência. 
+   - Dados pessoais sensiveis como documentos, nomes diferentes causam (incorreto) (caso somente acentuação, causa somente "alerta"), já data de nascimento, nacionalidade, informações pessoais e etc. podem causar (alerta) caso haja divergência. 
    - A Confissão pode ter fiadores ou responsáveis adicionais.
    - Da construtora, pode estar descrita como CONSTRUTORA MENIN, MENIN ENGENHARIA, ou até a INCORPORADORA MF... sendo ambos do grupo da empresa. 
    - Em alguns contratos podem ter alguma outra empresa junto da construtora, que no caso são os representantes pela área/terreno do local.
