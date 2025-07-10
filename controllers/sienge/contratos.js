@@ -5,8 +5,18 @@ import isBetween from 'dayjs/plugin/isBetween.js';
 dayjs.extend(isBetween);
 
 const contratosCache = new Map();
-const CACHE_TTL = 1000 * 60 * 10; // 10 minutos
+const CACHE_TTL = 1000 * 60 * 20; // 20 minutos
 const BLOCK_SIZE = 200;
+
+/**
+ * Limpa o cache global de contratos
+ */
+export const clearContratosCache = (req, res) => {
+  contratosCache.delete('global');
+  console.log('🗑️ Cache global de contratos limpo manualmente');
+  return res.json({ message: 'Cache de contratos limpo com sucesso.' });
+};
+
 
 export const fetchContratos = async (req, res) => {
   try {
@@ -54,23 +64,50 @@ export const fetchContratos = async (req, res) => {
     let loadedBlocks = Math.ceil(cache.raw.length / BLOCK_SIZE);
 
     // se precisamos de mais blocos, busca apenas os faltantes
+    // if (loadedBlocks < neededBlocks) {
+    //   const toLoad = neededBlocks - loadedBlocks;
+    //   console.log(`🆕 Carregando blocos faltantes: ${toLoad}`);
+    //   for (let i = 0; i < toLoad; i++) {
+    //     const offset = cache.raw.length;
+    //     console.log(`🔁 Buscando bloco ${loadedBlocks + i + 1}/${neededBlocks} (offset=${offset})`);
+    //     const { data } = await apiSienge.get('/v1/sales-contracts', {
+    //       params: { limit: BLOCK_SIZE, offset, situation: '2' }
+    //     });
+    //     console.log({ limit: BLOCK_SIZE, offset, situation: '2' })
+    //     const bloc = data.results || [];
+    //     cache.raw.push(...bloc);
+    //     cache.timestamp = Date.now();
+    //     console.log(`📥 Recebidos ${bloc.length} contratos`);
+    //     if (bloc.length < BLOCK_SIZE) break;
+    //   }
+    //   console.log(`📦 Cache global agora tem ${cache.raw.length} contratos`);
+    // } else {
+    //   console.log(`✅ Cache global já possui ${cache.raw.length} contratos`);
+    // }
+
     if (loadedBlocks < neededBlocks) {
       const toLoad = neededBlocks - loadedBlocks;
       console.log(`🆕 Carregando blocos faltantes: ${toLoad}`);
-      for (let i = 0; i < toLoad; i++) {
-        const offset = cache.raw.length;
-        console.log(`🔁 Buscando bloco ${loadedBlocks + i + 1}/${neededBlocks} (offset=${offset})`);
-        const { data } = await apiSienge.get('/v1/sales-contracts', {
+
+      // Monta todos offsets necessários
+      const offsets = Array.from({ length: toLoad }, (_, i) => (loadedBlocks + i) * BLOCK_SIZE);
+      const requests = offsets.map(offset => {
+        console.log(`🔁 Preparando bloco (offset=${offset})`);
+        return apiSienge.get('/v1/sales-contracts', {
           params: { limit: BLOCK_SIZE, offset, situation: '2' }
         });
-        console.log({ limit: BLOCK_SIZE, offset, situation: '2' })
-        const bloc = data.results || [];
+      });
+
+      // Executa todos em paralelo
+      const responses = await Promise.all(requests);
+      let totalFetched = 0;
+      for (const response of responses) {
+        const bloc = response.data.results || [];
         cache.raw.push(...bloc);
-        cache.timestamp = Date.now();
-        console.log(`📥 Recebidos ${bloc.length} contratos`);
-        if (bloc.length < BLOCK_SIZE) break;
+        totalFetched += bloc.length;
       }
-      console.log(`📦 Cache global agora tem ${cache.raw.length} contratos`);
+      cache.timestamp = Date.now();
+      console.log(`📥 Total recebido: ${totalFetched} contratos (cache agora com ${cache.raw.length})`);
     } else {
       console.log(`✅ Cache global já possui ${cache.raw.length} contratos`);
     }
