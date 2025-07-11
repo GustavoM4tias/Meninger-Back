@@ -28,7 +28,7 @@ Para cada contrato, verifique e compare de forma objetiva:
    - O valor de avaliação de venda financiária (cláusula B4 do Contrato Caixa) deve bater com o "valor de venda" da Confissão.
    - Quaisquer divergências em valores da confissão para contrato caixa deve gerar (incorreto).
    - O parcelamento do valor de recurso do cliente aparece somente na confissão de dívida, mas a somatoria junto do desconto caso exista, deve retornar o valor de recurso do contrato caixa. 
-   - Calcule **explicitamente a soma das parcelas**: multiplique os valores unitários pelo número de parcelas e some com outras parcelas pontuais (SEM CHANCE PARA ERROS MATEMÁTICOS, FAÇA COM MAIOR ATENÇÃO).
+   - Calcule **explicitamente a soma das parcelas**: Exemplo: 41 * "VALOR" e some com outras parcelas pontuais, Exemplo: 1 * VALOR, logo é = 41 * VALOR + 1 * VALOR, isso pode varias em quantidade de parcelas e valor, mas o resultado deve ser exato.
    - Compare esse total com o valor de 'recursos próprios' no Contrato Caixa.
 
 3. **Datas**
