@@ -23,13 +23,15 @@ Para cada contrato, verifique e compare de forma objetiva:
    - Em alguns contratos podem ter alguma outra empresa junto da construtora, que no caso são os representantes pela área/terreno do local.
 
 2. **Valores**
-   - Valores totais, subsídios (federal e estadual), recursos próprios, FGTS, parcelas e descontos devem coincidir.
-   - Em caso de "desconto construtora", abata-o do "recurso a pagar" do contrato caixa para bater os valores.
-   - O valor de avaliação de venda financiária (cláusula B4 do Contrato Caixa) deve bater com o "valor de venda" da Confissão.
-   - Quaisquer divergências em valores da confissão para contrato caixa deve gerar (incorreto).
-   - O parcelamento do valor de recurso do cliente aparece somente na confissão de dívida, mas a somatoria junto do desconto caso exista, deve retornar o valor de recurso do contrato caixa. 
-   - Calcule **explicitamente a soma das parcelas**: Exemplo: 41 * "VALOR" e some com outras parcelas pontuais, Exemplo: 1 * VALOR, logo é = 41 * VALOR + 1 * VALOR, isso pode varias em quantidade de parcelas e valor, mas o resultado deve ser exato.
-   - Compare esse total com o valor de 'recursos próprios' no Contrato Caixa.
+    - **PARA TODOS OS CÁLCULOS E COMPARAÇÕES DE VALORES, VOCÊ DEVE OBRIGATORIAMENTE UTILIZAR A FERRAMENTA DE CÁLCULO (PYTHON CODE) PARA GARANTIR PRECISÃO ABSOLUTA. NÃO REALIZE CÁLCULOS MENTALMENTE OU POR APROXIMAÇÃO.**
+    - Valores totais, subsídios (federal e estadual), recursos próprios, FGTS, parcelas e descontos devem coincidir.
+    - Em caso de "desconto construtora", abata-o do "recurso a pagar" do contrato caixa para bater os valores.
+    - O valor de avaliação de venda financiária (cláusula B4 do Contrato Caixa) deve bater com o "valor de venda" da Confissão.
+    - Quaisquer divergências em valores da confissão para contrato caixa deve gerar (incorreto).
+    - O parcelamento do valor de recurso do cliente aparece somente na confissão de dívida, mas a somatoria junto do desconto caso exista, deve retornar o valor de recurso do contrato caixa. 
+    - Os conjuntos de parcelamento podem variar, podendo ser feito em um unico grupo ou 2+, nesse caso a somatoria das parcelas de cada grupo deve ser somada e caso exista, somada tambem ao desconto, resultando no valor de recurso a parcelar.
+    - Compare esse total com o valor de 'recursos próprios' no Contrato Caixa.
+    - **APÓS REALIZAR UM CÁLCULO, REFAÇA-O UMA SEGUNDA VEZ USANDO A FERRAMENTA DE CÁLCULO PARA UMA DUPLA VERIFICAÇÃO ANTES DE AFIRMAR O RESULTADO. SE HOUVER QUALQUER DÚVIDA, INDIQUE UM "ALERTA" E DETALHE O CÁLCULO REALIZADO.**
 
 3. **Datas**
    - A data de assinatura deve ser idêntica.
