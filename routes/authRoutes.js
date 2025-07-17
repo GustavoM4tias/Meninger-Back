@@ -14,3 +14,6 @@ router.get('/users', authenticate, getAllUsers);  // Rota para obter todos os us
 router.put('/users', authenticate, updateUser);  // Rota para obter todos os usuários
  
 export default router;
+
+// ATUALIZAR RETORNOS MICROSOFT NAS ROTAS
+
