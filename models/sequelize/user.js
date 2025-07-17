@@ -3,12 +3,12 @@ import bcrypt from 'bcryptjs';
 
 export default (sequelize, DataTypes) => {
   const User = sequelize.define('User', {
-    username:   { type: DataTypes.STRING(50), allowNull: false, unique: true },
-    password:   { type: DataTypes.STRING(255), allowNull: false },
-    email:      { type: DataTypes.STRING(100),allowNull: false, unique: true },
-    position:   DataTypes.STRING,
-    city:       DataTypes.STRING,
-    status:     { type: DataTypes.BOOLEAN, defaultValue: true },
+    username: { type: DataTypes.STRING(50), allowNull: false, unique: true },
+    password: { type: DataTypes.STRING(255), allowNull: false },
+    email: { type: DataTypes.STRING(100), allowNull: false, unique: true },
+    position: DataTypes.STRING,
+    city: DataTypes.STRING,
+    status: { type: DataTypes.BOOLEAN, defaultValue: true },
     birth_date: DataTypes.DATEONLY,
     last_login: DataTypes.DATE,
     manager_id: {  // <- Novo campo
@@ -18,6 +18,18 @@ export default (sequelize, DataTypes) => {
         model: 'users',
         key: 'id'
       },
+    },
+    microsoft_access_token: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    microsoft_refresh_token: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    microsoft_token_expires_at: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
     },
   }, {
     tableName: 'users',
@@ -32,7 +44,7 @@ export default (sequelize, DataTypes) => {
   // User.associate = models => {
   //   User.hasMany(models.Favorite, { foreignKey: 'user_id', as: 'favorites' });
   // };
-  
+
 
   User.associate = models => {
     User.belongsTo(models.User, {
