@@ -1,10 +1,10 @@
 // scheduler/contractSiengeScheduler.js
 import cron from 'node-cron';
-import SiengeController from '../controllers/sienge/siengeController.js';
+import bulkDataController from '../controllers/sienge/bulkDataController.js';
 
-class ContractScheduler {
+class ContractValidatorScheduler {
     constructor() {
-        this.ctl = new SiengeController();
+        this.ctl = new bulkDataController();
         this.task = null;
         this.cronExp = process.env.CONTRACT_SIENGE_CRON_EXPRESSION || '0 * * * *';
     }
@@ -21,7 +21,7 @@ class ContractScheduler {
 
             await this.ctl.deltaSync({}, fakeRes);
         });
-        console.log(`✅ Scheduler iniciado: ${this.cronExp}`);
+        console.log(`✅ Timer de contratos Sienge configurado: ${this.cronExp}`);
     }
 
     stop() {
@@ -30,4 +30,4 @@ class ContractScheduler {
     }
 }
 
-export default new ContractScheduler();
+export default new ContractValidatorScheduler();

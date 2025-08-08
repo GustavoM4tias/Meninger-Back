@@ -1,6 +1,6 @@
 // services/siengeService.js
-import apiSienge from '../lib/apiSienge.js';
-import db from '../models/sequelize/index.js';
+import apiSienge from '../../../lib/apiSienge.js';
+import db from '../../../models/sequelize/index.js';
 
 const {
     SalesContract,

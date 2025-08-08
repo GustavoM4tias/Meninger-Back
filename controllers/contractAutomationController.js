@@ -195,12 +195,12 @@ class ContractAutomationController {
     //     try {
     //         const { enabled, interval } = req.body;
 
-    //         contractScheduler.updateConfig({ enabled, interval });
+    //         contractValidatorScheduler.updateConfig({ enabled, interval });
 
     //         res.status(200).json({
     //             success: true,
     //             message: 'Configuração de agendamento atualizada com sucesso',
-    //             config: contractScheduler.getStatus()
+    //             config: contractValidatorScheduler.getStatus()
     //         });
 
     //     } catch (error) {

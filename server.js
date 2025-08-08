@@ -14,9 +14,10 @@ import contractAutomationRoutes from './routes/contractAutomationRoutes.js';
 import microsoftAuthRoutes from './routes/microsoftAuthRoutes.js';
  
 // cron 
-import contractScheduler from './scheduler/contractScheduler.js';
+import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
-
+import leadCvScheduler from './scheduler/leadCvScheduler.js';
+ 
 
 dotenv.config();
 const app = express();
@@ -40,7 +41,7 @@ app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
 app.use('/api/cv', cvRoutes);
 
-// Sienge api and cron
+// Sienge api, db and cron
 app.use('/api/sienge', siengeRoutes); 
 // Microsoft for archives
 app.use('/api/microsoft', microsoftAuthRoutes);
@@ -49,15 +50,21 @@ app.use('/api/microsoft', microsoftAuthRoutes);
 app.use('/api/ai', validatorAI);
 
 app.use('/api/contracts', contractAutomationRoutes);
+ 
 
 // verifica se esta autorizado a iniciar contador para avaliação de contratos
 if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') {
-  contractScheduler.start();
+  contractValidatorScheduler.start();
 }
 
 // verifica se esta autorizado a iniciar contador para buscar contratos do sienge
 if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') {
   contractSiengeScheduler.start();
+}
+
+// verifica se esta autorizado a iniciar contador para buscar leads do cv 
+if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') {
+  leadCvScheduler.start();
 }
 
 const PORT = process.env.PORT || 5000;
