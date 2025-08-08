@@ -6,8 +6,19 @@ export default (sequelize, DataTypes) => {
     username: { type: DataTypes.STRING(50), allowNull: false, unique: true },
     password: { type: DataTypes.STRING(255), allowNull: false },
     email: { type: DataTypes.STRING(100), allowNull: false, unique: true },
-    position: DataTypes.STRING,
-    city: DataTypes.STRING,
+    position: {
+      type: DataTypes.ENUM('Diretor', 'Gerente', 'Financeiro', 'Marketing', 'Comercial'), 
+      allowNull: false
+    },
+    city: {
+      type: DataTypes.ENUM('Marília', 'Bauru', 'Jacarezinho', 'Guaratinguetá', 'Bady Bassitt', 'Dourados', 'Cuiabá'), // ajuste as cidades válidas
+      allowNull: false
+    },
+    role: {
+      type: DataTypes.ENUM('admin', 'manager', 'user'), // ajuste os cargos aqui
+      allowNull: false,
+      defaultValue: 'user'
+    },
     status: { type: DataTypes.BOOLEAN, defaultValue: true },
     birth_date: DataTypes.DATEONLY,
     last_login: DataTypes.DATE,
@@ -39,12 +50,6 @@ export default (sequelize, DataTypes) => {
 
   User.beforeCreate(u => bcrypt.hash(u.password, 10).then(h => { u.password = h; }));
   User.beforeUpdate(u => u.changed('password') && bcrypt.hash(u.password, 10).then(h => { u.password = h; }));
-
-  // // Se precisar, associações
-  // User.associate = models => {
-  //   User.hasMany(models.Favorite, { foreignKey: 'user_id', as: 'favorites' });
-  // };
-
 
   User.associate = models => {
     User.belongsTo(models.User, {

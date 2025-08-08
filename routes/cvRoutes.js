@@ -5,8 +5,10 @@ import { fetchReservas, fetchReservaPagamentos } from '../controllers/cv/reserva
 import { fetchEmpreendimentos, fetchBuildings, fetchBuildingById } from '../controllers/cv/empreendimentos.js'
 import { fetchFilas, fetchLeads } from '../controllers/cv/leads.js'
 import { fetchBanners } from '../controllers/cv/banner.js'
-
+import bulkDataController from '../controllers/cv/bulkDataController.js';
+ 
 const router = express.Router();
+const bulk = new bulkDataController();
  
 router.get('/repasses', fetchRepasses);
 router.get('/repasse-workflow', fetchRepasseWorkflow); 
@@ -18,5 +20,8 @@ router.get('/empreendimento/:id', fetchBuildingById);
 router.get('/filas', fetchFilas);
 router.get('/leads', fetchLeads); 
 router.get('/banners', fetchBanners);
+
+router.post('/leads/sync/full',   bulk.fullSync.bind(bulk));
+router.post('/leads/sync/delta',  bulk.deltaSync.bind(bulk));
 
 export default router;
