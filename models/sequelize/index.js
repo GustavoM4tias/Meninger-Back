@@ -14,6 +14,8 @@ import SalesContractUnitDefine     from './sienge/salesContractUnit.js';
 import PaymentConditionDefine      from './sienge/paymentCondition.js';
 import ContractLinkDefine          from './sienge/contractLink.js';
 
+// perto dos outros imports
+import LeadDefine from './cv/lead.js';
 
 const env = process.env.NODE_ENV || 'development';
 const cfg = config[env];
@@ -35,6 +37,9 @@ db.SalesContractCustomer = SalesContractCustomerDefine(sequelize, DataTypes);
 db.SalesContractUnit     = SalesContractUnitDefine(sequelize, DataTypes);
 db.PaymentCondition      = PaymentConditionDefine(sequelize, DataTypes);
 db.ContractLink          = ContractLinkDefine(sequelize, DataTypes);
+
+// ... após definir outros modelos:
+db.Lead = LeadDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

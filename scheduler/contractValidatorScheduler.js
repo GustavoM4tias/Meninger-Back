@@ -1,8 +1,8 @@
-// scheduler/contractScheduler.js
+// scheduler/contractValidatorScheduler.js
 import cron from 'node-cron';
 import ContractAutomationController from '../controllers/contractAutomationController.js';
 
-class ContractScheduler {
+class ContractValidatorScheduler {
     constructor() {
         this.controller = new ContractAutomationController();
         this.task = null;
@@ -29,7 +29,7 @@ class ContractScheduler {
         });
 
         this.enabled = true;
-        console.log(`✅ Agendamento iniciado com expressão: ${cronExp}`);
+        console.log(`✅ Timer de validação de contratos configurado:: ${cronExp}`);
     }
 
     stop() {
@@ -39,7 +39,7 @@ class ContractScheduler {
         }
 
         this.enabled = false;
-        console.log('⛔ Agendamento parado');
+        console.log('⛔ Timer parado');
     }
 
     restart(newCronExp) {
@@ -61,8 +61,8 @@ class ContractScheduler {
     }
 }
 
-const contractScheduler = new ContractScheduler();
-export default contractScheduler;
+const contractValidatorScheduler = new ContractValidatorScheduler();
+export default contractValidatorScheduler;
 
 // | Campo         | Valor  | Significado             |
 // | ------------- | ------ | ----------------------- |
