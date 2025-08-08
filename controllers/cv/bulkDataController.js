@@ -1,16 +1,14 @@
-import SiengeService from '../../services/siengeService.js'; 
+// src/controllers/cv/bulkDataController.js
+import cvDataService from '../../services/bulkData/cv/cvDataService.js';
 
-const state = {
-    lastRunAt: null
-};
+const state = { lastRunAt: null };
 
-export default class SiengeController {
+export default class CvLeadSyncController {
     constructor() {
-        this.service = new SiengeService();
+        this.service = new cvDataService();
         this.isRunning = false;
     }
 
-    /** Rota POST /api/sienge/sync/full */
     async fullSync(req, res) {
         if (this.isRunning) return res.status(429).send('Já em execução');
         this.isRunning = true;
@@ -26,13 +24,11 @@ export default class SiengeController {
         }
     }
 
-    /** Rota POST /api/sienge/sync/delta */
     async deltaSync(req, res) {
         if (this.isRunning) return res.status(429).send('Já em execução');
         this.isRunning = true;
         try {
-            const since = state.lastRunAt || new Date(Date.now() - 24 * 3600 * 1000);
-            await this.service.loadDelta(since);
+            await this.service.loadDelta();
             state.lastRunAt = new Date();
             res.send('Sincronização incremental concluída');
         } catch (e) {
