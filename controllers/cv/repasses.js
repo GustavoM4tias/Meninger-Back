@@ -25,7 +25,7 @@ export const fetchRepasses = async (req, res) => {
       let totalEmp = 0;
 
       do {
-        const url = `/v1/cv/repasses?total=${limit}&limit=${limit}&offset=${offset}&empreendimento=${encodeURIComponent(emp)}`;
+        const url = `/v1/financeiro/repasses?total=${limit}&limit=${limit}&offset=${offset}&empreendimento=${encodeURIComponent(emp)}`;
 
         const { data } = await apiCv.get(url);
 
@@ -57,7 +57,7 @@ export const fetchRepasses = async (req, res) => {
     } else {
       let offset = 0;
       do {
-        const url = `/v1/cv/repasses?total=${limit}&limit=${limit}&offset=${offset}`;
+        const url = `/v1/financeiro/repasses?total=${limit}&limit=${limit}&offset=${offset}`;
         const { data } = await apiCv.get(url);
 
         if (data.repasses && Array.isArray(data.repasses)) {

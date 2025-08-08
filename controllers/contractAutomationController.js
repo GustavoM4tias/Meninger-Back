@@ -143,7 +143,7 @@ class ContractAutomationController {
      */
     async getRepasseById(idRepasse) {
         try {
-            const response = await apiCv.get(`/v1/cv/repasses?ID=${idRepasse}`);
+            const response = await apiCv.get(`/v1/financeiro/repasses?ID=${idRepasse}`);
 
             if (!response.data?.repasses) {
                 throw new Error('Resposta inválida da API de repasses');
