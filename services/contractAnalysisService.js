@@ -80,7 +80,7 @@ class ContractAnalysisService {
      */
     async getRepassesForAnalysis() {
         try {
-            const response = await apiCv.get(`/v1/cv/repasses?limit=0`);
+            const response = await apiCv.get(`/v1/financeiro/repasses?limit=0`);
 
             if (!response.data?.repasses) {
                 throw new Error('Resposta inválida da API de repasses');
@@ -136,7 +136,7 @@ class ContractAnalysisService {
      */
     async getReservaDocuments(idreserva) {
         try {
-            const response = await apiCv.get(`/v1/cv/reservas/documentos/${idreserva}`);
+            const response = await apiCv.get(`/v1/comercial/reservas/${idreserva}/documentos`);
 
             if (!response.data?.dados?.documentos?.titular) {
                 throw new Error('Documentos da reserva não encontrados');
@@ -275,7 +275,7 @@ class ContractAnalysisService {
      */
     async sendMessageToRepasse(idRepasse, mensagem) {
         try {
-            const response = await apiCv.post(`/v2/cv/repasses/mensagens`, {
+            const response = await apiCv.post(`/v2/financeiro/repasses/mensagens`, {
                 idrepasse: idRepasse,
                 mensagem: mensagem
             });
@@ -304,7 +304,7 @@ class ContractAnalysisService {
             targetId = this.reprovedSituationId;    // fallback (ainda 66)
         }
 
-        const urlTarget = `/v1/cv/repasses/${idRepasse}/alterar-situacao/${targetId}`;
+        const urlTarget = `/v1/financeiro/repasses/${idRepasse}/alterar-situacao/${targetId}`;
         try {
             const response = await apiCv.post(urlTarget);
             console.log(`🔄 Situação do repasse ${idRepasse} alterada para ID: ${targetId}`);

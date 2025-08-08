@@ -7,7 +7,7 @@ import axios from 'axios';
 export const validateApiConnection = async (req, res, next) => {
     try {
         // Verificar se a API do CRM está acessível
-        const crmResponse = await axios.get('https://menin.cvcrm.com.br/api/v1/cv/repasses?limit=1', {
+        const crmResponse = await axios.get('https://menin.cvcrm.com.br/api/v1/financeiro/repasses?limit=1', {
             timeout: 5000
         });
 
