@@ -1,16 +1,17 @@
-import express from 'express';
- 
-import { fetchContratos, clearContratosCache } from '../controllers/sienge/contratos.js' 
-import SiengeController from '../controllers/sienge/siengeController.js';
+import express from 'express'; 
+import { getContracts, listEnterprises, clearCache } from '../controllers/sienge/contractSalesController.js';
+import authenticate from '../middlewares/authMiddleware.js'; 
+import bulkDataController from '../controllers/sienge/bulkDataController.js';
 
 const router = express.Router();
-const ctl = new SiengeController();
- 
-router.get('/contratos', fetchContratos);
+const bulk = new bulkDataController();
 
-router.post('/contratos/cache/clear', clearContratosCache);
+// GET /api/contracts?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&situation=Emitido|Autorizado|Cancelado&enterpriseName=texto
+router.get('/contracts', authenticate, getContracts);
+router.get('/contracts/enterprises', authenticate, listEnterprises );
+router.post('/contracts/cache/clear', authenticate, clearCache);
 
-router.post('/sync/full',  ctl.fullSync.bind(ctl));
-router.post('/sync/delta', ctl.deltaSync.bind(ctl));
+router.post('/contracts/sync/full',  bulk.fullSync.bind(bulk));
+router.post('/contracts/sync/delta', bulk.deltaSync.bind(bulk));
 
 export default router;
