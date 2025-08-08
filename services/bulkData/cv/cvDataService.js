@@ -14,13 +14,18 @@ function hashObj(o) {
 
 async function fetchAll(url) {
     let offset = 0, all = [];
+    console.log(`🔍 Iniciando fetch: ${url}`);
     while (true) {
         const res = await apiCv.get(`${url}&limit=${LIMIT}&offset=${offset}`);
         const data = res.data.leads;
+ 
+        console.log(`   → Página offset=${offset} | retornados=${data.length}`);
+
         all.push(...data);
         if (data.length < LIMIT) break;
         offset += LIMIT;
     }
+    console.log(`✅ Fim do fetch "${url}" — total=${all.length} leads\n`);
     return all;
 }
 
@@ -41,6 +46,10 @@ export default class CvLeadSyncService {
         const merge = [...ativos, ...vendidos];
         const idsSync = merge.map(l => l.idlead);
 
+        console.log(`📦 Leads ativos: ${ativos.length}`);
+        console.log(`💰 Leads vendidos: ${vendidos.length}`);
+        console.log(`🔄 Total a sincronizar: ${merge.length}`);
+
         await this.upsertBatch(merge);
 
         // marca descartados
@@ -53,15 +62,18 @@ export default class CvLeadSyncService {
                 }
             }
         );
-
+ 
         console.log(`🎉 Delta concluído: ${merge.length} leads processados`);
     }
 
     async upsertBatch(arr) {
+        console.log(`✍️ Iniciando upsert em ${arr.length} leads`);
         const CHUNK = 100;
         for (let i = 0; i < arr.length; i += CHUNK) {
             const slice = arr.slice(i, i + CHUNK);
             await Promise.all(slice.map(raw => this.upsertOne(raw)));
+
+            console.log(`   → progresso: ${i + slice.length}/${arr.length}`);
         }
     }
 
