@@ -41,94 +41,93 @@ export async function getContracts(req, res) {
       : '';
 
     const sql = `
-WITH customers_ranked AS (
-  SELECT
-    scu.contract_id,
-    sc.enterprise_id,
-    sc.enterprise_name,
-    sc.financial_institution_date,
-    scu.name AS unit_name,
-    scc.id AS scc_id,
-    scc.customer_id,
-    scc.name AS customer_name,
-    scc.participation_percentage,
-    ROW_NUMBER() OVER (
-      PARTITION BY scu.contract_id
-      ORDER BY scc.id
-    ) AS rn
-  FROM sales_contract_units scu
-  LEFT JOIN sales_contracts sc ON sc.id = scu.contract_id
-  LEFT JOIN sales_contract_customers scc ON scc.contract_id = scu.contract_id
-  WHERE sc.financial_institution_date BETWEEN :start AND :end
-    AND sc.situation = :situation 
-    ${whereNameClause}
-    AND scc.main = true
-  ),  
-payment_grouped AS (
-  SELECT
-    pc.contract_id,
-    JSON_AGG(
-      JSON_BUILD_OBJECT(
-        'condition_type_id', pc.condition_type_id,
-        'condition_type_name', pc.condition_type_name,
-        'total_value', COALESCE(pc.total_value, 0)
-      )
-    ) AS payment_conditions
-  FROM payment_conditions pc
-  GROUP BY pc.contract_id
-),
-associates_grouped AS (
-  SELECT
-    scc.contract_id,
-    JSON_AGG(
-      JSON_BUILD_OBJECT(
-        'customer_id', scc.customer_id,
-        'name', scc.name,
-        'participation_percentage', scc.participation_percentage::numeric
-      )
-    ) AS associates
-  FROM sales_contract_customers scc
-  WHERE scc.main = true
-    AND scc.id NOT IN (
-      SELECT MIN(scc2.id)
-      FROM sales_contract_customers scc2
-      WHERE scc2.main = true
-      GROUP BY scc2.contract_id
+    WITH customers_ranked AS (
+      SELECT
+        scu.contract_id,
+        sc.enterprise_id,
+        sc.enterprise_name,
+        sc.financial_institution_date,
+        scu.name AS unit_name,
+        scc.id AS scc_id,
+        scc.customer_id,
+        scc.name AS customer_name,
+        scc.participation_percentage,
+        ROW_NUMBER() OVER (
+          PARTITION BY scu.contract_id
+          ORDER BY scc.id
+        ) AS rn
+      FROM sales_contract_units scu
+      LEFT JOIN sales_contracts sc ON sc.id = scu.contract_id
+      LEFT JOIN sales_contract_customers scc ON scc.contract_id = scu.contract_id
+      WHERE sc.financial_institution_date BETWEEN :start AND :end
+        AND sc.situation = :situation 
+        ${whereNameClause}
+        AND scc.main = true
+      ),  
+    payment_grouped AS (
+      SELECT
+        pc.contract_id,
+        JSON_AGG(
+          JSON_BUILD_OBJECT(
+            'condition_type_id', pc.condition_type_id,
+            'condition_type_name', pc.condition_type_name,
+            'total_value', COALESCE(pc.total_value, 0)
+          )
+        ) AS payment_conditions
+      FROM payment_conditions pc
+      GROUP BY pc.contract_id
+    ),
+    associates_grouped AS (
+      SELECT
+        scc.contract_id,
+        JSON_AGG(
+          JSON_BUILD_OBJECT(
+            'customer_id', scc.customer_id,
+            'name', scc.name,
+            'participation_percentage', scc.participation_percentage::numeric
+          )
+        ) AS associates
+      FROM sales_contract_customers scc
+      WHERE scc.main = true
+        AND scc.id NOT IN (
+          SELECT MIN(scc2.id)
+          FROM sales_contract_customers scc2
+          WHERE scc2.main = true
+          GROUP BY scc2.contract_id
+        )
+      GROUP BY scc.contract_id
+    ),
+    contract_links_grouped AS (
+      SELECT
+        cl.contract_id,
+        JSON_AGG(
+          JSON_BUILD_OBJECT(
+            'rel', cl.rel,
+            'href', cl.href
+          )
+        ) AS links
+      FROM contract_links cl
+      GROUP BY cl.contract_id
     )
-  GROUP BY scc.contract_id
-),
-contract_links_grouped AS (
-  SELECT
-    cl.contract_id,
-    JSON_AGG(
-      JSON_BUILD_OBJECT(
-        'rel', cl.rel,
-        'href', cl.href
-      )
-    ) AS links
-  FROM contract_links cl
-  GROUP BY cl.contract_id
-)
-SELECT
-  cr.contract_id,
-  cr.enterprise_id,
-  cr.enterprise_name,
-  cr.financial_institution_date,
-  cr.unit_name,
-  cr.customer_id,
-  cr.customer_name,
-  cr.participation_percentage,
-  COALESCE(ag.associates, '[]') AS associates,
-  COALESCE(pg.payment_conditions, '[]') AS payment_conditions,
-  COALESCE(clg.links, '[]') AS links
-FROM customers_ranked cr
-LEFT JOIN payment_grouped pg ON cr.contract_id = pg.contract_id
-LEFT JOIN associates_grouped ag ON cr.contract_id = ag.contract_id
-LEFT JOIN contract_links_grouped clg ON cr.contract_id = clg.contract_id
-WHERE cr.rn = 1
-ORDER BY cr.financial_institution_date, cr.contract_id;
-`;
-
+    SELECT
+      cr.contract_id,
+      cr.enterprise_id,
+      cr.enterprise_name,
+      cr.financial_institution_date,
+      cr.unit_name,
+      cr.customer_id,
+      cr.customer_name,
+      cr.participation_percentage,
+      COALESCE(ag.associates, '[]') AS associates,
+      COALESCE(pg.payment_conditions, '[]') AS payment_conditions,
+      COALESCE(clg.links, '[]') AS links
+    FROM customers_ranked cr
+    LEFT JOIN payment_grouped pg ON cr.contract_id = pg.contract_id
+    LEFT JOIN associates_grouped ag ON cr.contract_id = ag.contract_id
+    LEFT JOIN contract_links_grouped clg ON cr.contract_id = clg.contract_id
+    WHERE cr.rn = 1
+    ORDER BY cr.financial_institution_date, cr.contract_id;
+    `;
     const replacements = {
       start: start.format('YYYY-MM-DD'),
       end: end.format('YYYY-MM-DD'),
