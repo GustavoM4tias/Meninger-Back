@@ -2,6 +2,7 @@
 // import 'mysql2';            // <- força inclusão no bundle
 import express from 'express';
 import dotenv from 'dotenv';
+dotenv.config();
 import cors from 'cors';
 import db from './models/sequelize/index.js';
 import authRoutes from './routes/authRoutes.js';
@@ -18,8 +19,8 @@ import contractValidatorScheduler from './scheduler/contractValidatorScheduler.j
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
  
+import admin from './routes/admin.js';
 
-dotenv.config();
 const app = express();
 
 // CORS precisa estar no topo, ANTES de qualquer rota
@@ -34,6 +35,9 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
+
+
+app.use('/api/maintenance', admin);
 
 // Rotas
 app.use('/api/auth', authRoutes);
