@@ -1,3 +1,4 @@
+// /models/sequelize/sienge/salesContract.js
 export default (sequelize, DataTypes) => {
     const SalesContract = sequelize.define('SalesContract', {
         id: { type: DataTypes.BIGINT, primaryKey: true },
@@ -12,7 +13,7 @@ export default (sequelize, DataTypes) => {
         situation: DataTypes.STRING(50),
         discount_type: DataTypes.STRING(50),
         discount_percentage: DataTypes.DECIMAL(5, 2),
-        cancellation_reason: { type: DataTypes.TEXT },       // <<-- TEXT agora
+        cancellation_reason: { type: DataTypes.TEXT },
         cancellation_date: DataTypes.DATEONLY,
         value: DataTypes.DECIMAL(14, 2),
         total_selling_value: DataTypes.DECIMAL(14, 2),
@@ -23,7 +24,7 @@ export default (sequelize, DataTypes) => {
         creation_date: DataTypes.DATEONLY,
         last_update_date: DataTypes.DATEONLY,
         contains_remade_installments: DataTypes.BOOLEAN,
-        special_clause: { type: DataTypes.TEXT },       // <<-- TEXT
+        special_clause: { type: DataTypes.TEXT },
         pro_rata_indexer: DataTypes.DECIMAL(5, 2),
         interest_percentage: DataTypes.DECIMAL(5, 2),
         interest_type: DataTypes.STRING(5),
@@ -35,17 +36,20 @@ export default (sequelize, DataTypes) => {
         cancellation_payable_bill_id: DataTypes.BIGINT,
         financial_institution_date: DataTypes.DATEONLY,
         financial_institution_number: DataTypes.STRING(100),
+
+        // 👇 novos
+        customers: { type: DataTypes.JSONB },           // array bruto
+        units: { type: DataTypes.JSONB },               // array bruto
+        payment_conditions: { type: DataTypes.JSONB },  // array bruto
+        links_json: { type: DataTypes.JSONB },          // array bruto
     }, {
-        tableName: 'sales_contracts',
+        tableName: 'contracts',
         underscored: true
     });
 
-    SalesContract.associate = models => {
-        SalesContract.hasMany(models.SalesContractCustomer, { foreignKey: 'contract_id', as: 'customers' });
-        SalesContract.hasMany(models.SalesContractUnit, { foreignKey: 'contract_id', as: 'units' });
-        SalesContract.hasMany(models.PaymentCondition, { foreignKey: 'contract_id', as: 'paymentConditions' });
-        SalesContract.hasMany(models.ContractLink, { foreignKey: 'contract_id', as: 'links' });
-    };
+    // Opcional: remover associações se for parar de usar as tabelas filhas.
+    // SalesContract.associate = models => { ... };
 
     return SalesContract;
 };
+
