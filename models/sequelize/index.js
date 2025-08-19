@@ -1,5 +1,7 @@
 // /models/sequelize/index.js
 import { Sequelize, DataTypes } from 'sequelize';
+import dotenv from 'dotenv';
+dotenv.config();
 import UserDefine from './user.js';
 import FavoriteDefine from './favorite.js';
 import EventDefine from './event.js';
@@ -9,10 +11,6 @@ import ValidationHistoryDefine from './validationHistory.js';
 
 // Singe imports
 import SalesContractDefine         from './sienge/salesContract.js';
-import SalesContractCustomerDefine from './sienge/salesContractCustomer.js';
-import SalesContractUnitDefine     from './sienge/salesContractUnit.js';
-import PaymentConditionDefine      from './sienge/paymentCondition.js';
-import ContractLinkDefine          from './sienge/contractLink.js';
 
 // perto dos outros imports
 import LeadDefine from './cv/lead.js';
@@ -33,10 +31,6 @@ db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
 
 // sienge db 
 db.SalesContract         = SalesContractDefine(sequelize, DataTypes);
-db.SalesContractCustomer = SalesContractCustomerDefine(sequelize, DataTypes);
-db.SalesContractUnit     = SalesContractUnitDefine(sequelize, DataTypes);
-db.PaymentCondition      = PaymentConditionDefine(sequelize, DataTypes);
-db.ContractLink          = ContractLinkDefine(sequelize, DataTypes);
 
 // ... após definir outros modelos:
 db.Lead = LeadDefine(sequelize, DataTypes);

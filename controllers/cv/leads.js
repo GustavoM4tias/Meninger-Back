@@ -1,5 +1,8 @@
-// controllers/cv/leads.js
-import apiCv from '../../lib/apiCv.js'; 
+// src/controllers/leadController.js
+import dayjs from 'dayjs';
+import db from '../../models/sequelize/index.js';
+import apiCv from '../../lib/apiCv.js';
+import { cvBuildingCityMap } from '../../config/cityMappingLeads.js';
 
 export const fetchFilas = async (req, res) => {
     try {
@@ -13,115 +16,110 @@ export const fetchFilas = async (req, res) => {
     }
 };
 
-export const fetchLeads = async (req, res) => {
+export async function getLeads(req, res) {
     try {
-        let { data_inicio, data_fim, mostrar_todos } = req.query;
-        const hoje = new Date();
-
-        if (!data_inicio || !data_fim) {
-            const ano = hoje.getFullYear();
-            const mes = hoje.getMonth();
-            data_inicio = new Date(ano, mes, 1, 0, 0, 0);
-            data_fim = new Date(ano, mes + 1, 0, 23, 59, 59);
-        } else {
-            data_inicio = new Date(data_inicio + "T00:00:00");
-            data_fim = new Date(data_fim + "T23:59:59");
+        // Garante que existe req.user
+        if (!req.user) {
+            return res.status(401).json({ error: 'Usuário não autenticado.' });
         }
 
-        if (data_inicio > data_fim) {
-            return res.status(400).json({ error: "A data de início não pode ser maior que a data de fim." });
+        let {
+            nome,
+            email,
+            telefone,
+            imobiliaria,
+            corretor,
+            situacao_nome,
+            midia_principal,
+            origem,
+            empreendimento,
+            data_inicio,
+            data_fim
+        } = req.query;
+
+        // Datas padrão
+        const hoje = dayjs();
+        const start = data_inicio ? dayjs(data_inicio) : hoje.startOf('month');
+        const end = data_fim ? dayjs(data_fim) : hoje;
+
+        if (end.isBefore(start)) {
+            return res.status(400).json({ error: 'Data final não pode ser menor que a inicial.' });
         }
 
-        const diffDays = (data_fim - data_inicio) / (1000 * 60 * 60 * 24);
-        if (diffDays > 92) {
-            return res.status(400).json({ error: "O período máximo permitido é de 3 meses." });
-        }
+        const whereClauses = [`l.data_cad BETWEEN :start AND :end`];
+        const replacements = {
+            start: start.format('YYYY-MM-DD 00:00:00'),
+            end: end.format('YYYY-MM-DD 23:59:59')
+        };
 
-        const mostrarTodos = mostrar_todos === "true";
-        const dataInicioTime = data_inicio.getTime();
-        const dataFimTime = data_fim.getTime();
-        const origensExcluidas = new Set(["Painel Gestor", "Painel Corretor", "Painel Imobiliária"]);
+        const ilikeFields = {
+            nome: 'l.nome',
+            email: 'l.email',
+            telefone: 'l.telefone',
+            imobiliaria: `l.imobiliaria->>'nome'`,
+            corretor: `l.corretor->>'nome'`,
+            situacao_nome: 'l.situacao_nome',
+            midia_principal: 'l.midia_principal',
+            origem: 'l.origem',
+            empreendimento: `e->>'nome'`
+        };
 
-        let allLeads = [];
-        const limit = 300;
-        const batchSize = 3;
-        let offset = 0;
-        let continuar = true;
-
-        while (continuar) {
-            const batchPromises = [];
-
-            for (let i = 0; i < batchSize && continuar; i++) {
-                const currentOffset = offset + (i * limit);
-
-                batchPromises.push(
-                    apiCv.get(`/cvio/lead`, {
-                        params: { limit, offset: currentOffset },
-                        timeout: 25000,
-                    }).then(response => ({ data: response.data, offset: currentOffset }))
-                        .catch(error => {
-                            console.error(`Erro na página offset=${currentOffset}: ${error.message}`);
-                            return { data: { leads: [] }, offset: currentOffset };
-                        })
-                );
-            }
-
-            const results = await Promise.all(batchPromises);
-
-            let shouldStopSearch = false;
-            let maxOffsetProcessed = offset;
-
-            for (const result of results) {
-                const leads = result.data.leads || [];
-                maxOffsetProcessed = Math.max(maxOffsetProcessed, result.offset);
-
-                if (leads.length === 0) {
-                    shouldStopSearch = true;
-                    continue;
-                }
-
-                const leadsFiltrados = leads.filter(lead => {
-                    if (!lead.data_cad) return false;
-                    const dataCadTime = new Date(lead.data_cad).getTime();
-                    if (dataCadTime < dataInicioTime || dataCadTime > dataFimTime) return false;
-                    if (!mostrarTodos && origensExcluidas.has(lead.origem)) return false;
-                    return true;
-                });
-
-                if (leadsFiltrados.length > 0) {
-                    allLeads = allLeads.concat(leadsFiltrados);
-                }
-
-                const ultimoLead = leads[leads.length - 1];
-                if (ultimoLead && ultimoLead.data_cad) {
-                    const dataUltimoLead = new Date(ultimoLead.data_cad).getTime();
-                    if (dataUltimoLead < dataInicioTime) {
-                        shouldStopSearch = true;
-                        break;
-                    }
-                }
-            }
-
-            if (shouldStopSearch) {
-                continuar = false;
-            } else {
-                offset = maxOffsetProcessed + limit;
-            }
-        }
-
-        res.status(200).json({
-            total: allLeads.length,
-            leads: allLeads,
-            periodo: {
-                data_inicio: data_inicio.toISOString(),
-                data_fim: data_fim.toISOString()
-            },
-            filtro: {
-                mostrar_todos: mostrarTodos
+        Object.entries(ilikeFields).forEach(([param, column]) => {
+            if (req.query[param]) {
+                whereClauses.push(`${column} ILIKE :${param}`);
+                replacements[param] = `%${req.query[param]}%`;
             }
         });
-    } catch (error) {
-        console.error('Erro ao buscar leads:', error.message);
-        res.status(500).json({ error: 'Erro ao buscar leads na API externa' });
+
+        // 🔹 Busca os leads (sem filtro de cidade ainda)
+        const sql = `
+        SELECT 
+            l.*,
+            emp.empreendimentos
+        FROM leads l
+        LEFT JOIN LATERAL (
+            SELECT STRING_AGG(DISTINCT e->>'nome', ', ') AS empreendimentos
+            FROM jsonb_array_elements(l.empreendimento) AS e
+        ) emp ON true
+        WHERE ${whereClauses.join(' AND ')}
+        ORDER BY l.data_cad DESC
+        `;
+        let results = await db.sequelize.query(sql, {
+            replacements,
+            type: db.Sequelize.QueryTypes.SELECT
+        });
+
+        // 🔒 Aplica filtro de cidade baseado no mapeamento
+        if (req.user.role !== 'admin') {
+            const userCity = req.user.city;
+
+            results = results.filter(lead => {
+                try {
+                    const empreendimentos = Array.isArray(lead.empreendimento)
+                        ? lead.empreendimento
+                        : JSON.parse(lead.empreendimento || '[]');
+
+                    // Pega todas as cidades dos empreendimentos do lead
+                    const cidades = empreendimentos
+                        .map(e => cvBuildingCityMap[e.id])
+                        .filter(Boolean);
+
+                    return cidades.includes(userCity);
+                } catch (err) {
+                    console.error('Erro ao processar empreendimentos do lead:', err);
+                    return false;
+                }
+            });
+        }
+
+        return res.json({
+            count: results.length,
+            periodo: { data_inicio: replacements.start, data_fim: replacements.end },
+            results
+        });
+
+    } catch (err) {
+        console.error('Erro ao buscar leads:', err);
+        return res.status(500).json({ error: 'Erro ao buscar leads.' });
     }
-};
+}
