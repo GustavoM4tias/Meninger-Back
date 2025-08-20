@@ -112,7 +112,8 @@ export class DocumentValidator {
         status,
         mensagens,
         tokensUsed: result.tokensUsed,
-        model: result.model
+        model: result.model,
+        providerMeta: JSON.stringify({ keyIndex: result.keyIndex })
       });
 
       return {
