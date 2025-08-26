@@ -96,7 +96,22 @@ export class DocumentValidator {
     const confissaoSnippet = slicePages(txtF, 3, 2);
     const fullMessage = `Contrato Caixa:\n${contratoSnippet}\n\nConfissão de Dívida:\n${confissaoSnippet}`;
 
-    const result = await AIService.generateResponse(systemPrompt, fullMessage, 'gemini-2.5-pro');
+    const result = await AIService.generateResponse(systemPrompt, fullMessage);
+
+    // ⬇️ NOVO IF – trata quando o AIService retorna erro fatal (ex.: 500, chave inválida etc.)
+    if (result.error) {
+      return {
+        status: "ERRO",  // <- mantém repasse na mesma etapa
+        mensagens: [{
+          tipo: "Modelo/Provider",
+          descricao: result.error,
+          nivel: "incorreto"
+        }],
+        tokensUsed: result.tokensUsed,
+        model: result.model
+      };
+    }
+
 
     try {
       let responseText = result.response.replace(/^```json\n?|```$/g, '').trim();
@@ -126,10 +141,18 @@ export class DocumentValidator {
     } catch (err) {
       return {
         status: 'ERRO',
-        resultado: result.response,
-        erro: 'Erro ao interpretar resposta do modelo.',
-        tokensUsed: result.tokensUsed,
-        model: result.model
+        mensagens: [
+          {
+            tipo: "Parser",
+            descricao: `Falha ao interpretar resposta ou requisição: ${err.message}`,
+            nivel: "incorreto"
+          }
+        ],
+        resultado: typeof result?.response === 'string'
+          ? result.response.slice(0, 2000) // protege contra payloads gigantes
+          : null,
+        tokensUsed: result?.tokensUsed || 0,
+        model: result?.model || 'desconhecido'
       };
     }
   }
