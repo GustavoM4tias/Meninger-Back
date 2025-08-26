@@ -63,11 +63,3 @@ class ContractValidatorScheduler {
 
 const contractValidatorScheduler = new ContractValidatorScheduler();
 export default contractValidatorScheduler;
-
-// | Campo         | Valor  | Significado             |
-// | ------------- | ------ | ----------------------- |
-// | Minuto        | `0`    | No minuto zero          |
-// | Hora          | `9-17` | Das 09h às 17h          |
-// | Dia do mês    | `*`    | Todos os dias           |
-// | Mês           | `*`    | Todos os meses          |
-// | Dia da semana | `1-5`  | Segunda (1) a sexta (5) |

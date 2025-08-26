@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import apiCv from '../lib/apiCv.js';
-import apiValidator from '../lib/apiValidator .js';
+import apiValidator from '../lib/apiValidator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,8 +47,12 @@ class ContractAnalysisService {
             for (const repasse of repasses) {
                 try {
                     console.log(`🔄 Processando repasse ID: ${repasse.ID} - Reserva: ${repasse.idreserva}`);
-                    await this.processRepasse(repasse);
+                    const analysisResult = await this.processRepasse(repasse);
                     processed++;
+                    if (analysisResult?.status?.toUpperCase?.() === 'ERRO') {
+                        errors++;
+                    }
+
                     console.log(`✅ Repasse ${repasse.ID} processado com sucesso`);
                 } catch (error) {
                     errors++;
@@ -91,7 +95,7 @@ class ContractAnalysisService {
                 repasse.status_repasse === this.targetStatus
             );
         } catch (error) {
-            console.error('❌ Erro ao buscar repasses:', error.message);
+            console.error('Erro ao buscar repasses:', error.message);
             throw new Error(`Falha ao buscar repasses: ${error.message}`);
         }
     }
@@ -125,8 +129,9 @@ class ContractAnalysisService {
             // 8. Limpar arquivos temporários
             await this.cleanupTempFiles(downloadedDocs);
 
+            return analysisResult;
         } catch (error) {
-            console.error(`❌ Erro ao processar repasse ${repasse.ID}:`, error.message);
+            console.error(`Erro ao processar repasse ${repasse.ID}:`, error.message);
             throw error;
         }
     }
@@ -144,7 +149,7 @@ class ContractAnalysisService {
 
             return response.data.dados.documentos.titular;
         } catch (error) {
-            console.error(`❌ Erro ao buscar documentos da reserva ${idreserva}:`, error.message);
+            console.error(`Erro ao buscar documentos da reserva ${idreserva}:`, error.message);
             throw new Error(`Falha ao buscar documentos da reserva: ${error.message}`);
         }
     }
@@ -204,7 +209,7 @@ class ContractAnalysisService {
                 console.log(`📄 Documento baixado: ${tipo} - ${fileName}`);
 
             } catch (error) {
-                console.error(`❌ Erro ao baixar documento ${tipo}:`, error.message);
+                console.error(`Erro ao baixar documento ${tipo}:`, error.message);
                 throw new Error(`Falha ao baixar documento ${tipo}: ${error.message}`);
             }
         }
@@ -238,7 +243,7 @@ class ContractAnalysisService {
             return response.data;
 
         } catch (error) {
-            console.error('❌ Erro na análise dos documentos:', error.message);
+            console.error('Erro na análise dos documentos:', error.message);
             throw new Error(`Falha na análise dos documentos: ${error.message}`);
         }
     }
@@ -248,24 +253,30 @@ class ContractAnalysisService {
      */
     async logAnalysisResult(idRepasse, analysisResult) {
         try {
-            let mensagem = `🤖 ANÁLISE AUTOMÁTICA DE CONTRATOS\n\n`;
-            mensagem += `📊 Resultado: ${analysisResult.status}\n\n`;
+            let mensagem = `ANÁLISE AUTOMÁTICA DE CONTRATOS\n\n`;
+            mensagem += `Resultado: ${analysisResult.status}\n\n`;
 
-            if (analysisResult.mensagens && analysisResult.mensagens.length > 0) {
-                mensagem += `📋 Detalhes da Análise:\n`;
+            const msgs = Array.isArray(analysisResult.mensagens) ? analysisResult.mensagens : [];
 
-                for (const msg of analysisResult.mensagens) {
-                    const emoji = this.getEmojiForLevel(msg.nivel);
-                    mensagem += `${emoji} ${msg.tipo}: ${msg.descricao}\n`;
-                }
+            if (msgs.length === 0 && analysisResult.status === 'ERRO') {
+                msgs.push({
+                    tipo: "Sistema",
+                    descricao: analysisResult?.resultado || "Erro inesperado sem detalhes.",
+                    nivel: "incorreto"
+                });
             }
 
-            mensagem += `\n⏰ Processado em: ${new Date().toLocaleString('pt-BR')}`;
+            mensagem += `DETALHES:\n`;
+            for (const m of msgs) {
+                mensagem += `- [${m.nivel?.toUpperCase() ?? "INFO"}] ${m.tipo ?? "Geral"}: ${m.descricao}\n`;
+            }
+
+            mensagem += `\nProcessado em: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
 
             await this.sendMessageToRepasse(idRepasse, mensagem);
 
         } catch (error) {
-            console.error(`❌ Erro ao registrar resultado no repasse ${idRepasse}:`, error.message);
+            console.error(`Erro ao registrar resultado no repasse ${idRepasse}:`, error.message);
             throw new Error(`Falha ao registrar resultado: ${error.message}`);
         }
     }
@@ -284,7 +295,7 @@ class ContractAnalysisService {
             return response.data;
 
         } catch (error) {
-            console.error(`❌ Erro ao enviar mensagem para repasse ${idRepasse}:`, error.message);
+            console.error(`Erro ao enviar mensagem para repasse ${idRepasse}:`, error.message);
             throw new Error(`Falha ao enviar mensagem: ${error.message}`);
         }
     }
@@ -294,14 +305,17 @@ class ContractAnalysisService {
      */
     async updateRepasseSituation(idRepasse, analysisResult) {
         const status = analysisResult.status?.toUpperCase();
-        let targetId;
 
-        if (status === 'APROVADO') {
-            targetId = this.targetSituationId;   // 47
-        } else if (status === 'REPROVADO') {
-            targetId = this.reprovedSituationId;   // 66 ou conforme definição
-        } else {
-            targetId = this.reprovedSituationId;    // fallback (ainda 66)
+        if (status === "ERRO") {
+            console.log(`⚠️ Repasse ${idRepasse} ficou em ERRO → não altera situação, apenas mensagem`);
+            return; // não muda de etapa
+        }
+
+        let targetId;
+        if (status === "APROVADO") {
+            targetId = this.targetSituationId; // 47
+        } else if (status === "REPROVADO") {
+            targetId = this.reprovedSituationId; // 66
         }
 
         const urlTarget = `/v1/financeiro/repasses/${idRepasse}/alterar-situacao/${targetId}`;
@@ -313,52 +327,44 @@ class ContractAnalysisService {
             console.error(`❌ Erro ao alterar situação do repasse ${idRepasse}:`, error.message);
             throw new Error(`Falha ao alterar situação: ${error.message}`);
         }
-    } 
+    }
 
     /**
      * Registrar erro no repasse
      */
     async logErrorToRepasse(idRepasse, errorMessage) {
-    try {
-        const mensagem = `❌ ERRO NA ANÁLISE AUTOMÁTICA\n\n` +
-            `🔴 Erro: ${errorMessage}\n\n` +
-            `⏰ Ocorrido em: ${new Date().toLocaleString('pt-BR')}\n\n` +
-            `⚠️ Necessária análise manual`;
+        try {
+            const mensagem =
+                `ERRO NA ANALISE AUTOMATICA\n\n` +
+                `ERRO: ${errorMessage}\n\n` +
+                `OCORRIDO EM: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}\n\n` +
+                `ACAO: Necessaria analise manual`;
 
-        await this.sendMessageToRepasse(idRepasse, mensagem);
+            console.error(`Logando erro no repasse ${idRepasse}: ${errorMessage}`);
+            await this.sendMessageToRepasse(idRepasse, mensagem);
 
-    } catch (error) {
-        console.error(`❌ Erro ao registrar erro no repasse ${idRepasse}:`, error.message);
+        } catch (error) {
+            console.error(`❌ Erro ao registrar erro no repasse ${idRepasse}:`, error.message);
+        }
     }
-}
+
 
     /**
      * Limpar arquivos temporários
      */
     async cleanupTempFiles(docs) {
-    for (const [tipo, doc] of Object.entries(docs)) {
-        try {
-            if (fs.existsSync(doc.path)) {
-                fs.unlinkSync(doc.path);
-                console.log(`🗑️ Arquivo temporário removido: ${tipo}`);
+        for (const [tipo, doc] of Object.entries(docs)) {
+            try {
+                if (fs.existsSync(doc.path)) {
+                    fs.unlinkSync(doc.path);
+                    console.log(`🗑️ Arquivo temporário removido: ${tipo}`);
+                }
+            } catch (error) {
+                console.error(`⚠️ Erro ao remover arquivo temporário ${tipo}:`, error.message);
             }
-        } catch (error) {
-            console.error(`⚠️ Erro ao remover arquivo temporário ${tipo}:`, error.message);
         }
     }
-}
 
-/**
- * Obter emoji baseado no nível da mensagem
- */
-getEmojiForLevel(nivel) {
-    switch (nivel) {
-        case 'correto': return '✅';
-        case 'alerta': return '⚠️';
-        case 'incorreto': return '❌';
-        default: return '📋';
-    }
-}
 }
 
 export default ContractAnalysisService;
