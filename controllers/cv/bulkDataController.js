@@ -1,11 +1,11 @@
 // src/controllers/cv/bulkDataController.js
-import cvDataService from '../../services/bulkData/cv/cvDataService.js';
+import LeadSyncService from '../../services/bulkData/cv/LeadSyncService.js';
 
 const state = { lastRunAt: null };
 
 export default class CvLeadSyncController {
     constructor() {
-        this.service = new cvDataService();
+        this.service = new LeadSyncService();
         this.isRunning = false;
     }
 

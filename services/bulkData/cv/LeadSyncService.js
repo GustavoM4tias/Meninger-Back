@@ -1,4 +1,4 @@
-// src/services/cvLeadSyncService.js
+// src/services/LeadSyncService.js
 import apiCv from '../../../lib/apiCv.js';
 import db from '../../../models/sequelize/index.js';
 import { Op } from 'sequelize';

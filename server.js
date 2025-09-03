@@ -13,12 +13,14 @@ import siengeRoutes from './routes/siengeRoutes.js';
 import validatorAI from './validatorAI/index.js';
 import contractAutomationRoutes from './routes/contractAutomationRoutes.js';
 import microsoftAuthRoutes from './routes/microsoftAuthRoutes.js';
- 
+
 // cron 
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
- 
+import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
+import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
+
 import admin from './routes/admin.js';
 
 const app = express();
@@ -44,38 +46,34 @@ app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
 app.use('/api/cv', cvRoutes);
-
-// Sienge api, db and cron
-app.use('/api/sienge', siengeRoutes); 
-// Microsoft for archives
-app.use('/api/microsoft', microsoftAuthRoutes);
-
-// chatbot ai
-app.use('/api/ai', validatorAI);
-
+app.use('/api/sienge', siengeRoutes); // Sienge api, db and cron
+app.use('/api/microsoft', microsoftAuthRoutes);// Microsoft for archives
+app.use('/api/ai', validatorAI);// chatbot ai
 app.use('/api/contracts', contractAutomationRoutes);
- 
-
-// verifica se esta autorizado a iniciar contador para avaliação de contratos
-if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') {
-  contractValidatorScheduler.start();
-}
-
-// verifica se esta autorizado a iniciar contador para buscar contratos do sienge
-if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') {
-  contractSiengeScheduler.start();
-}
-
-// verifica se esta autorizado a iniciar contador para buscar leads do cv 
-if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') {
-  leadCvScheduler.start();
-}
 
 const PORT = process.env.PORT || 5000;
 
 db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar dados
   .then(() => {
     console.log('Banco sincronizado com sucesso!');
+
+    // Start schedulers só depois do sync:
+    if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') {
+      contractValidatorScheduler.start();
+    }
+    if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') {
+      contractSiengeScheduler.start();
+    }
+    if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') {
+      leadCvScheduler.start();
+    }
+    if (process.env.ENABLE_CV_REPASSE_SCHEDULE === 'true') {
+      repasseCvScheduler.start();
+    }
+    if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') {  // 👈 NOVO
+      reservaCvScheduler.start();
+    }
+
     app.listen(PORT, () => {
       console.log(`Servidor rodando na porta: ${PORT}`);
     });
@@ -89,8 +87,3 @@ db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar da
 // | Desenvolvimento | `sync({ force: true })`       | Recria do zero sempre, útil para testar |
 // | Desenvolvimento | `sync({ alter: true })`       | Adapta estrutura sem perder dados       |
 // | Produção        | `sync()` ou migrações via CLI | Use migrações para controle total       |
-
-
-// app.listen(PORT, () => {
-//   console.log(`Servidor rodando na porta: ${PORT}`);
-// });
