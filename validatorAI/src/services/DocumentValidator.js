@@ -92,7 +92,7 @@ export class DocumentValidator {
     const clMatch = txtF.match(/Comprador\(a\),\s*([A-ZÀ-Ÿ\s']+),/i);
     const cliente = clMatch ? clMatch[1].trim() : 'Desconhecido';
 
-    const contratoSnippet = slicePages(txtC, 6, 6);
+    const contratoSnippet = slicePages(txtC, 5, 4);
     const confissaoSnippet = slicePages(txtF, 3, 2);
     const fullMessage = `Contrato Caixa:\n${contratoSnippet}\n\nConfissão de Dívida:\n${confissaoSnippet}`;
 
