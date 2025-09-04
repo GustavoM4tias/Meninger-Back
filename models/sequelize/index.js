@@ -14,8 +14,14 @@ import SalesContractDefine         from './sienge/salesContract.js';
 
 // perto dos outros imports
 import LeadDefine from './cv/lead.js';
+// ...
+import RepasseDefine from './cv/repasse.js';
+// ...
+import ReservaDefine from './cv/reserva.js';
+// ...
 
 const env = process.env.NODE_ENV || 'development';
+
 const cfg = config[env];
 const sequelize = new Sequelize(cfg.database, cfg.username, cfg.password, {
   host: cfg.host, port: cfg.port, dialect: cfg.dialect,
@@ -34,6 +40,10 @@ db.SalesContract         = SalesContractDefine(sequelize, DataTypes);
 
 // ... após definir outros modelos:
 db.Lead = LeadDefine(sequelize, DataTypes);
+
+db.Repasse = RepasseDefine(sequelize, DataTypes);
+// ...
+db.Reserva = ReservaDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)
