@@ -5,11 +5,11 @@ import apiCv from '../../../lib/apiCv.js';
 const { Reserva, Repasse } = db;
 
 // ===================== Config =====================
-const RESERVA_CHUNK = parseInt(process.env.RESERVA_UPSERT_CHUNK || '50', 10);
+const RESERVA_CHUNK = parseInt(process.env.RESERVA_UPSERT_CHUNK || '100', 10);
 // FULL: use 1–2 | DELTA: 2–3 (ajuste no .env)
-const RESERVA_CONCURRENCY = parseInt(process.env.RESERVA_CONCURRENCY || '1', 10);
+const RESERVA_CONCURRENCY = parseInt(process.env.RESERVA_CONCURRENCY || '2', 10);
 // minTime global entre requests à API (serializa as chamadas)
-const CVCRM_MIN_TIME_MS = parseInt(process.env.CVCRM_MIN_TIME_MS || '150', 10);
+const CVCRM_MIN_TIME_MS = parseInt(process.env.CVCRM_MIN_TIME_MS || '200', 10);
 // backoff
 const MAX_RETRIES = parseInt(process.env.CVCRM_MAX_RETRIES || '5', 10);
 const BASE_BACKOFF_MS = parseInt(process.env.CVCRM_BASE_BACKOFF_MS || '500', 10);
