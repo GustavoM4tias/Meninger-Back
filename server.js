@@ -13,6 +13,7 @@ import siengeRoutes from './routes/siengeRoutes.js';
 import validatorAI from './validatorAI/index.js';
 import contractAutomationRoutes from './routes/contractAutomationRoutes.js';
 import microsoftAuthRoutes from './routes/microsoftAuthRoutes.js';
+import externalRoutes from './routes/externalRoutes.js'
 
 // cron 
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -20,6 +21,7 @@ import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
 import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
 import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
+import landScheduler from './scheduler/landScheduler.js';
 
 import admin from './routes/admin.js';
 
@@ -50,6 +52,7 @@ app.use('/api/sienge', siengeRoutes); // Sienge api, db and cron
 app.use('/api/microsoft', microsoftAuthRoutes);// Microsoft for archives
 app.use('/api/ai', validatorAI);// chatbot ai
 app.use('/api/contracts', contractAutomationRoutes);
+app.use('/api/external', externalRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -72,6 +75,9 @@ db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar da
     }
     if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') {  // 👈 NOVO
       reservaCvScheduler.start();
+    }
+    if (process.env.ENABLE_LAND_cONTRACT_SCHEDULE === 'true') {  // 👈 NOVO
+      landScheduler.start();
     }
 
     app.listen(PORT, () => {
