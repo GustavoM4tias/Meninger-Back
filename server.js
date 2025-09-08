@@ -76,7 +76,7 @@ db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar da
     if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') {  // 👈 NOVO
       reservaCvScheduler.start();
     }
-    if (process.env.ENABLE_LAND_cONTRACT_SCHEDULE === 'true') {  // 👈 NOVO
+    if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') {  // 👈 NOVO
       landScheduler.start();
     }
 
