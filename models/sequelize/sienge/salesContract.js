@@ -37,11 +37,17 @@ export default (sequelize, DataTypes) => {
         financial_institution_date: DataTypes.DATEONLY,
         financial_institution_number: DataTypes.STRING(100),
 
+        // valores do terreno db marlon
+        land_value: { type: DataTypes.DECIMAL(14, 2) },
+        land_updated_at: { type: DataTypes.DATE }, 
+        // ...
         // 👇 novos
         customers: { type: DataTypes.JSONB },           // array bruto
         units: { type: DataTypes.JSONB },               // array bruto
         payment_conditions: { type: DataTypes.JSONB },  // array bruto
         links_json: { type: DataTypes.JSONB },          // array bruto
+
+        // ...
     }, {
         tableName: 'contracts',
         underscored: true
