@@ -53,18 +53,37 @@ export async function getContracts(req, res) {
           b.enterprise_name,
           b.financial_institution_date,
 
-          -- Unidade principal (preferência main=true; senão, a 1ª)
+          CASE
+            WHEN b.land_value IS NULL THEN NULL
+            WHEN position(',' in b.land_value::text) > 0
+              THEN replace(regexp_replace(b.land_value::text, '\\.', '', 'g'), ',', '.')::numeric
+            ELSE
+              regexp_replace(b.land_value::text, '[^0-9\\.]', '', 'g')::numeric
+          END AS land_value,
+
+          -- Unidade principal (preferência main=true; senão, a 1ª) 
+          COALESCE( 
+            (SELECT u ->> 'name' 
+              FROM jsonb_array_elements(b.units) u 
+              WHERE (u ->> 'main')::boolean = true 
+              LIMIT 1), 
+            (SELECT u ->> 'name' 
+              FROM jsonb_array_elements(b.units) u 
+              LIMIT 1) 
+          ) AS unit_name,
+
+          -- unit_id principal (main=true; senão, a 1ª)
           COALESCE(
-            (SELECT u ->> 'name'
+            (SELECT (u ->> 'id')::int
                FROM jsonb_array_elements(b.units) u
               WHERE (u ->> 'main')::boolean = true
               LIMIT 1),
-            (SELECT u ->> 'name'
+            (SELECT (u ->> 'id')::int
                FROM jsonb_array_elements(b.units) u
               LIMIT 1)
-          ) AS unit_name,
+          ) AS unit_id,
 
-          -- Cliente principal (preferência main=true; fallback 1º por id)
+          -- cliente principal
           COALESCE(
             (SELECT c
                FROM jsonb_array_elements(b.customers) c
@@ -76,7 +95,7 @@ export async function getContracts(req, res) {
               LIMIT 1)
           ) AS main_customer,
 
-          -- Demais "main" (associados), exceto o principal
+          -- associados "main" (exceto o principal)
           COALESCE(
             (
               SELECT jsonb_agg(
@@ -114,13 +133,30 @@ export async function getContracts(req, res) {
         p.enterprise_name,
         p.financial_institution_date,
         p.unit_name,
+        p.unit_id,
+        p.land_value,
+
         (p.main_customer ->> 'id')::int                                    AS customer_id,
         (p.main_customer ->> 'name')                                       AS customer_name,
         NULLIF(p.main_customer ->> 'participationPercentage', '')::numeric AS participation_percentage,
         p.associates,
         p.payment_conditions,
-        p.links
+        p.links,
+
+        -- array de repasses (todas as colunas) 
+        COALESCE(rp.repasse, '[]'::jsonb) AS repasse
+
       FROM pivots p
+      LEFT JOIN LATERAL ( 
+        SELECT jsonb_agg(to_jsonb(rr)) AS repasse
+        FROM (
+          SELECT r.*
+          FROM repasses r
+          WHERE r.codigointerno_unidade::text = p.unit_id::text
+          ORDER BY (r.data_status_repasse)::timestamptz DESC NULLS LAST
+          LIMIT 1
+        ) rr
+      ) rp ON TRUE
       ORDER BY p.financial_institution_date, p.contract_id;
     `;
 
