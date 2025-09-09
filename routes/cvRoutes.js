@@ -24,7 +24,7 @@ router.get('/listagem-empreendimentos', authenticate, fetchEmpreendimentos);
 router.get('/empreendimentos', authenticate, fetchBuildings);
 router.get('/empreendimento/:id', authenticate, fetchBuildingById);
 router.get('/filas', authenticate, fetchFilas);
-router.get('/banners', authenticate, fetchBanners);
+router.get('/banners', fetchBanners);
 
 router.post('/leads/sync/full', authenticate, cvLeads.fullSync.bind(cvLeads));
 router.post('/leads/sync/delta', authenticate, cvLeads.deltaSync.bind(cvLeads));
