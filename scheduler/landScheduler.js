@@ -1,30 +1,18 @@
+// src/scheduler/obstitDailyScheduler.js
 import cron from 'node-cron';
-import landDataController from '../controllers/external/landDataController.js';
+import LandDataController from '../controllers/external/landDataController.js';
 
-class ObstitDailyScheduler {
-  constructor() {
-    this.ctl = new landDataController();
-    this.task = null;
-    this.cronExp = process.env.LAND_CRON_EXPRESSION || '0 7 * * *';
-    this.tz = process.env.OBSTIT_CRON_TZ || 'America/Sao_Paulo';
-  }
+const ctl = new LandDataController();
+const CRON_EXPR = process.env.LAND_CRON_EXPRESSION || '0 7 * * *';
 
+export default {
   start() {
-    if (this.task) this.task.stop();
-    this.task = cron.schedule(this.cronExp, async () => {
-      console.log('🕖 Iniciando OBSTIT sync diário...');
-      // fake res para reuso do controller
-      const fakeRes = { send: () => {}, status: () => ({ send: () => {} }) };
-      await this.ctl.run({}, fakeRes);
-    }, { timezone: this.tz });
+    cron.schedule(CRON_EXPR, async () => {
+      console.log(`[OBSTIT Sync] Iniciando sync diário (${new Date().toISOString()})`);
+      const fakeRes = { send: () => { }, status: () => ({ send: () => { } }) };
+      await ctl.run({}, fakeRes);
+    });
 
-    console.log(`✅ OBSTIT Scheduler configurado: ${this.cronExp} (${this.tz})`);
+    console.log(`✅ OBSTIT Scheduler configurado: ${CRON_EXPR}`);
   }
-
-  stop() {
-    if (this.task) this.task.stop();
-    console.log('⛔ OBSTIT Scheduler parado');
-  }
-}
-
-export default new ObstitDailyScheduler();
+};
