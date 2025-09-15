@@ -166,7 +166,40 @@ export async function getContracts(req, res) {
 
   FROM pivots p
   LEFT JOIN LATERAL (
-    SELECT jsonb_agg(to_jsonb(rr)) AS repasse
+  SELECT
+    p.contract_id,
+    p.enterprise_id,
+    p.enterprise_name,
+    p.financial_institution_date,
+    p.unit_name,
+    p.unit_id,
+    p.land_value,
+
+    (p.main_customer ->> 'id')::int                                    AS customer_id,
+    (p.main_customer ->> 'name')                                       AS customer_name,
+    NULLIF(p.main_customer ->> 'participationPercentage', '')::numeric AS participation_percentage,
+    p.associates,
+    p.payment_conditions,
+    p.links,
+
+    -- array de repasses (todas as colunas)
+    COALESCE(rp.repasse, '[]'::jsonb) AS repasse,
+
+    -- array com a(s) reserva(s) correspondente(s) ao repasse escolhido (normalmente 1)
+    COALESCE(rp.reserva, '[]'::jsonb) AS reserva
+
+  FROM pivots p
+  LEFT JOIN LATERAL (
+    SELECT
+      -- mantém o repasse escolhido como antes
+      jsonb_agg(to_jsonb(rr)) AS repasse,
+
+      -- busca a(s) reserva(s) pelo idreserva do repasse escolhido
+      (
+        SELECT jsonb_agg(to_jsonb(z))
+        FROM reservas z
+        WHERE z.idreserva = rr.idreserva
+      ) AS reserva
     FROM (
       SELECT r.*,
              (r.codigointerno_unidade::text = p.unit_id::text) AS id_match,
@@ -197,6 +230,7 @@ export async function getContracts(req, res) {
   ) rp ON TRUE
 
   ORDER BY p.financial_institution_date, p.contract_id;
+
 `;
 
     const replacements = {
