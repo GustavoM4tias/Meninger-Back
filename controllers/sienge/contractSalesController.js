@@ -39,164 +39,169 @@ export async function getContracts(req, res) {
 
     // 🔽 Agora tudo vem de contracts + JSONB
     const sql = `
-  WITH base AS (
-    SELECT sc.*
-    FROM contracts sc
-    WHERE sc.financial_institution_date BETWEEN :start AND :end
-      AND sc.situation = :situation
-      ${whereNameClause}
-  ),
-  pivots AS (
-    SELECT
-      b.id AS contract_id,
-      b.enterprise_id,
-      b.enterprise_name,
-      b.company_id,
-      b.company_id::text AS company_id_str,
-      b.financial_institution_date,
-
-      CASE
-        WHEN b.land_value IS NULL THEN NULL
-        WHEN position(',' in b.land_value::text) > 0
-          THEN replace(regexp_replace(b.land_value::text, '\\.', '', 'g'), ',', '.')::numeric
-        ELSE
-          regexp_replace(b.land_value::text, '[^0-9\\.]', '', 'g')::numeric
-      END AS land_value,
-
-      -- Unidade principal (preferência main=true; senão, a 1ª)
-      COALESCE( 
-        (SELECT u ->> 'name'
-         FROM jsonb_array_elements(b.units) u
-         WHERE (u ->> 'main')::boolean = true
-         LIMIT 1),
-        (SELECT u ->> 'name'
-         FROM jsonb_array_elements(b.units) u
-         LIMIT 1)
-      ) AS unit_name,
-
-      -- unit_id principal (main=true; senão, a 1ª)
-      COALESCE(
-        (SELECT (u ->> 'id')::int
-         FROM jsonb_array_elements(b.units) u
-         WHERE (u ->> 'main')::boolean = true
-         LIMIT 1),
-        (SELECT (u ->> 'id')::int
-         FROM jsonb_array_elements(b.units) u
-         LIMIT 1)
-      ) AS unit_id,
-
-      -- cliente principal
-      COALESCE(
-        (SELECT c
-         FROM jsonb_array_elements(b.customers) c
-         WHERE (c ->> 'main')::boolean = true
-         LIMIT 1),
-        (SELECT c
-         FROM jsonb_array_elements(b.customers) c
-         ORDER BY (c ->> 'id')::int NULLS LAST
-         LIMIT 1)
-      ) AS main_customer,
-
-      -- associados "main" (exceto o principal)
-      COALESCE(
-        (
-          SELECT jsonb_agg(
-                   jsonb_build_object(
-                     'customer_id', (c ->> 'id')::int,
-                     'name', c ->> 'name',
-                     'participation_percentage',
-                     NULLIF(c ->> 'participationPercentage', '')::numeric
-                   )
-          )
-          FROM jsonb_array_elements(b.customers) c
-          WHERE (c ->> 'main')::boolean = true
-            AND (c ->> 'id')::int IS DISTINCT FROM (
-              COALESCE(
-                (SELECT (mc ->> 'id')::int
-                 FROM jsonb_array_elements(b.customers) mc
-                 WHERE (mc ->> 'main')::boolean = true
-                 LIMIT 1),
-                (SELECT (mc ->> 'id')::int
-                 FROM jsonb_array_elements(b.customers) mc
-                 ORDER BY (mc ->> 'id')::int NULLS LAST
-                 LIMIT 1)
-              )
-            )
-        ),
-        '[]'::jsonb
-      ) AS associates,
-
-      COALESCE(b.payment_conditions, '[]'::jsonb) AS payment_conditions,
-      COALESCE(b.links_json, '[]'::jsonb)         AS links,
-
-      -- Normalizações
-      regexp_replace(unaccent(upper(
-        COALESCE(
-          (SELECT u ->> 'name'
-           FROM jsonb_array_elements(b.units) u
-           WHERE (u ->> 'main')::boolean = true
-           LIMIT 1),
-          (SELECT u ->> 'name'
-           FROM jsonb_array_elements(b.units) u
-           LIMIT 1),
-          ''
-        )
-      )), '[^A-Z0-9]+', '', 'g') AS unit_name_norm
-  FROM base b
-  )
-
+WITH base AS (
+  SELECT sc.*
+  FROM contracts sc
+  WHERE sc.financial_institution_date BETWEEN :start AND :end
+    AND sc.situation = :situation
+    ${whereNameClause}
+),
+pivots AS (
   SELECT
-    p.contract_id,
-    p.enterprise_id,
-    p.enterprise_name,
-    p.financial_institution_date,
-    p.unit_name,
-    p.unit_id,
-    p.land_value,
+    b.id AS contract_id,
+    b.enterprise_id,
+    b.enterprise_name,
+    b.company_id,
+    b.company_id::text AS company_id_str,
+    b.financial_institution_date,
 
-    (p.main_customer ->> 'id')::int                                    AS customer_id,
-    (p.main_customer ->> 'name')                                       AS customer_name,
-    NULLIF(p.main_customer ->> 'participationPercentage', '')::numeric AS participation_percentage,
-    p.associates,
-    p.payment_conditions,
-    p.links,
+    CASE
+      WHEN b.land_value IS NULL THEN NULL
+      WHEN position(',' in b.land_value::text) > 0
+        THEN replace(regexp_replace(b.land_value::text, '\.', '', 'g'), ',', '.')::numeric
+      ELSE
+        regexp_replace(b.land_value::text, '[^0-9\.]', '', 'g')::numeric
+    END AS land_value,
 
-    -- array de repasses (todas as colunas)
-    COALESCE(rp.repasse, '[]'::jsonb) AS repasse
+    -- Unidade principal (preferência main=true; senão, a 1ª)
+    COALESCE( 
+      (SELECT u ->> 'name'
+       FROM jsonb_array_elements(b.units) u
+       WHERE (u ->> 'main')::boolean = true
+       LIMIT 1),
+      (SELECT u ->> 'name'
+       FROM jsonb_array_elements(b.units) u
+       LIMIT 1)
+    ) AS unit_name,
 
-  FROM pivots p
-  LEFT JOIN LATERAL (
-    SELECT jsonb_agg(to_jsonb(rr)) AS repasse
-    FROM (
-      SELECT r.*,
-             (r.codigointerno_unidade::text = p.unit_id::text) AS id_match,
-             COALESCE(r.data_status_repasse, r.data_contrato_liberado, r.data_contrato_contab) AS data_mais_recente
-      FROM repasses r
-      WHERE
-        -- 1) Match por ID
-        r.codigointerno_unidade::text = p.unit_id::text
+    -- unit_id principal (main=true; senão, a 1ª)
+    COALESCE(
+      (SELECT (u ->> 'id')::int
+       FROM jsonb_array_elements(b.units) u
+       WHERE (u ->> 'main')::boolean = true
+       LIMIT 1),
+      (SELECT (u ->> 'id')::int
+       FROM jsonb_array_elements(b.units) u
+       LIMIT 1)
+    ) AS unit_id,
 
-        -- 2) Fallback por nome + enterprise_id
-        OR (
-          regexp_replace(unaccent(upper(COALESCE(r.unidade, ''))), '[^A-Z0-9]+', '', 'g') = p.unit_name_norm
-          AND r.codigointerno_empreendimento::text = p.enterprise_id::text
+    -- cliente principal
+    COALESCE(
+      (SELECT c
+       FROM jsonb_array_elements(b.customers) c
+       WHERE (c ->> 'main')::boolean = true
+       LIMIT 1),
+      (SELECT c
+       FROM jsonb_array_elements(b.customers) c
+       ORDER BY (c ->> 'id')::int NULLS LAST
+       LIMIT 1)
+    ) AS main_customer,
+
+    -- associados "main" (exceto o principal)
+    COALESCE(
+      (
+        SELECT jsonb_agg(
+                 jsonb_build_object(
+                   'customer_id', (c ->> 'id')::int,
+                   'name', c ->> 'name',
+                   'participation_percentage',
+                   NULLIF(c ->> 'participationPercentage', '')::numeric
+                 )
         )
+        FROM jsonb_array_elements(b.customers) c
+        WHERE (c ->> 'main')::boolean = true
+          AND (c ->> 'id')::int IS DISTINCT FROM (
+            COALESCE(
+              (SELECT (mc ->> 'id')::int
+               FROM jsonb_array_elements(b.customers) mc
+               WHERE (mc ->> 'main')::boolean = true
+               LIMIT 1),
+              (SELECT (mc ->> 'id')::int
+               FROM jsonb_array_elements(b.customers) mc
+               ORDER BY (mc ->> 'id')::int NULLS LAST
+               LIMIT 1)
+            )
+          )
+      ),
+      '[]'::jsonb
+    ) AS associates,
 
-        -- 3) Fallback por nome + prefixo de company_id
-        OR (
-          regexp_replace(unaccent(upper(COALESCE(r.unidade, ''))), '[^A-Z0-9]+', '', 'g') = p.unit_name_norm
-          AND r.codigointerno_empreendimento::text LIKE p.company_id_str || '%'
-        )
+    COALESCE(b.payment_conditions, '[]'::jsonb) AS payment_conditions,
+    COALESCE(b.links_json, '[]'::jsonb)         AS links,
 
-      ORDER BY
-        id_match DESC,
-        (CASE WHEN r.status_repasse ILIKE 'Cancelado' THEN 1 ELSE 0 END),
-        data_mais_recente DESC NULLS LAST
-      LIMIT 1
-    ) rr
-  ) rp ON TRUE
+    -- Normalizações
+    regexp_replace(unaccent(upper(
+      COALESCE(
+        (SELECT u ->> 'name'
+         FROM jsonb_array_elements(b.units) u
+         WHERE (u ->> 'main')::boolean = true
+         LIMIT 1),
+        (SELECT u ->> 'name'
+         FROM jsonb_array_elements(b.units) u
+         LIMIT 1),
+        ''
+      )
+    )), '[^A-Z0-9]+', '', 'g') AS unit_name_norm
+  FROM base b
+)
 
-  ORDER BY p.financial_institution_date, p.contract_id;
+SELECT
+  p.contract_id,
+  p.enterprise_id,
+  p.enterprise_name,
+  p.financial_institution_date,
+  p.unit_name,
+  p.unit_id,
+  p.land_value,
+
+  (p.main_customer ->> 'id')::int                                    AS customer_id,
+  (p.main_customer ->> 'name')                                       AS customer_name,
+  NULLIF(p.main_customer ->> 'participationPercentage', '')::numeric AS participation_percentage,
+  p.associates,
+  p.payment_conditions,
+  p.links,
+
+  -- array de repasses (mesma lógica de escolha)
+  COALESCE(rp.repasse, '[]'::jsonb) AS repasse,
+
+  -- json da reserva correspondente ao repasse escolhido (1º elemento da agregação)
+  rp.reservas->0 AS reserva
+
+FROM pivots p
+LEFT JOIN LATERAL (
+  SELECT
+    jsonb_agg(to_jsonb(r))                        AS repasse,   -- array (máx. 1 item pelo LIMIT)
+    jsonb_agg(DISTINCT to_jsonb(res))             AS reservas   -- agrega para não violar regra do GROUP
+  FROM (
+    SELECT
+      r.*,
+      (r.codigointerno_unidade::text = p.unit_id::text) AS id_match,
+      COALESCE(r.data_status_repasse, r.data_contrato_liberado, r.data_contrato_contab) AS data_mais_recente
+    FROM repasses r
+    WHERE
+      -- 1) Match por ID
+      r.codigointerno_unidade::text = p.unit_id::text
+      -- 2) Fallback por nome + enterprise_id
+      OR (
+        regexp_replace(unaccent(upper(COALESCE(r.unidade, ''))), '[^A-Z0-9]+', '', 'g') = p.unit_name_norm
+        AND r.codigointerno_empreendimento::text = p.enterprise_id::text
+      )
+      -- 3) Fallback por nome + prefixo de company_id
+      OR (
+        regexp_replace(unaccent(upper(COALESCE(r.unidade, ''))), '[^A-Z0-9]+', '', 'g') = p.unit_name_norm
+        AND r.codigointerno_empreendimento::text LIKE p.company_id_str || '%'
+      )
+    ORDER BY
+      id_match DESC,
+      (CASE WHEN r.status_repasse ILIKE 'Cancelado' THEN 1 ELSE 0 END),
+      data_mais_recente DESC NULLS LAST
+    LIMIT 1
+  ) r
+  LEFT JOIN reservas res
+    ON res.idreserva = r.idreserva
+) rp ON TRUE
+
+ORDER BY p.financial_institution_date, p.contract_id;
 `;
 
     const replacements = {
