@@ -13,6 +13,6 @@ export default {
             const fakeRes = { send: () => { }, status: () => ({ send: () => { } }) };
             await ctl.deltaSync({}, fakeRes);
         });
-        console.log(`✅ CVCRM Sync agendado: ${CRON_EXPR}`);
+        console.log(`✅ CVCRM Leads Sync agendado: ${CRON_EXPR}`);
     }
 };
