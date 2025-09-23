@@ -7,10 +7,19 @@ import { chooseLandValue } from './obstitParse.js';
 const BATCH = 500;
 
 async function getDistinctContractNumbers() {
+    const ids = (process.env.ENTERPRISE_IDS || '').split(',').map(id => id.trim());
+
     const rows = await db.sequelize.query(
-        'SELECT DISTINCT number FROM contracts WHERE number IS NOT NULL',
-        { type: db.Sequelize.QueryTypes.SELECT }
+        `SELECT DISTINCT number 
+         FROM contracts 
+         WHERE number IS NOT NULL
+           AND enterprise_id IN (:ids)`,
+        {
+            replacements: { ids },
+            type: db.Sequelize.QueryTypes.SELECT
+        }
     );
+
     return rows.map(r => String(r.number));
 }
 
