@@ -98,30 +98,59 @@ pivots AS (
     ) AS main_customer,
 
     -- associados "main" (exceto o principal)
+    -- associados: todos os clientes != titular, independente de main,
+    -- ordenando cônjuge primeiro e deduplicando por id
     COALESCE(
       (
+        WITH cust AS (
+          SELECT
+            (c ->> 'id')::int                                   AS cid,
+            c ->> 'name'                                        AS cname,
+            NULLIF(c ->> 'participationPercentage','')::numeric AS participation,
+            COALESCE((c ->> 'spouse')::boolean, false)          AS is_spouse,
+            (
+              NULLIF(c ->> 'participationPercentage','')::numeric IS NOT NULL
+              AND NULLIF(c ->> 'participationPercentage','')::numeric > 0
+            )                                                   AS has_participation,
+            row_number() OVER ()                                AS rn
+          FROM jsonb_array_elements(b.customers) c
+        ),
+        main_sel AS (
+          SELECT COALESCE(
+            (SELECT (mc ->> 'id')::int
+             FROM jsonb_array_elements(b.customers) mc
+             WHERE (mc ->> 'main')::boolean = true
+             LIMIT 1),
+            (SELECT (mc ->> 'id')::int
+             FROM jsonb_array_elements(b.customers) mc
+             ORDER BY (mc ->> 'id')::int NULLS LAST
+             LIMIT 1)
+          ) AS main_id
+        ),
+        -- escolhe 1 por cid priorizando: (1) cônjuge, (2) tem participação > 0, (3) ordem natural
+        picked AS (
+          SELECT cid, cname, participation, is_spouse, has_participation, rn
+          FROM (
+            SELECT *,
+                   row_number() OVER (
+                     PARTITION BY cid
+                     ORDER BY is_spouse DESC, has_participation DESC, rn ASC
+                   ) AS pick
+            FROM cust, main_sel
+            WHERE cid IS NOT NULL
+              AND cid IS DISTINCT FROM main_sel.main_id
+          ) x
+          WHERE pick = 1
+        )
         SELECT jsonb_agg(
                  jsonb_build_object(
-                   'customer_id', (c ->> 'id')::int,
-                   'name', c ->> 'name',
-                   'participation_percentage',
-                   NULLIF(c ->> 'participationPercentage', '')::numeric
+                   'customer_id', cid,
+                   'name', cname,
+                   'participation_percentage', participation
                  )
-        )
-        FROM jsonb_array_elements(b.customers) c
-        WHERE (c ->> 'main')::boolean = true
-          AND (c ->> 'id')::int IS DISTINCT FROM (
-            COALESCE(
-              (SELECT (mc ->> 'id')::int
-               FROM jsonb_array_elements(b.customers) mc
-               WHERE (mc ->> 'main')::boolean = true
-               LIMIT 1),
-              (SELECT (mc ->> 'id')::int
-               FROM jsonb_array_elements(b.customers) mc
-               ORDER BY (mc ->> 'id')::int NULLS LAST
-               LIMIT 1)
-            )
-          )
+                 ORDER BY is_spouse DESC, has_participation DESC, rn ASC
+               )
+        FROM picked
       ),
       '[]'::jsonb
     ) AS associates,
