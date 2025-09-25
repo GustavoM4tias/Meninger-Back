@@ -97,9 +97,8 @@ pivots AS (
        LIMIT 1)
     ) AS main_customer,
 
-    -- associados "main" (exceto o principal)
-    -- associados: todos os clientes != titular, independente de main,
-    -- ordenando cônjuge primeiro e deduplicando por id
+    -- associados: todos os clientes com nome != do titular (por nome normalizado),
+    -- cônjuge primeiro; deduplicação por nome normalizado; preferir quem tem participação > 0
     COALESCE(
       (
         WITH cust AS (
@@ -112,33 +111,89 @@ pivots AS (
               NULLIF(c ->> 'participationPercentage','')::numeric IS NOT NULL
               AND NULLIF(c ->> 'participationPercentage','')::numeric > 0
             )                                                   AS has_participation,
-            row_number() OVER ()                                AS rn
+            row_number() OVER ()                                AS rn,
+
+            -- normaliza nome: remove acentos, pontuação/espacos, e stopwords comuns
+            -- 1) maiúsculas sem acento
+            unaccent(upper(c ->> 'name'))                                                  AS cname_up,
+            -- 2) troca não alfanum por espaço
+            regexp_replace(unaccent(upper(c ->> 'name')), '[^A-Z0-9]+', ' ', 'g')          AS cname_spc,
+            -- 3) remove stopwords (DE, DA, DO, DAS, DOS, E) como palavras inteiras
+            regexp_replace(
+              regexp_replace(unaccent(upper(c ->> 'name')), '[^A-Z0-9]+', ' ', 'g'),
+              '(^| )(DE|DA|DO|DAS|DOS|E)( |$)', ' ', 'g'
+            )                                                                              AS cname_nostop_spc,
+            -- 4) tira todos os espaços
+            regexp_replace(
+              regexp_replace(
+                regexp_replace(unaccent(upper(c ->> 'name')), '[^A-Z0-9]+', ' ', 'g'),
+                '(^| )(DE|DA|DO|DAS|DOS|E)( |$)', ' ', 'g'
+              ),
+              '\s+', '', 'g'
+            )                                                                              AS cname_norm
           FROM jsonb_array_elements(b.customers) c
         ),
         main_sel AS (
-          SELECT COALESCE(
-            (SELECT (mc ->> 'id')::int
-             FROM jsonb_array_elements(b.customers) mc
-             WHERE (mc ->> 'main')::boolean = true
-             LIMIT 1),
-            (SELECT (mc ->> 'id')::int
-             FROM jsonb_array_elements(b.customers) mc
-             ORDER BY (mc ->> 'id')::int NULLS LAST
-             LIMIT 1)
-          ) AS main_id
+          -- principal por regra atual
+          SELECT
+            COALESCE(
+              (SELECT (mc ->> 'id')::int
+               FROM jsonb_array_elements(b.customers) mc
+               WHERE (mc ->> 'main')::boolean = true
+               LIMIT 1),
+              (SELECT (mc ->> 'id')::int
+               FROM jsonb_array_elements(b.customers) mc
+               ORDER BY (mc ->> 'id')::int NULLS LAST
+               LIMIT 1)
+            )                                                  AS main_id,
+            -- nome normalizado do titular (mesmo pipeline)
+            regexp_replace(
+              regexp_replace(unaccent(upper(
+                COALESCE(
+                  (SELECT mc ->> 'name'
+                   FROM jsonb_array_elements(b.customers) mc
+                   WHERE (mc ->> 'main')::boolean = true
+                   LIMIT 1),
+                  (SELECT mc ->> 'name'
+                   FROM jsonb_array_elements(b.customers) mc
+                   ORDER BY (mc ->> 'id')::int NULLS LAST
+                   LIMIT 1)
+                )
+              )), '[^A-Z0-9]+', ' ', 'g'),
+              '(^| )(DE|DA|DO|DAS|DOS|E)( |$)', ' ', 'g'
+            )                                                  AS main_name_spc,
+            regexp_replace(
+              regexp_replace(
+                regexp_replace(unaccent(upper(
+                  COALESCE(
+                    (SELECT mc ->> 'name'
+                     FROM jsonb_array_elements(b.customers) mc
+                     WHERE (mc ->> 'main')::boolean = true
+                     LIMIT 1),
+                    (SELECT mc ->> 'name'
+                     FROM jsonb_array_elements(b.customers) mc
+                     ORDER BY (mc ->> 'id')::int NULLS LAST
+                     LIMIT 1)
+                  )
+                )), '[^A-Z0-9]+', ' ', 'g'),
+                '(^| )(DE|DA|DO|DAS|DOS|E)( |$)', ' ', 'g'
+              ),
+              '\s+', '', 'g'
+            )                                                  AS main_name_norm
         ),
-        -- escolhe 1 por cid priorizando: (1) cônjuge, (2) tem participação > 0, (3) ordem natural
         picked AS (
-          SELECT cid, cname, participation, is_spouse, has_participation, rn
+          -- tira o titular e eventuais variações do próprio titular (mesmo nome normalizado),
+          -- e escolhe 1 por nome (cname_norm) priorizando: (1) cônjuge, (2) participação, (3) ordem
+          SELECT cname_norm, cid, cname, participation, is_spouse, has_participation, rn
           FROM (
             SELECT *,
                    row_number() OVER (
-                     PARTITION BY cid
+                     PARTITION BY cname_norm
                      ORDER BY is_spouse DESC, has_participation DESC, rn ASC
                    ) AS pick
             FROM cust, main_sel
-            WHERE cid IS NOT NULL
-              AND cid IS DISTINCT FROM main_sel.main_id
+            WHERE cname_norm IS NOT NULL
+              AND cname_norm <> main_name_norm
           ) x
           WHERE pick = 1
         )
