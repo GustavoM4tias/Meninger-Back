@@ -7,15 +7,30 @@ import { chooseLandValue } from './obstitParse.js';
 const BATCH = 500;
 
 async function getDistinctContractNumbers() {
-    const ids = (process.env.ENTERPRISE_IDS || '').split(',').map(id => id.trim());
+    const idsInt = (process.env.ENTERPRISE_IDS || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(Number)
+        .filter(Number.isInteger);
+
+    // Monte um literal de array Postgres: "{17004,78001,...}"
+    const idsArrayLiteral = `{${idsInt.join(',')}}`;
+
+    // Se a semântica de "sem filtro" for "não retorna nada", descomente:
+    // if (idsInt.length === 0) return [];
 
     const rows = await db.sequelize.query(
-        `SELECT DISTINCT number 
-         FROM contracts 
+        `SELECT DISTINCT number
+          FROM contracts
          WHERE number IS NOT NULL
-           AND enterprise_id IN (:ids)`,
+           AND (
+                cardinality(:ids::int[]) = 0
+             OR enterprise_id = ANY(:ids::int[])
+           )`,
         {
-            replacements: { ids },
+            // 🔴 Passe o literal do array e faça cast no SQL com ::int[]
+            replacements: { ids: idsArrayLiteral },
             type: db.Sequelize.QueryTypes.SELECT
         }
     );
