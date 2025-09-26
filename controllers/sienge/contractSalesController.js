@@ -76,11 +76,11 @@ pivots AS (
 
     -- unit_id principal (main=true; senão, a 1ª)
     COALESCE(
-      (SELECT (u ->> 'id')::int
+      (SELECT NULLIF(u ->> 'id','')::int
        FROM jsonb_array_elements(b.units) u
        WHERE (u ->> 'main')::boolean = true
        LIMIT 1),
-      (SELECT (u ->> 'id')::int
+      (SELECT NULLIF(u ->> 'id','')::int
        FROM jsonb_array_elements(b.units) u
        LIMIT 1)
     ) AS unit_id,
@@ -103,7 +103,7 @@ pivots AS (
       (
         WITH cust AS (
           SELECT
-            (c ->> 'id')::int                                   AS cid,
+            NULLIF(c ->> 'id','')::int                          AS cid,
             c ->> 'name'                                        AS cname,
             NULLIF(c ->> 'participationPercentage','')::numeric AS participation,
             COALESCE((c ->> 'spouse')::boolean, false)          AS is_spouse,
@@ -137,13 +137,13 @@ pivots AS (
           -- principal por regra atual
           SELECT
             COALESCE(
-              (SELECT (mc ->> 'id')::int
+              (SELECT NULLIF(mc ->> 'id','')::int
                FROM jsonb_array_elements(b.customers) mc
                WHERE (mc ->> 'main')::boolean = true
                LIMIT 1),
-              (SELECT (mc ->> 'id')::int
+              (SELECT NULLIF(mc ->> 'id','')::int
                FROM jsonb_array_elements(b.customers) mc
-               ORDER BY (mc ->> 'id')::int NULLS LAST
+               ORDER BY NULLIF(mc ->> 'id','')::int NULLS LAST
                LIMIT 1)
             )                                                  AS main_id,
             -- nome normalizado do titular (mesmo pipeline)
@@ -238,7 +238,7 @@ SELECT
   p.unit_id,
   p.land_value,
 
-  (p.main_customer ->> 'id')::int                                    AS customer_id,
+  NULLIF(p.main_customer ->> 'id','')::int                           AS customer_id,
   (p.main_customer ->> 'name')                                       AS customer_name,
   NULLIF(p.main_customer ->> 'participationPercentage', '')::numeric AS participation_percentage,
   p.associates,
