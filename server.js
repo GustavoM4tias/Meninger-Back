@@ -25,21 +25,23 @@ import landScheduler from './scheduler/landScheduler.js';
 
 import admin from './routes/admin.js';
 
+import supportRoutes from './routes/supportRoutes.js';
+
 const app = express();
 
 // CORS precisa estar no topo, ANTES de qualquer rota
 const corsOptions = {
   origin: [
     'http://localhost:5173',
-    'https://meninger.vercel.app'
+    'https://meninger.vercel.app',
+    'https://office.menin.com.br'
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // 👈 adicione PATCH
   credentials: true
 };
 
 app.use(cors(corsOptions));
 app.use(express.json());
-
 
 app.use('/api/maintenance', admin);
 
@@ -53,6 +55,8 @@ app.use('/api/microsoft', microsoftAuthRoutes);// Microsoft for archives
 app.use('/api/ai', validatorAI);// chatbot ai
 app.use('/api/contracts', contractAutomationRoutes);
 app.use('/api/external', externalRoutes);
+
+app.use('/api/support', supportRoutes);
 
 const PORT = process.env.PORT || 5000;
 
