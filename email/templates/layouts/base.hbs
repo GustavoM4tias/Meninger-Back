@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+    <head>
+        <meta charset="utf-8">
+        <title>{{title}}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <!-- preview text -->
+        <span
+            style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;">
+            {{previewText}}
+        </span>
+        <style>
+    body { margin:0; background:#f5f7fb; font-family: Arial, sans-serif; }
+    .container { max-width:600px; margin:0 auto; background:#ffffff; }
+    .px { padding-left:24px; padding-right:24px; }
+    .py { padding-top:20px; padding-bottom:20px; }
+    .muted { color:#6b7280; }
+    .btn { display:inline-block; padding:12px 18px; text-decoration:none; background:#2563eb; color:#fff; border-radius:8px; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:12px; margin-right:6px; }
+    img { border:0; max-width:100%; }
+    @media (max-width: 640px){ .px { padding-left:16px; padding-right:16px; } }
+  </style>
+    </head>
+    <body>
+        <table class="container" role="presentation" width="100%"
+            cellspacing="0" cellpadding="0">
+            <tr><td>{{> header }}</td></tr>
+            <tr><td class="px py">{{{content}}}</td></tr>
+            <tr><td>{{> footer }}</td></tr>
+        </table>
+    </body>
+</html>
