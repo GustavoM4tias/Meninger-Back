@@ -65,6 +65,161 @@ export const loginUser = async (req, res) => {
   }
 };
 
+// Util: média de embeddings (vários frames -> 1 vetor)
+const distanceEuclidean = (a, b) => {
+  if (!a || !b || a.length !== b.length) return Number.POSITIVE_INFINITY;
+  let s = 0; for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d * d; }
+  return Math.sqrt(s);
+};
+const averageEmbedding = (arr) => {
+  if (!arr?.length) return null;
+  const len = arr[0].length;
+  const out = new Array(len).fill(0);
+  for (const v of arr) for (let i = 0; i < len; i++) out[i] += v[i];
+  for (let i = 0; i < len; i++) out[i] /= arr.length;
+  return out;
+};
+
+export const enrollFace = async (req, res) => {
+  // body: { embeddings: number[][], threshold?: number }
+  const { embeddings, threshold } = req.body;
+  if (!Array.isArray(embeddings) || embeddings.length < 5) {
+    return res.status(400).json({ success: false, error: 'Coleta insuficiente' });
+  }
+  const user = await User.findByPk(req.user.id);
+  if (!user) return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
+
+  const mean = averageEmbedding(embeddings);
+  user.face_template = mean;
+  if (threshold) user.face_threshold = threshold;
+  user.face_enabled = true;
+  user.face_last_update = new Date();
+  await user.save();
+
+  return res.json({ success: true, data: { face_enabled: true } });
+};
+
+export const identifyFace = async (req, res) => {
+  try {
+    let { embedding } = req.body;
+
+    // 🔎 LOG de debug
+    const raw = req.body?.embedding;
+    console.log('[identifyFace] raw type:', typeof raw, 'isArray:', Array.isArray(raw), 'len:', raw?.length);
+
+    // 🔧 Normalizações comuns
+    if (embedding && !Array.isArray(embedding)) {
+      // Caso venha como Float32Array/TypedArray
+      if (typeof embedding === 'object' && typeof embedding.length === 'number') {
+        embedding = Array.from(embedding);
+      }
+      // Caso venha como { data: [...] }
+      else if (embedding && Array.isArray(embedding.data)) {
+        embedding = embedding.data;
+      }
+      // Caso venha como string JSON
+      else if (typeof embedding === 'string') {
+        try {
+          const parsed = JSON.parse(embedding);
+          if (Array.isArray(parsed)) embedding = parsed;
+        } catch (_) { /* ignora */ }
+      }
+    }
+
+    // 🔒 Validação final
+    if (!Array.isArray(embedding) || embedding.length !== 128 || embedding.some((x) => typeof x !== 'number')) {
+      console.log('[identifyFace] payload inválido após normalização:', {
+        type: typeof embedding,
+        isArray: Array.isArray(embedding),
+        len: embedding?.length
+      });
+      return res.status(400).json({ success: false, error: 'embedding inválido' });
+    }
+
+    // Você pode limitar por status/cidade/etc. se quiser reduzir o conjunto:
+    const users = await User.findAll({
+      where: {
+        face_enabled: true,
+      },
+      attributes: ['id', 'email', 'username', 'position', 'role', 'city', 'face_template', 'face_threshold', 'status'],
+    });
+
+    if (!users.length) {
+      return res.status(404).json({ success: false, error: 'Sem usuários com face habilitado' });
+    }
+
+    let bestUser = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+
+    for (const u of users) {
+      if (!u.status) continue; // inativo → ignora
+      if (!u.face_template) continue;
+
+      // face_template pode estar salvo como array (JSON) ou string JSON
+      let tpl = u.face_template;
+      if (typeof tpl === 'string') {
+        try { tpl = JSON.parse(tpl); } catch { /* pode ser array puro ou string de array */ }
+      }
+      // Se salvou mean direto: tpl = [128 floats]
+      // Se salvou objeto: {mean:[...], embeddings:[...]}
+      let dists = [];
+      if (Array.isArray(tpl)) {
+        dists.push(distanceEuclidean(embedding, tpl));
+      } else if (tpl && Array.isArray(tpl.mean)) {
+        dists.push(distanceEuclidean(embedding, tpl.mean));
+        if (Array.isArray(tpl.embeddings)) {
+          for (const e of tpl.embeddings) dists.push(distanceEuclidean(embedding, e));
+        }
+      } else {
+        continue; // sem template válido
+      }
+
+      const minDist = Math.min(...dists);
+      if (minDist < bestDist) {
+        bestDist = minDist;
+        bestUser = u;
+      }
+    }
+
+    // limiar
+    const threshold = parseFloat(process.env.FACE_THRESHOLD || '0.60');
+    const passed = bestUser && bestDist <= threshold;
+
+    console.log(`[faceIdentify] best=${bestUser?.email} dist=${bestDist?.toFixed(4)} thr=${threshold} ok=${passed}`);
+
+    if (!passed) {
+      return res.status(401).json({
+        success: false,
+        error: 'Não reconhecido',
+        data: { meta: { dist: bestDist, threshold } },
+      });
+    }
+
+    // sucesso → gera o MESMO JWT do login por senha
+    const token = jwt.sign({
+      id: bestUser.id,
+      position: bestUser.position,
+      city: bestUser.city,
+      role: bestUser.role
+    }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+
+    bestUser.last_login = new Date();
+    await bestUser.save();
+
+    return res.json({
+      success: true,
+      data: {
+        token,
+        user: { id: bestUser.id, email: bestUser.email, username: bestUser.username },
+        meta: { dist: bestDist, threshold },
+      }
+    });
+  } catch (err) {
+    console.error('[identifyFace] erro:', err);
+    return res.status(500).json({ success: false, error: 'erro interno' });
+  }
+};
+
 export const getUserInfo = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
