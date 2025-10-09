@@ -7,7 +7,7 @@ export default (sequelize, DataTypes) => {
     password: { type: DataTypes.STRING(255), allowNull: false },
     email: { type: DataTypes.STRING(100), allowNull: false, unique: true },
     position: {
-      type: DataTypes.ENUM('Diretor', 'Gerente', 'Financeiro', 'Marketing', 'Comercial'), 
+      type: DataTypes.ENUM('Diretor', 'Gerente', 'Financeiro', 'Marketing', 'Comercial'),
       allowNull: false
     },
     city: {
@@ -42,6 +42,10 @@ export default (sequelize, DataTypes) => {
       type: DataTypes.BIGINT,
       allowNull: true,
     },
+    face_enabled: { type: DataTypes.BOOLEAN, defaultValue: false },
+    face_template: { type: DataTypes.JSONB }, // [128 floats]
+    face_threshold: { type: DataTypes.FLOAT, defaultValue: 0.6 },
+    face_last_update: { type: DataTypes.DATE }
   }, {
     tableName: 'users',
     underscored: true,
