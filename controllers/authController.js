@@ -223,7 +223,7 @@ export const identifyFace = async (req, res) => {
 export const getUserInfo = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status']
+      attributes: ['id','username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update']
     });
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
@@ -235,12 +235,12 @@ export const getUserInfo = async (req, res) => {
 };
 
 export const updateMe = async (req, res) => {
-  const { username, email, position, city, status, birth_date } = req.body;
-  if (!username || !email || !position || !city || status === undefined || !birth_date) {
+  const { username, email, position, city, status, birth_date, face_enabled } = req.body;
+  if (!username || !email || !position || !city || status === undefined || !birth_date || face_enabled === undefined) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
   try {
-    const [affectedRows] = await User.update({ username, email, position, city, status, birth_date }, { where: { id: req.user.id } });
+    const [affectedRows] = await User.update({ username, email, position, city, status, birth_date, face_enabled }, { where: { id: req.user.id } });
     if (affectedRows === 0) {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
@@ -249,17 +249,20 @@ export const updateMe = async (req, res) => {
     return responseHandler.error(res, error);
   }
 };
-
+// authController.updateUser – relaxe a validação:
 export const updateUser = async (req, res) => {
   const { id, username, email, position, role, manager_id, city, status, birth_date } = req.body;
-  if (!id || !username || !email || !position || !role || /*!manager ||*/ !city || status === undefined || !birth_date) {
+
+  if (!id || !username || !email || !position || !city || status === undefined || !birth_date) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
+
+  const payload = { username, email, position, manager_id, city, status, birth_date };
+  if (role !== undefined) payload.role = role;
+
   try {
-    const [affectedRows] = await User.update({ username, email, position, role, manager_id, city, status, birth_date }, { where: { id } });
-    if (affectedRows === 0) {
-      return responseHandler.error(res, 'Usuário não encontrado');
-    }
+    const [affectedRows] = await User.update(payload, { where: { id } });
+    if (affectedRows === 0) return responseHandler.error(res, 'Usuário não encontrado');
     return responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
   } catch (error) {
     return responseHandler.error(res, error);
@@ -269,7 +272,7 @@ export const updateUser = async (req, res) => {
 export const getAllUsers = async (req, res) => {
   try {
     const users = await User.findAll({
-      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status'],
+      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update'],
       include: [
         {
           model: User,
@@ -295,7 +298,7 @@ export const getAllUsers = async (req, res) => {
 export const getUserById = async (req, res) => {
   try {
     const user = await User.findByPk(req.params.id, {
-      attributes: ['username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status'],
+      attributes: ['username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update'],
       include: [
         {
           model: User,
