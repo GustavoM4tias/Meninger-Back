@@ -8,7 +8,7 @@ const bulk = new bulkDataController();
 
 // GET /api/contracts?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&situation=Emitido|Autorizado|Cancelado&enterpriseName=texto
 router.get('/contracts', authenticate, getContracts);
-router.get('/contracts/enterprises', authenticate, listEnterprises );
+router.get('/contracts/enterprises', authenticate, listEnterprises);
 router.post('/contracts/cache/clear', authenticate, clearCache);
 
 router.post('/contracts/sync/full',  bulk.fullSync.bind(bulk));

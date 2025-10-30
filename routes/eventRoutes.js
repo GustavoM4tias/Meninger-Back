@@ -5,7 +5,7 @@ import authenticate from '../middlewares/authMiddleware.js';
 const router = express.Router();
 
 router.post('/add', authenticate, addEvent);
-router.get('/', getEvents);
+router.get('/', authenticate, getEvents);
 router.put('/edit/:id', authenticate, updateEvent);
 router.delete('/delete/:id', authenticate, deleteEvent);
 
