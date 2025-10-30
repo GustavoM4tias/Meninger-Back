@@ -4,6 +4,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 dotenv.config();
 import cors from 'cors';
+import authenticate from './middlewares/authMiddleware.js';
 import db from './models/sequelize/index.js';
 import authRoutes from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
@@ -27,6 +28,8 @@ import admin from './routes/admin.js';
 
 import supportRoutes from './routes/supportRoutes.js';
 
+import projectionRoutes from './routes/projectionsRoutes.js';
+
 const app = express();
 
 // CORS precisa estar no topo, ANTES de qualquer rota
@@ -43,7 +46,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-app.use('/api/maintenance', admin);
+app.use('/api/admin', admin);
 
 // Rotas
 app.use('/api/auth', authRoutes);
@@ -52,11 +55,13 @@ app.use('/api/favorite', favoriteRoutes);
 app.use('/api/cv', cvRoutes);
 app.use('/api/sienge', siengeRoutes); // Sienge api, db and cron
 app.use('/api/microsoft', microsoftAuthRoutes);// Microsoft for archives
-app.use('/api/ai', validatorAI);// chatbot ai
+app.use('/api/ai', authenticate, validatorAI);// chatbot ai
 app.use('/api/contracts', contractAutomationRoutes);
 app.use('/api/external', externalRoutes);
 
 app.use('/api/support', supportRoutes);
+
+app.use('/api/projections', projectionRoutes);
 
 const PORT = process.env.PORT || 5000;
 
