@@ -1,5 +1,5 @@
 // src/services/empreendimentosService.js
-import apiCv from '../lib/apiCv.js';
+import apiCv from '../../lib/apiCv.js';
 
 let empreendimentosCache = {
   dados: [],

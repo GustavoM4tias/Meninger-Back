@@ -37,6 +37,8 @@ import CvEnterpriseUnitDefine   from './cv/enterpriseUnit.js';
 import CvEnterpriseMaterialDefine from './cv/enterpriseMaterial.js';
 import CvEnterprisePlanDefine   from './cv/enterprisePlan.js';
 
+import CvWorkflowGroupDefine from './cv/workflowGroup.js';
+
 const env = process.env.NODE_ENV || 'development';
 
 const cfg = config[env];
@@ -81,6 +83,8 @@ db.CvEnterpriseBlock   = CvEnterpriseBlockDefine(sequelize, DataTypes);
 db.CvEnterpriseUnit    = CvEnterpriseUnitDefine(sequelize, DataTypes);
 db.CvEnterpriseMaterial= CvEnterpriseMaterialDefine(sequelize, DataTypes);
 db.CvEnterprisePlan    = CvEnterprisePlanDefine(sequelize, DataTypes);
+
+db.CvWorkflowGroup = CvWorkflowGroupDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

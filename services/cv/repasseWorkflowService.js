@@ -1,4 +1,4 @@
-import apiCv from '../lib/apiCv.js';
+import apiCv from '../../lib/apiCv.js';
 
 let repasseCache = {
   dados: [],

@@ -30,7 +30,7 @@ import supportRoutes from './routes/supportRoutes.js';
 
 import projectionRoutes from './routes/projectionsRoutes.js';
 
-import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js';
+import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js'; 
 
 const app = express();
 
@@ -93,7 +93,7 @@ db.sequelize.sync({ alter: false })  // ⚠️ alter: true = adapta sem apagar d
     // ...
     if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') {
       enterpriseCvScheduler.start();
-    }
+    } 
 
     app.listen(PORT, () => {
       console.log(`Servidor rodando na porta: ${PORT}`);

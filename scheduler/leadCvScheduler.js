@@ -1,6 +1,6 @@
 // src/scheduler/leadCvScheduler.js
 import cron from 'node-cron';
-import CvLeadSyncController from '../controllers/cv/bulkDataController.js';
+import CvLeadSyncController from '../services/bulkData/cv/bulkDataController.js';
 
 const ctl = new CvLeadSyncController();
 const CRON_EXPR = process.env.LEAD_CV_CRON_EXPRESSION || '*/30 * * * *'; // a cada 30min
