@@ -1,5 +1,5 @@
 // src/controllers/cv/bulkDataController.js
-import LeadSyncService from '../../services/bulkData/cv/LeadSyncService.js';
+import LeadSyncService from './LeadSyncService.js';
 
 const state = { lastRunAt: null };
 

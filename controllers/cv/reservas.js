@@ -1,6 +1,13 @@
 // controllers/cv/reservas.js
-import { getEmpreendimentos } from '../../services/empreendimentoService.js';
-import apiCv from '../../lib/apiCv.js'; 
+import { getEmpreendimentos } from '../../services/cv/empreendimentoService.js';
+import apiCv from '../../lib/apiCv.js';
+
+// Cache simples em memória (1h)
+let reservaCache = {
+    dados: null,
+    timestamp: 0,
+    expiracaoMs: 3600000
+}
 
 export const fetchReservas = async (req, res) => {
     let responseWasSent = false;
@@ -148,5 +155,88 @@ export const fetchReservaPagamentos = async (req, res) => {
     } catch (error) {
         console.error('Erro ao buscar condições de pagamento:', error.message);
         res.status(500).json({ error: 'Erro ao buscar condições de pagamento na API externa' });
+    }
+};
+
+// ⬇️ NOVO: endpoint de workflow de reservas (espelha o de repasses)
+export const fetchReservaWorkflow = async (req, res) => {
+    try {
+        const workflowData = await getReservaWorkflow()
+        res.status(200).json(workflowData)
+    } catch (error) {
+        console.error('Erro ao buscar workflow de reservas:', error.message)
+        res.status(500).json({ error: 'Erro ao buscar workflow de reservas na API externa' })
+    }
+}
+
+export const getReservaWorkflow = async () => {
+    try {
+        const agora = Date.now();
+
+        // ✅ Verifica se há dados e se ainda estão válidos
+        if (
+            reservaCache.dados &&
+            reservaCache.dados.situacoes &&
+            Array.isArray(reservaCache.dados.situacoes) &&
+            (agora - reservaCache.timestamp) < reservaCache.expiracaoMs
+        ) {
+            console.log('Retornando dados de workflow de reservas do cache');
+            return reservaCache.dados;
+        }
+
+        // 🚀 Busca o workflow de reservas (troca repasses → reservas)
+        const { data } = await apiCv.get('/v1/cv/workflow/reservas');
+
+        // ⚙️ Trata caso o retorno venha em objeto { situacoes, grupos }
+        let situacoes = [];
+        if (Array.isArray(data)) {
+            situacoes = data;
+        } else if (Array.isArray(data.situacoes)) {
+            situacoes = data.situacoes;
+        } else {
+            throw new Error('Formato inesperado no retorno de /workflow/reservas');
+        }
+
+        // Ordena por ordem crescente
+        const dadosOrdenados = situacoes.sort((a, b) => a.ordem - b.ordem);
+
+        // Monta grupos conforme estrutura padrão
+        const grupos = {};
+        dadosOrdenados.forEach(item => {
+            if (item.grupos?.length > 0) {
+                item.grupos.forEach(grupo => {
+                    if (!grupos[grupo.idgrupo]) {
+                        grupos[grupo.idgrupo] = {
+                            id: grupo.idgrupo,
+                            nome: grupo.nome,
+                            cor: item.cor_bg,
+                            cor_texto: item.cor_nome,
+                            situacoes: []
+                        };
+                    }
+                    grupos[grupo.idgrupo].situacoes.push({
+                        id: item.idsituacao,
+                        nome: item.nome
+                    });
+                });
+            }
+        });
+
+        const gruposArray = Object.values(grupos);
+
+        // Atualiza cache
+        reservaCache = {
+            dados: {
+                situacoes: dadosOrdenados,
+                grupos: gruposArray
+            },
+            timestamp: agora,
+            expiracaoMs: 3600000
+        };
+
+        return reservaCache.dados;
+    } catch (error) {
+        console.error('Erro ao buscar workflow de reservas:', error);
+        throw error;
     }
 };

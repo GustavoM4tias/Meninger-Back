@@ -2,9 +2,9 @@ import {
   getRepasseWorkflow,
   contarRepassesPorSituacao,
   contarRepassesPorGrupo
-} from '../../services/repasseWorkflowService.js';
+} from '../../services/cv/repasseWorkflowService.js';
 
-import { getEmpreendimentos } from '../../services/empreendimentoService.js';
+import { getEmpreendimentos } from '../../services/cv/empreendimentoService.js';
 import apiCv from '../../lib/apiCv.js';
 
 export const fetchRepasses = async (req, res) => {
