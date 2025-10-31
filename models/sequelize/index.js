@@ -22,6 +22,21 @@ import ReservaDefine from './cv/reserva.js';
 import SupportMessageDefine from './supportMessage.js';
 import SupportTicketDefine from './supportTicket.js';
 
+import EnterpriseCityDefine from './enterpriseCity.js';
+
+import SalesProjectionDefine     from './projection/salesProjection.js';
+import SalesProjectionLineDefine from './projection/salesProjectionLine.js';
+import SalesProjectionLogDefine  from './projection/salesProjectionLog.js';
+import SalesProjectionEnterpriseDefine from './projection/salesProjectionEnterprise.js';
+
+// ... imports existentes
+import CvEnterpriseDefine       from './cv/enterprise.js';
+import CvEnterpriseStageDefine  from './cv/enterpriseStage.js';
+import CvEnterpriseBlockDefine  from './cv/enterpriseBlock.js';
+import CvEnterpriseUnitDefine   from './cv/enterpriseUnit.js';
+import CvEnterpriseMaterialDefine from './cv/enterpriseMaterial.js';
+import CvEnterprisePlanDefine   from './cv/enterprisePlan.js';
+
 const env = process.env.NODE_ENV || 'development';
 
 const cfg = config[env];
@@ -50,6 +65,22 @@ db.Reserva = ReservaDefine(sequelize, DataTypes);
 // 👇 REGISTRE AQUI OS NOVOS MODELOS
 db.SupportTicket = SupportTicketDefine(sequelize, DataTypes);
 db.SupportMessage = SupportMessageDefine(sequelize, DataTypes);
+
+db.EnterpriseCity = EnterpriseCityDefine(sequelize, DataTypes);
+
+
+db.SalesProjection            = SalesProjectionDefine(sequelize, DataTypes);
+db.SalesProjectionLine        = SalesProjectionLineDefine(sequelize, DataTypes);
+db.SalesProjectionLog         = SalesProjectionLogDefine(sequelize, DataTypes);
+db.SalesProjectionEnterprise  = SalesProjectionEnterpriseDefine(sequelize, DataTypes);
+
+// ... modelos já existentes
+db.CvEnterprise        = CvEnterpriseDefine(sequelize, DataTypes);
+db.CvEnterpriseStage   = CvEnterpriseStageDefine(sequelize, DataTypes);
+db.CvEnterpriseBlock   = CvEnterpriseBlockDefine(sequelize, DataTypes);
+db.CvEnterpriseUnit    = CvEnterpriseUnitDefine(sequelize, DataTypes);
+db.CvEnterpriseMaterial= CvEnterpriseMaterialDefine(sequelize, DataTypes);
+db.CvEnterprisePlan    = CvEnterprisePlanDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

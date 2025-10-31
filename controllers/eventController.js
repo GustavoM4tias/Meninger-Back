@@ -107,18 +107,54 @@ export const updateEvent = async (req, res) => {
     } catch (error) {
         responseHandler.error(res, error.message);
     }
-};
+}; 
 
 export const getEvents = async (req, res) => {
-    try {
-        const events = await Event.findAll({
-            order: [['event_date', 'ASC']],
-            attributes: ['id', 'title', 'description', 'post_date', 'event_date', 'tags', 'images', 'address', 'created_by', 'organizers', 'notify_to']
-        });
-        responseHandler.success(res, { events });
-    } catch (error) {
-        responseHandler.error(res, error);
+  try {
+    // 🔒 precisa do user para sabermos a cidade
+    if (!req.user) {
+      return res.status(401).json({ error: 'Usuário não autenticado.' });
     }
+
+    const isAdmin = req.user.role === 'admin';
+    const userCity = req.user.city || '';
+
+    // Base do findAll
+    const base = {
+      order: [['event_date', 'ASC']],
+      attributes: [
+        'id', 'title', 'description', 'post_date', 'event_date',
+        'tags', 'images', 'address', 'created_by', 'organizers', 'notify_to'
+      ],
+    };
+
+    // Admin -> vê tudo
+    if (isAdmin) {
+      const events = await Event.findAll(base);
+      return responseHandler.success(res, { events });
+    }
+
+    // Não-admin -> precisa de cidade no token
+    if (!userCity?.trim()) {
+      return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+    }
+
+    // 🎯 Filtro por address.city ILIKE %userCity%
+    // Sequelize com Postgres permite json path com Sequelize.json('address.city')
+    const whereCity = db.Sequelize.where(
+      db.Sequelize.json('address.city'),
+      { [Op.iLike]: `%${userCity}%` }
+    );
+
+    const events = await Event.findAll({
+      ...base,
+      where: whereCity,
+    });
+
+    return responseHandler.success(res, { events });
+  } catch (error) {
+    return responseHandler.error(res, error);
+  }
 };
 
 export const deleteEvent = async (req, res) => {
