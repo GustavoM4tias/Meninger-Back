@@ -3,7 +3,7 @@ import {
   getEmpreendimentos,
   getEmpreendimentoDetalhes,
   getAllBuildings
-} from '../../services/empreendimentoService.js';
+} from '../../services/cv/empreendimentoService.js';
 
 export const fetchEmpreendimentos = async (req, res) => {
   try {
