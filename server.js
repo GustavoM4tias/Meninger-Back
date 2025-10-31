@@ -30,6 +30,8 @@ import supportRoutes from './routes/supportRoutes.js';
 
 import projectionRoutes from './routes/projectionsRoutes.js';
 
+import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js';
+
 const app = express();
 
 // CORS precisa estar no topo, ANTES de qualquer rota
@@ -87,6 +89,10 @@ db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar da
     }
     if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') {  // 👈 NOVO
       landScheduler.start();
+    }
+    // ...
+    if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') {
+      enterpriseCvScheduler.start();
     }
 
     app.listen(PORT, () => {
