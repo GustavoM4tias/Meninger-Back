@@ -14,6 +14,8 @@ import ReservasSyncController from '../controllers/cv/reservasSyncController.js'
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb } from '../controllers/cv/empreendimentosDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
+import { fetchWorkflows, fetchWorkflowsRepasse, fetchWorkflowsReserva } from '../controllers/cv/workflow.js';
+
 const router = express.Router();
 const cvLeads = new bulkDataController();
 const cvRepasses = new RepassesSyncController();
@@ -48,6 +50,10 @@ router.post('/empreendimentos/sync/delta', authenticate, cvEnterprises.deltaSync
 
 router.get('/empreendimentos',    authenticate, fetchBuildingsFromDb);
 router.get('/empreendimento/:id', authenticate, fetchBuildingByIdFromDb);
+
+router.get('/workflows', fetchWorkflows);
+router.get('/workflows/repasse', fetchWorkflowsRepasse);
+router.get('/workflows/reserva', fetchWorkflowsReserva);
 
 
 export default router;
