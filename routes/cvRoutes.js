@@ -14,7 +14,9 @@ import ReservasSyncController from '../controllers/cv/reservasSyncController.js'
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb } from '../controllers/cv/empreendimentosDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
-import { fetchWorkflowGroups, createOrUpdateWorkflowGroup, removeWorkflowGroup } from '../controllers/cv/workflowGroups.js';
+import { fetchWorkflowGroups, createOrUpdateWorkflowGroup, removeWorkflowGroup, fetchListSegments  } from '../controllers/cv/workflowGroups.js';
+// routes/cvRoutes.js
+import { fetchGroupProjections } from '../controllers/cv/workflowGroupQueries.js';
 
 const router = express.Router();
 const cvLeads = new bulkDataController();
@@ -57,7 +59,12 @@ router.get('/empreendimentos', authenticate, fetchBuildingsFromDb);
 router.get('/empreendimento/:id', authenticate, fetchBuildingByIdFromDb);
 
 router.get('/workflow-grupos', authenticate, fetchWorkflowGroups);
+// ?tipo=repasses
 router.post('/workflow-grupos', authenticate, createOrUpdateWorkflowGroup);
 router.delete('/workflow-grupos/:id', authenticate, removeWorkflowGroup);
+router.get('/workflow-grupos/segments', fetchListSegments);
+// ...
+router.get('/workflow-grupos/:id/projecoes', authenticate, fetchGroupProjections);
+
 
 export default router;

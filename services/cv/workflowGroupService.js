@@ -7,7 +7,7 @@ import { getRepasseWorkflow } from './repasseWorkflowService.js';
 const { CvWorkflowGroup } = db;
 
 /** Mantém igual, só inclui segmentos no retorno */
-export async function syncWorkflowGroups(tipo = 'reservas') {
+export async function syncWorkflowGroups(tipo) {
     const workflow = tipo === 'repasses' ? await getRepasseWorkflow() : await getReservaWorkflow();
 
     const situacoesAtuais = workflow.situacoes;
@@ -61,4 +61,18 @@ export async function upsertWorkflowGroup({ tipo, nome, descricao, situacoes_ids
 
 export async function deleteWorkflowGroup(idgroup) {
     await CvWorkflowGroup.destroy({ where: { idgroup } });
+}
+
+/** Service puro: retorna lista de segmentos (array de string) */
+export async function getDistinctSegments() {
+  const rows = await db.sequelize.query(
+    `
+    SELECT DISTINCT segmento_nome
+    FROM cv_enterprises
+    WHERE segmento_nome IS NOT NULL AND TRIM(segmento_nome) <> ''
+    ORDER BY segmento_nome;
+    `,
+    { type: db.Sequelize.QueryTypes.SELECT }
+  );
+  return rows.map(r => r.segmento_nome);
 }
