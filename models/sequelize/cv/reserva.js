@@ -1,59 +1,53 @@
 // src/models/sequelize/cv/Reserva.js
 export default (sequelize, DataTypes) => {
     const Reserva = sequelize.define('Reserva', {
-        // PK (vem do CVCRM)
         idreserva: { type: DataTypes.INTEGER, primaryKey: true },
 
-        // Espelho do status ATUAL (copiado do Repasse relacionado)
-        status_reserva: { type: DataTypes.STRING(100) },
-        status_repasse: { type: DataTypes.STRING(100) },
+        // Campos que MV pode usar
+        status_reserva: { type: DataTypes.STRING },   // sem length
+        status_repasse: { type: DataTypes.STRING },   // sem length
         idsituacao_repasse: { type: DataTypes.INTEGER },
         data_status_repasse: { type: DataTypes.DATE },
 
-        // Denormalizações úteis p/ filtros/relatórios
-        documento: { type: DataTypes.STRING(20) },           // titular.documento
-        empreendimento: { type: DataTypes.STRING(255) },     // unidade.empreendimento
-        etapa: { type: DataTypes.STRING(100) },              // unidade.etapa
-        bloco: { type: DataTypes.STRING(100) },              // unidade.bloco
-        unidade: { type: DataTypes.STRING(255) },            // unidade.unidade (rótulo)
+        // Denormalizações (use STRING sem length p/ evitar ALTER desnecessário)
+        documento: { type: DataTypes.STRING },
+        empreendimento: { type: DataTypes.STRING },
+        etapa: { type: DataTypes.STRING },
+        bloco: { type: DataTypes.STRING },
+        unidade: { type: DataTypes.STRING },
 
-        // Blocos da reserva (JSONB)
-        situacao: { type: DataTypes.JSONB },                 // obj
-        imobiliaria: { type: DataTypes.JSONB },              // obj
-        unidade_json: { type: DataTypes.JSONB },             // obj (detalhes completos)
-        titular: { type: DataTypes.JSONB },                  // obj
-        corretor: { type: DataTypes.JSONB },                 // obj
-        condicoes: { type: DataTypes.JSONB },                // obj (inclui series)
-        leads_associados: { type: DataTypes.JSONB },         // array
+        // JSONB
+        situacao: { type: DataTypes.JSONB }, // <– CRÍTICO: JSONB
+        imobiliaria: { type: DataTypes.JSONB },
+        unidade_json: { type: DataTypes.JSONB },
+        titular: { type: DataTypes.JSONB },
+        corretor: { type: DataTypes.JSONB },
+        condicoes: { type: DataTypes.JSONB },
+        leads_associados: { type: DataTypes.JSONB },
 
-        // Campos “flat” do corpo de reserva (opcionais)
+        // Demais campos
         idproposta_cv: { type: DataTypes.INTEGER },
-        idproposta_int: { type: DataTypes.STRING(50) },
+        idproposta_int: { type: DataTypes.STRING },
         vendida: { type: DataTypes.STRING(1) },
         observacoes: { type: DataTypes.TEXT },
-        data_reserva: { type: DataTypes.DATE },              // campo "data"
+        data_reserva: { type: DataTypes.DATE },
         data_contrato: { type: DataTypes.DATE },
         data_venda: { type: DataTypes.DATE },
         idtipovenda: { type: DataTypes.INTEGER },
-        tipovenda: { type: DataTypes.STRING(100) },
+        tipovenda: { type: DataTypes.STRING },
         idprecadastro: { type: DataTypes.INTEGER },
         ultima_mensagem: { type: DataTypes.TEXT },
         idtime: { type: DataTypes.INTEGER },
+        contratos: { type: DataTypes.JSONB },
+        empresa_correspondente: { type: DataTypes.JSONB },
 
-        contratos: { type: DataTypes.JSONB },                // array
-        empresa_correspondente: { type: DataTypes.JSONB },   // obj
+        documentos: { type: DataTypes.JSONB, defaultValue: {} },
+        erp_sienge: { type: DataTypes.JSONB, defaultValue: {} },
+        campanhas: { type: DataTypes.JSONB, defaultValue: [] },
+        mensagens: { type: DataTypes.JSONB, defaultValue: [] },
 
-        // Extras vindos de outras rotas
-        documentos: { type: DataTypes.JSONB, defaultValue: {} },     // /documentos
-        erp_sienge: { type: DataTypes.JSONB, defaultValue: {} },      // /erp/sienge
-        campanhas: { type: DataTypes.JSONB, defaultValue: [] },       // /campanhas
-        mensagens: { type: DataTypes.JSONB, defaultValue: [] },       // /mensagens (array plano)
-
-        // Histórico do status (status[0] = atual)
-        // item: { status_reserva, status_repasse, idsituacao_repasse, data_status_repasse, captured_at }
         status: { type: DataTypes.JSONB, defaultValue: [] },
 
-        // Metadados
         first_seen_at: { type: DataTypes.DATE },
         last_seen_at: { type: DataTypes.DATE },
     }, {
