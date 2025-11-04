@@ -4,7 +4,6 @@ import express from 'express';
 import dotenv from 'dotenv';
 dotenv.config();
 import cors from 'cors';
-import authenticate from './middlewares/authMiddleware.js';
 import db from './models/sequelize/index.js';
 import authRoutes from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
