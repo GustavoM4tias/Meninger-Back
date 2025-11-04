@@ -57,7 +57,7 @@ app.use('/api/favorite', favoriteRoutes);
 app.use('/api/cv', cvRoutes);
 app.use('/api/sienge', siengeRoutes); // Sienge api, db and cron
 app.use('/api/microsoft', microsoftAuthRoutes);// Microsoft for archives
-app.use('/api/ai', authenticate, validatorAI);// chatbot ai
+app.use('/api/ai', validatorAI);// chatbot ai
 app.use('/api/contracts', contractAutomationRoutes);
 app.use('/api/external', externalRoutes);
 
