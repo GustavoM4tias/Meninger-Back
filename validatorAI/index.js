@@ -3,6 +3,7 @@ import express from 'express';
 import multer from 'multer';
 import cors from 'cors';
 import helmet from 'helmet';
+import authenticate from '../middlewares/authMiddleware.js';
 import { documentRoutes } from './src/routes/documentRoutes.js';
 import { chatRoutes } from './src/routes/chatRoutes.js';
 import statsRoutes from './src/routes/statsRoutes.js';
@@ -29,7 +30,7 @@ app.use(express.json());
 
 // Rotas
 app.use('/validator', documentRoutes(upload));
-app.use('/validator/history', historyRoutes);
+app.use('/validator/history', authenticate, historyRoutes);
 app.use('/chat', chatRoutes);
 app.use('/token', statsRoutes);
 
