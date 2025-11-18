@@ -10,7 +10,10 @@ import TokenUsageDefine from './tokenUsage.js';
 import ValidationHistoryDefine from './validationHistory.js';
 
 // Singe imports
-import SalesContractDefine         from './sienge/salesContract.js';
+import SalesContractDefine         from './sienge/salesContract.js'; 
+import SiengeBillDefine from './sienge/bill.js';
+
+import MktExpenseDefine from './mktExpense.js';
 
 // perto dos outros imports
 import LeadDefine from './cv/lead.js';
@@ -55,7 +58,10 @@ db.TokenUsage = TokenUsageDefine(sequelize, DataTypes);
 db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
 
 // sienge db 
-db.SalesContract         = SalesContractDefine(sequelize, DataTypes);
+db.SalesContract          = SalesContractDefine(sequelize, DataTypes);
+db.SiengeBill = SiengeBillDefine(sequelize, DataTypes);
+
+db.MktExpense = MktExpenseDefine(sequelize, DataTypes);
 
 // ... após definir outros modelos:
 db.Lead = LeadDefine(sequelize, DataTypes);
@@ -69,7 +75,6 @@ db.SupportTicket = SupportTicketDefine(sequelize, DataTypes);
 db.SupportMessage = SupportMessageDefine(sequelize, DataTypes);
 
 db.EnterpriseCity = EnterpriseCityDefine(sequelize, DataTypes);
-
 
 db.SalesProjection            = SalesProjectionDefine(sequelize, DataTypes);
 db.SalesProjectionLine        = SalesProjectionLineDefine(sequelize, DataTypes);
