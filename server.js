@@ -31,6 +31,8 @@ import projectionRoutes from './routes/projectionsRoutes.js';
 
 import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js'; 
 
+import mktExpensesRoutes from './routes/mktExpenses.js';
+
 const app = express();
 
 // CORS precisa estar no topo, ANTES de qualquer rota
@@ -63,6 +65,8 @@ app.use('/api/external', externalRoutes);
 app.use('/api/support', supportRoutes);
 
 app.use('/api/projections', projectionRoutes);
+
+app.use('/api/mkt', mktExpensesRoutes);
 
 const PORT = process.env.PORT || 5000;
 
