@@ -16,7 +16,7 @@ router.post('/contracts/cache/clear', authenticate, clearCache);
 router.post('/contracts/sync/full',  bulk.fullSync.bind(bulk));
 router.post('/contracts/sync/delta', bulk.deltaSync.bind(bulk));
 
-router.post('/bills/sync', ctrl.sync);
-router.get('/bills',       ctrl.list);
+router.post('/bills/sync', authenticate, ctrl.sync);
+router.get('/bills', authenticate, ctrl.list);
 
 export default router;
