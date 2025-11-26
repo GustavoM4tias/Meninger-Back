@@ -49,7 +49,7 @@ export default class BillsController {
                 const sql = `
           SELECT 1
           FROM enterprise_cities ec
-          WHERE ec.source = 'erp'
+          WHERE ec.erp_id IS NOT NULL
             AND ec.erp_id::int = :costCenterId
             AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
           LIMIT 1;
@@ -137,7 +137,7 @@ export default class BillsController {
                 const sql = `
           SELECT 1
           FROM enterprise_cities ec
-          WHERE ec.source = 'erp'
+          WHERE ec.erp_id IS NOT NULL
             AND ec.erp_id::int = :costCenterId
             AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
           LIMIT 1;
