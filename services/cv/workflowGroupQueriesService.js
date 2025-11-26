@@ -1,16 +1,24 @@
 // services/cv/workflowGroupQueriesService.js
 import db from '../../models/sequelize/index.js';
 
-export async function getGroupProjections({ idgroup }) {
+export async function getGroupProjections({ idgroup, isAdmin, userCity }) {
   const group = await db.CvWorkflowGroup.findByPk(idgroup);
   if (!group) throw new Error('Grupo não encontrado');
 
   const tipo = group.tipo; // 'reservas' | 'repasses'
-  const situacoes = Array.isArray(group.situacoes_ids) ? group.situacoes_ids.filter(Number.isInteger) : [];
-  const segmentos = Array.isArray(group.segmentos) ? group.segmentos.filter(s => typeof s === 'string' && s.trim().length) : [];
+  const situacoes = Array.isArray(group.situacoes_ids)
+    ? group.situacoes_ids.filter(Number.isInteger)
+    : [];
+  const segmentos = Array.isArray(group.segmentos)
+    ? group.segmentos.filter(s => typeof s === 'string' && s.trim().length)
+    : [];
 
   if (!situacoes.length) {
-    return { count: 0, results: [], meta: { tipo, segmentos, situacoes } };
+    return {
+      count: 0,
+      results: [],
+      meta: { tipo, segmentos, situacoes, city: isAdmin ? null : userCity }
+    };
   }
 
   const sql = `
@@ -18,16 +26,16 @@ export async function getGroupProjections({ idgroup }) {
     base_reservas AS (
       ${tipo === 'repasses'
       ? `
-            SELECT rr.*
-            FROM repasses rp
-            JOIN reservas rr ON rr.idreserva = rp.idreserva
-            WHERE rp.idsituacao_repasse IN (:ids)
-          `
+          SELECT rr.*
+          FROM repasses rp
+          JOIN reservas rr ON rr.idreserva = rp.idreserva
+          WHERE rp.idsituacao_repasse IN (:ids)
+        `
       : `
-            SELECT r.*
-            FROM reservas r
-            WHERE (r.situacao->>'idsituacao')::int IN (:ids)
-          `
+          SELECT r.*
+          FROM reservas r
+          WHERE (r.situacao->>'idsituacao')::int IN (:ids)
+        `
     }
     ),
 
@@ -40,18 +48,37 @@ export async function getGroupProjections({ idgroup }) {
     ),
 
     reservas_segmentadas AS (
-      SELECT re.*, ce.segmento_nome
+      SELECT
+        re.*,
+        ce.segmento_nome,
+        ec_city.city_resolved
       FROM reservas_enriquecidas re
+      /* segmento (quando configurado no grupo) */
       LEFT JOIN cv_enterprises ce
         ON ce.idempreendimento_int::int = re.idemp_int
-      ${segmentos.length ? `WHERE ce.segmento_nome IN (:segments)` : ``}
+      /* cidade do ERP via enterprise_cities (mesmo padrão dos outros endpoints) */
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved
+        FROM enterprise_cities ec
+        WHERE ec.erp_id IS NOT NULL
+          AND ec.erp_id = re.idemp_int::text
+        ORDER BY ec.updated_at DESC
+        LIMIT 1
+      ) ec_city ON TRUE
+      WHERE 1 = 1
+      ${segmentos.length ? `AND ce.segmento_nome IN (:segments)` : ``}
+      ${isAdmin ? '' : `
+        AND ec_city.city_resolved IS NOT NULL
+        AND unaccent(upper(regexp_replace(ec_city.city_resolved, '[^A-Z0-9]+',' ','g'))) =
+            unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
+      `}
     ),
 
     /* 4) Excluir SOMENTE se:
           - enterprise_id coincide
           - unidade (units.name) coincide
           - situation = 'Emitido'
-          - financial_institution_date IS NOT NULL  <-- NOVO
+          - financial_institution_date IS NOT NULL
     */
     reservas_filtradas AS (
       SELECT rs.*
@@ -67,7 +94,7 @@ export async function getGroupProjections({ idgroup }) {
           c.enterprise_id = rs.idemp_int
           AND c.situation = 'Emitido'
           AND cu.unit_name = rs.unidade_nome
-          AND c.financial_institution_date IS NOT NULL   -- <=== requisito adicional
+          AND c.financial_institution_date IS NOT NULL
       )
     ),
 
@@ -94,17 +121,23 @@ export async function getGroupProjections({ idgroup }) {
       rf.idreserva DESC
   `;
 
+  const replacements = {
+    ids: situacoes,
+    segments: segmentos.length ? segmentos : undefined,
+  };
+
+  if (!isAdmin) {
+    replacements.userCity = userCity;
+  }
+
   const results = await db.sequelize.query(sql, {
-    replacements: {
-      ids: situacoes,
-      segments: segmentos.length ? segmentos : undefined,
-    },
+    replacements,
     type: db.Sequelize.QueryTypes.SELECT,
   });
 
   return {
     count: results.length,
     results,
-    meta: { tipo, segmentos, situacoes }
+    meta: { tipo, segmentos, situacoes, city: isAdmin ? null : userCity }
   };
 }
