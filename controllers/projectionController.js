@@ -51,7 +51,7 @@ export async function listProjections(req, res) {
       WITH allowed AS (
         SELECT DISTINCT ec.erp_id
         FROM enterprise_cities ec
-        WHERE ec.source = 'erp'
+        WHERE ec.erp_id IS NOT NULL
           AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
       ),
       visible_projections AS (
@@ -270,7 +270,7 @@ export async function getProjectionDetail(req, res) {
       WITH allowed AS (
         SELECT DISTINCT ec.erp_id
         FROM enterprise_cities ec
-        WHERE ec.source = 'erp'
+        WHERE ec.erp_id IS NOT NULL
           AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
       )
       SELECT
@@ -287,7 +287,7 @@ export async function getProjectionDetail(req, res) {
       WITH allowed AS (
         SELECT DISTINCT ec.erp_id
         FROM enterprise_cities ec
-        WHERE ec.source = 'erp'
+        WHERE ec.erp_id IS NOT NULL
           AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
       )
       SELECT
