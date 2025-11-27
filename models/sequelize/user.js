@@ -7,15 +7,15 @@ export default (sequelize, DataTypes) => {
     password: { type: DataTypes.STRING(255), allowNull: false },
     email: { type: DataTypes.STRING(100), allowNull: false, unique: true },
     position: {
-      type: DataTypes.ENUM('Diretor', 'Gerente', 'Financeiro', 'Marketing', 'Comercial'),
-      allowNull: false
+      type: DataTypes.STRING(100),
+      allowNull: false,
     },
     city: {
-      type: DataTypes.ENUM('Marília', 'Bauru', 'Jacarezinho', 'Guaratinguetá', 'Bady Bassitt', 'Dourados', 'Cuiabá'), // ajuste as cidades válidas
-      allowNull: false
+      type: DataTypes.STRING(100),
+      allowNull: false,
     },
     role: {
-      type: DataTypes.ENUM('admin', 'manager', 'user'), // ajuste os cargos aqui
+      type: DataTypes.ENUM('admin', 'user'), // ajuste os cargos aqui
       allowNull: false,
       defaultValue: 'user'
     },
