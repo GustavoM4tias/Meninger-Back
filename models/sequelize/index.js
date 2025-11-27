@@ -3,6 +3,8 @@ import { Sequelize, DataTypes } from 'sequelize';
 import dotenv from 'dotenv';
 dotenv.config();
 import UserDefine from './user.js';
+import PositionDefine from './position.js';
+import UserCityDefine from './userCity.js';
 import FavoriteDefine from './favorite.js';
 import EventDefine from './event.js';
 import config from '../../config/config.cjs';
@@ -52,6 +54,8 @@ const sequelize = new Sequelize(cfg.database, cfg.username, cfg.password, {
 
 const db = {};
 db.User     = UserDefine(sequelize, DataTypes);
+db.Position = PositionDefine(sequelize, DataTypes);
+db.UserCity = UserCityDefine(sequelize, DataTypes);
 db.Favorite = FavoriteDefine(sequelize, DataTypes);
 db.Event    = EventDefine(sequelize, DataTypes);
 db.TokenUsage = TokenUsageDefine(sequelize, DataTypes);

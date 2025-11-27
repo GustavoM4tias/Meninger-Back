@@ -5,29 +5,52 @@ import db from '../models/sequelize/index.js';
 import jwtConfig from '../config/jwtConfig.js';
 import responseHandler from '../utils/responseHandler.js';
 
-const { User } = db;
+const { User, Position, UserCity } = db;
 
 export const registerUser = async (req, res) => {
   const { username, password, email, position, city, birth_date } = req.body;
   if (!username || !password || !email || !position || !city || !birth_date) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
+
   try {
     const existingUser = await User.findOne({ where: { username } });
     if (existingUser) {
       return responseHandler.error(res, 'Nome já existente');
     }
 
-    const user = await User.create({ username, password, email, position, city, birth_date });
+    // 🔹 valida se cargo e cidade existem e estão ativos
+    const [positionRecord, cityRecord] = await Promise.all([
+      Position.findOne({ where: { name: position, active: true } }),
+      UserCity.findOne({ where: { name: city, active: true } }),
+    ]);
+
+    if (!positionRecord) {
+      return responseHandler.error(res, 'Cargo inválido ou inativo');
+    }
+    if (!cityRecord) {
+      return responseHandler.error(res, 'Cidade inválida ou inativa');
+    }
+
+    const user = await User.create({
+      username,
+      password,
+      email,
+      position: positionRecord.name,
+      city: cityRecord.name,
+      birth_date,
+    });
+
     const token = jwt.sign({
       id: user.id,
       position: user.position,
       city: user.city,
-      role: user.role
+      role: user.role,
     }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
 
     return responseHandler.success(res, { token });
   } catch (error) {
+    console.error('Erro no registerUser:', error);
     return responseHandler.error(res, error);
   }
 };
@@ -239,8 +262,29 @@ export const updateMe = async (req, res) => {
   if (!username || !email || !position || !city || status === undefined || !birth_date || face_enabled === undefined) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
+
   try {
-    const [affectedRows] = await User.update({ username, email, position, city, status, birth_date, face_enabled }, { where: { id: req.user.id } });
+    const [positionRecord, cityRecord] = await Promise.all([
+      Position.findOne({ where: { name: position, active: true } }),
+      UserCity.findOne({ where: { name: city, active: true } }),
+    ]);
+
+    if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
+    if (!cityRecord)    return responseHandler.error(res, 'Cidade inválida ou inativa');
+
+    const [affectedRows] = await User.update(
+      {
+        username,
+        email,
+        position: positionRecord.name,
+        city: cityRecord.name,
+        status,
+        birth_date,
+        face_enabled,
+      },
+      { where: { id: req.user.id } }
+    );
+
     if (affectedRows === 0) {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
@@ -249,7 +293,7 @@ export const updateMe = async (req, res) => {
     return responseHandler.error(res, error);
   }
 };
-// authController.updateUser – relaxe a validação:
+
 export const updateUser = async (req, res) => {
   const { id, username, email, position, role, manager_id, city, status, birth_date } = req.body;
 
@@ -257,10 +301,26 @@ export const updateUser = async (req, res) => {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
 
-  const payload = { username, email, position, manager_id, city, status, birth_date };
-  if (role !== undefined) payload.role = role;
-
   try {
+    const [positionRecord, cityRecord] = await Promise.all([
+      Position.findOne({ where: { name: position, active: true } }),
+      UserCity.findOne({ where: { name: city, active: true } }),
+    ]);
+
+    if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
+    if (!cityRecord)    return responseHandler.error(res, 'Cidade inválida ou inativa');
+
+    const payload = {
+      username,
+      email,
+      position: positionRecord.name,
+      manager_id,
+      city: cityRecord.name,
+      status,
+      birth_date,
+    };
+    if (role !== undefined) payload.role = role; // admin/user
+
     const [affectedRows] = await User.update(payload, { where: { id } });
     if (affectedRows === 0) return responseHandler.error(res, 'Usuário não encontrado');
     return responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
