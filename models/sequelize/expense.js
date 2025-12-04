@@ -1,38 +1,42 @@
-// models/mkt/mktExpense.js
+// models/expense.js
 export default (sequelize, DataTypes) => {
-    const MktExpense = sequelize.define('MktExpense', {
+    const Expense = sequelize.define('Expense', {
         id: {
             type: DataTypes.INTEGER,
             primaryKey: true,
             autoIncrement: true,
         },
-
         cost_center_id: {
             type: DataTypes.INTEGER,
             allowNull: false,
         },
-
-        // mês de competência (sempre YYYY-MM-01)
+        cost_center_name: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
         competence_month: {
             type: DataTypes.DATEONLY,
             allowNull: false,
         },
-
-        // opcionalmente ligado a um título do Sienge
         bill_id: {
             type: DataTypes.INTEGER,
             allowNull: true,
         },
-
         description: DataTypes.STRING,
         amount: {
             type: DataTypes.DECIMAL(15, 2),
             allowNull: false,
         },
-
-        // pode ter depois: categoria, tipo, usuário etc
+        department_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+        },
+        department_name: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
     }, {
-        tableName: 'mkt_expenses',
+        tableName: 'expenses',
         underscored: true,
         indexes: [
             { fields: ['cost_center_id', 'competence_month'] },
@@ -40,12 +44,12 @@ export default (sequelize, DataTypes) => {
         ]
     });
 
-    MktExpense.associate = models => {
-        MktExpense.belongsTo(models.SiengeBill, {
+    Expense.associate = models => {
+        Expense.belongsTo(models.SiengeBill, {
             foreignKey: 'bill_id',
             as: 'bill'
         });
     };
 
-    return MktExpense;
+    return Expense;
 };
