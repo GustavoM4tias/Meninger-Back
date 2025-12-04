@@ -14,6 +14,7 @@ import validatorAI from './validatorAI/index.js';
 import contractAutomationRoutes from './routes/contractAutomationRoutes.js';
 import microsoftAuthRoutes from './routes/microsoftAuthRoutes.js';
 import externalRoutes from './routes/externalRoutes.js'
+import expensesRoutes from './routes/expensesRoutes.js';
 
 // cron 
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -31,7 +32,6 @@ import projectionRoutes from './routes/projectionsRoutes.js';
 
 import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js'; 
 
-import mktExpensesRoutes from './routes/mktExpenses.js';
 
 const app = express();
 
@@ -66,7 +66,7 @@ app.use('/api/support', supportRoutes);
 
 app.use('/api/projections', projectionRoutes);
 
-app.use('/api/mkt', mktExpensesRoutes);
+app.use('/api/expenses', expensesRoutes);
 
 const PORT = process.env.PORT || 5000;
 
