@@ -127,7 +127,7 @@ export default class BillsService {
             return bill;
         }
 
-        console.log(`🏷️ [API] Buscando departments-cost do bill ${bill.id}`);
+        // console.log(`🏷️ [API] Buscando departments-cost do bill ${bill.id}`);
 
         // exemplo: /v1/bills/466257/departments-cost
         const relativePath = depLink.href.replace('https://api.sienge.com.br/menin/public/api', '');

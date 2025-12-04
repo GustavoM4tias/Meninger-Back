@@ -320,36 +320,43 @@ export async function listEnterprises(req, res) {
   try {
     const isAdmin = req.user?.role === 'admin';
 
-    // Admin: usa cache (id, name)
+    // 🔁 Cache só para admin
     if (isAdmin && _enterprisesCache && Date.now() - _enterprisesCacheTs < CACHE_TTL) {
       return res.json({ count: _enterprisesCache.length, results: _enterprisesCache });
     }
 
     if (isAdmin) {
-      // carrega lista base (sem filtro de cidade) e cacheia
-      const rows = await db.SalesContract.findAll({
-        attributes: [
-          ['enterprise_id', 'id'],
-          ['enterprise_name', 'name'],
-        ],
-        group: ['enterprise_id', 'enterprise_name'],
-        order: [['enterprise_name', 'ASC']],
+      // ADMIN -> pega 1 linha por enterprise_id, usando o contrato mais recente
+      const sqlAdmin = `
+        SELECT DISTINCT ON (sc.enterprise_id)
+          sc.enterprise_id AS id,
+          sc.enterprise_name AS name
+        FROM contracts sc
+        ORDER BY
+          sc.enterprise_id,
+          sc.financial_institution_date DESC NULLS LAST,
+          sc.id DESC;
+      `;
+
+      const rows = await db.sequelize.query(sqlAdmin, {
+        type: db.Sequelize.QueryTypes.SELECT,
       });
 
-      const results = rows.map((e) => ({ id: e.get('id'), name: e.get('name') }));
+      const results = rows.map(r => ({ id: r.id, name: r.name }));
       _enterprisesCache = results;
       _enterprisesCacheTs = Date.now();
+
       return res.json({ count: results.length, results });
     }
 
-    // Não-admin: traz só os empreendimentos da cidade do usuário (ERP-only), direto no SQL
+    // 🔒 Não-admin: mesma lógica, mas com filtro por cidade
     const userCity = req.user?.city || '';
     if (!userCity.trim()) {
       return res.status(403).json({ error: 'Cidade do usuário não configurada.' });
     }
 
-    const sql = `
-      SELECT DISTINCT
+    const sqlNonAdmin = `
+      SELECT DISTINCT ON (sc.enterprise_id)
         sc.enterprise_id AS id,
         sc.enterprise_name AS name
       FROM contracts sc
@@ -366,10 +373,13 @@ export async function listEnterprises(req, res) {
         ec_erp.city_resolved IS NOT NULL
         AND unaccent(upper(regexp_replace(ec_erp.city_resolved, '[^A-Z0-9]+',' ','g'))) =
             unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
-      ORDER BY sc.enterprise_name ASC;
+      ORDER BY
+        sc.enterprise_id,
+        sc.financial_institution_date DESC NULLS LAST,
+        sc.id DESC;
     `;
 
-    const filtered = await db.sequelize.query(sql, {
+    const filtered = await db.sequelize.query(sqlNonAdmin, {
       replacements: { userCity },
       type: db.Sequelize.QueryTypes.SELECT,
     });

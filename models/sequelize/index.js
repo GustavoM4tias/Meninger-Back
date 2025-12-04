@@ -15,7 +15,7 @@ import ValidationHistoryDefine from './validationHistory.js';
 import SalesContractDefine         from './sienge/salesContract.js'; 
 import SiengeBillDefine from './sienge/bill.js';
 
-import MktExpenseDefine from './mktExpense.js';
+import ExpenseDefine from './expense.js';
 
 // perto dos outros imports
 import LeadDefine from './cv/lead.js';
@@ -65,7 +65,7 @@ db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
 db.SalesContract          = SalesContractDefine(sequelize, DataTypes);
 db.SiengeBill = SiengeBillDefine(sequelize, DataTypes);
 
-db.MktExpense = MktExpenseDefine(sequelize, DataTypes);
+db.Expense = ExpenseDefine(sequelize, DataTypes);
 
 // ... após definir outros modelos:
 db.Lead = LeadDefine(sequelize, DataTypes);
