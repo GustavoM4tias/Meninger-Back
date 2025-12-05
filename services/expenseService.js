@@ -186,6 +186,7 @@ export default class expenseService {
     };
   }
 
+  // services/expenseService.js
   async listLinksByBill({ billIds }) {
     const rows = await Expense.findAll({
       where: { bill_id: { [Op.in]: billIds } },
@@ -193,6 +194,9 @@ export default class expenseService {
         'bill_id',
         [Sequelize.fn('COUNT', Sequelize.col('id')), 'count'],
         [Sequelize.fn('SUM', Sequelize.col('amount')), 'total'],
+        // 👇 pega uma categoria "representativa" (MAX serve pra isso)
+        [Sequelize.fn('MAX', Sequelize.col('department_category_id')), 'departmentCategoryId'],
+        [Sequelize.fn('MAX', Sequelize.col('department_category_name')), 'departmentCategoryName'],
       ],
       group: ['bill_id'],
     });
@@ -201,6 +205,10 @@ export default class expenseService {
       billId: r.bill_id,
       count: Number(r.get('count') || 0),
       total: Number(r.get('total') || 0),
+      departmentCategoryId: r.get('departmentCategoryId')
+        ? Number(r.get('departmentCategoryId'))
+        : null,
+      departmentCategoryName: r.get('departmentCategoryName') || null,
     }));
   }
 

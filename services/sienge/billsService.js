@@ -8,6 +8,19 @@ const { Op } = Sequelize;
 export default class BillsService {
     constructor() {
         this.limit = 200;
+
+        // 👇 cache simples em memória
+        this.cache = new Map();
+        this.cacheTtlMs = 5 * 60 * 1000; // 5 minutos
+    }
+
+    getCacheKey({ costCenterId, startDate, endDate, debtorId }) {
+        return [
+            costCenterId || '',
+            startDate || '',
+            endDate || '',
+            debtorId || '',
+        ].join('|');
     }
 
     /** Normalização pro nosso modelo local */
@@ -265,6 +278,17 @@ export default class BillsService {
 
         console.log('🌐 [Bills] listFromSiengeWithDepartments()', filters);
 
+        // 👇 CACHE: se já buscamos recentemente com os mesmos filtros, devolve do cache
+        const cacheKey = this.getCacheKey({ costCenterId, startDate, endDate, debtorId });
+        const cached = this.cache.get(cacheKey);
+        const now = Date.now();
+
+        if (cached && now - cached.ts < this.cacheTtlMs) {
+            console.log('💾 [Bills] retornando resultados do cache em memória');
+            // retorna uma cópia pra evitar mutações externas
+            return cached.data.map(b => ({ ...b }));
+        }
+
         // 1) sempre busca no Sienge
         const rawBills = await this.fetchAll(filters);
 
@@ -325,9 +349,16 @@ export default class BillsService {
         const result = ids
             .map(id => byId.get(id))
             .filter(Boolean)
-            .map(b => b.toJSON()); // inclui creditor_json junto com o resto
+            .map(b => b.toJSON());
 
         console.log(`✅ [Bills] listFromSiengeWithDepartments retornando ${result.length} títulos (ordem do Sienge)`);
+
+        // 👇 grava no cache
+        this.cache.set(cacheKey, {
+            ts: Date.now(),
+            data: result,
+        });
+
         return result;
     }
 }
