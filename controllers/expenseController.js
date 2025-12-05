@@ -18,6 +18,9 @@ export default class expenseController {
         description,
         departmentId,
         departmentName,
+        // 👇 NOVO
+        departmentCategoryId,
+        departmentCategoryName,
       } = req.body;
 
       if (!costCenterId || !month || !amount) {
@@ -35,6 +38,9 @@ export default class expenseController {
         description,
         departmentId,
         departmentName,
+        // 👇 NOVO
+        departmentCategoryId,
+        departmentCategoryName,
       });
 
       res.json(exp);
@@ -97,11 +103,19 @@ export default class expenseController {
     }
   };
 
-  // PUT /api/expenses/:id
+  // PUT /api/expenses/:id 
   update = async (req, res) => {
     try {
       const { id } = req.params;
-      const { amount, description, departmentId, departmentName } = req.body;
+      const {
+        amount,
+        description,
+        departmentId,
+        departmentName,
+        // 👇 NOVO
+        departmentCategoryId,
+        departmentCategoryName,
+      } = req.body;
 
       const exp = await this.service.updateExpense({
         id: Number(id),
@@ -109,6 +123,8 @@ export default class expenseController {
         description,
         departmentId,
         departmentName,
+        departmentCategoryId,
+        departmentCategoryName,
       });
 
       res.json(exp);
