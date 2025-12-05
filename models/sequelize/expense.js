@@ -35,6 +35,14 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.STRING,
             allowNull: true,
         },
+        department_category_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+        },
+        department_category_name: {
+            type: DataTypes.STRING(120),
+            allowNull: true,
+        },
     }, {
         tableName: 'expenses',
         underscored: true,
@@ -48,6 +56,10 @@ export default (sequelize, DataTypes) => {
         Expense.belongsTo(models.SiengeBill, {
             foreignKey: 'bill_id',
             as: 'bill'
+        });
+        Expense.belongsTo(models.DepartmentCategory, {
+            foreignKey: 'department_category_id',
+            as: 'departmentCategory',
         });
     };
 

@@ -39,6 +39,13 @@ export default (sequelize, DataTypes) => {
         main_department_id: DataTypes.INTEGER,
         main_department_name: DataTypes.STRING,
 
+        // 🔹 CREDITOR – cache local da chamada /v1/creditors/{id}
+        //     Estrutura no formato retornado pelo Sienge, ex:
+        //     {
+        //       id, name, tradeName, cnpj, address: { ... }, phones: [...], ...
+        //     }
+        creditor_json: DataTypes.JSONB,
+
         // raw links pra reaproveitar se precisar
         links_json: DataTypes.JSONB,
     }, {
@@ -48,6 +55,8 @@ export default (sequelize, DataTypes) => {
             { fields: ['cost_center_id'] },
             { fields: ['debtor_id'] },
             { fields: ['issue_date'] },
+            // se quiser, pode adicionar um índice aqui também:
+            // { fields: ['creditor_id'] },
         ]
     });
 
