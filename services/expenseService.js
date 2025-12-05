@@ -4,7 +4,7 @@ import db from '../models/sequelize/index.js';
 const { Expense, SiengeBill, Sequelize } = db;
 const { Op } = Sequelize;
 
-export default class expenseService { 
+export default class expenseService {
   async addExpense({
     costCenterId,
     costCenterName,
@@ -14,6 +14,8 @@ export default class expenseService {
     description,
     departmentId,
     departmentName,
+    departmentCategoryId,
+    departmentCategoryName,
   }) {
     const [y, m] = competenceMonth.split('-').map(Number);
     const monthStart = new Date(y, m - 1, 1);
@@ -28,6 +30,8 @@ export default class expenseService {
       description,
       department_id: departmentId || null,
       department_name: departmentName || null,
+      department_category_id: departmentCategoryId || null,
+      department_category_name: departmentCategoryName || null,
     });
 
     return expense;
@@ -75,6 +79,11 @@ export default class expenseService {
         description: e.description,
         departmentId: e.department_id,
         departmentName: e.department_name,
+
+        // 👇 NOVO
+        departmentCategoryId: e.department_category_id,
+        departmentCategoryName: e.department_category_name,
+
         costCenterId: e.cost_center_id,
         costCenterName: e.cost_center_name,
         billId: e.bill_id,
@@ -85,6 +94,10 @@ export default class expenseService {
             totalInvoiceAmount: Number(e.bill.total_invoice_amount),
             mainDepartmentName: e.bill.main_department_name,
             notes: e.bill.notes,
+
+            document_identification_id: e.bill.document_identification_id,
+            document_number: e.bill.document_number,
+            creditor_json: e.bill.creditor_json,
           }
           : null,
       })),
@@ -141,6 +154,11 @@ export default class expenseService {
           description: e.description,
           departmentId: e.department_id,
           departmentName: e.department_name,
+
+          // 👇 NOVO
+          departmentCategoryId: e.department_category_id,
+          departmentCategoryName: e.department_category_name,
+
           costCenterId: e.cost_center_id,
           costCenterName: e.cost_center_name,
           billId: e.bill_id,
@@ -151,6 +169,10 @@ export default class expenseService {
               totalInvoiceAmount: Number(e.bill.total_invoice_amount),
               mainDepartmentName: e.bill.main_department_name,
               notes: e.bill.notes,
+
+              document_identification_id: e.bill.document_identification_id,
+              document_number: e.bill.document_number,
+              creditor_json: e.bill.creditor_json,
             }
             : null,
         })),
@@ -182,7 +204,16 @@ export default class expenseService {
     }));
   }
 
-  async updateExpense({ id, amount, description, departmentId, departmentName }) {
+  async updateExpense({
+    id,
+    amount,
+    description,
+    departmentId,
+    departmentName,
+    // 👇 NOVO
+    departmentCategoryId,
+    departmentCategoryName,
+  }) {
     const exp = await Expense.findByPk(id);
     if (!exp) {
       throw new Error('Despesa não encontrada');
@@ -193,6 +224,10 @@ export default class expenseService {
       description,
       department_id: departmentId ?? exp.department_id,
       department_name: departmentName ?? exp.department_name,
+
+      // 👇 NOVO
+      department_category_id: departmentCategoryId ?? exp.department_category_id,
+      department_category_name: departmentCategoryName ?? exp.department_category_name,
     });
 
     return exp;

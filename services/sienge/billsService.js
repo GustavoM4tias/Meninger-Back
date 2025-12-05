@@ -94,7 +94,7 @@ export default class BillsService {
         return all;
     }
 
-    /** Upsert de UM título (campos básicos) sem mexer em departments_json */
+    /** Upsert de UM título (campos básicos) sem mexer em departments_json / creditor_json */
     async upsertBasic(raw, context = {}) {
         const normalized = this.normalize(raw, context);
 
@@ -127,8 +127,6 @@ export default class BillsService {
             return bill;
         }
 
-        // console.log(`🏷️ [API] Buscando departments-cost do bill ${bill.id}`);
-
         // exemplo: /v1/bills/466257/departments-cost
         const relativePath = depLink.href.replace('https://api.sienge.com.br/menin/public/api', '');
         const { data } = await apiSienge.get(relativePath);
@@ -155,16 +153,106 @@ export default class BillsService {
         return bill;
     }
 
+    /** Busca UM creditor na API usando, se possível, o link vindo do bill */
+    async fetchCreditorFromApi(creditorId, linksFromApi = []) {
+        // tenta achar link rel="creditor" vindo do /v1/bills
+        const credLink = linksFromApi.find(l => l.rel === 'creditor');
+
+        let relativePath;
+
+        if (credLink && credLink.href) {
+            if (credLink.href.startsWith('http')) {
+                // corta a base do tenant
+                relativePath = credLink.href.replace('https://api.sienge.com.br/menin/public/api', '');
+            } else {
+                relativePath = credLink.href;
+            }
+        } else {
+            // fallback padrão
+            relativePath = `/v1/creditors/${creditorId}`;
+        }
+
+        const { data } = await apiSienge.get(relativePath);
+        return data; // mantém o payload exatamente como o Sienge manda
+    }
+
     /**
-     * 🚀 Fluxo que você descreveu (Sienge + banco + paralelo):
+     * Garante creditor_json preenchido para os bills do batch:
+     * - só processa quem tem creditor_id e ainda NÃO tem creditor_json
+     * - agrupa por creditorId pra evitar várias chamadas iguais
+     * - limita concorrência (CRED_CHUNK) pra não agredir a API
+     */
+    async ensureCreditorsForBatch(pairs) {
+        // pairs: [{ raw, bill }]
+        const missingPairs = pairs.filter(({ bill }) =>
+            bill.creditor_id &&
+            (!bill.creditor_json || Object.keys(bill.creditor_json || {}).length === 0)
+        );
+
+        if (!missingPairs.length) {
+            return;
+        }
+
+        // agrupa por creditor_id -> [ { raw, bill }, ... ]
+        const byCreditorId = new Map();
+        for (const pair of missingPairs) {
+            const cid = pair.bill.creditor_id;
+            if (!cid) continue;
+            if (!byCreditorId.has(cid)) byCreditorId.set(cid, []);
+            byCreditorId.get(cid).push(pair);
+        }
+        const creditorIds = [...byCreditorId.keys()];
+
+        console.log(`ℹ️ [Bills] ${creditorIds.length} creditors sem cache local em creditor_json, completando via Sienge...`);
+
+        const CRED_CHUNK = 30;
+
+        for (let i = 0; i < creditorIds.length; i += CRED_CHUNK) {
+            const slice = creditorIds.slice(i, i + CRED_CHUNK);
+
+            await Promise.all(
+                slice.map(async creditorId => {
+                    const list = byCreditorId.get(creditorId) || [];
+                    if (!list.length) return;
+
+                    // usa o primeiro da lista pra pegar os links
+                    const first = list[0];
+                    const links = first.raw.links || first.bill.links_json || [];
+
+                    try {
+                        const creditorData = await this.fetchCreditorFromApi(creditorId, links);
+
+                        // salva o MESMO objeto em todos os bills com esse creditorId
+                        await Promise.all(
+                            list.map(({ bill }) =>
+                                bill.update({ creditor_json: creditorData })
+                            )
+                        );
+                    } catch (err) {
+                        console.error(
+                            `Erro ao buscar creditor ${creditorId}`,
+                            err?.response?.status,
+                            err?.response?.data || err?.message
+                        );
+                    }
+                })
+            );
+        }
+    }
+
+    /**
+     * Fluxo:
      *
      * 1) Busca SEMPRE no Sienge (/v1/bills) com costCenterId + datas (+ debtorId se tiver)
      * 2) Para cada retorno:
-     *    - upsert básico na SiengeBill (sem departments_json)
-     * 3) Para quem não tem departments_json no banco:
+     *    - upsert básico na SiengeBill (sem departments_json / creditor_json)
+     * 3) Para quem não tem departments_json:
      *    - chama /v1/bills/{id}/departments-cost em paralelo (chunks)
      *    - salva departments_json + main_department_*
-     * 4) Monta o retorno na mesma ordem do Sienge
+     * 4) Para quem não tem creditor_json:
+     *    - chama /v1/creditors/{creditorId} em paralelo (chunks por creditorId)
+     *    - salva creditor_json com o payload completo do Sienge
+     * 5) Monta o retorno na mesma ordem do Sienge (bill.toJSON(), incluindo creditor_json)
      */
     async listFromSiengeWithDepartments({ costCenterId, startDate, endDate, debtorId }) {
         const filters = {
@@ -201,17 +289,17 @@ export default class BillsService {
             }
         }
 
-        // 3) descobre quem ainda não tem departments_json
-        const missing = pairs.filter(
+        // 3) departments_json: completa só pra quem não tem
+        const missingDeps = pairs.filter(
             ({ bill }) => !bill.departments_json || !bill.departments_json.length
         );
 
-        if (missing.length) {
-            console.log(`ℹ️ [Bills] ${missing.length} títulos sem departments_json, completando via Sienge...`);
+        if (missingDeps.length) {
+            console.log(`ℹ️ [Bills] ${missingDeps.length} títulos sem departments_json, completando via Sienge...`);
 
             const DEP_CHUNK = 30;
-            for (let i = 0; i < missing.length; i += DEP_CHUNK) {
-                const slice = missing.slice(i, i + DEP_CHUNK);
+            for (let i = 0; i < missingDeps.length; i += DEP_CHUNK) {
+                const slice = missingDeps.slice(i, i + DEP_CHUNK);
 
                 await Promise.all(
                     slice.map(({ raw, bill }) =>
@@ -224,7 +312,10 @@ export default class BillsService {
             }
         }
 
-        // 4) carregar tudo do banco de uma vez e devolver na MESMA ordem que o Sienge mandou
+        // 4) creditor_json: completa para quem não tem (agrupado por creditorId)
+        await this.ensureCreditorsForBatch(pairs);
+
+        // 5) carregar tudo do banco de uma vez e devolver na MESMA ordem que o Sienge mandou
         const ids = rawBills.map(b => b.id);
         const dbRows = await SiengeBill.findAll({
             where: { id: { [Op.in]: ids } },
@@ -234,7 +325,7 @@ export default class BillsService {
         const result = ids
             .map(id => byId.get(id))
             .filter(Boolean)
-            .map(b => b.toJSON());
+            .map(b => b.toJSON()); // inclui creditor_json junto com o resto
 
         console.log(`✅ [Bills] listFromSiengeWithDepartments retornando ${result.length} títulos (ordem do Sienge)`);
         return result;
