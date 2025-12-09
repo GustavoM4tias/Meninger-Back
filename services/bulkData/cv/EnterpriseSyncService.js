@@ -1,4 +1,4 @@
-// /src/services/bulkData/cv/EnterpriseSyncController.js
+// /src/services/bulkData/cv/EnterpriseSyncService.js
 import apiCv from '../../../lib/apiCv.js';
 import db from '../../../models/sequelize/index.js';
 import crypto from 'crypto';
@@ -20,7 +20,7 @@ async function fetchList() {
 }
 
 async function fetchDetail(id) {
-    const res = await apiCv.get(`/cvio/empreendimento/${id}`);
+    const res = await apiCv.get(`/cvio/empreendimento/${id}?limite_dados_unidade=1000`);
     return res.data;
 }
 
@@ -142,17 +142,66 @@ async function upsertEnterpriseFromDetail(detail) {
     else if (existing.content_hash !== h) await existing.update(data);
 }
 
+/**
+ * Apaga TUDO (materiais, plantas, etapas, blocos e unidades) do empreendimento
+ * e recria a partir do detalhe atual do CV.
+ */
 async function replaceChildren(detail) {
     const id = detail.idempreendimento ?? detail.id;
     if (!id) return;
 
-    await Promise.all([
+    //
+    // 1) Descobre etapas existentes desse empreendimento
+    //
+    const oldStages = await CvEnterpriseStage.findAll({
+        where: { idempreendimento: id },
+        attributes: ['idetapa'],
+    });
+
+    const stageIds = oldStages.map(s => s.idetapa);
+
+    //
+    // 2) Descobre blocos existentes dessas etapas
+    //
+    let oldBlocks = [];
+    if (stageIds.length > 0) {
+        oldBlocks = await CvEnterpriseBlock.findAll({
+            where: { idetapa: stageIds },
+            attributes: ['idbloco'],
+        });
+    }
+
+    const oldBlockIds = oldBlocks.map(b => b.idbloco);
+
+    //
+    // 3) Apaga unidades primeiro (dependem de blocos)
+    //
+    if (oldBlockIds.length > 0) {
+        await CvEnterpriseUnit.destroy({
+            where: { idbloco: oldBlockIds },
+        });
+    }
+
+    //
+    // 4) Apaga materiais, plantas, blocos e etapas do empreendimento
+    //
+    const destroyPromises = [
         CvEnterpriseMaterial.destroy({ where: { idempreendimento: id } }),
         CvEnterprisePlan.destroy({ where: { idempreendimento: id } }),
         CvEnterpriseStage.destroy({ where: { idempreendimento: id } }),
-    ]);
+    ];
 
-    // materiais
+    if (oldBlockIds.length > 0) {
+        destroyPromises.push(
+            CvEnterpriseBlock.destroy({ where: { idbloco: oldBlockIds } })
+        );
+    }
+
+    await Promise.all(destroyPromises);
+
+    //
+    // 5) Recria materiais
+    //
     if (Array.isArray(detail.materiais_campanha)) {
         await CvEnterpriseMaterial.bulkCreate(
             detail.materiais_campanha.map(m => ({
@@ -164,12 +213,13 @@ async function replaceChildren(detail) {
                 arquivo: m.arquivo ?? null,
                 servidor: m.servidor ?? null,
                 raw: m
-            })),
-            { ignoreDuplicates: true }
+            }))
         );
     }
 
-    // plantas mapeadas (com pontos embutidos no raw)
+    //
+    // 6) Recria plantas mapeadas
+    //
     if (Array.isArray(detail.plantas_mapeadas)) {
         await CvEnterprisePlan.bulkCreate(
             detail.plantas_mapeadas.map(p => ({
@@ -177,15 +227,17 @@ async function replaceChildren(detail) {
                 idempreendimento: id,
                 nome: p.nome ?? null,
                 link: p.link ?? null,
-                raw: p // inclui pontos
-            })),
-            { ignoreDuplicates: true }
+                raw: p
+            }))
         );
     }
 
-    // etapas/blocos/unidades
+    //
+    // 7) Recria etapas / blocos / unidades
+    //
     if (Array.isArray(detail.etapas)) {
         for (const e of detail.etapas) {
+            // etapa
             await CvEnterpriseStage.create({
                 idetapa: e.idetapa,
                 idetapa_int: e.idetapa_int ?? null,
@@ -195,34 +247,47 @@ async function replaceChildren(detail) {
                 raw: e
             });
 
+            // blocos da etapa
             if (Array.isArray(e.blocos)) {
                 for (const b of e.blocos) {
-                    // paginacao
                     const p = b?.paginacao_unidade || {};
+
+                    // bloco (sem idempreendimento!)
                     await CvEnterpriseBlock.create({
                         idbloco: b.idbloco,
                         idbloco_int: b.idbloco_int ?? null,
                         idetapa: e.idetapa,
                         nome: b.nome ?? null,
                         data_cad: b.data_cad ?? null,
-                        total_unidades: p.total ?? 0,
+
+                        total_unidades: p.total ?? (Array.isArray(b.unidades) ? b.unidades.length : 0),
                         limite_dados_unidade: p.limite_dados_unidade ?? null,
                         pagina_unidade: p.pagina_unidade ?? null,
                         paginas_total: p.paginas_total ?? null,
+
                         raw: b
                     });
 
-                    if (Array.isArray(b.unidades)) {
+                    // unidades desse bloco
+                    if (Array.isArray(b.unidades) && b.unidades.length > 0) {
                         const units = b.unidades.map(u => ({
                             idunidade: u.idunidade,
                             idunidade_int: u.idunidade_int ?? null,
                             idbloco: b.idbloco,
 
                             nome: u.nome,
-                            area_privativa: u.area_privativa ? Number(String(u.area_privativa).replace(',', '.')) : null,
-                            area_comum: u.area_comum ? Number(String(u.area_comum).replace(',', '.')) : null,
-                            valor: u.valor ? Number(String(u.valor).replace(',', '.')) : null,
-                            valor_avaliacao: u.valor_avaliacao ? Number(String(u.valor_avaliacao).replace(',', '.')) : null,
+                            area_privativa: u.area_privativa
+                                ? Number(String(u.area_privativa).replace(',', '.'))
+                                : null,
+                            area_comum: u.area_comum
+                                ? Number(String(u.area_comum).replace(',', '.'))
+                                : null,
+                            valor: u.valor
+                                ? Number(String(u.valor).replace(',', '.'))
+                                : null,
+                            valor_avaliacao: u.valor_avaliacao
+                                ? Number(String(u.valor_avaliacao).replace(',', '.'))
+                                : null,
                             vagas_garagem: u.vagas_garagem ?? null,
                             vagas_garagem_qtde: parseVagasQtde(u.vagas_garagem),
                             andar: u.andar ?? null,
@@ -245,7 +310,7 @@ async function replaceChildren(detail) {
 
                         const CHUNK = 1000;
                         for (let i = 0; i < units.length; i += CHUNK) {
-                            await CvEnterpriseUnit.bulkCreate(units.slice(i, i + CHUNK), { ignoreDuplicates: true });
+                            await CvEnterpriseUnit.bulkCreate(units.slice(i, i + CHUNK));
                         }
                     }
                 }
@@ -265,6 +330,7 @@ export default class EnterpriseSyncController {
             await upsertEnterpriseFromList(item);
             if (++i % 100 === 0) console.log(`   → lista ${i}/${list.length}`);
         }
+
         console.log('🏗️  [Empreendimentos] FULL: detalhes + filhos');
         i = 0;
         for (const item of list) {

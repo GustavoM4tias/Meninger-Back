@@ -1,3 +1,4 @@
+// models/sequelize/projection/SalesProjectionLine.js
 import { Model } from 'sequelize';
 
 export default (sequelize, DataTypes) => {
@@ -6,10 +7,14 @@ export default (sequelize, DataTypes) => {
     projection_id: { type: DataTypes.INTEGER, allowNull: false },
     erp_id: { type: DataTypes.STRING(64), allowNull: false },
     alias_id: { type: DataTypes.STRING, allowNull: false, defaultValue: 'default' },
-    year_month: { type: DataTypes.STRING(7), allowNull: false }, // 'YYYY-MM'
+    year_month: { type: DataTypes.STRING(7), allowNull: false },
     units_target: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     avg_price_target: { type: DataTypes.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
     enterprise_name_cache: { type: DataTypes.STRING(255), allowNull: true },
+
+    // NOVOS (%)
+    marketing_pct: { type: DataTypes.DECIMAL(5, 2), allowNull: false, defaultValue: 0 },
+    commission_pct: { type: DataTypes.DECIMAL(5, 2), allowNull: false, defaultValue: 0 },
   }, {
     sequelize,
     modelName: 'SalesProjectionLine',

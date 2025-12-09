@@ -1,5 +1,4 @@
-// /server.js
-// import 'mysql2';            // <- força inclusão no bundle
+// /server.js 
 import express from 'express';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -14,24 +13,18 @@ import validatorAI from './validatorAI/index.js';
 import contractAutomationRoutes from './routes/contractAutomationRoutes.js';
 import microsoftAuthRoutes from './routes/microsoftAuthRoutes.js';
 import externalRoutes from './routes/externalRoutes.js'
+import admin from './routes/admin.js'; 
+import supportRoutes from './routes/supportRoutes.js'; 
+import projectionRoutes from './routes/projectionsRoutes.js';
 import expensesRoutes from './routes/expensesRoutes.js';
-
-// cron 
+import viabilityRoutes from './routes/viabilityRoutes.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
 import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
 import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
 import landScheduler from './scheduler/landScheduler.js';
-
-import admin from './routes/admin.js';
-
-import supportRoutes from './routes/supportRoutes.js';
-
-import projectionRoutes from './routes/projectionsRoutes.js';
-
 import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js'; 
-
 
 const app = express();
 
@@ -50,8 +43,6 @@ app.use(cors(corsOptions));
 app.use(express.json());
 
 app.use('/api/admin', admin);
-
-// Rotas
 app.use('/api/auth', authRoutes);  
 app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
@@ -61,12 +52,10 @@ app.use('/api/microsoft', microsoftAuthRoutes);// Microsoft for archives
 app.use('/api/ai', validatorAI);// chatbot ai
 app.use('/api/contracts', contractAutomationRoutes);
 app.use('/api/external', externalRoutes);
-
 app.use('/api/support', supportRoutes);
-
 app.use('/api/projections', projectionRoutes);
-
 app.use('/api/expenses', expensesRoutes);
+app.use('/api/viability', viabilityRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -92,12 +81,10 @@ db.sequelize.sync({ alter: false })  // ⚠️ alter: true = adapta sem apagar d
     }
     if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') {  // 👈 NOVO
       landScheduler.start();
-    }
-    // ...
+    } 
     if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') {
       enterpriseCvScheduler.start();
-    } 
-
+    }  
     app.listen(PORT, () => {
       console.log(`Servidor rodando na porta: ${PORT}`);
     });

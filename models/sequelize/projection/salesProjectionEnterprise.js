@@ -1,3 +1,4 @@
+// models/sequelize/projection/SalesProjectionEnterprise.js
 import { Model } from 'sequelize';
 
 export default (sequelize, DataTypes) => {
@@ -8,6 +9,10 @@ export default (sequelize, DataTypes) => {
     alias_id: { type: DataTypes.STRING, allowNull: false, defaultValue: 'default' },
     default_avg_price: { type: DataTypes.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
     enterprise_name_cache: { type: DataTypes.STRING(255), allowNull: true },
+
+    // NOVOS
+    default_marketing_pct: { type: DataTypes.DECIMAL(5, 2), allowNull: false, defaultValue: 0 },
+    default_commission_pct: { type: DataTypes.DECIMAL(5, 2), allowNull: false, defaultValue: 0 },
   }, {
     sequelize,
     modelName: 'SalesProjectionEnterprise',

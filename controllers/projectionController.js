@@ -175,7 +175,9 @@ export async function cloneProjection(req, res) {
         erp_id: d.erp_id,
         alias_id: d.alias_id || 'default',
         default_avg_price: Number(d.default_avg_price || 0),
-        enterprise_name_cache: d.enterprise_name_cache || null
+        enterprise_name_cache: d.enterprise_name_cache || null,
+        default_marketing_pct: Number(d.default_marketing_pct || 0),
+        default_commission_pct: Number(d.default_commission_pct || 0),
       }));
       await SalesProjectionEnterprise.bulkCreate(toInsert, { transaction: trx });
     }
@@ -192,7 +194,9 @@ export async function cloneProjection(req, res) {
         year_month: l.year_month,
         units_target: Number(l.units_target || 0),
         avg_price_target: Number(l.avg_price_target || 0),
-        enterprise_name_cache: l.enterprise_name_cache || null
+        enterprise_name_cache: l.enterprise_name_cache || null,
+        marketing_pct: Number(l.marketing_pct || 0),
+        commission_pct: Number(l.commission_pct || 0),
       }));
       await SalesProjectionLine.bulkCreate(toInsert, { transaction: trx });
     }
@@ -246,13 +250,14 @@ export async function getProjectionDetail(req, res) {
           attributes: [
             'id', 'erp_id', 'alias_id',
             'year_month', 'units_target', 'avg_price_target',
-            'enterprise_name_cache', 'created_at', 'updated_at'
+            'enterprise_name_cache', 'created_at', 'updated_at',
+            'marketing_pct', 'commission_pct',
           ],
           order: [['erp_id', 'ASC'], ['alias_id', 'ASC'], ['year_month', 'ASC']]
         }),
         SalesProjectionEnterprise.findAll({
           where: { projection_id: id },
-          attributes: ['erp_id', 'alias_id', 'default_avg_price', 'enterprise_name_cache'],
+          attributes: ['erp_id', 'alias_id', 'default_avg_price', 'enterprise_name_cache', 'default_marketing_pct', 'default_commission_pct'],
           order: [['erp_id', 'ASC'], ['alias_id', 'ASC']]
         }),
       ]);
@@ -316,7 +321,6 @@ export async function getProjectionDetail(req, res) {
   }
 }
 
-// PUT /api/projections/:id/defaults  (admin)
 export async function upsertProjectionDefaults(req, res) {
   if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Acesso negado.' });
@@ -338,8 +342,18 @@ export async function upsertProjectionDefaults(req, res) {
       erp_id: String(i.erp_id),
       alias_id: i.alias_id ? String(i.alias_id) : 'default',
       default_avg_price: Number(i.default_avg_price ?? 0),
-      enterprise_name_cache: i.enterprise_name_cache || null
+      enterprise_name_cache: i.enterprise_name_cache || null,
+      default_marketing_pct: Number(i.default_marketing_pct ?? 0),
+      default_commission_pct: Number(i.default_commission_pct ?? 0),
     }));
+
+    // 🔴 IMPORTANTE: colapsar duplicatas por (erp_id, alias_id)
+    const key = r => `${r.erp_id}|${r.alias_id}`;
+    const dedupMap = new Map();
+    for (const r of incoming) {
+      dedupMap.set(key(r), r); // o último sobrescreve o anterior
+    }
+    const finalItems = [...dedupMap.values()];
 
     // carrega antes
     const before = await db.SalesProjectionEnterprise.findAll({
@@ -347,20 +361,25 @@ export async function upsertProjectionDefaults(req, res) {
       transaction: trx
     });
 
-    const key = r => `${r.erp_id}|${r.alias_id || 'default'}`;
     const beforeMap = new Map(before.map(r => [key(r), r.toJSON()]));
-    const afterMap = new Map(incoming.map(r => [key(r), r]));
+    const afterMap = new Map(finalItems.map(r => [key(r), r]));
 
-    // upsert
-    await db.SalesProjectionEnterprise.bulkCreate(incoming, {
+    // upsert SEM duplicatas
+    await db.SalesProjectionEnterprise.bulkCreate(finalItems, {
       transaction: trx,
-      updateOnDuplicate: ['default_avg_price', 'enterprise_name_cache', 'updated_at']
+      updateOnDuplicate: [
+        'default_avg_price',
+        'enterprise_name_cache',
+        'default_marketing_pct',
+        'default_commission_pct',
+        'updated_at'
+      ]
     });
 
     // remoção opcional
     let removedKeys = [];
     if (remove_missing) {
-      const incomingKeys = new Set(incoming.map(r => key(r)));
+      const incomingKeys = new Set(finalItems.map(r => key(r)));
       const toRemove = before.filter(r => !incomingKeys.has(key(r)));
       if (toRemove.length) {
         removedKeys = toRemove.map(r => key(r));
@@ -372,7 +391,6 @@ export async function upsertProjectionDefaults(req, res) {
       }
     }
 
-    // resumo amigável
     const { summary, note } = summarizeDefaultsChange({ beforeMap, afterMap, removedKeys });
 
     await db.SalesProjectionLog.create({
@@ -380,7 +398,7 @@ export async function upsertProjectionDefaults(req, res) {
       action: 'UPSERT_DEFAULTS',
       user_id: req.user.id,
       payload_after: {
-        count: incoming.length,
+        count: finalItems.length,
         remove_missing,
         summary
       },
@@ -388,7 +406,12 @@ export async function upsertProjectionDefaults(req, res) {
     }, { transaction: trx });
 
     await trx.commit();
-    return res.json({ ok: true, upserted: incoming.length, removed: removedKeys.length, summary });
+    return res.json({
+      ok: true,
+      upserted: finalItems.length,
+      removed: removedKeys.length,
+      summary
+    });
   } catch (e) {
     await trx.rollback();
     return res.status(400).json({ error: e.message || 'Erro ao salvar defaults.' });
@@ -403,33 +426,49 @@ export async function upsertProjectionLines(req, res) {
   const trx = await db.sequelize.transaction();
   try {
     const id = Number(req.params.id);
-    const { rows } = req.body;
+    let { rows, remove_missing } = req.body;
+    remove_missing = !!remove_missing;
 
     const proj = await db.SalesProjection.findByPk(id, { transaction: trx });
-    if (!proj) { await trx.rollback(); return res.status(404).json({ error: 'Projeção não encontrada.' }); }
-    if (proj.is_locked) { await trx.rollback(); return res.status(423).json({ error: 'Projeção bloqueada.' }); }
+    if (!proj) {
+      await trx.rollback();
+      return res.status(404).json({ error: 'Projeção não encontrada.' });
+    }
+    if (proj.is_locked) {
+      await trx.rollback();
+      return res.status(423).json({ error: 'Projeção bloqueada.' });
+    }
 
     if (!Array.isArray(rows) || !rows.length) {
       await trx.rollback();
       return res.status(400).json({ error: 'Envie rows com pelo menos um item.' });
     }
 
-    const key = r => `${id}|${String(r.erp_id)}|${String(r.alias_id || 'default')}|${String(r.year_month).slice(0, 7)}`;
+    const key = r =>
+      `${id}|${String(r.erp_id)}|${String(r.alias_id || 'default')}|${String(r.year_month).slice(0, 7)}`;
+
     const map = new Map();
 
     for (const r of rows) {
       const ym = String(r.year_month || '').slice(0, 7);
-      if (!/^\d{4}-\d{2}$/.test(ym)) throw new Error(`year_month inválido: ${r.year_month}`);
+      if (!/^\d{4}-\d{2}$/.test(ym)) {
+        throw new Error(`year_month inválido: ${r.year_month}`);
+      }
 
-      map.set(key({ ...r, year_month: ym }), {
-        projection_id: id,
-        erp_id: String(r.erp_id),
-        alias_id: r.alias_id ? String(r.alias_id) : 'default',
-        year_month: ym,
-        units_target: Math.max(0, parseInt(r.units_target ?? 0, 10)),
-        avg_price_target: Number(r.avg_price_target ?? 0),
-        enterprise_name_cache: r.enterprise_name_cache || null
-      });
+      map.set(
+        key({ ...r, year_month: ym }),
+        {
+          projection_id: id,
+          erp_id: String(r.erp_id),
+          alias_id: r.alias_id ? String(r.alias_id) : 'default',
+          year_month: ym,
+          units_target: Math.max(0, parseInt(r.units_target ?? 0, 10)),
+          avg_price_target: Number(r.avg_price_target ?? 0),
+          enterprise_name_cache: r.enterprise_name_cache || null,
+          marketing_pct: Number(r.marketing_pct ?? 0),
+          commission_pct: Number(r.commission_pct ?? 0),
+        }
+      );
     }
 
     const normalized = [...map.values()];
@@ -438,50 +477,126 @@ export async function upsertProjectionLines(req, res) {
     const whereTouched = {
       projection_id: id,
       [db.Sequelize.Op.or]: normalized.map(n => ({
-        erp_id: n.erp_id, alias_id: n.alias_id, year_month: n.year_month
+        erp_id: n.erp_id,
+        alias_id: n.alias_id,
+        year_month: n.year_month
       }))
     };
-    const beforeTouched = await db.SalesProjectionLine.findAll({ where: whereTouched, transaction: trx });
 
-    const beforeTotals = beforeTouched.reduce((acc, r) => {
-      const u = Number(r.units_target || 0);
-      const p = Number(r.avg_price_target || 0);
-      acc.units += u;
-      acc.revenue += (u * p);
-      return acc;
-    }, { units: 0, revenue: 0 });
-
-    await db.SalesProjectionLine.bulkCreate(normalized, {
-      transaction: trx,
-      updateOnDuplicate: ['units_target', 'avg_price_target', 'enterprise_name_cache', 'updated_at']
+    const beforeTouched = await db.SalesProjectionLine.findAll({
+      where: whereTouched,
+      transaction: trx
     });
 
-    const afterTouched = await db.SalesProjectionLine.findAll({ where: whereTouched, transaction: trx });
-    const afterTotals = afterTouched.reduce((acc, r) => {
-      const u = Number(r.units_target || 0);
-      const p = Number(r.avg_price_target || 0);
-      acc.units += u;
-      acc.revenue += (u * p);
-      return acc;
-    }, { units: 0, revenue: 0 });
+    const beforeTotals = beforeTouched.reduce(
+      (acc, r) => {
+        const u = Number(r.units_target || 0);
+        const p = Number(r.avg_price_target || 0);
+        acc.units += u;
+        acc.revenue += u * p;
+        return acc;
+      },
+      { units: 0, revenue: 0 }
+    );
 
-    const enterprisesAffected = new Set(normalized.map(n => `${n.erp_id}|${n.alias_id}`)).size;
-    const monthsAffected = new Set(normalized.map(n => n.year_month)).size;
+    // UPSERT das linhas tocadas
+    await db.SalesProjectionLine.bulkCreate(normalized, {
+      transaction: trx,
+      updateOnDuplicate: [
+        'units_target',
+        'avg_price_target',
+        'enterprise_name_cache',
+        'marketing_pct',
+        'commission_pct',
+        'updated_at'
+      ]
+    });
+
+    const afterTouched = await db.SalesProjectionLine.findAll({
+      where: whereTouched,
+      transaction: trx
+    });
+
+    const afterTotals = afterTouched.reduce(
+      (acc, r) => {
+        const u = Number(r.units_target || 0);
+        const p = Number(r.avg_price_target || 0);
+        acc.units += u;
+        acc.revenue += u * p;
+        return acc;
+      },
+      { units: 0, revenue: 0 }
+    );
+
+    const enterprisesAffected = new Set(
+      normalized.map(n => `${n.erp_id}|${n.alias_id}`)
+    ).size;
+
+    const monthsAffected = new Set(
+      normalized.map(n => n.year_month)
+    ).size;
+
+    // === remoção opcional de pares (erp_id|alias_id) que sumiram da grade ===
+    let removedPairs = [];
+    if (remove_missing) {
+      // pares que DEVEM permanecer (os que ainda existem no payload atual)
+      const keepPairs = new Set(
+        normalized.map(n => `${n.erp_id}|${n.alias_id || 'default'}`)
+      );
+
+      // todas as linhas atuais da projeção
+      const existing = await db.SalesProjectionLine.findAll({
+        where: { projection_id: id },
+        transaction: trx
+      });
+
+      // linhas cuja combinação erp_id|alias_id não está mais no payload
+      const toDelete = existing.filter(
+        r => !keepPairs.has(`${r.erp_id}|${r.alias_id || 'default'}`)
+      );
+
+      if (toDelete.length) {
+        removedPairs = [...new Set(
+          toDelete.map(r => `${r.erp_id}|${r.alias_id || 'default'}`)
+        )];
+
+        const ids = toDelete.map(r => r.id);
+        await db.SalesProjectionLine.destroy({
+          where: { id: ids },
+          transaction: trx
+        });
+      }
+    }
 
     const { summary, note } = summarizeLinesChange({
-      beforeTotals, afterTotals, enterprisesAffected, monthsAffected
+      beforeTotals,
+      afterTotals,
+      enterprisesAffected,
+      monthsAffected
     });
 
     await db.SalesProjectionLog.create({
       projection_id: id,
       action: 'UPSERT_LINES',
       user_id: req.user.id,
-      payload_after: { count: normalized.length, summary },
-      note
+      payload_after: {
+        count: normalized.length,
+        summary,
+        remove_missing,
+        removed_pairs: removedPairs
+      },
+      note: removedPairs.length
+        ? `${note} • ${removedPairs.length} par(es) (erp_id|alias_id) removido(s): ${removedPairs.join(', ')}`
+        : note
     }, { transaction: trx });
 
     await trx.commit();
-    return res.json({ ok: true, upserted: normalized.length, summary });
+    return res.json({
+      ok: true,
+      upserted: normalized.length,
+      removed_pairs: removedPairs,
+      summary
+    });
   } catch (e) {
     console.error(e);
     await trx.rollback();
