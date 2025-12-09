@@ -35,6 +35,16 @@ import {
   deleteDepartmentCategory,
 } from '../controllers/departmentCategoryController.js';
 
+import {
+  listLandSyncEnterprises,
+  addLandSyncEnterprise,
+  removeLandSyncEnterprise
+} from '../controllers/landSyncController.js';
+
+import LandDataController from '../controllers/external/landDataController.js';
+const landDataController = new LandDataController();
+
+
 const router = express.Router();
 
 router.post('/admin/drop-legacy-sienge', authMiddleware, async (req, res) => {
@@ -81,5 +91,11 @@ router.get('/department-categories', authMiddleware, requireAdmin, listDepartmen
 router.post('/department-categories', authMiddleware, requireAdmin, createDepartmentCategory);
 router.put('/department-categories/:id', authMiddleware, requireAdmin, updateDepartmentCategory);
 router.delete('/department-categories/:id', authMiddleware, requireAdmin, deleteDepartmentCategory);
+
+router.get('/land-sync-enterprises', authMiddleware, requireAdmin, listLandSyncEnterprises);
+router.post('/land-sync-enterprises', authMiddleware, requireAdmin, addLandSyncEnterprise);
+router.delete('/land-sync-enterprises/:id', authMiddleware, requireAdmin, removeLandSyncEnterprise);
+ 
+router.post( '/land-sync-obstit/run', authMiddleware, requireAdmin, landDataController.run );
 
 export default router;
