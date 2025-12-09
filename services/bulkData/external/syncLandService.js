@@ -1,4 +1,4 @@
-// src/services/obstit/syncService.js
+// src/services/external/syncLandService.js
 import db from '../../../models/sequelize/index.js';
 import { Op } from 'sequelize';
 import { fetchObstitByNumbers } from './landService.js';
@@ -6,15 +6,25 @@ import { chooseLandValue } from './obstitParse.js';
 
 const BATCH = 500;
 
-async function getDistinctContractNumbers() {
-    const idsInt = (process.env.ENTERPRISE_IDS || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .map(Number)
-        .filter(Number.isInteger);
+async function getLandSyncEnterpriseIds() {
+    const rows = await db.LandSyncEnterprise.findAll({
+        where: { active: true },
+        attributes: ['enterprise_id']
+    });
+    return rows.map(r => r.enterprise_id).filter(Number.isInteger);
+}
 
-    // Monte um literal de array Postgres: "{17004,78001,...}"
+
+async function getDistinctContractNumbers() {
+
+    const idsInt = await getLandSyncEnterpriseIds();
+    console.log(idsInt)
+
+    // 👉 Sem config => não mexe em ninguém
+    if (!idsInt.length) {
+        return [];
+    }
+
     const idsArrayLiteral = `{${idsInt.join(',')}}`;
 
     // Se a semântica de "sem filtro" for "não retorna nada", descomente:
@@ -22,14 +32,10 @@ async function getDistinctContractNumbers() {
 
     const rows = await db.sequelize.query(
         `SELECT DISTINCT number
-          FROM contracts
-         WHERE number IS NOT NULL
-           AND (
-                cardinality(:ids::int[]) = 0
-             OR enterprise_id = ANY(:ids::int[])
-           )`,
+       FROM contracts
+      WHERE number IS NOT NULL
+        AND enterprise_id = ANY(:ids::int[])`,
         {
-            // 🔴 Passe o literal do array e faça cast no SQL com ::int[]
             replacements: { ids: idsArrayLiteral },
             type: db.Sequelize.QueryTypes.SELECT
         }
