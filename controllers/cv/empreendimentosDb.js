@@ -1,76 +1,126 @@
 // /src/controllers/cv/empreendimentosDb.js
 import db from '../../models/sequelize/index.js';
 const {
-    CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
-    CvEnterpriseMaterial, CvEnterprisePlan
+  CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
+  CvEnterpriseMaterial, CvEnterprisePlan
 } = db;
- 
+
 // cache simples opcional (30s)
 const cache = new Map();
 const TTL = 30_000;
 
 const norm = (s) => String(s || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase();
 
 export const fetchBuildingsFromDb = async (req, res) => {
-    try {
-        if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
-
-        const isAdmin = req.user.role === 'admin';
-        const userCity = req.user.city || '';
-
-        let rows = await CvEnterprise.findAll({
-            order: [['nome', 'ASC']]
-        });
-
-        if (!isAdmin) {
-            const target = norm(userCity);
-            if (!target.trim()) return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-            rows = rows.filter(r => r.cidade && norm(r.cidade).includes(target));
-        }
-
-        // Reconstruir o shape da lista /empreendimentos
-        const payload = rows.map(r => {
-            const raw = r.raw || {};
-            return {
-                idempreendimento: r.idempreendimento,
-                idempreendimento_int: r.idempreendimento_int ?? raw.idempreendimento_int ?? null,
-                referencia_externa: raw.referencia_externa ?? null,
-                nome: r.nome,
-                regiao: r.regiao,
-                cidade: r.cidade,
-                estado: r.estado,
-                bairro: r.bairro,
-                endereco_emp: r.endereco_emp,
-                numero: r.numero,
-                logradouro: r.logradouro,
-                cep: r.cep,
-                endereco: r.endereco,
-                idempresa: r.idempresa,
-                sigla: r.sigla,
-                link_disponibilidade: raw.link_disponibilidade ?? (r.idempreendimento ? `https://menin.cvcrm.com.br/gestor/comercial/mapadisponibilidade/${r.idempreendimento}` : null),
-                logo: r.logo,
-                foto_listagem: r.foto_listagem,
-                foto: r.foto,
-                app_exibir: r.app_exibir,
-                app_cor_background: r.app_cor_background,
-                data_entrega: r.data_entrega,
-                andamento: r.andamento ? Number(r.andamento) : null,
-                unidades_disponiveis: r.unidades_disponiveis ?? null,
-                situacao_obra: raw.situacao_obra ?? (r.situacao_obra_nome ? [{ nome: r.situacao_obra_nome }] : []),
-                situacao_comercial: raw.situacao_comercial ?? (r.situacao_comercial_nome ? [{ nome: r.situacao_comercial_nome }] : []),
-                tipo_empreendimento: raw.tipo_empreendimento ?? (r.tipo_empreendimento_nome ? [{ nome: r.tipo_empreendimento_nome }] : []),
-                segmento: raw.segmento ?? (r.segmento_nome ? [{ nome: r.segmento_nome }] : []),
-            };
-        });
-
-        return res.status(200).json(payload);
-    } catch (err) {
-        console.error('Erro ao buscar empreendimentos (DB):', err);
-        return res.status(500).json({ error: 'Erro ao buscar empreendimentos no banco' });
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Usuário não autenticado.' });
     }
+
+    const isAdmin = req.user.role === 'admin';
+    const userCity = req.user.city || '';
+
+    // ----- CACHE (30s) -----
+    const key = `list:${isAdmin ? 'admin' : norm(userCity)}`;
+    const now = Date.now();
+    const memo = cache.get(key);
+    if (memo && now - memo.ts < TTL) {
+      res.set('X-Cache', 'HIT');
+      return res.json(memo.data);
+    }
+
+    // ----- CAMPOS MINIMOS -----
+    const fields = [
+      "idempreendimento", "idempreendimento_int", "nome",
+      "regiao", "cidade", "estado", "bairro",
+      "endereco_emp", "numero", "logradouro", "cep",
+      "endereco", "idempresa", "sigla",
+      "logo", "foto_listagem", "foto",
+      "app_exibir", "app_cor_background",
+      "data_entrega", "andamento", "unidades_disponiveis",
+      "situacao_obra_nome", "situacao_comercial_nome",
+      "tipo_empreendimento_nome", "segmento_nome",
+      "raw"
+    ];
+
+    // ----- FILTRO DIRETO NO BANCO (cidade) -----
+    const where = {};
+    if (!isAdmin) {
+      const clean = norm(userCity);
+      if (!clean.trim()) {
+        return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+      }
+      where.cidade = db.Sequelize.where(
+        db.Sequelize.fn("lower", db.Sequelize.col("cidade")),
+        "LIKE",
+        `%${clean}%`
+      );
+    }
+
+    // ----- BUSCA SQL -----
+    const rows = await CvEnterprise.findAll({
+      attributes: fields,
+      where,
+      order: [['nome', 'ASC']]
+    });
+
+    // ----- MONTAR PAYLOAD (leve) -----
+    const payload = rows.map(r => {
+      const raw = r.raw || {};
+
+      return {
+        idempreendimento: r.idempreendimento,
+        idempreendimento_int: r.idempreendimento_int ?? raw.idempreendimento_int ?? null,
+        referencia_externa: raw.referencia_externa ?? null,
+        nome: r.nome,
+        regiao: r.regiao,
+        cidade: r.cidade,
+        estado: r.estado,
+        bairro: r.bairro,
+        endereco_emp: r.endereco_emp,
+        numero: r.numero,
+        logradouro: r.logradouro,
+        cep: r.cep,
+        endereco: r.endereco,
+        idempresa: r.idempresa,
+        sigla: r.sigla,
+
+        link_disponibilidade:
+          raw.link_disponibilidade ??
+          (r.idempreendimento
+            ? `https://menin.cvcrm.com.br/gestor/comercial/mapadisponibilidade/${r.idempreendimento}`
+            : null),
+
+        logo: r.logo,
+        foto_listagem: r.foto_listagem,
+        foto: r.foto,
+
+        app_exibir: r.app_exibir,
+        app_cor_background: r.app_cor_background,
+        data_entrega: r.data_entrega,
+        andamento: r.andamento ? Number(r.andamento) : null,
+        unidades_disponiveis: r.unidades_disponiveis,
+
+        situacao_obra: raw.situacao_obra ?? (r.situacao_obra_nome ? [{ nome: r.situacao_obra_nome }] : []),
+        situacao_comercial: raw.situacao_comercial ?? (r.situacao_comercial_nome ? [{ nome: r.situacao_comercial_nome }] : []),
+        tipo_empreendimento: raw.tipo_empreendimento ?? (r.tipo_empreendimento_nome ? [{ nome: r.tipo_empreendimento_nome }] : []),
+        segmento: raw.segmento ?? (r.segmento_nome ? [{ nome: r.segmento_nome }] : []),
+      };
+    });
+
+    // ----- SALVA NO CACHE -----
+    cache.set(key, { ts: now, data: payload });
+    res.set('X-Cache', 'MISS');
+
+    return res.json(payload);
+
+  } catch (err) {
+    console.error('Erro ao buscar empreendimentos (DB):', err);
+    return res.status(500).json({ error: 'Erro ao buscar empreendimentos no banco' });
+  }
 };
 
 export const fetchBuildingByIdFromDb = async (req, res) => {
@@ -102,31 +152,31 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
     ] = await Promise.all([
       CvEnterpriseStage.findAll({
         where: { idempreendimento: id },
-        order: [['data_cad','ASC'], ['idetapa','ASC']]
+        order: [['data_cad', 'ASC'], ['idetapa', 'ASC']]
       }),
-      CvEnterpriseMaterial.findAll({ where: { idempreendimento: id }, order: [['idarquivo','ASC']] }),
-      CvEnterprisePlan.findAll({ where: { idempreendimento: id }, order: [['idplanta_mapeada','ASC']] }),
+      CvEnterpriseMaterial.findAll({ where: { idempreendimento: id }, order: [['idarquivo', 'ASC']] }),
+      CvEnterprisePlan.findAll({ where: { idempreendimento: id }, order: [['idplanta_mapeada', 'ASC']] }),
     ]);
 
     // 3) blocos por etapas (ids)
     const etapaIds = etapas.map(e => e.idetapa);
     const blocos = etapaIds.length
       ? await CvEnterpriseBlock.findAll({
-          where: { idetapa: etapaIds },
-          order: [['nome','ASC'], ['idbloco','ASC']],
-          // pegue também totais/paginação persistidos
-          attributes: { exclude: [] }
-        })
+        where: { idetapa: etapaIds },
+        order: [['nome', 'ASC'], ['idbloco', 'ASC']],
+        // pegue também totais/paginação persistidos
+        attributes: { exclude: [] }
+      })
       : [];
 
     // 4) unidades por blocos (ids)
     const blocoIds = blocos.map(b => b.idbloco);
     const unidades = blocoIds.length
       ? await CvEnterpriseUnit.findAll({
-          where: { idbloco: blocoIds },
-          order: [['idunidade','ASC']],
-          attributes: { exclude: [] } // traga tudo que você salvou (inclui raw)
-        })
+        where: { idbloco: blocoIds },
+        order: [['idunidade', 'ASC']],
+        attributes: { exclude: [] } // traga tudo que você salvou (inclui raw)
+      })
       : [];
 
     // 5) indexações em memória (O(n)) para agrupar rápido
@@ -139,21 +189,25 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
 
     const blocksByStage = new Map();
     for (const b of blocos) {
+      const units = unitsByBlock.get(b.idbloco) || [];
+
       const arr = blocksByStage.get(b.idetapa) || [];
-      // monta shape do bloco igual ao front espera
       arr.push({
         idbloco: b.idbloco,
         idbloco_int: b.idbloco_int ?? null,
         idetapa: b.idetapa,
         nome: b.nome ?? null,
         data_cad: b.data_cad ?? null,
+
+        // 🔴 AGORA: paginação sempre espelha o que veio das unidades reais
         paginacao_unidade: {
-          total: b.total_unidades ?? (unitsByBlock.get(b.idbloco)?.length || 0),
-          limite_dados_unidade: b.limite_dados_unidade ?? 30,
-          pagina_unidade: b.pagina_unidade ?? 1,
-          paginas_total: b.paginas_total ?? ((b.total_unidades || (unitsByBlock.get(b.idbloco)?.length || 0)) ? 1 : 0),
+          total: units.length,
+          limite_dados_unidade: units.length,
+          pagina_unidade: 1,
+          paginas_total: units.length > 0 ? 1 : 0,
         },
-        unidades: (unitsByBlock.get(b.idbloco) || []).map(u => ({
+
+        unidades: units.map(u => ({
           nome: u.nome,
           area_privativa: u.area_privativa != null ? Number(u.area_privativa).toFixed(6) : null,
           idunidade: u.idunidade,
