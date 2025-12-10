@@ -48,6 +48,9 @@ import CvWorkflowGroupDefine from './cv/workflowGroup.js';
 
 import landSyncEnterpriseDefine from './landSyncEnterprise.js';
 
+import SiengeAwardDefine from './sienge/award.js';
+import SiengeAwardLinkDefine from './sienge/awardLink.js';
+
 const env = process.env.NODE_ENV || 'development';
 
 const cfg = config[env];
@@ -102,6 +105,9 @@ db.CvEnterprisePlan    = CvEnterprisePlanDefine(sequelize, DataTypes);
 db.CvWorkflowGroup = CvWorkflowGroupDefine(sequelize, DataTypes);
 
 db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
+
+db.Award = SiengeAwardDefine(sequelize, DataTypes);
+db.AwardLink = SiengeAwardLinkDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)
