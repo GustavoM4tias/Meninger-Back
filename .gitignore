@@ -3,3 +3,5 @@ node_modules/
 *.log
 /temp
 uploads
+playwright/playwright/.auth/
+playwright/**/Code Cache/
