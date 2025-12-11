@@ -1,7 +1,7 @@
 // playwright/core/popups.js
 import { log } from "./logger.js";
 
-export async function dismissCommonPopups(page, maxWaitMs = 4000) {
+export async function dismissCommonPopups(page, maxWaitMs = 2000) {
     log("POPUP", "Limpando popups rápidos...");
 
     const start = Date.now();
