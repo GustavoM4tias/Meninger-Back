@@ -50,6 +50,7 @@ import landSyncEnterpriseDefine from './landSyncEnterprise.js';
 
 import SiengeAwardDefine from './sienge/award.js';
 import SiengeAwardLinkDefine from './sienge/awardLink.js';
+import SiengeAwardLogDefine from './sienge/awardLog.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -108,6 +109,7 @@ db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
 
 db.Award = SiengeAwardDefine(sequelize, DataTypes);
 db.AwardLink = SiengeAwardLinkDefine(sequelize, DataTypes);
+db.AwardLog = SiengeAwardLogDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)
