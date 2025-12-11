@@ -247,7 +247,7 @@ LEFT JOIN LATERAL (
   ORDER BY ec.updated_at DESC
   LIMIT 1
 ) ec_erp ON TRUE
-
+ 
 /* Seu join lateral de repasses permanece */
 LEFT JOIN LATERAL (
   SELECT
@@ -260,15 +260,27 @@ LEFT JOIN LATERAL (
       COALESCE(r.data_status_repasse, r.data_contrato_liberado, r.data_contrato_contab) AS data_mais_recente
     FROM repasses r
     WHERE
+      -- 1) casa direto pelo id interno da unidade
       r.codigointerno_unidade::text = p.unit_id::text
+
+      -- 2) nome normalizado + codigointerno_empreendimento = enterprise_id
       OR (
         regexp_replace(unaccent(upper(COALESCE(r.unidade, ''))), '[^A-Z0-9]+', '', 'g') = p.unit_name_norm
         AND r.codigointerno_empreendimento::text = p.enterprise_id::text
       )
+
+      -- 3) nome normalizado + codigointerno_empreendimento começa com company_id (101 -> 10101/10103)
       OR (
         regexp_replace(unaccent(upper(COALESCE(r.unidade, ''))), '[^A-Z0-9]+', '', 'g') = p.unit_name_norm
         AND r.codigointerno_empreendimento::text LIKE p.company_id_str || '%'
       )
+
+      -- 4) 🔥 NOVA REGRA: nome normalizado + codigointerno_etapa começa com company_id
+      OR (
+        regexp_replace(unaccent(upper(COALESCE(r.unidade, ''))), '[^A-Z0-9]+', '', 'g') = p.unit_name_norm
+        AND r.codigointerno_etapa::text LIKE p.company_id_str || '%'
+      )
+
     ORDER BY
       id_match DESC,
       (CASE WHEN r.status_repasse ILIKE 'Cancelado' THEN 1 ELSE 0 END),
