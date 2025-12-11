@@ -180,11 +180,20 @@ export default class RepasseSyncService {
         const prevSnap0 = (existing.status && existing.status[0]) || null;
         const statusChanged = !snapshotsEqual(prevSnap0, currentSnap);
 
+        // if (!statusChanged) {
+        //     // nada a fazer — mantém como está
+        //     return 'unchanged';
+        // }
         if (!statusChanged) {
-            // nada a fazer — mantém como está
-            return 'unchanged';
+            // ✅ Mesmo se status igual, ainda atualiza os campos espelho
+            await existing.update({
+                ...mapped,
+                // se quiser economizar I/O, pode NÃO mexer no status aqui
+                last_seen_at: now
+            });
+            return 'updated'; // ou 'meta_updated' se quiser separar contagem
         }
-
+        
         // mudou o status → insere snapshot no início e atualiza colunas espelho
         const nextStatus = [currentSnap, ...(existing.status || [])];
 
