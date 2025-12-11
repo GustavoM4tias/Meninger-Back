@@ -48,6 +48,28 @@ export default (sequelize, DataTypes) => {
                 field: "nf_xml",
                 type: DataTypes.TEXT("long"),
             },
+            status: {
+                field: "status",
+                type: DataTypes.STRING,
+                allowNull: false,
+                defaultValue: "iniciado",
+            },
+            createdBy: {
+                field: "created_by",
+                type: DataTypes.INTEGER,
+            },
+            createdByName: {
+                field: "created_by_name",
+                type: DataTypes.STRING,
+            },
+            updatedBy: {
+                field: "updated_by",
+                type: DataTypes.INTEGER,
+            },
+            updatedByName: {
+                field: "updated_by_name",
+                type: DataTypes.STRING,
+            },
         },
         {
             tableName: "awards",
@@ -60,6 +82,10 @@ export default (sequelize, DataTypes) => {
         Award.hasMany(models.AwardLink, {
             foreignKey: 'awardId',
             as: 'links',
+        })
+        Award.hasMany(models.AwardLog, {
+            foreignKey: 'awardId',
+            as: 'logs',
         })
     }
     return Award;
