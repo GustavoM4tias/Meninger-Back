@@ -11,7 +11,7 @@ import bulkDataController from '../services/bulkData/cv/bulkDataController.js';
 import RepassesSyncController from '../controllers/cv/repassesSyncController.js';
 import ReservasSyncController from '../controllers/cv/reservasSyncController.js';
 
-import { fetchBuildingsFromDb, fetchBuildingByIdFromDb } from '../controllers/cv/empreendimentosDb.js';
+import { fetchBuildingsFromDb, fetchBuildingByIdFromDb, fetchBuildingUnitsSummaryFromDb } from '../controllers/cv/empreendimentosDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
 import { fetchWorkflowGroups, createOrUpdateWorkflowGroup, removeWorkflowGroup, fetchListSegments  } from '../controllers/cv/workflowGroups.js';
@@ -26,7 +26,6 @@ const cvEnterprises = new EnterprisesSyncController();
 
 router.get('/repasses', authenticate, fetchRepasses);
 router.get('/repasse-workflow', authenticate, fetchRepasseWorkflow);
-
 
 router.get('/reservas', authenticate, fetchReservas);
 // ⬇️ NOVO: workflow de reservas + grupos paralelos
@@ -57,6 +56,7 @@ router.post('/empreendimentos/sync/delta', authenticate, cvEnterprises.deltaSync
 
 router.get('/empreendimentos', authenticate, fetchBuildingsFromDb);
 router.get('/empreendimento/:id', authenticate, fetchBuildingByIdFromDb);
+router.get('/empreendimento/:id/unidades', authenticate, fetchBuildingUnitsSummaryFromDb);
 
 router.get('/workflow-grupos', authenticate, fetchWorkflowGroups);
 // ?tipo=repasses

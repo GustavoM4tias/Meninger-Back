@@ -1,5 +1,6 @@
+// routes/projectionsRoutes.js
 import express from 'express';
-import * as ctrl from '../controllers/projectionController.js';
+import * as ctrl from '../controllers/projectionController.js'; // ✅ plural e bate com o arquivo
 import authenticate from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
@@ -7,16 +8,16 @@ const router = express.Router();
 router.use(authenticate);
 
 // rotas específicas SEM :id primeiro
-router.get('/', ctrl.listProjections);                 // ?year=YYYY
-router.post('/', ctrl.createProjection);               // admin
-router.post('/clone', ctrl.cloneProjection);  
-router.get('/enterprise-picker', ctrl.listEnterprisesForPicker); // <-- AGORA ANTES
+router.get('/', ctrl.listProjections);
+router.post('/', ctrl.createProjection);
+router.post('/clone', ctrl.cloneProjection);
+router.get('/enterprise-picker', ctrl.listEnterprisesForPicker);
 
 // rotas que usam :id com regex numérica
-router.get('/:id(\\d+)', ctrl.getProjectionDetail);          // filtra por cidade se não-admin
-router.put('/:id(\\d+)/lines', ctrl.upsertProjectionLines);  // admin (bulk)
-router.patch('/:id(\\d+)', ctrl.updateProjectionMeta);       // admin (name, lock/unlock)
-router.put('/:id(\\d+)/defaults', ctrl.upsertProjectionDefaults); // novo
-router.get('/:id(\\d+)/logs', ctrl.getProjectionLogs);       // timeline
+router.get('/:id(\\d+)', ctrl.getProjectionDetail);
+router.put('/:id(\\d+)/lines', ctrl.upsertProjectionLines);
+router.patch('/:id(\\d+)', ctrl.updateProjectionMeta);
+router.put('/:id(\\d+)/defaults', ctrl.upsertProjectionDefaults);
+router.get('/:id(\\d+)/logs', ctrl.getProjectionLogs);
 
 export default router;

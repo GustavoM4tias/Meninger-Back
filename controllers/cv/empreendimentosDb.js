@@ -1,5 +1,6 @@
 // /src/controllers/cv/empreendimentosDb.js
 import db from '../../models/sequelize/index.js';
+import { summarizeUnitsFromDb } from '../../services/cv/enterpriseUnitsSummaryService.js';
 const {
   CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
   CvEnterpriseMaterial, CvEnterprisePlan
@@ -321,4 +322,30 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
     console.error('Erro no detalhe do empreendimento:', err);
     return res.status(500).json({ error: 'Erro ao montar empreendimento.' });
   }
+}; 
+
+export const fetchBuildingUnitsSummaryFromDb = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Usuário não autenticado.' });
+    }
+
+    const { id } = req.params; // idempreendimento (CV)
+    const cvEnterpriseId = Number(id);
+
+    if (!cvEnterpriseId) {
+      return res.status(400).json({ error: "Parâmetro 'id' inválido." });
+    }
+
+    const summary = await summarizeUnitsFromDb(cvEnterpriseId);
+
+    return res.json({
+      cvEnterpriseId,
+      ...summary
+    });
+  } catch (err) {
+    console.error('Erro ao resumir unidades do empreendimento (DB):', err);
+    return res.status(500).json({ error: 'Erro ao resumir unidades do empreendimento.' });
+  }
 };
+  

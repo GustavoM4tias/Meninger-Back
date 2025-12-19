@@ -1,4 +1,6 @@
+// controllers/projectionsController.js
 import db from '../models/sequelize/index.js';
+import { summarizeUnitsFromDb } from '../services/cv/enterpriseUnitsSummaryService.js';
 
 const {
   SalesProjection,
@@ -6,7 +8,8 @@ const {
   SalesProjectionLog,
   SalesProjectionEnterprise,
   EnterpriseCity,
-  Sequelize
+  Sequelize,
+  User,
 } = db;
 
 const { Op } = Sequelize;
@@ -17,7 +20,7 @@ const assertAdmin = (req, res) => {
   return null;
 };
 
-// Normalização de cidade: igual ao restante do projeto (ex.: contratos / leads)
+// Normalização de cidade
 const CITY_EQ = (col) => `
   unaccent(upper(regexp_replace(${col}, '[^A-Z0-9]+',' ','g')))
 `;
@@ -28,211 +31,345 @@ const normYM = (v) => {
   return ym;
 };
 
+const isTruthy = (v) => v === true || v === 1 || v === '1' || v === 'true' || v === 'yes';
+
 const getRangeOrNull = (req) => {
   const start = req.query.start_month ? normYM(req.query.start_month) : null;
   const end = req.query.end_month ? normYM(req.query.end_month) : null;
-  if ((start && !end) || (!start && end)) {
-    throw new Error('Envie start_month e end_month juntos (ou nenhum).');
-  }
+  if ((start && !end) || (!start && end)) throw new Error('Envie start_month e end_month juntos (ou nenhum).');
   if (start && end && start > end) throw new Error('start_month não pode ser maior que end_month');
   return { start, end };
 };
 
-const buildYearMonthWhere = ({ start, end }) => {
-  if (!start || !end) return {};
-  return { year_month: { [Op.between]: [start, end] } };
-};
+/**
+ * =============================================================================
+ * ✅ VIABILIDADE (CV) — cache global (process-wide) + ENRICH defaults
+ * =============================================================================
+ * - Injeta em enterprise_defaults:
+ *   - cv_enterprise_id
+ *   - units_summary { totalUnits, soldUnits, soldUnitsStock, reservedUnits, blockedUnits, availableUnits, availableInventory }
+ *
+ * - Também registra logs internos (console) quando CV falhar, pra rastrear problemas.
+ */
+const unitsCache = new Map();
+const UNITS_TTL = 30_000;
 
-const isManualEnterpriseKey = (enterprise_key) => String(enterprise_key || '').startsWith('MAN:');
-const isErpEnterpriseKey = (enterprise_key) => String(enterprise_key || '').startsWith('ERP:');
+async function getUnitsSummaryCached(cvEnterpriseId) {
+  if (!cvEnterpriseId) return null;
+
+  const key = `units:${cvEnterpriseId}`;
+  const now = Date.now();
+  const memo = unitsCache.get(key);
+  if (memo && now - memo.ts < UNITS_TTL) return memo.data;
+
+  try {
+    const data = await summarizeUnitsFromDb(Number(cvEnterpriseId));
+    unitsCache.set(key, { ts: now, data });
+    return data;
+  } catch (e) {
+    // log técnico pra investigar falhas de CV sem quebrar a tela
+    console.error('[projections][units_summary] erro ao carregar CV snapshot', {
+      cvEnterpriseId,
+      message: e?.message,
+    });
+    unitsCache.set(key, { ts: now, data: null });
+    return null;
+  }
+}
+
+async function resolveCvEnterpriseIdByErp({ erpId }) {
+  if (!erpId) return undefined;
+
+  const row = await EnterpriseCity.findOne({
+    where: { source: 'crm', erp_id: String(erpId) },
+    attributes: ['crm_id'],
+  });
+
+  if (!row) return undefined;
+  return row.crm_id != null ? Number(row.crm_id) : undefined;
+}
+
+async function enrichDefaultsWithUnits(defaults) {
+  if (!Array.isArray(defaults) || defaults.length === 0) return defaults;
+
+  // dedup ERP->cvId e cvId->summary
+  const cvIdByErp = new Map();
+  const summaryByCvId = new Map();
+
+  // 1) resolve cvId para cada item
+  const itemsWithCv = await Promise.all(
+    defaults.map(async (d) => {
+      const erpId = d?.erp_id != null ? String(d.erp_id) : null;
+
+      let cvId = d?.cv_enterprise_id != null ? Number(d.cv_enterprise_id) : undefined;
+
+      if (!cvId && erpId) {
+        if (cvIdByErp.has(erpId)) {
+          cvId = cvIdByErp.get(erpId);
+        } else {
+          const resolved = await resolveCvEnterpriseIdByErp({ erpId });
+          cvIdByErp.set(erpId, resolved);
+          cvId = resolved;
+        }
+      }
+
+      return { d, cvId: cvId ?? null };
+    })
+  );
+
+  // 2) carrega summaries (dedup por cvId)
+  const uniqueCvIds = [...new Set(itemsWithCv.map((x) => x.cvId).filter(Boolean))];
+
+  await Promise.all(
+    uniqueCvIds.map(async (cvId) => {
+      const summary = await getUnitsSummaryCached(cvId);
+      summaryByCvId.set(cvId, summary);
+    })
+  );
+
+  // 3) injeta no payload (formato que o front já espera no AvailabilityInline)
+  return itemsWithCv.map(({ d, cvId }) => {
+    const unitsSummary = cvId ? summaryByCvId.get(cvId) : null;
+
+    return {
+      ...d,
+      cv_enterprise_id: cvId,
+      units_summary: unitsSummary
+        ? {
+          totalUnits: unitsSummary.totalUnits,
+          soldUnits: unitsSummary.soldUnits,
+          soldUnitsStock: unitsSummary.soldUnitsStock ?? unitsSummary.soldUnits ?? 0,
+          reservedUnits: unitsSummary.reservedUnits,
+          blockedUnits: unitsSummary.blockedUnits,
+          availableUnits: unitsSummary.availableUnits,
+          availableInventory: unitsSummary.availableInventory,
+        }
+        : null,
+    };
+  });
+}
 
 /**
  * =============================================================================
- * SQL HELPERS PARA "RANGE REAL" (não gerar abr→dez se a projeção real só vai até mar)
+ * SQL: Allowed (USER)
  * =============================================================================
- *
- * A ideia:
- * - bounds: calcula min_ym e max_ym por (enterprise_key, alias_id) usando SOMENTE linhas com units_target > 0
- * - pairs_in_view: mantém apenas pares cujo range real intersecta o range solicitado (start/end)
- * - lines: retorna as linhas DO RANGE pedido, mas só para os pares em view
- * - defaults: retorna defaults só para os pares em view (para não "sobrar" empreendimento fantasma no grid)
  */
-
-const SQL_ADMIN_BOUNDS = `
-WITH bounds AS (
-  SELECT
-    l.projection_id,
-    l.enterprise_key,
-    COALESCE(l.alias_id,'default') AS alias_id,
-    MIN(l.year_month) AS min_ym,
-    MAX(l.year_month) AS max_ym
-  FROM sales_projection_lines l
-  WHERE l.projection_id = :pid
-    AND COALESCE(l.units_target,0) > 0
-  GROUP BY l.projection_id, l.enterprise_key, COALESCE(l.alias_id,'default')
-),
-pairs_in_view AS (
-  SELECT *
-  FROM bounds
-  WHERE min_ym <= :end
-    AND max_ym >= :start
-)
-SELECT * FROM pairs_in_view;
-`;
-
-const SQL_ADMIN_LINES = `
-WITH bounds AS (
-  SELECT
-    l.projection_id,
-    l.enterprise_key,
-    COALESCE(l.alias_id,'default') AS alias_id,
-    MIN(l.year_month) AS min_ym,
-    MAX(l.year_month) AS max_ym
-  FROM sales_projection_lines l
-  WHERE l.projection_id = :pid
-    AND COALESCE(l.units_target,0) > 0
-  GROUP BY l.projection_id, l.enterprise_key, COALESCE(l.alias_id,'default')
-),
-pairs_in_view AS (
-  SELECT *
-  FROM bounds
-  WHERE min_ym <= :end
-    AND max_ym >= :start
-)
-SELECT
-  l.id, l.enterprise_key, l.erp_id, l.alias_id, l.year_month,
-  l.units_target, l.avg_price_target,
-  l.enterprise_name_cache, l.created_at, l.updated_at,
-  l.marketing_pct, l.commission_pct
-FROM sales_projection_lines l
-JOIN pairs_in_view p
-  ON p.projection_id = l.projection_id
- AND p.enterprise_key = l.enterprise_key
- AND p.alias_id = COALESCE(l.alias_id,'default')
-WHERE l.projection_id = :pid
-  AND l.year_month BETWEEN :start AND :end
-ORDER BY l.enterprise_key ASC, COALESCE(l.alias_id,'default') ASC, l.year_month ASC;
-`;
-
-const SQL_ADMIN_DEFAULTS = `
-WITH bounds AS (
-  SELECT
-    l.projection_id,
-    l.enterprise_key,
-    COALESCE(l.alias_id,'default') AS alias_id,
-    MIN(l.year_month) AS min_ym,
-    MAX(l.year_month) AS max_ym
-  FROM sales_projection_lines l
-  WHERE l.projection_id = :pid
-    AND COALESCE(l.units_target,0) > 0
-  GROUP BY l.projection_id, l.enterprise_key, COALESCE(l.alias_id,'default')
-),
-pairs_in_view AS (
-  SELECT *
-  FROM bounds
-  WHERE min_ym <= :end
-    AND max_ym >= :start
-)
-SELECT
-  d.enterprise_key, d.erp_id, d.alias_id,
-  d.default_avg_price, d.enterprise_name_cache,
-  d.default_marketing_pct, d.default_commission_pct
-FROM sales_projection_enterprises d
-JOIN pairs_in_view p
-  ON p.projection_id = d.projection_id
- AND p.enterprise_key = d.enterprise_key
- AND p.alias_id = COALESCE(d.alias_id,'default')
-WHERE d.projection_id = :pid
-ORDER BY d.enterprise_key ASC, COALESCE(d.alias_id,'default') ASC;
-`;
-
-const SQL_USER_LINES = `
+const SQL_ALLOWED = `
 WITH allowed AS (
   SELECT DISTINCT ec.erp_id
   FROM enterprise_cities ec
   WHERE ec.erp_id IS NOT NULL
     AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-),
-bounds AS (
-  SELECT
-    l.projection_id,
-    l.enterprise_key,
-    COALESCE(l.alias_id,'default') AS alias_id,
-    MIN(l.year_month) AS min_ym,
-    MAX(l.year_month) AS max_ym,
-    l.erp_id
-  FROM sales_projection_lines l
-  JOIN allowed a ON a.erp_id = l.erp_id
-  WHERE l.projection_id = :pid
-    AND l.erp_id IS NOT NULL
-    AND COALESCE(l.units_target,0) > 0
-  GROUP BY l.projection_id, l.enterprise_key, COALESCE(l.alias_id,'default'), l.erp_id
-),
-pairs_in_view AS (
-  SELECT *
-  FROM bounds
-  WHERE min_ym <= :end
-    AND max_ym >= :start
 )
+`;
+
+/**
+ * =============================================================================
+ * MV: include_zero=1 precisa incluir:
+ *  - pares vindos de QUALQUER line existente (mesmo units=0) OU defaults
+ *  - e trazer as lines no range (ou todas se sem range)
+ *
+ * include_zero=0:
+ *  - pares pelo "range real" calculado em lines com units_target>0
+ */
+
+/* ===========================
+   ADMIN — include_zero=0 (range real)
+=========================== */
+const SQL_ADMIN_PAIRS_RANGE_REAL = `
+WITH pairs_in_view AS (
+  SELECT DISTINCT
+    l.enterprise_key,
+    COALESCE(l.alias_id,'default') AS alias_id
+  FROM sales_projection_lines l
+  WHERE l.projection_id = :pid
+    AND EXISTS (
+      SELECT 1
+      FROM sales_projection_lines x
+      WHERE x.projection_id = :pid
+        AND x.enterprise_key = l.enterprise_key
+        AND COALESCE(x.alias_id,'default') = COALESCE(l.alias_id,'default')
+        AND x.year_month BETWEEN :start AND :end
+        AND COALESCE(x.units_target,0) > 0
+    )
+)
+SELECT
+  p.enterprise_key,
+  p.alias_id,
+  d.erp_id,
+  d.enterprise_name_cache,
+  COALESCE(d.default_avg_price,0) AS default_avg_price,
+  COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
+  COALESCE(d.default_commission_pct,0) AS default_commission_pct,
+  d.total_units
+FROM pairs_in_view p
+LEFT JOIN sales_projection_enterprises d
+  ON d.projection_id = :pid
+ AND d.enterprise_key = p.enterprise_key
+ AND COALESCE(d.alias_id,'default') = p.alias_id
+ORDER BY p.enterprise_key ASC, p.alias_id ASC;
+`;
+
+const SQL_ADMIN_LINES_RANGE = `
 SELECT
   l.id, l.enterprise_key, l.erp_id, l.alias_id, l.year_month,
   l.units_target, l.avg_price_target,
   l.enterprise_name_cache, l.created_at, l.updated_at,
   l.marketing_pct, l.commission_pct
 FROM sales_projection_lines l
-JOIN pairs_in_view p
-  ON p.projection_id = l.projection_id
- AND p.enterprise_key = l.enterprise_key
- AND p.alias_id = COALESCE(l.alias_id,'default')
- AND p.erp_id = l.erp_id
+WHERE l.projection_id = :pid
+  AND l.year_month BETWEEN :start AND :end
+ORDER BY l.enterprise_key ASC, COALESCE(l.alias_id,'default') ASC, l.year_month ASC;
+`;
+
+/* ===========================
+   ADMIN — include_zero=1 (pairs ANY: lines UNION defaults)
+=========================== */
+const SQL_ADMIN_PAIRS_ANY = `
+WITH pairs AS (
+  -- ✅ qualquer line existente (independente de units_target)
+  SELECT
+    l.enterprise_key,
+    COALESCE(l.alias_id,'default') AS alias_id,
+    MAX(l.erp_id) AS erp_id,
+    MAX(l.enterprise_name_cache) AS enterprise_name_cache
+  FROM sales_projection_lines l
+  WHERE l.projection_id = :pid
+  GROUP BY l.enterprise_key, COALESCE(l.alias_id,'default')
+
+  UNION
+
+  -- ✅ qualquer default existente
+  SELECT
+    d.enterprise_key,
+    COALESCE(d.alias_id,'default') AS alias_id,
+    d.erp_id,
+    d.enterprise_name_cache
+  FROM sales_projection_enterprises d
+  WHERE d.projection_id = :pid
+)
+SELECT
+  p.enterprise_key,
+  p.alias_id,
+  COALESCE(d.erp_id, p.erp_id) AS erp_id,
+  COALESCE(d.enterprise_name_cache, p.enterprise_name_cache) AS enterprise_name_cache,
+  COALESCE(d.default_avg_price,0) AS default_avg_price,
+  COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
+  COALESCE(d.default_commission_pct,0) AS default_commission_pct,
+  d.total_units
+FROM pairs p
+LEFT JOIN sales_projection_enterprises d
+  ON d.projection_id = :pid
+ AND d.enterprise_key = p.enterprise_key
+ AND COALESCE(d.alias_id,'default') = p.alias_id
+ORDER BY p.enterprise_key ASC, p.alias_id ASC;
+`;
+
+/* ===========================
+   USER — include_zero=0 (range real, allowed)
+=========================== */
+const SQL_USER_PAIRS_RANGE_REAL = `
+${SQL_ALLOWED}
+, pairs_in_view AS (
+  SELECT DISTINCT
+    l.enterprise_key,
+    COALESCE(l.alias_id,'default') AS alias_id,
+    l.erp_id
+  FROM sales_projection_lines l
+  JOIN allowed a ON a.erp_id = l.erp_id
+  WHERE l.projection_id = :pid
+    AND l.erp_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM sales_projection_lines x
+      WHERE x.projection_id = :pid
+        AND x.erp_id = l.erp_id
+        AND x.enterprise_key = l.enterprise_key
+        AND COALESCE(x.alias_id,'default') = COALESCE(l.alias_id,'default')
+        AND x.year_month BETWEEN :start AND :end
+        AND COALESCE(x.units_target,0) > 0
+    )
+)
+SELECT
+  p.enterprise_key,
+  p.alias_id,
+  p.erp_id,
+  d.enterprise_name_cache,
+  COALESCE(d.default_avg_price,0) AS default_avg_price,
+  COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
+  COALESCE(d.default_commission_pct,0) AS default_commission_pct,
+  d.total_units
+FROM pairs_in_view p
+LEFT JOIN sales_projection_enterprises d
+  ON d.projection_id = :pid
+ AND d.enterprise_key = p.enterprise_key
+ AND COALESCE(d.alias_id,'default') = p.alias_id
+ AND d.erp_id = p.erp_id
+ORDER BY p.enterprise_key ASC, p.alias_id ASC;
+`;
+
+const SQL_USER_LINES_RANGE = `
+${SQL_ALLOWED}
+SELECT
+  l.id, l.enterprise_key, l.erp_id, l.alias_id, l.year_month,
+  l.units_target, l.avg_price_target,
+  l.enterprise_name_cache, l.created_at, l.updated_at,
+  l.marketing_pct, l.commission_pct
+FROM sales_projection_lines l
+JOIN allowed a ON a.erp_id = l.erp_id
 WHERE l.projection_id = :pid
   AND l.erp_id IS NOT NULL
   AND l.year_month BETWEEN :start AND :end
 ORDER BY l.enterprise_key ASC, COALESCE(l.alias_id,'default') ASC, l.year_month ASC;
 `;
 
-const SQL_USER_DEFAULTS = `
-WITH allowed AS (
-  SELECT DISTINCT ec.erp_id
-  FROM enterprise_cities ec
-  WHERE ec.erp_id IS NOT NULL
-    AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-),
-bounds AS (
+/* ===========================
+   USER — include_zero=1 (pairs ANY allowed: lines UNION defaults)
+=========================== */
+const SQL_USER_PAIRS_ANY_ALLOWED = `
+${SQL_ALLOWED}
+, pairs AS (
+  -- ✅ qualquer line existente (independente de units_target), mas só allowed
   SELECT
-    l.projection_id,
     l.enterprise_key,
     COALESCE(l.alias_id,'default') AS alias_id,
-    MIN(l.year_month) AS min_ym,
-    MAX(l.year_month) AS max_ym,
-    l.erp_id
+    l.erp_id,
+    MAX(l.enterprise_name_cache) AS enterprise_name_cache
   FROM sales_projection_lines l
   JOIN allowed a ON a.erp_id = l.erp_id
   WHERE l.projection_id = :pid
     AND l.erp_id IS NOT NULL
-    AND COALESCE(l.units_target,0) > 0
-  GROUP BY l.projection_id, l.enterprise_key, COALESCE(l.alias_id,'default'), l.erp_id
-),
-pairs_in_view AS (
-  SELECT *
-  FROM bounds
-  WHERE min_ym <= :end
-    AND max_ym >= :start
+  GROUP BY l.enterprise_key, COALESCE(l.alias_id,'default'), l.erp_id
+
+  UNION
+
+  -- ✅ defaults existentes, só allowed
+  SELECT
+    d.enterprise_key,
+    COALESCE(d.alias_id,'default') AS alias_id,
+    d.erp_id,
+    d.enterprise_name_cache
+  FROM sales_projection_enterprises d
+  JOIN allowed a ON a.erp_id = d.erp_id
+  WHERE d.projection_id = :pid
+    AND d.erp_id IS NOT NULL
 )
 SELECT
-  d.enterprise_key, d.erp_id, d.alias_id,
-  d.default_avg_price, d.enterprise_name_cache,
-  d.default_marketing_pct, d.default_commission_pct
-FROM sales_projection_enterprises d
-JOIN pairs_in_view p
-  ON p.projection_id = d.projection_id
- AND p.enterprise_key = d.enterprise_key
- AND p.alias_id = COALESCE(d.alias_id,'default')
- AND p.erp_id = d.erp_id
-JOIN allowed a ON a.erp_id = d.erp_id
-WHERE d.projection_id = :pid
-  AND d.erp_id IS NOT NULL
-ORDER BY d.enterprise_key ASC, COALESCE(d.alias_id,'default') ASC;
+  p.enterprise_key,
+  p.alias_id,
+  p.erp_id,
+  COALESCE(d.enterprise_name_cache, p.enterprise_name_cache) AS enterprise_name_cache,
+  COALESCE(d.default_avg_price,0) AS default_avg_price,
+  COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
+  COALESCE(d.default_commission_pct,0) AS default_commission_pct,
+  d.total_units
+FROM pairs p
+LEFT JOIN sales_projection_enterprises d
+  ON d.projection_id = :pid
+ AND d.enterprise_key = p.enterprise_key
+ AND COALESCE(d.alias_id,'default') = p.alias_id
+ AND d.erp_id = p.erp_id
+ORDER BY p.enterprise_key ASC, p.alias_id ASC;
 `;
 
 /**
@@ -256,27 +393,16 @@ export async function listProjections(req, res) {
       const rows = await SalesProjection.findAll({
         where,
         attributes: ['id', 'name', 'is_locked', 'is_active', 'created_at', 'updated_at'],
-        order: [
-          ['is_active', 'DESC'],
-          ['updated_at', 'DESC'],
-          ['name', 'ASC'],
-        ],
+        order: [['is_active', 'DESC'], ['updated_at', 'DESC'], ['name', 'ASC']],
       });
       return res.json(rows);
     }
 
-    if (!userCity) {
-      return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-    }
+    if (!userCity) return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
 
     const sql = `
-      WITH allowed AS (
-        SELECT DISTINCT ec.erp_id
-        FROM enterprise_cities ec
-        WHERE ec.erp_id IS NOT NULL
-          AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-      ),
-      visible AS (
+      ${SQL_ALLOWED}
+      , visible AS (
         SELECT DISTINCT l.projection_id
         FROM sales_projection_lines l
         JOIN allowed a ON a.erp_id = l.erp_id
@@ -313,7 +439,6 @@ export async function listProjections(req, res) {
  * CREATE PROJECTION (ADMIN)
  * =============================================================================
  */
-// POST /api/projections
 export async function createProjection(req, res) {
   const deny = assertAdmin(req, res);
   if (deny) return;
@@ -327,12 +452,7 @@ export async function createProjection(req, res) {
     }
 
     const created = await SalesProjection.create(
-      {
-        name: String(name),
-        is_locked: false,
-        is_active: !!is_active,
-        created_by: req.user.id,
-      },
+      { name: String(name), is_locked: false, is_active: !!is_active, created_by: req.user.id },
       { transaction: trx }
     );
 
@@ -374,7 +494,6 @@ export async function createProjection(req, res) {
  * CLONE PROJECTION (ADMIN)
  * =============================================================================
  */
-// POST /api/projections/clone
 export async function cloneProjection(req, res) {
   const deny = assertAdmin(req, res);
   if (deny) return;
@@ -394,20 +513,11 @@ export async function cloneProjection(req, res) {
     }
 
     const created = await SalesProjection.create(
-      {
-        name: String(name),
-        is_locked: false,
-        is_active: !!is_active,
-        created_by: req.user.id,
-      },
+      { name: String(name), is_locked: false, is_active: !!is_active, created_by: req.user.id },
       { transaction: trx }
     );
 
-    const srcDefaults = await SalesProjectionEnterprise.findAll({
-      where: { projection_id: source.id },
-      transaction: trx,
-    });
-
+    const srcDefaults = await SalesProjectionEnterprise.findAll({ where: { projection_id: source.id }, transaction: trx });
     if (srcDefaults.length) {
       await SalesProjectionEnterprise.bulkCreate(
         srcDefaults.map((d) => ({
@@ -419,16 +529,13 @@ export async function cloneProjection(req, res) {
           enterprise_name_cache: d.enterprise_name_cache || null,
           default_marketing_pct: Number(d.default_marketing_pct || 0),
           default_commission_pct: Number(d.default_commission_pct || 0),
+          total_units: d.total_units ?? null,
         })),
         { transaction: trx }
       );
     }
 
-    const srcLines = await SalesProjectionLine.findAll({
-      where: { projection_id: source.id },
-      transaction: trx,
-    });
-
+    const srcLines = await SalesProjectionLine.findAll({ where: { projection_id: source.id }, transaction: trx });
     if (srcLines.length) {
       await SalesProjectionLine.bulkCreate(
         srcLines.map((l) => ({
@@ -486,13 +593,17 @@ export async function cloneProjection(req, res) {
 
 /**
  * =============================================================================
- * GET PROJECTION DETAIL
+ * GET PROJECTION DETAIL (MV)
  * =============================================================================
- * Agora:
- * - Se start/end vierem: devolve só pares cujo "range real" (com units>0) intersecta start/end
- * - E devolve linhas só do período pedido (start→end), mas apenas desses pares.
+ * GET /api/projections/:id?start_month=YYYY-MM&end_month=YYYY-MM&include_zero=1
+ *
+ * ✅ Agora SEMPRE retorna enterprise_defaults enriquecido com:
+ *    - cv_enterprise_id
+ *    - units_summary (snapshot CV)
+ *
+ * ✅ Acompanhamento de logs:
+ *    - Registra um log leve de VIEW_DETAIL (sem payload gigante), pra rastrear “possíveis problemas”
  */
-// GET /api/projections/:id?start_month=YYYY-MM&end_month=YYYY-MM
 export async function getProjectionDetail(req, res) {
   try {
     if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
@@ -506,17 +617,86 @@ export async function getProjectionDetail(req, res) {
     if (!proj) return res.status(404).json({ error: 'Projeção não encontrada.' });
 
     const isAdmin = req.user.role === 'admin';
+    const includeZero = isTruthy(req.query.include_zero);
     const { start, end } = getRangeOrNull(req);
+    const hasRange = !!(start && end);
 
-    // Se não mandou range, mantém comportamento antigo (não mexe)
-    if (!start || !end) {
-      if (isAdmin) {
+    // =========================
+    // ADMIN
+    // =========================
+    if (isAdmin) {
+      // include_zero=1
+      if (includeZero) {
+        const defaults = await db.sequelize.query(SQL_ADMIN_PAIRS_ANY, {
+          replacements: { pid: id },
+          type: db.Sequelize.QueryTypes.SELECT,
+        });
+
+        const lines = hasRange
+          ? await db.sequelize.query(SQL_ADMIN_LINES_RANGE, {
+            replacements: { pid: id, start, end },
+            type: db.Sequelize.QueryTypes.SELECT,
+          })
+          : await SalesProjectionLine.findAll({
+            where: { projection_id: id },
+            attributes: [
+              'id',
+              'enterprise_key',
+              'erp_id',
+              'alias_id',
+              'year_month',
+              'units_target',
+              'avg_price_target',
+              'enterprise_name_cache',
+              'created_at',
+              'updated_at',
+              'marketing_pct',
+              'commission_pct',
+            ],
+            order: [['enterprise_key', 'ASC'], ['alias_id', 'ASC'], ['year_month', 'ASC']],
+          });
+
+        const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
+
+        // log leve de acompanhamento
+        try {
+          await SalesProjectionLog.create({
+            projection_id: id,
+            action: 'VIEW_DETAIL',
+            user_id: req.user.id,
+            payload_after: {
+              include_zero: true,
+              start_month: start ?? null,
+              end_month: end ?? null,
+              lines_count: Array.isArray(lines) ? lines.length : (lines?.length ?? null),
+              defaults_count: defaultsEnriched?.length ?? 0,
+            },
+            note: `Detalhe carregado (admin, include_zero=sim${hasRange ? `, range=${start}..${end}` : ''}).`,
+          });
+        } catch (e) {
+          console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
+        }
+
+        return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
+      }
+
+      // include_zero=0 (sem range)
+      if (!hasRange) {
         const lines = await SalesProjectionLine.findAll({
           where: { projection_id: id },
           attributes: [
-            'id', 'enterprise_key', 'erp_id', 'alias_id', 'year_month',
-            'units_target', 'avg_price_target', 'enterprise_name_cache',
-            'created_at', 'updated_at', 'marketing_pct', 'commission_pct',
+            'id',
+            'enterprise_key',
+            'erp_id',
+            'alias_id',
+            'year_month',
+            'units_target',
+            'avg_price_target',
+            'enterprise_name_cache',
+            'created_at',
+            'updated_at',
+            'marketing_pct',
+            'commission_pct',
           ],
           order: [['enterprise_key', 'ASC'], ['alias_id', 'ASC'], ['year_month', 'ASC']],
         });
@@ -524,100 +704,218 @@ export async function getProjectionDetail(req, res) {
         const defaults = await SalesProjectionEnterprise.findAll({
           where: { projection_id: id },
           attributes: [
-            'enterprise_key', 'erp_id', 'alias_id',
-            'default_avg_price', 'enterprise_name_cache',
-            'default_marketing_pct', 'default_commission_pct',
+            'enterprise_key',
+            'erp_id',
+            'alias_id',
+            'default_avg_price',
+            'enterprise_name_cache',
+            'default_marketing_pct',
+            'default_commission_pct',
+            'total_units',
           ],
           order: [['enterprise_key', 'ASC'], ['alias_id', 'ASC']],
         });
 
-        return res.json({ projection: proj, lines, enterprise_defaults: defaults });
+        const defaultsPlain = defaults.map((d) => (d?.toJSON ? d.toJSON() : d));
+        const defaultsEnriched = await enrichDefaultsWithUnits(defaultsPlain);
+
+        try {
+          await SalesProjectionLog.create({
+            projection_id: id,
+            action: 'VIEW_DETAIL',
+            user_id: req.user.id,
+            payload_after: {
+              include_zero: false,
+              start_month: null,
+              end_month: null,
+              lines_count: lines?.length ?? 0,
+              defaults_count: defaultsEnriched?.length ?? 0,
+            },
+            note: 'Detalhe carregado (admin, include_zero=não, sem range).',
+          });
+        } catch (e) {
+          console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
+        }
+
+        return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
       }
 
-      // USER sem range -> mantém comportamento antigo (mas ainda filtra allowed)
-      const userCity = (req.user.city || '').trim();
-      if (!userCity) return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-
-      const sqlLines = `
-        WITH allowed AS (
-          SELECT DISTINCT ec.erp_id
-          FROM enterprise_cities ec
-          WHERE ec.erp_id IS NOT NULL
-            AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-        )
-        SELECT
-          l.id, l.enterprise_key, l.erp_id, l.alias_id, l.year_month,
-          l.units_target, l.avg_price_target,
-          l.enterprise_name_cache, l.created_at, l.updated_at,
-          l.marketing_pct, l.commission_pct
-        FROM sales_projection_lines l
-        JOIN allowed a ON a.erp_id = l.erp_id
-        WHERE l.projection_id = :pid
-          AND l.erp_id IS NOT NULL
-        ORDER BY l.enterprise_key ASC, l.alias_id ASC, l.year_month ASC;
-      `;
-
-      const lines = await db.sequelize.query(sqlLines, {
-        replacements: { pid: id, userCity },
-        type: db.Sequelize.QueryTypes.SELECT,
-      });
-
-      const sqlDefaults = `
-        WITH allowed AS (
-          SELECT DISTINCT ec.erp_id
-          FROM enterprise_cities ec
-          WHERE ec.erp_id IS NOT NULL
-            AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-        )
-        SELECT
-          d.enterprise_key, d.erp_id, d.alias_id,
-          d.default_avg_price, d.enterprise_name_cache,
-          d.default_marketing_pct, d.default_commission_pct
-        FROM sales_projection_enterprises d
-        JOIN allowed a ON a.erp_id = d.erp_id
-        WHERE d.projection_id = :pid
-          AND d.erp_id IS NOT NULL
-        ORDER BY d.enterprise_key ASC, d.alias_id ASC;
-      `;
-
-      const defaults = await db.sequelize.query(sqlDefaults, {
-        replacements: { pid: id, userCity },
-        type: db.Sequelize.QueryTypes.SELECT,
-      });
-
-      return res.json({ projection: proj, lines, enterprise_defaults: defaults });
-    }
-
-    // ====== COM RANGE (start/end) ======
-    if (isAdmin) {
-      const lines = await db.sequelize.query(SQL_ADMIN_LINES, {
+      // include_zero=0 com range (range real)
+      const defaults = await db.sequelize.query(SQL_ADMIN_PAIRS_RANGE_REAL, {
         replacements: { pid: id, start, end },
         type: db.Sequelize.QueryTypes.SELECT,
       });
 
-      const defaults = await db.sequelize.query(SQL_ADMIN_DEFAULTS, {
+      const lines = await db.sequelize.query(SQL_ADMIN_LINES_RANGE, {
         replacements: { pid: id, start, end },
         type: db.Sequelize.QueryTypes.SELECT,
       });
 
-      return res.json({ projection: proj, lines, enterprise_defaults: defaults });
+      const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
+
+      try {
+        await SalesProjectionLog.create({
+          projection_id: id,
+          action: 'VIEW_DETAIL',
+          user_id: req.user.id,
+          payload_after: {
+            include_zero: false,
+            start_month: start,
+            end_month: end,
+            lines_count: lines?.length ?? 0,
+            defaults_count: defaultsEnriched?.length ?? 0,
+          },
+          note: `Detalhe carregado (admin, include_zero=não, range=${start}..${end}).`,
+        });
+      } catch (e) {
+        console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
+      }
+
+      return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
     }
 
-    // USER COM RANGE
+    // =========================
+    // USER
+    // =========================
     const userCity = (req.user.city || '').trim();
     if (!userCity) return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
 
-    const lines = await db.sequelize.query(SQL_USER_LINES, {
+    if (includeZero) {
+      const defaults = await db.sequelize.query(SQL_USER_PAIRS_ANY_ALLOWED, {
+        replacements: { pid: id, userCity },
+        type: db.Sequelize.QueryTypes.SELECT,
+      });
+
+      const lines = hasRange
+        ? await db.sequelize.query(SQL_USER_LINES_RANGE, {
+          replacements: { pid: id, userCity, start, end },
+          type: db.Sequelize.QueryTypes.SELECT,
+        })
+        : await db.sequelize.query(
+          `${SQL_ALLOWED}
+             SELECT
+               l.id, l.enterprise_key, l.erp_id, l.alias_id, l.year_month,
+               l.units_target, l.avg_price_target,
+               l.enterprise_name_cache, l.created_at, l.updated_at,
+               l.marketing_pct, l.commission_pct
+             FROM sales_projection_lines l
+             JOIN allowed a ON a.erp_id = l.erp_id
+             WHERE l.projection_id = :pid
+               AND l.erp_id IS NOT NULL
+             ORDER BY l.enterprise_key ASC, COALESCE(l.alias_id,'default') ASC, l.year_month ASC;`,
+          { replacements: { pid: id, userCity }, type: db.Sequelize.QueryTypes.SELECT }
+        );
+
+      const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
+
+      // log leve (usuário também) — ajuda a rastrear tela “vazia”
+      try {
+        await SalesProjectionLog.create({
+          projection_id: id,
+          action: 'VIEW_DETAIL',
+          user_id: req.user.id,
+          payload_after: {
+            include_zero: true,
+            start_month: start ?? null,
+            end_month: end ?? null,
+            lines_count: lines?.length ?? 0,
+            defaults_count: defaultsEnriched?.length ?? 0,
+          },
+          note: `Detalhe carregado (user, include_zero=sim${hasRange ? `, range=${start}..${end}` : ''}).`,
+        });
+      } catch (e) {
+        console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
+      }
+
+      return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
+    }
+
+    // include_zero=0
+    if (!hasRange) {
+      const lines = await db.sequelize.query(
+        `${SQL_ALLOWED}
+         SELECT
+           l.id, l.enterprise_key, l.erp_id, l.alias_id, l.year_month,
+           l.units_target, l.avg_price_target,
+           l.enterprise_name_cache, l.created_at, l.updated_at,
+           l.marketing_pct, l.commission_pct
+         FROM sales_projection_lines l
+         JOIN allowed a ON a.erp_id = l.erp_id
+         WHERE l.projection_id = :pid
+           AND l.erp_id IS NOT NULL
+         ORDER BY l.enterprise_key ASC, COALESCE(l.alias_id,'default') ASC, l.year_month ASC;`,
+        { replacements: { pid: id, userCity }, type: db.Sequelize.QueryTypes.SELECT }
+      );
+
+      const defaults = await db.sequelize.query(
+        `${SQL_ALLOWED}
+         SELECT
+           d.enterprise_key, d.erp_id, d.alias_id,
+           d.default_avg_price, d.enterprise_name_cache,
+           d.default_marketing_pct, d.default_commission_pct,
+           d.total_units
+         FROM sales_projection_enterprises d
+         JOIN allowed a ON a.erp_id = d.erp_id
+         WHERE d.projection_id = :pid
+           AND d.erp_id IS NOT NULL
+         ORDER BY d.enterprise_key ASC, COALESCE(d.alias_id,'default') ASC;`,
+        { replacements: { pid: id, userCity }, type: db.Sequelize.QueryTypes.SELECT }
+      );
+
+      const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
+
+      try {
+        await SalesProjectionLog.create({
+          projection_id: id,
+          action: 'VIEW_DETAIL',
+          user_id: req.user.id,
+          payload_after: {
+            include_zero: false,
+            start_month: null,
+            end_month: null,
+            lines_count: lines?.length ?? 0,
+            defaults_count: defaultsEnriched?.length ?? 0,
+          },
+          note: 'Detalhe carregado (user, include_zero=não, sem range).',
+        });
+      } catch (e) {
+        console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
+      }
+
+      return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
+    }
+
+    const defaults = await db.sequelize.query(SQL_USER_PAIRS_RANGE_REAL, {
       replacements: { pid: id, userCity, start, end },
       type: db.Sequelize.QueryTypes.SELECT,
     });
 
-    const defaults = await db.sequelize.query(SQL_USER_DEFAULTS, {
+    const lines = await db.sequelize.query(SQL_USER_LINES_RANGE, {
       replacements: { pid: id, userCity, start, end },
       type: db.Sequelize.QueryTypes.SELECT,
     });
 
-    return res.json({ projection: proj, lines, enterprise_defaults: defaults });
+    const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
+
+    try {
+      await SalesProjectionLog.create({
+        projection_id: id,
+        action: 'VIEW_DETAIL',
+        user_id: req.user.id,
+        payload_after: {
+          include_zero: false,
+          start_month: start,
+          end_month: end,
+          lines_count: lines?.length ?? 0,
+          defaults_count: defaultsEnriched?.length ?? 0,
+        },
+        note: `Detalhe carregado (user, include_zero=não, range=${start}..${end}).`,
+      });
+    } catch (e) {
+      console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
+    }
+
+    return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: e.message || 'Erro ao carregar projeção.' });
@@ -626,103 +924,7 @@ export async function getProjectionDetail(req, res) {
 
 /**
  * =============================================================================
- * UPSERT DEFAULTS (ADMIN)
- * =============================================================================
- */
-export async function upsertProjectionDefaults(req, res) {
-  if (!req.user || req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado.' });
-  }
-
-  const trx = await db.sequelize.transaction();
-  try {
-    const id = Number(req.params.id);
-    let { items, remove_missing } = req.body;
-    remove_missing = !!remove_missing;
-
-    if (!Array.isArray(items) || !items.length) {
-      await trx.rollback();
-      return res.status(400).json({ error: 'Envie items com pelo menos um item.' });
-    }
-
-    const incoming = items.map((i) => {
-      const enterprise_key = String(i.enterprise_key || '').trim();
-      if (!enterprise_key) throw new Error('enterprise_key é obrigatório nos defaults.');
-
-      return {
-        projection_id: id,
-        enterprise_key,
-        erp_id: i.erp_id ? String(i.erp_id) : null,
-        alias_id: i.alias_id ? String(i.alias_id) : 'default',
-        default_avg_price: Number(i.default_avg_price ?? 0),
-        enterprise_name_cache: i.enterprise_name_cache || null,
-        default_marketing_pct: Number(i.default_marketing_pct ?? 0),
-        default_commission_pct: Number(i.default_commission_pct ?? 0),
-      };
-    });
-
-    const key = (r) => `${r.enterprise_key}|${r.alias_id}`;
-    const dedupMap = new Map();
-    for (const r of incoming) dedupMap.set(key(r), r);
-    const finalItems = [...dedupMap.values()];
-
-    const before = await db.SalesProjectionEnterprise.findAll({
-      where: { projection_id: id },
-      transaction: trx,
-    });
-
-    const beforeMap = new Map(before.map((r) => [key(r), r.toJSON()]));
-    const afterMap = new Map(finalItems.map((r) => [key(r), r]));
-
-    await db.SalesProjectionEnterprise.bulkCreate(finalItems, {
-      transaction: trx,
-      updateOnDuplicate: [
-        'erp_id',
-        'default_avg_price',
-        'enterprise_name_cache',
-        'default_marketing_pct',
-        'default_commission_pct',
-        'updated_at',
-      ],
-    });
-
-    let removedKeys = [];
-    if (remove_missing) {
-      const incomingKeys = new Set(finalItems.map((r) => key(r)));
-      const toRemove = before.filter((r) => !incomingKeys.has(key(r)));
-      if (toRemove.length) {
-        removedKeys = toRemove.map((r) => key(r));
-        await db.SalesProjectionEnterprise.destroy({
-          where: { id: toRemove.map((r) => r.id) },
-          transaction: trx,
-        });
-      }
-    }
-
-    const { summary, note } = summarizeDefaultsChange({ beforeMap, afterMap, removedKeys });
-
-    await db.SalesProjectionLog.create(
-      {
-        projection_id: id,
-        action: 'UPSERT_DEFAULTS',
-        user_id: req.user.id,
-        payload_after: { count: finalItems.length, remove_missing, summary },
-        note,
-      },
-      { transaction: trx }
-    );
-
-    await trx.commit();
-    return res.json({ ok: true, upserted: finalItems.length, removed: removedKeys.length, summary });
-  } catch (e) {
-    await trx.rollback();
-    return res.status(400).json({ error: e.message || 'Erro ao salvar defaults.' });
-  }
-}
-
-/**
- * =============================================================================
- * UPSERT LINES (ADMIN)
+ * UPSERT LINES (ADMIN) — MV
  * =============================================================================
  */
 export async function upsertProjectionLines(req, res) {
@@ -735,7 +937,7 @@ export async function upsertProjectionLines(req, res) {
     let { rows, remove_missing } = req.body;
     remove_missing = !!remove_missing;
 
-    const proj = await db.SalesProjection.findByPk(id, { transaction: trx });
+    const proj = await SalesProjection.findByPk(id, { transaction: trx });
     if (!proj) {
       await trx.rollback();
       return res.status(404).json({ error: 'Projeção não encontrada.' });
@@ -750,9 +952,7 @@ export async function upsertProjectionLines(req, res) {
       return res.status(400).json({ error: 'Envie rows com pelo menos um item.' });
     }
 
-    const key = (r) =>
-      `${id}|${String(r.enterprise_key)}|${String(r.alias_id || 'default')}|${normYM(r.year_month)}`;
-
+    const key = (r) => `${id}|${String(r.enterprise_key)}|${String(r.alias_id || 'default')}|${normYM(r.year_month)}`;
     const map = new Map();
 
     for (const r of rows) {
@@ -760,7 +960,7 @@ export async function upsertProjectionLines(req, res) {
       const enterprise_key = String(r.enterprise_key || '').trim();
       if (!enterprise_key) throw new Error('enterprise_key é obrigatório.');
 
-      const alias_id = r.alias_id ? String(r.alias_id) : 'default'; // ✅ normaliza
+      const alias_id = r.alias_id ? String(r.alias_id) : 'default';
       const erp_id = r.erp_id ? String(r.erp_id) : null;
       const nameCache = r.enterprise_name_cache ? String(r.enterprise_name_cache) : null;
 
@@ -782,28 +982,7 @@ export async function upsertProjectionLines(req, res) {
 
     const normalized = [...map.values()];
 
-    const whereTouched = {
-      projection_id: id,
-      [db.Sequelize.Op.or]: normalized.map((n) => ({
-        enterprise_key: n.enterprise_key,
-        alias_id: n.alias_id,
-        year_month: n.year_month,
-      })),
-    };
-
-    const beforeTouched = await db.SalesProjectionLine.findAll({ where: whereTouched, transaction: trx });
-    const beforeTotals = beforeTouched.reduce(
-      (acc, r) => {
-        const u = Number(r.units_target || 0);
-        const p = Number(r.avg_price_target || 0);
-        acc.units += u;
-        acc.revenue += u * p;
-        return acc;
-      },
-      { units: 0, revenue: 0 }
-    );
-
-    await db.SalesProjectionLine.bulkCreate(normalized, {
+    await SalesProjectionLine.bulkCreate(normalized, {
       transaction: trx,
       updateOnDuplicate: [
         'erp_id',
@@ -816,61 +995,29 @@ export async function upsertProjectionLines(req, res) {
       ],
     });
 
-    const afterTouched = await db.SalesProjectionLine.findAll({ where: whereTouched, transaction: trx });
-    const afterTotals = afterTouched.reduce(
-      (acc, r) => {
-        const u = Number(r.units_target || 0);
-        const p = Number(r.avg_price_target || 0);
-        acc.units += u;
-        acc.revenue += u * p;
-        return acc;
-      },
-      { units: 0, revenue: 0 }
-    );
-
-    const enterprisesAffected = new Set(normalized.map((n) => `${n.enterprise_key}|${n.alias_id}`)).size;
-    const monthsAffected = new Set(normalized.map((n) => n.year_month)).size;
-
-    let removedPairs = [];
     if (remove_missing) {
       const keepPairs = new Set(normalized.map((n) => `${n.enterprise_key}|${n.alias_id}`));
-      const existing = await db.SalesProjectionLine.findAll({
-        where: { projection_id: id },
-        transaction: trx,
-      });
+      const existing = await SalesProjectionLine.findAll({ where: { projection_id: id }, transaction: trx });
 
       const toDelete = existing.filter((r) => !keepPairs.has(`${r.enterprise_key}|${r.alias_id || 'default'}`));
       if (toDelete.length) {
-        removedPairs = [...new Set(toDelete.map((r) => `${r.enterprise_key}|${r.alias_id || 'default'}`))];
-        await db.SalesProjectionLine.destroy({
-          where: { id: toDelete.map((r) => r.id) },
-          transaction: trx,
-        });
+        await SalesProjectionLine.destroy({ where: { id: toDelete.map((r) => r.id) }, transaction: trx });
       }
     }
 
-    const { summary, note } = summarizeLinesChange({
-      beforeTotals,
-      afterTotals,
-      enterprisesAffected,
-      monthsAffected,
-    });
-
-    await db.SalesProjectionLog.create(
+    await SalesProjectionLog.create(
       {
         projection_id: id,
         action: 'UPSERT_LINES',
         user_id: req.user.id,
-        payload_after: { count: normalized.length, summary, remove_missing, removed_pairs: removedPairs },
-        note: removedPairs.length
-          ? `${note} • ${removedPairs.length} par(es) removido(s): ${removedPairs.join(', ')}`
-          : note,
+        payload_after: { count: normalized.length, remove_missing },
+        note: `Linhas: upsert ${normalized.length} (remove_missing=${remove_missing ? 'sim' : 'não'}).`,
       },
       { transaction: trx }
     );
 
     await trx.commit();
-    return res.json({ ok: true, upserted: normalized.length, removed_pairs: removedPairs, summary });
+    return res.json({ ok: true, upserted: normalized.length });
   } catch (e) {
     console.error(e);
     await trx.rollback();
@@ -880,10 +1027,105 @@ export async function upsertProjectionLines(req, res) {
 
 /**
  * =============================================================================
+ * UPSERT DEFAULTS (ADMIN) — MV
+ * =============================================================================
+ */
+export async function upsertProjectionDefaults(req, res) {
+  const deny = assertAdmin(req, res);
+  if (deny) return;
+
+  const trx = await db.sequelize.transaction();
+  try {
+    const id = Number(req.params.id);
+    let { items, remove_missing } = req.body;
+    remove_missing = !!remove_missing;
+
+    if (!Array.isArray(items) || !items.length) {
+      await trx.rollback();
+      return res.status(400).json({ error: 'Envie items com pelo menos um item.' });
+    }
+
+    const key = (r) => `${r.enterprise_key}|${r.alias_id}`;
+    const dedup = new Map();
+
+    for (const i of items) {
+      const enterprise_key = String(i.enterprise_key || '').trim();
+      if (!enterprise_key) throw new Error('enterprise_key é obrigatório nos defaults.');
+
+      const erp_id = i.erp_id ? String(i.erp_id) : null;
+      const alias_id = i.alias_id ? String(i.alias_id) : 'default';
+
+      let total_units = null;
+      if (typeof i.total_units !== 'undefined' && i.total_units !== null) {
+        total_units = Math.max(0, parseInt(i.total_units, 10) || 0);
+      } else if (typeof i.totalUnits !== 'undefined' && i.totalUnits !== null) {
+        total_units = Math.max(0, parseInt(i.totalUnits, 10) || 0);
+      }
+
+      dedup.set(key({ enterprise_key, alias_id }), {
+        projection_id: id,
+        enterprise_key,
+        erp_id,
+        alias_id,
+        default_avg_price: Number(i.default_avg_price ?? i.defaultPrice ?? 0),
+        enterprise_name_cache: i.enterprise_name_cache ?? i.name ?? null,
+        default_marketing_pct: Number(i.default_marketing_pct ?? 0),
+        default_commission_pct: Number(i.default_commission_pct ?? 0),
+        total_units,
+      });
+    }
+
+    const finalItems = [...dedup.values()];
+
+    await SalesProjectionEnterprise.bulkCreate(finalItems, {
+      transaction: trx,
+      updateOnDuplicate: [
+        'erp_id',
+        'default_avg_price',
+        'enterprise_name_cache',
+        'default_marketing_pct',
+        'default_commission_pct',
+        'total_units',
+        'updated_at',
+      ],
+    });
+
+    if (remove_missing) {
+      const incomingKeys = new Set(finalItems.map((r) => key(r)));
+      const before = await SalesProjectionEnterprise.findAll({ where: { projection_id: id }, transaction: trx });
+      const toRemove = before.filter(
+        (r) => !incomingKeys.has(key({ enterprise_key: r.enterprise_key, alias_id: r.alias_id || 'default' }))
+      );
+      if (toRemove.length) {
+        await SalesProjectionEnterprise.destroy({ where: { id: toRemove.map((r) => r.id) }, transaction: trx });
+      }
+    }
+
+    await SalesProjectionLog.create(
+      {
+        projection_id: id,
+        action: 'UPSERT_DEFAULTS',
+        user_id: req.user.id,
+        payload_after: { count: finalItems.length, remove_missing },
+        note: `Defaults: upsert ${finalItems.length} (remove_missing=${remove_missing ? 'sim' : 'não'}).`,
+      },
+      { transaction: trx }
+    );
+
+    await trx.commit();
+    return res.json({ ok: true, upserted: finalItems.length });
+  } catch (e) {
+    console.error(e);
+    await trx.rollback();
+    return res.status(400).json({ error: e.message || 'Erro ao salvar defaults.' });
+  }
+}
+
+/**
+ * =============================================================================
  * UPDATE META (ADMIN)
  * =============================================================================
  */
-// PATCH /api/projections/:id
 export async function updateProjectionMeta(req, res) {
   const deny = assertAdmin(req, res);
   if (deny) return;
@@ -928,7 +1170,8 @@ export async function updateProjectionMeta(req, res) {
     if (changes.name) parts.push(`nome: "${changes.name.from}" → "${changes.name.to}"`);
     if (changes.is_locked)
       parts.push(
-        `status: ${changes.is_locked.from ? 'Bloqueada' : 'Aberta'} → ${changes.is_locked.to ? 'Bloqueada' : 'Aberta'}`
+        `status: ${changes.is_locked.from ? 'Bloqueada' : 'Aberta'} → ${changes.is_locked.to ? 'Bloqueada' : 'Aberta'
+        }`
       );
     if (changes.is_active)
       parts.push(`ativa: ${changes.is_active.from ? 'Sim' : 'Não'} → ${changes.is_active.to ? 'Sim' : 'Não'}`);
@@ -957,12 +1200,7 @@ export async function updateProjectionMeta(req, res) {
     );
 
     await trx.commit();
-    return res.json({
-      id: proj.id,
-      name: proj.name,
-      is_locked: proj.is_locked,
-      is_active: proj.is_active,
-    });
+    return res.json({ id: proj.id, name: proj.name, is_locked: proj.is_locked, is_active: proj.is_active });
   } catch (e) {
     console.error(e);
     await trx.rollback();
@@ -975,17 +1213,16 @@ export async function updateProjectionMeta(req, res) {
  * LOGS
  * =============================================================================
  */
-// GET /api/projections/:id/logs
 export async function getProjectionLogs(req, res) {
   try {
     if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
     const id = Number(req.params.id);
-    const logs = await db.SalesProjectionLog.findAll({
+    const logs = await SalesProjectionLog.findAll({
       where: { projection_id: id },
       order: [['created_at', 'DESC']],
       attributes: ['id', 'action', 'user_id', 'payload_before', 'payload_after', 'note', 'created_at'],
-      include: [{ model: db.User, as: 'actor', attributes: ['id', 'username', 'email'] }],
+      include: User ? [{ model: User, as: 'actor', attributes: ['id', 'username', 'email'], required: false }] : [],
     });
 
     return res.json(logs);
@@ -1000,11 +1237,10 @@ export async function getProjectionLogs(req, res) {
  * ENTERPRISE PICKER
  * =============================================================================
  */
-// GET /api/projections/enterprise-picker
 export async function listEnterprisesForPicker(req, res) {
   try {
     const isAdmin = req.user?.role === 'admin';
-    const userCity = req.user?.city || '';
+    const userCity = (req.user?.city || '').trim();
 
     const sql = `
       SELECT DISTINCT ON (ec.erp_id)
@@ -1012,11 +1248,7 @@ export async function listEnterprisesForPicker(req, res) {
              TRIM(COALESCE(ec.enterprise_name, ec.erp_id)) AS name
       FROM enterprise_cities ec
       WHERE ec.erp_id IS NOT NULL
-        ${isAdmin
-        ? ''
-        : `
-          AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-        `}
+        ${isAdmin ? '' : `AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}`}
       ORDER BY ec.erp_id, ec.updated_at DESC, TRIM(COALESCE(ec.enterprise_name, ec.erp_id));
     `;
 
@@ -1030,88 +1262,11 @@ export async function listEnterprisesForPicker(req, res) {
       const id = String(r.id);
       if (!map.has(id)) map.set(id, { id, name: r.name });
     }
-    const results = [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 
+    const results = [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
     return res.json({ count: results.length, results });
-  } catch (err) {
-    console.error(err);
+  } catch (e) {
+    console.error(e);
     return res.status(500).json({ error: 'Erro ao listar empreendimentos.' });
   }
-}
-
-/**
- * =============================================================================
- * HELPERS (LOG SUMMARY)
- * =============================================================================
- */
-function summarizeDefaultsChange({ beforeMap, afterMap, removedKeys }) {
-  const added = [];
-  const removed = [];
-  const price_changed = [];
-  const renamed = [];
-
-  for (const [k, v] of afterMap.entries()) {
-    const prev = beforeMap.get(k);
-    if (!prev) {
-      added.push({ enterprise_key: v.enterprise_key, alias_id: v.alias_id });
-    } else {
-      const pFrom = Number(prev.default_avg_price || 0);
-      const pTo = Number(v.default_avg_price || 0);
-      if (pFrom !== pTo) {
-        price_changed.push({
-          enterprise_key: v.enterprise_key,
-          alias_id: v.alias_id,
-          from: pFrom,
-          to: pTo,
-        });
-      }
-      const nFrom = prev.enterprise_name_cache || null;
-      const nTo = v.enterprise_name_cache || null;
-      if (nFrom !== nTo) {
-        renamed.push({
-          enterprise_key: v.enterprise_key,
-          alias_id: v.alias_id,
-          from: nFrom,
-          to: nTo,
-        });
-      }
-    }
-  }
-
-  for (const k of removedKeys) {
-    const prev = beforeMap.get(k);
-    if (prev) removed.push({ enterprise_key: prev.enterprise_key, alias_id: prev.alias_id });
-  }
-
-  const noteParts = [];
-  if (added.length) noteParts.push(`${added.length} adicionado(s)`);
-  if (removed.length) noteParts.push(`${removed.length} removido(s)`);
-  if (price_changed.length) noteParts.push(`${price_changed.length} preço(s) alterado(s)`);
-  if (renamed.length) noteParts.push(`${renamed.length} renomeado(s)`);
-
-  const note = noteParts.length ? `Defaults: ${noteParts.join(', ')}.` : 'Defaults: nenhuma mudança relevante.';
-  return { summary: { added, removed, price_changed, renamed }, note };
-}
-
-function summarizeLinesChange({ beforeTotals, afterTotals, enterprisesAffected, monthsAffected }) {
-  const unitsDelta = Number(afterTotals.units) - Number(beforeTotals.units);
-  const revenueDelta = Number(afterTotals.revenue) - Number(beforeTotals.revenue);
-
-  const note = [
-    'Linhas:',
-    `${enterprisesAffected} empreendimento(s) afetado(s)`,
-    `${monthsAffected} mês(es) tocado(s)`,
-    `Δ unidades = ${unitsDelta}`,
-    `Δ receita = R$ ${revenueDelta.toFixed(2)}`,
-  ].join(' • ');
-
-  return {
-    summary: {
-      enterprises_affected: enterprisesAffected,
-      months_affected: monthsAffected,
-      units_delta: unitsDelta,
-      revenue_delta: Number(revenueDelta.toFixed(2)),
-    },
-    note,
-  };
 }
