@@ -1,5 +1,6 @@
 // src/services/viabilityService.js
 import db from '../models/sequelize/index.js';
+import { summarizeUnitsFromDb } from './cv/enterpriseUnitsSummaryService.js';
 
 const {
     SalesProjection,
@@ -19,80 +20,9 @@ const { Op } = Sequelize;
  * Gera array ["2025-01", ..., "2025-12"]
  */
 function buildYearMonths(year) {
-    return Array.from({ length: 12 }, (_, i) =>
-        `${year}-${String(i + 1).padStart(2, '0')}`
-    );
-}
-
-/**
- * Normaliza texto simples (sem acento, minúsculo)
- */
-function norm(str) {
-    return String(str || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .trim();
-}
-
-/**
- * Classifica uma unidade em vendido / reservado / bloqueado / disponível
- * Compatível com o mapa de disponibilidade do CV (Building):
- *
- * 1 = Disponível
- * 2 = Reserva Início
- * 3 = Vendido
- * 4 = Bloqueado
- * 5 = Reserva Ativa
- *
- * Também considera:
- *  - data_bloqueio => bloqueado
- *  - fallback textual para legados (vend / reserv / bloq / disp)
- */
-function classifyUnitStatus(unit) {
-    const raw = unit.situacao_mapa_disponibilidade;
-    const numeric = Number(raw);
-    let statusNum = null;
-
-    if (!Number.isNaN(numeric) && numeric > 0) {
-        statusNum = numeric;
-    }
-
-    let isSold = false;
-    let isReserved = false;
-    let isBlocked = false;
-    let isAvailableExplicit = false;
-
-    if (statusNum !== null) {
-        // Mapa de disponibilidade numérico
-        isSold = statusNum === 3;
-        isReserved = statusNum === 2 || statusNum === 5;
-        isBlocked = statusNum === 4;
-        isAvailableExplicit = statusNum === 1;
-    } else {
-        // Fallback textual (legado)
-        const s = norm(raw);
-
-        if (s) {
-            if (s.includes('vend')) isSold = true;          // vendido
-            if (s.includes('reserv')) isReserved = true;    // reservado
-            if (s.includes('bloq')) isBlocked = true;       // bloqueado
-            if (s.includes('disp')) isAvailableExplicit = true; // disponível explícito
-        }
-    }
-
-    // Regra extra: qualquer unidade com data_bloqueio entra como BLOQUEADA
-    if (unit.data_bloqueio) {
-        isBlocked = true;
-        isAvailableExplicit = false;
-    }
-
-    return {
-        isSold,
-        isReserved,
-        isBlocked,
-        isAvailableExplicit
-    };
+  return Array.from({ length: 12 }, (_, i) =>
+    `${year}-${String(i + 1).padStart(2, '0')}`
+  );
 }
 
 export default class ViabilityService {
@@ -158,119 +88,7 @@ export default class ViabilityService {
      *  - availableInventory (não vendidas = disp + reserv + bloqueadas)
      */
     async summarizeUnits({ cvEnterpriseId }) {
-        console.log('[Viability] summarizeUnits: IN', { cvEnterpriseId });
-
-        if (!cvEnterpriseId) {
-            console.warn('[Viability] summarizeUnits: cvEnterpriseId vazio, retornando zeros.');
-            return {
-                totalUnits: 0,
-                soldUnits: 0,
-                soldUnitsStock: 0,
-                reservedUnits: 0,
-                blockedUnits: 0,
-                availableUnits: 0,
-                availableInventory: 0
-            };
-        }
-
-        const stages = await CvEnterpriseStage.findAll({
-            where: { idempreendimento: cvEnterpriseId },
-            attributes: ['idetapa']
-        });
-        console.log('[Viability] summarizeUnits: stages encontrados', {
-            cvEnterpriseId,
-            count: stages.length,
-            ids: stages.map(s => s.idetapa)
-        });
-
-        const stageIds = stages.map(s => s.idetapa);
-        if (!stageIds.length) {
-            console.warn('[Viability] summarizeUnits: nenhum stage encontrado', { cvEnterpriseId });
-            return {
-                totalUnits: 0,
-                soldUnits: 0,
-                soldUnitsStock: 0,
-                reservedUnits: 0,
-                blockedUnits: 0,
-                availableUnits: 0,
-                availableInventory: 0
-            };
-        }
-
-        const blocks = await CvEnterpriseBlock.findAll({
-            where: { idetapa: stageIds },
-            attributes: ['idbloco']
-        });
-        console.log('[Viability] summarizeUnits: blocks encontrados', {
-            stageCount: stageIds.length,
-            blockCount: blocks.length,
-            ids: blocks.map(b => b.idbloco)
-        });
-
-        const blockIds = blocks.map(b => b.idbloco);
-        if (!blockIds.length) {
-            console.warn('[Viability] summarizeUnits: nenhum block encontrado', { stageIds });
-            return {
-                totalUnits: 0,
-                soldUnits: 0,
-                soldUnitsStock: 0,
-                reservedUnits: 0,
-                blockedUnits: 0,
-                availableUnits: 0,
-                availableInventory: 0
-            };
-        }
-
-        const units = await CvEnterpriseUnit.findAll({
-            where: { idbloco: blockIds },
-            attributes: [
-                'idunidade',
-                'situacao_mapa_disponibilidade',
-                'data_bloqueio'
-            ]
-        });
-        console.log('[Viability] summarizeUnits: units encontrados', {
-            unitCount: units.length
-        });
-
-        let totalUnits = 0;
-        let soldUnits = 0;
-        let reservedUnits = 0;
-        let blockedUnits = 0;
-        let availableUnits = 0;
-
-        for (const u of units) {
-            totalUnits += 1;
-            const status = classifyUnitStatus(u);
-
-            if (status.isSold) {
-                soldUnits += 1;
-            } else if (status.isReserved) {
-                reservedUnits += 1;
-            } else if (status.isBlocked) {
-                blockedUnits += 1;
-            } else {
-                // Qualquer coisa que não seja vendida / reservada / bloqueada
-                // é considerada disponível (snapshot CV)
-                availableUnits += 1;
-            }
-        }
-
-        // Unidades não vendidas (estoque de viabilidade) = disponível + reserva + bloqueada
-        const availableInventory = availableUnits + reservedUnits + blockedUnits;
-
-        const summary = {
-            totalUnits,
-            soldUnits,
-            soldUnitsStock: soldUnits, // alias usado pelo front (totals.soldUnitsStock)
-            reservedUnits,
-            blockedUnits,
-            availableUnits,
-            availableInventory
-        };
-
-        console.log('[Viability] summarizeUnits: OUT summary', summary);
-        return summary;
+        return summarizeUnitsFromDb(cvEnterpriseId);
     }
 
     /**
