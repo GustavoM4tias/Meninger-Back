@@ -12,6 +12,7 @@ export default (sequelize, DataTypes) => {
     default_marketing_pct: { type: DataTypes.DECIMAL(6, 2), allowNull: false, defaultValue: 0 },
     default_commission_pct: { type: DataTypes.DECIMAL(6, 2), allowNull: false, defaultValue: 0 },
     total_units: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null, },
+    manual_city: { type: DataTypes.STRING(120), allowNull: true },
   }, {
     tableName: 'sales_projection_enterprises',
     underscored: true,

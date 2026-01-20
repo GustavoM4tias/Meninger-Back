@@ -18,6 +18,7 @@ import supportRoutes from './routes/supportRoutes.js';
 import projectionRoutes from './routes/projectionsRoutes.js';
 import expensesRoutes from './routes/expensesRoutes.js';
 import viabilityRoutes from './routes/viabilityRoutes.js';
+import academyRoutes from './routes/academyRoutes.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
@@ -25,6 +26,7 @@ import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
 import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
 import landScheduler from './scheduler/landScheduler.js';
 import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js'; 
+
 
 const app = express();
 
@@ -56,6 +58,7 @@ app.use('/api/support', supportRoutes);
 app.use('/api/projections', projectionRoutes);
 app.use('/api/expenses', expensesRoutes);
 app.use('/api/viability', viabilityRoutes);
+app.use('/api/academy', academyRoutes);
 
 const PORT = process.env.PORT || 5000;
 
