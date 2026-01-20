@@ -1242,31 +1242,70 @@ export async function listEnterprisesForPicker(req, res) {
     const isAdmin = req.user?.role === 'admin';
     const userCity = (req.user?.city || '').trim();
 
+    // Admin pode filtrar por cidade via query ?city=...
+    const requestedCity = (req.query.city || '').trim();
+    const effectiveCity = isAdmin ? requestedCity : userCity;
+
+    if (!isAdmin && !effectiveCity) {
+      return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+    }
+
+    const whereCity =
+      !effectiveCity
+        ? ''
+        : `AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:effectiveCity`)}`;
+
+    // ✅ name volta "como antes" (com ERP embutido)
+    // ✅ city volta junto pro front poder usar se quiser
     const sql = `
       SELECT DISTINCT ON (ec.erp_id)
-             ec.erp_id AS id,
-             TRIM(COALESCE(ec.enterprise_name, ec.erp_id)) AS name
+        ec.erp_id AS id,
+        (TRIM(COALESCE(ec.enterprise_name, ec.erp_id)) || ' (ERP ' || ec.erp_id || ')') AS name,
+        TRIM(COALESCE(ec.city_override, ec.default_city)) AS city
       FROM enterprise_cities ec
       WHERE ec.erp_id IS NOT NULL
-        ${isAdmin ? '' : `AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}`}
+        ${whereCity}
       ORDER BY ec.erp_id, ec.updated_at DESC, TRIM(COALESCE(ec.enterprise_name, ec.erp_id));
     `;
 
     const rows = await db.sequelize.query(sql, {
-      replacements: isAdmin ? {} : { userCity },
+      replacements: effectiveCity ? { effectiveCity } : {},
       type: db.Sequelize.QueryTypes.SELECT,
     });
 
+    // Dedup defensivo (mesmo com DISTINCT ON)
     const map = new Map();
     for (const r of rows) {
       const id = String(r.id);
-      if (!map.has(id)) map.set(id, { id, name: r.name });
+      if (!map.has(id)) {
+        map.set(id, { id, name: r.name, city: r.city || null });
+      }
     }
 
     const results = [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+
+    // (Opcional) lista de cidades para o filtro do modal (admin)
+    if (isAdmin && String(req.query.with_cities || '') === '1') {
+      const citiesSql = `
+        SELECT DISTINCT TRIM(COALESCE(ec.city_override, ec.default_city)) AS city
+        FROM enterprise_cities ec
+        WHERE ec.erp_id IS NOT NULL
+          AND TRIM(COALESCE(ec.city_override, ec.default_city)) IS NOT NULL
+          AND TRIM(COALESCE(ec.city_override, ec.default_city)) <> ''
+        ORDER BY TRIM(COALESCE(ec.city_override, ec.default_city)) ASC;
+      `;
+      const cityRows = await db.sequelize.query(citiesSql, {
+        type: db.Sequelize.QueryTypes.SELECT,
+      });
+      const cities = (cityRows || []).map((c) => c.city).filter(Boolean);
+
+      return res.json({ count: results.length, results, cities });
+    }
+
     return res.json({ count: results.length, results });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Erro ao listar empreendimentos.' });
   }
 }
+

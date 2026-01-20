@@ -1,6 +1,6 @@
 // routes/projectionsRoutes.js
 import express from 'express';
-import * as ctrl from '../controllers/projectionController.js'; // ✅ plural e bate com o arquivo
+import * as ctrl from '../controllers/projectionController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 
 const router = express.Router();

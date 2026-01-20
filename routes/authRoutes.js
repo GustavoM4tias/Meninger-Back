@@ -14,13 +14,7 @@ router.get('/user/:id', authenticate, authorizeByRole(['admin']), getUserById); 
 // router.get('/users', authenticate, authorizeByRole(['admin']), getAllUsers);  // Rota para obter todos os usuários
 router.get('/users', authenticate, getAllUsers);  // Rota para obter todos os usuários
 router.put('/users', authenticate, authorizeByRole(['admin']), updateUser); 
-
 router.post('/face/enroll', authenticate, enrollFace);     // cria/atualiza template
-
 router.post('/face/identify', identifyFace);           // NOVO (sem email)
 
-
 export default router;
-
-// ATUALIZAR RETORNOS MICROSOFT NAS ROTAS
-

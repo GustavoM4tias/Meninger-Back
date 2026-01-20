@@ -52,6 +52,17 @@ import SiengeAwardDefine from './sienge/award.js';
 import SiengeAwardLinkDefine from './sienge/awardLink.js';
 import SiengeAwardLogDefine from './sienge/awardLog.js';
 
+import AcademyArticleDefine from './academy/article.js';
+import AcademyTopicDefine from './academy/topic.js';
+import AcademyUserTrackProgressDefine from './academy/userTrackProgress.js';
+import AcademyHighlightDefine from './academy/highlight.js';
+import AcademyPostDefine from './academy/post.js';
+import AcademyTrackDefine from './academy/track.js';
+import AcademyTrackItemDefine from './academy/trackItem.js';
+import AcademyUserProgressDefine from './academy/userProgress.js';
+import AcademyTrackAssignmentDefine from './academy/trackAssignment.js';
+import AcademyUserQuizAttemptDefine from './academy/userQuizAttempt.js';
+
 const env = process.env.NODE_ENV || 'development';
 
 const cfg = config[env];
@@ -110,6 +121,17 @@ db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
 db.Award = SiengeAwardDefine(sequelize, DataTypes);
 db.AwardLink = SiengeAwardLinkDefine(sequelize, DataTypes);
 db.AwardLog = SiengeAwardLogDefine(sequelize, DataTypes);
+
+db.AcademyArticle = AcademyArticleDefine(sequelize, DataTypes);
+db.AcademyTopic = AcademyTopicDefine(sequelize, DataTypes);
+db.AcademyUserTrackProgress = AcademyUserTrackProgressDefine(sequelize, DataTypes);
+db.AcademyHighlight = AcademyHighlightDefine(sequelize, DataTypes);
+db.AcademyPost = AcademyPostDefine(sequelize, DataTypes);
+db.AcademyTrack = AcademyTrackDefine(sequelize, DataTypes);
+db.AcademyTrackItem = AcademyTrackItemDefine(sequelize, DataTypes);
+db.AcademyUserProgress = AcademyUserProgressDefine(sequelize, DataTypes);
+db.AcademyTrackAssignment = AcademyTrackAssignmentDefine(sequelize, DataTypes);
+db.AcademyUserQuizAttempt = AcademyUserQuizAttemptDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

@@ -99,7 +99,7 @@ export default class expenseController {
       res.json(data);
     } catch (e) {
       console.error(e);
-      res.status(500).send('Erro ao listar vínculos de custas');
+      res.status(500).send('Erro ao listar vínculos de custos');
     }
   };
 
