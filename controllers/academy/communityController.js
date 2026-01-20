@@ -1,10 +1,24 @@
 import communityService from '../../services/academy/communityService.js';
+import { COMMUNITY_CATEGORIES } from '../../services/academy/communityService.js';
 
 function resolveUserId(req) {
     if (req.user?.id) return req.user.id;
     const headerId = Number(req.headers['x-user-id']);
     if (Number.isFinite(headerId) && headerId > 0) return headerId;
     return null;
+}
+
+function isAdmin(req) {
+    // ajuste conforme seu auth atual:
+    // - se já existe req.user.isAdmin use isso
+    // - ou role === 'ADMIN'
+    if (req.user?.isAdmin === true) return true;
+
+    const role = String(req.user?.role || '').toUpperCase();
+    if (role === 'ADMIN') return true;
+
+    const roles = Array.isArray(req.user?.roles) ? req.user.roles : [];
+    return roles.map(r => String(r).toUpperCase()).includes('ADMIN');
 }
 
 const communityController = {
@@ -51,15 +65,18 @@ const communityController = {
         try {
             const userId = resolveUserId(req);
             const { id } = req.params;
+
             const data = await communityService.createPost({
                 userId,
                 topicId: Number(id),
                 payload: req.body,
             });
+
             return res.status(201).json(data);
         } catch (err) {
             console.error('[academy.community.createPost]', err);
-            return res.status(400).json({ message: err.message || 'Erro ao responder.' });
+            const status = err.statusCode || 400;
+            return res.status(status).json({ message: err.message || 'Erro ao responder.' });
         }
     },
 
@@ -67,15 +84,19 @@ const communityController = {
         try {
             const userId = resolveUserId(req);
             const { id, postId } = req.params;
+
             const data = await communityService.acceptPost({
                 userId,
+                isAdmin: isAdmin(req),
                 topicId: Number(id),
                 postId: Number(postId),
             });
+
             return res.json(data);
         } catch (err) {
             console.error('[academy.community.acceptPost]', err);
-            return res.status(400).json({ message: err.message || 'Erro ao marcar solução.' });
+            const status = err.statusCode || 400;
+            return res.status(status).json({ message: err.message || 'Erro ao marcar solução.' });
         }
     },
 
@@ -83,13 +104,50 @@ const communityController = {
         try {
             const userId = resolveUserId(req);
             const { id } = req.params;
-            const data = await communityService.closeTopic({ userId, topicId: Number(id) });
+
+            const data = await communityService.closeTopic({
+                userId,
+                isAdmin: isAdmin(req),
+                topicId: Number(id),
+            });
+
             return res.json(data);
         } catch (err) {
             console.error('[academy.community.closeTopic]', err);
-            return res.status(400).json({ message: err.message || 'Erro ao fechar tópico.' });
+            const status = err.statusCode || 400;
+            return res.status(status).json({ message: err.message || 'Erro ao fechar tópico.' });
         }
     },
+
+    async reopenTopic(req, res) {
+        try {
+            const userId = resolveUserId(req);
+            const { id } = req.params;
+
+            const data = await communityService.reopenTopic({
+                userId,
+                isAdmin: isAdmin(req),
+                topicId: Number(id),
+            });
+
+            return res.json(data);
+        } catch (err) {
+            console.error('[academy.community.reopenTopic]', err);
+            const status = err.statusCode || 400;
+            return res.status(status).json({ message: err.message || 'Erro ao reabrir tópico.' });
+        }
+    },
+    async getMeta(req, res) {
+        return res.json({
+            categories: COMMUNITY_CATEGORIES,
+            types: [
+                { key: 'questions', label: 'Dúvidas', value: 'QUESTION' },
+                { key: 'discussions', label: 'Discussões', value: 'DISCUSSION' },
+                { key: 'suggestions', label: 'Sugestões', value: 'SUGGESTION' },
+                { key: 'incidents', label: 'Incidentes', value: 'INCIDENT' },
+            ],
+        });
+    }
 };
 
 export default communityController;
