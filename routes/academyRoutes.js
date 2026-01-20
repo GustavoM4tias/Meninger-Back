@@ -16,7 +16,7 @@ const router = express.Router();
 
 router.get('/panel/summary', authenticate, panelController.getSummary);
 
-router.get('/me/summary', authenticate, meController.getSummary); 
+router.get('/me/summary', authenticate, meController.getSummary);
 router.get('/users/rank', authenticate, meController.rank);
 router.get('/users/:id(\\d+)/summary', authenticate, meController.summary);
 
@@ -35,7 +35,9 @@ router.get('/community/topics/:id', authenticate, communityController.getTopic);
 router.post('/community/topics/:id/posts', authenticate, communityController.createPost);
 router.patch('/community/topics/:id/accept/:postId', authenticate, communityController.acceptPost);
 router.patch('/community/topics/:id/close', authenticate, communityController.closeTopic);
- 
+router.patch('/community/topics/:id/reopen', authenticate, communityController.reopenTopic);
+router.get('/community/meta', authenticate, communityController.getMeta);
+
 router.get('/tracks', authenticate, trackController.listTracks);
 router.get('/tracks/:slug', authenticate, trackController.getTrack);
 router.post('/tracks/:slug/progress', authenticate, trackController.markProgress);
