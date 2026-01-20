@@ -4,10 +4,12 @@ import db from '../../models/sequelize/index.js';
 function normalizeAudience(a) {
     return ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'].includes(a) ? a : 'BOTH';
 }
+
 function audienceWhere(a) {
     if (a === 'BOTH') return { audience: { [Op.in]: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] } };
     return { audience: { [Op.in]: ['BOTH', a] } };
 }
+
 function normalizeType(type) {
     const map = {
         questions: 'QUESTION',
@@ -18,13 +20,37 @@ function normalizeType(type) {
     return map[type] || (['QUESTION', 'DISCUSSION', 'SUGGESTION', 'INCIDENT'].includes(type) ? type : '');
 }
 
+function normalizeStatus(s) {
+    const v = String(s || '').toUpperCase();
+    return v === 'CLOSED' ? 'CLOSED' : 'OPEN';
+}
+
+function cleanTags(tags) {
+    return Array.isArray(tags)
+        ? tags.map(String).map(t => t.trim()).filter(Boolean)
+        : [];
+}
+
+function safePayload(p) {
+    // padrão parecido com KB: { embeds: [], widgets: { ... } }
+    if (!p || typeof p !== 'object') return {};
+    return p;
+}
+
+function pickUser(u) {
+    if (!u) return null;
+    return { id: u.id, username: u.username };
+}
+
 const communityService = {
     async listTopics({ type, q, status, audience, page, pageSize }) {
         const finalAudience = normalizeAudience(audience);
         const finalType = normalizeType(type);
+        const finalStatus = status ? normalizeStatus(status) : undefined;
+
         const where = {
             ...audienceWhere(finalAudience),
-            ...(status ? { status } : {}),
+            ...(finalStatus ? { status: finalStatus } : {}),
             ...(finalType ? { type: finalType } : {}),
         };
 
@@ -37,36 +63,72 @@ const communityService = {
 
         const { rows, count } = await db.AcademyTopic.findAndCountAll({
             where,
-            attributes: ['id', 'title', 'type', 'status', 'tags', 'acceptedPostId', 'createdAt'],
+            attributes: [
+                'id',
+                'title',
+                'type',
+                'status',
+                'audience',
+                'categorySlug',
+                'tags',
+                'acceptedPostId',
+                'createdAt',
+                'updatedAt',
+            ],
+            include: db.User ? [
+                { model: db.User, as: 'createdBy', attributes: ['id', 'username'], required: false },
+                { model: db.User, as: 'updatedBy', attributes: ['id', 'username'], required: false },
+            ] : [],
             order: [['createdAt', 'DESC']],
             limit: pageSize,
             offset,
         });
 
-        return { page, pageSize, total: count, results: rows };
+        // normaliza retorno (sem instance sequelize)
+        const results = rows.map(r => {
+            const o = r.toJSON();
+            if (o.createdBy) o.createdBy = pickUser(o.createdBy);
+            if (o.updatedBy) o.updatedBy = pickUser(o.updatedBy);
+            return o;
+        });
+
+        return { page, pageSize, total: count, results };
     },
 
     async createTopic({ userId, payload }) {
         const title = String(payload?.title || '').trim();
         const type = normalizeType(payload?.type || 'QUESTION') || 'QUESTION';
         const audience = normalizeAudience(payload?.audience || 'BOTH');
-        const tags = Array.isArray(payload?.tags) ? payload.tags.map(String).map(t => t.trim()).filter(Boolean) : [];
+        const categorySlug = String(payload?.categorySlug || 'geral').trim() || 'geral';
+        const tags = cleanTags(payload?.tags);
         const body = String(payload?.body || '').trim();
+        const postPayload = safePayload(payload?.payload);
 
         if (!title) throw new Error('Título é obrigatório.');
         if (!body) throw new Error('Conteúdo é obrigatório.');
 
-        // cria tópico + primeiro post (conteúdo do tópico)
         const topic = await db.AcademyTopic.create({
-            title, type, status: 'OPEN', audience, tags,
+            title,
+            type,
+            status: 'OPEN',
+            audience,
+            categorySlug,
+            tags,
             createdByUserId: userId,
+            updatedByUserId: userId,
             acceptedPostId: null,
+            acceptedByUserId: null,
+            acceptedAt: null,
+            closedByUserId: null,
+            closedAt: null,
         });
 
         const firstPost = await db.AcademyPost.create({
             topicId: topic.id,
             body,
+            payload: postPayload,
             createdByUserId: userId,
+            updatedByUserId: userId,
             type: 'COMMENT',
         });
 
@@ -78,22 +140,75 @@ const communityService = {
 
         const topic = await db.AcademyTopic.findOne({
             where: { id, ...audienceWhere(finalAudience) },
-            attributes: ['id', 'title', 'type', 'status', 'tags', 'acceptedPostId', 'createdByUserId', 'createdAt', 'updatedAt'],
+            attributes: [
+                'id',
+                'title',
+                'type',
+                'status',
+                'audience',
+                'categorySlug',
+                'tags',
+                'acceptedPostId',
+                'createdByUserId',
+                'updatedByUserId',
+                'acceptedByUserId',
+                'acceptedAt',
+                'closedByUserId',
+                'closedAt',
+                'createdAt',
+                'updatedAt',
+            ],
+            include: db.User ? [
+                { model: db.User, as: 'createdBy', attributes: ['id', 'username'], required: false },
+                { model: db.User, as: 'updatedBy', attributes: ['id', 'username'], required: false },
+                { model: db.User, as: 'acceptedBy', attributes: ['id', 'username'], required: false },
+                { model: db.User, as: 'closedBy', attributes: ['id', 'username'], required: false },
+            ] : [],
         });
         if (!topic) return null;
 
         const posts = await db.AcademyPost.findAll({
             where: { topicId: id },
-            attributes: ['id', 'topicId', 'body', 'type', 'createdByUserId', 'upvotes', 'createdAt'],
+            attributes: [
+                'id',
+                'topicId',
+                'body',
+                'payload',
+                'type',
+                'createdByUserId',
+                'updatedByUserId',
+                'upvotes',
+                'createdAt',
+                'updatedAt',
+            ],
+            include: db.User ? [
+                { model: db.User, as: 'createdBy', attributes: ['id', 'username'], required: false },
+                { model: db.User, as: 'updatedBy', attributes: ['id', 'username'], required: false },
+            ] : [],
             order: [['createdAt', 'ASC']],
         });
 
-        return { topic, posts };
+        const topicJson = topic.toJSON();
+        if (topicJson.createdBy) topicJson.createdBy = pickUser(topicJson.createdBy);
+        if (topicJson.updatedBy) topicJson.updatedBy = pickUser(topicJson.updatedBy);
+        if (topicJson.acceptedBy) topicJson.acceptedBy = pickUser(topicJson.acceptedBy);
+        if (topicJson.closedBy) topicJson.closedBy = pickUser(topicJson.closedBy);
+
+        const postsJson = posts.map(p => {
+            const o = p.toJSON();
+            if (o.createdBy) o.createdBy = pickUser(o.createdBy);
+            if (o.updatedBy) o.updatedBy = pickUser(o.updatedBy);
+            return o;
+        });
+
+        return { topic: topicJson, posts: postsJson };
     },
 
     async createPost({ userId, topicId, payload }) {
         const body = String(payload?.body || '').trim();
+        const postPayload = safePayload(payload?.payload);
         const type = String(payload?.type || 'ANSWER').toUpperCase();
+
         if (!body) throw new Error('Resposta é obrigatória.');
 
         const topic = await db.AcademyTopic.findByPk(topicId);
@@ -103,9 +218,13 @@ const communityService = {
         const post = await db.AcademyPost.create({
             topicId,
             body,
+            payload: postPayload,
             createdByUserId: userId,
+            updatedByUserId: userId,
             type: type === 'COMMENT' ? 'COMMENT' : 'ANSWER',
         });
+
+        await topic.update({ updatedByUserId: userId });
 
         return post;
     },
@@ -115,18 +234,33 @@ const communityService = {
         if (!topic) throw new Error('Tópico não existe.');
         if (topic.status !== 'OPEN') throw new Error('Tópico está fechado.');
 
-        // MVP: permitir aceitar por qualquer membro (gestor/adm). Se quiser restringir: topic.createdByUserId === userId
         const post = await db.AcademyPost.findOne({ where: { id: postId, topicId } });
         if (!post) throw new Error('Resposta não encontrada.');
 
-        await topic.update({ acceptedPostId: postId, status: 'CLOSED' });
+        await topic.update({
+            acceptedPostId: postId,
+            acceptedByUserId: userId,
+            acceptedAt: new Date(),
+            status: 'CLOSED',
+            closedByUserId: userId,
+            closedAt: new Date(),
+            updatedByUserId: userId,
+        });
+
         return { ok: true };
     },
 
     async closeTopic({ userId, topicId }) {
         const topic = await db.AcademyTopic.findByPk(topicId);
         if (!topic) throw new Error('Tópico não existe.');
-        await topic.update({ status: 'CLOSED' });
+
+        await topic.update({
+            status: 'CLOSED',
+            closedByUserId: userId,
+            closedAt: new Date(),
+            updatedByUserId: userId,
+        });
+
         return { ok: true };
     },
 };
