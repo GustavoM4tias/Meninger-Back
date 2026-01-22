@@ -4,10 +4,53 @@ import db from '../../models/sequelize/index.js';
 function normalizeAudience(a) {
     return ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'].includes(a) ? a : 'BOTH';
 }
+
 function audienceWhere(a) {
     if (a === 'BOTH') return { audience: { [Op.in]: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] } };
     return { audience: { [Op.in]: ['BOTH', a] } };
 }
+
+function normalizeMyMode(mode) {
+    const v = String(mode || '').toUpperCase();
+    return ['CREATED', 'PARTICIPATED', 'BOTH'].includes(v) ? v : 'BOTH';
+}
+
+async function topicIdsParticipatedByUser(userId) {
+    // pega topicId onde o usuário postou
+    const rows = await db.AcademyPost.findAll({
+        where: { createdByUserId: userId },
+        attributes: [[fn('DISTINCT', col('topicId')), 'topicId']],
+        raw: true,
+    });
+
+    return rows
+        .map(r => Number(r.topicId))
+        .filter(n => Number.isFinite(n) && n > 0);
+}
+
+async function countsByType(where) {
+    const rows = await db.AcademyTopic.findAll({
+        where,
+        attributes: ['type', [fn('COUNT', col('id')), 'count']],
+        group: ['type'],
+        raw: true,
+    });
+
+    const out = { questions: 0, discussions: 0, suggestions: 0, incidents: 0 };
+
+    // type no banco: QUESTION|DISCUSSION|SUGGESTION|INCIDENT
+    for (const r of rows) {
+        const t = String(r.type || '').toUpperCase();
+        const c = Number(r.count) || 0;
+        if (t === 'QUESTION') out.questions = c;
+        if (t === 'DISCUSSION') out.discussions = c;
+        if (t === 'SUGGESTION') out.suggestions = c;
+        if (t === 'INCIDENT') out.incidents = c;
+    }
+
+    return out;
+}
+
 function normalizeType(type) {
     const map = {
         questions: 'QUESTION',
@@ -17,13 +60,16 @@ function normalizeType(type) {
     };
     return map[type] || (['QUESTION', 'DISCUSSION', 'SUGGESTION', 'INCIDENT'].includes(type) ? type : '');
 }
+
 function normalizeStatus(s) {
     const v = String(s || '').toUpperCase();
     return v === 'CLOSED' ? 'CLOSED' : 'OPEN';
 }
+
 function cleanTags(tags) {
     return Array.isArray(tags) ? tags.map(String).map(t => t.trim()).filter(Boolean) : [];
 }
+
 function safePayload(p) {
     if (!p || typeof p !== 'object') return {};
     return p;
@@ -180,8 +226,11 @@ const communityService = {
     async getTopic({ id, audience }) {
         const finalAudience = normalizeAudience(audience);
 
+        const topicId = Number(id);
+        if (!Number.isFinite(topicId) || topicId <= 0) return null;
+
         const topic = await db.AcademyTopic.findOne({
-            where: { id, ...audienceWhere(finalAudience) },
+            where: { id: topicId, ...audienceWhere(finalAudience) },
             attributes: [
                 'id',
                 'title',
@@ -338,6 +387,38 @@ const communityService = {
 
         return { ok: true };
     },
+
+    async listMyTopics({ userId, q, status, audience, page, pageSize }) {
+        const finalAudience = normalizeAudience(audience);
+        const finalStatus = status ? normalizeStatus(status) : undefined;
+
+        const where = {
+            ...audienceWhere(finalAudience),
+            createdByUserId: Number(userId),
+            ...(finalStatus ? { status: finalStatus } : {}),
+        };
+
+        if (q && String(q).trim()) {
+            const like = `%${String(q).trim()}%`;
+            where[Op.or] = [{ title: { [Op.iLike]: like } }];
+        }
+
+        const offset = (Math.max(1, page) - 1) * Math.max(1, pageSize);
+
+        const { rows, count } = await db.AcademyTopic.findAndCountAll({
+            where,
+            attributes: [
+                'id', 'title', 'type', 'status', 'audience', 'categorySlug', 'tags', 'acceptedPostId',
+                'createdByUserId', 'updatedByUserId', 'createdAt', 'updatedAt',
+            ],
+            order: [['createdAt', 'DESC']],
+            limit: pageSize,
+            offset,
+        });
+
+        return { page, pageSize, total: count, results: rows.map(r => r.toJSON()) };
+    },
+
 };
 
 export default communityService;
