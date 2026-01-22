@@ -24,12 +24,27 @@ function isAdmin(req) {
 const communityController = {
     async listTopics(req, res) {
         try {
-            const { type = '', q = '', status = 'OPEN', audience = 'BOTH', page = '1', pageSize = '20' } = req.query;
+            const {
+                type = '',
+                q = '',
+                status = 'OPEN',
+                audience = 'BOTH',
+                page = '1',
+                pageSize = '20',
+            } = req.query;
+
+            const p = Number(page);
+            const ps = Number(pageSize);
+
             const data = await communityService.listTopics({
-                type, q, status, audience,
-                page: Number(page) || 1,
-                pageSize: Number(pageSize) || 20,
+                type,
+                q,
+                status,
+                audience,
+                page: Number.isFinite(p) && p > 0 ? p : 1,
+                pageSize: Number.isFinite(ps) && ps > 0 ? ps : 20,
             });
+
             return res.json(data);
         } catch (err) {
             console.error('[academy.community.listTopics]', err);
@@ -50,25 +65,35 @@ const communityController = {
 
     async getTopic(req, res) {
         try {
-            const { id } = req.params;
+            const id = Number(req.params.id);
             const audience = req.query.audience || 'BOTH';
-            const data = await communityService.getTopic({ id: Number(id), audience });
+
+            if (!Number.isFinite(id) || id <= 0) {
+                return res.status(400).json({ message: 'ID inválido.' });
+            }
+
+            const data = await communityService.getTopic({ id, audience });
             if (!data) return res.status(404).json({ message: 'Tópico não encontrado.' });
+
             return res.json(data);
         } catch (err) {
             console.error('[academy.community.getTopic]', err);
             return res.status(500).json({ message: 'Erro ao carregar tópico.' });
         }
-    },
+    }, // ✅ vírgula aqui
 
     async createPost(req, res) {
         try {
             const userId = resolveUserId(req);
-            const { id } = req.params;
+            const topicId = Number(req.params.id);
+
+            if (!Number.isFinite(topicId) || topicId <= 0) {
+                return res.status(400).json({ message: 'ID inválido.' });
+            }
 
             const data = await communityService.createPost({
                 userId,
-                topicId: Number(id),
+                topicId,
                 payload: req.body,
             });
 
@@ -83,13 +108,18 @@ const communityController = {
     async acceptPost(req, res) {
         try {
             const userId = resolveUserId(req);
-            const { id, postId } = req.params;
+            const topicId = Number(req.params.id);
+            const postId = Number(req.params.postId);
+
+            if (!Number.isFinite(topicId) || topicId <= 0 || !Number.isFinite(postId) || postId <= 0) {
+                return res.status(400).json({ message: 'ID inválido.' });
+            }
 
             const data = await communityService.acceptPost({
                 userId,
                 isAdmin: isAdmin(req),
-                topicId: Number(id),
-                postId: Number(postId),
+                topicId,
+                postId,
             });
 
             return res.json(data);
@@ -103,12 +133,16 @@ const communityController = {
     async closeTopic(req, res) {
         try {
             const userId = resolveUserId(req);
-            const { id } = req.params;
+            const topicId = Number(req.params.id);
+
+            if (!Number.isFinite(topicId) || topicId <= 0) {
+                return res.status(400).json({ message: 'ID inválido.' });
+            }
 
             const data = await communityService.closeTopic({
                 userId,
                 isAdmin: isAdmin(req),
-                topicId: Number(id),
+                topicId,
             });
 
             return res.json(data);
@@ -119,15 +153,45 @@ const communityController = {
         }
     },
 
+    async listMyTopics(req, res) {
+        try {
+            const userId = resolveUserId(req);
+            if (!userId) return res.status(401).json({ message: 'Não autenticado.' });
+
+            const { q = '', status = '', audience = 'BOTH', page = '1', pageSize = '20' } = req.query;
+
+            const p = Number(page);
+            const ps = Number(pageSize);
+
+            const data = await communityService.listMyTopics({
+                userId,
+                q,
+                status,
+                audience,
+                page: Number.isFinite(p) && p > 0 ? p : 1,
+                pageSize: Number.isFinite(ps) && ps > 0 ? ps : 20,
+            });
+
+            return res.json(data);
+        } catch (err) {
+            console.error('[academy.community.listMyTopics]', err);
+            return res.status(500).json({ message: 'Erro ao listar meus tópicos.' });
+        }
+    },
+
     async reopenTopic(req, res) {
         try {
             const userId = resolveUserId(req);
-            const { id } = req.params;
+            const topicId = Number(req.params.id);
+
+            if (!Number.isFinite(topicId) || topicId <= 0) {
+                return res.status(400).json({ message: 'ID inválido.' });
+            }
 
             const data = await communityService.reopenTopic({
                 userId,
                 isAdmin: isAdmin(req),
-                topicId: Number(id),
+                topicId,
             });
 
             return res.json(data);
@@ -137,6 +201,7 @@ const communityController = {
             return res.status(status).json({ message: err.message || 'Erro ao reabrir tópico.' });
         }
     },
+
     async getMeta(req, res) {
         return res.json({
             categories: COMMUNITY_CATEGORIES,
@@ -147,7 +212,7 @@ const communityController = {
                 { key: 'incidents', label: 'Incidentes', value: 'INCIDENT' },
             ],
         });
-    }
+    },
 };
 
 export default communityController;
