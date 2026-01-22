@@ -36,6 +36,7 @@ router.post('/community/topics/:id/posts', authenticate, communityController.cre
 router.patch('/community/topics/:id/accept/:postId', authenticate, communityController.acceptPost);
 router.patch('/community/topics/:id/close', authenticate, communityController.closeTopic);
 router.patch('/community/topics/:id/reopen', authenticate, communityController.reopenTopic);
+router.get('/community/topics/my', authenticate, communityController.listMyTopics);
 router.get('/community/meta', authenticate, communityController.getMeta);
 
 router.get('/tracks', authenticate, trackController.listTracks);
