@@ -30,6 +30,11 @@ export default (sequelize, DataTypes) => {
         key: 'id'
       },
     },
+    auth_provider: { type: DataTypes.STRING(50), allowNull: false, defaultValue: 'INTERNAL' },
+    external_kind: { type: DataTypes.STRING(50), allowNull: true }, // 'BROKER' | 'REALESTATE_USER'
+    external_id: { type: DataTypes.STRING(50), allowNull: true },   // idcorretor | idusuarioimobiliaria_cv
+    document: { type: DataTypes.STRING(20), allowNull: true },      // CPF digits
+    external_organization_id: { type: DataTypes.INTEGER, allowNull: true },
     microsoft_access_token: {
       type: DataTypes.TEXT,
       allowNull: true,
@@ -60,7 +65,10 @@ export default (sequelize, DataTypes) => {
       as: 'manager',
       foreignKey: 'manager_id',
     });
-
+    User.belongsTo(models.ExternalOrganization, {
+      as: 'externalOrganization',
+      foreignKey: 'external_organization_id',
+    });
     User.hasMany(models.User, {
       as: 'subordinates',
       foreignKey: 'manager_id',
