@@ -33,3 +33,31 @@ export async function fetchRealEstateUserByDocument(document) {
     const u = data?.usuarios?.[0];
     return u || null;
 }
+
+export async function fetchCorrespondentUserByDocument(document) {
+    const doc = onlyDigits(document);
+    if (!doc || doc.length !== 11) return null;
+
+    const perPage = 500;         // máximo permitido
+    const maxPages = 200;        // proteção contra loop infinito (ajuste se necessário)
+
+    for (let page = 1; page <= maxPages; page++) {
+        const resp = await apiCv.get('/v2/cadastros/correspondentes-usuarios', {
+            params: { pagina: page, registros_por_pagina: perPage },
+        });
+
+        const data = resp?.data;
+        const list = Array.isArray(data?.dados) ? data.dados : [];
+
+        const found = list.find(u => onlyDigits(u?.documento) === doc);
+        if (found) return found;
+
+        const totalPages = Number(data?.total_de_paginas || 0);
+        if (totalPages && page >= totalPages) break;
+
+        // fallback: se não veio total_de_paginas, para quando não tiver mais dados
+        if (!list.length) break;
+    }
+
+    return null;
+}

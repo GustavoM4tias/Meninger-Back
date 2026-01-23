@@ -10,6 +10,7 @@ import {
     onlyDigits,
     fetchBrokerByDocument,
     fetchRealEstateUserByDocument,
+    fetchCorrespondentUserByDocument,
 } from '../../services/cv/cadastrosService.js';
 
 const { User, AuthAccessCode, ExternalOrganization } = db;
@@ -21,9 +22,11 @@ const OTP_MAX_ATTEMPTS = Number(process.env.AUTH_OTP_MAX_ATTEMPTS || 5);
 function normalizeKind(kind) {
     const k = String(kind || '').toUpperCase().trim();
 
-    // aceita variações comuns
     if (k === 'CORRETOR' || k === 'BROKER') return 'BROKER';
     if (k === 'IMOBILIARIA' || k === 'IMOBILIÁRIA' || k === 'REALESTATE' || k === 'REAL_ESTATE') return 'REALESTATE';
+
+    // novo: correspondente
+    if (k === 'CORRESPONDENTE' || k === 'CORRESPONDENT') return 'CORRESPONDENT';
 
     return '';
 }
@@ -42,12 +45,11 @@ function neutralOk(res) {
 async function getCvPayload(kind, document) {
     if (kind === 'BROKER') return fetchBrokerByDocument(document);
     if (kind === 'REALESTATE') return fetchRealEstateUserByDocument(document);
+    if (kind === 'CORRESPONDENT') return fetchCorrespondentUserByDocument(document);
     return null;
 }
 
 async function upsertExternalOrganizationFromCv(kind, cvPayload) {
-    // BROKER: idimobiliaria
-    // REALESTATE: idimobiliaria_cv + imobiliaria
     let externalCompanyId = null;
     let name = null;
 
@@ -57,6 +59,10 @@ async function upsertExternalOrganizationFromCv(kind, cvPayload) {
     } else if (kind === 'REALESTATE') {
         externalCompanyId = cvPayload?.idimobiliaria_cv ? String(cvPayload.idimobiliaria_cv) : null;
         name = cvPayload?.imobiliaria ? String(cvPayload.imobiliaria) : null;
+    } else if (kind === 'CORRESPONDENT') {
+        externalCompanyId = cvPayload?.idempresa ? String(cvPayload.idempresa) : null;
+        // a API não dá nome da empresa; mantém null ou use "Correspondente"
+        name = null;
     }
 
     if (!externalCompanyId) return null;
@@ -67,7 +73,6 @@ async function upsertExternalOrganizationFromCv(kind, cvPayload) {
     });
 
     if (name && org.name !== name) await org.update({ name });
-
     return org;
 }
 
@@ -179,6 +184,51 @@ async function upsertExternalUserFromCv(kind, document, cvPayload) {
         return { user, emailToSend: email };
     }
 
+    if (kind === 'CORRESPONDENT') {
+        const externalId = cvPayload?.idusuario ? String(cvPayload.idusuario) : '';
+        if (!externalId) return null;
+
+        const email = String(cvPayload?.email || '').trim().toLowerCase();
+        if (!email) return null;
+
+        const baseUsername = String(cvPayload?.nome || 'Correspondente').trim() || 'Correspondente';
+        const safeUsername = `${baseUsername} (${externalId})`;
+
+        let user = await User.findOne({
+            where: { auth_provider: 'CVCRM', external_kind: 'CORRESPONDENT', external_id: externalId },
+        });
+
+        if (!user) {
+            user = await User.create({
+                username: safeUsername,
+                email,
+                password: genCode6(),
+                position: 'Correspondente',
+                city: cvPayload?.cidade ? String(cvPayload.cidade) : 'N/A',
+                role: 'user',
+                status: false,
+
+                birth_date: cvPayload?.data_nasc ? new Date(cvPayload.data_nasc) : null,
+                manager_id: null,
+
+                auth_provider: 'CVCRM',
+                external_kind: 'CORRESPONDENT',
+                external_id: externalId,
+                document: doc,
+                external_organization_id: org?.id || null,
+            });
+        } else {
+            await user.update({
+                document: doc,
+                external_organization_id: org?.id || user.external_organization_id,
+            });
+
+            await safeUpdateEmail(user, email);
+        }
+
+        return { user, emailToSend: email };
+    }
+
     return null;
 }
 
@@ -187,19 +237,30 @@ export async function externalRequestCode(req, res) {
         const kind = normalizeKind(req.body?.kind);
         const document = onlyDigits(req.body?.document);
 
-        if (!kind || document.length !== 11) return neutralOk(res);
+        if (!kind || document.length !== 11) {
+            console.warn('[auth.external.request] invalid input', { kind, documentLen: document?.length });
+            return neutralOk(res);
+        }
 
-        // sempre busca no CV
         const cvPayload = await getCvPayload(kind, document);
-        if (!cvPayload) return neutralOk(res);
+        if (!cvPayload) {
+            console.warn('[auth.external.request] cvPayload not found', { kind, document });
+            return neutralOk(res);
+        }
 
-        // upsert user local
         const result = await upsertExternalUserFromCv(kind, document, cvPayload);
-        if (!result?.user || !result?.emailToSend) return neutralOk(res);
+        if (!result?.user || !result?.emailToSend) {
+            console.warn('[auth.external.request] upsert failed or missing email', {
+                kind,
+                hasUser: !!result?.user,
+                emailToSend: result?.emailToSend,
+                cvEmail: cvPayload?.email,
+            });
+            return neutralOk(res);
+        }
 
         const { user, emailToSend } = result;
 
-        // rate limit (por user)
         const last = await AuthAccessCode.findOne({
             where: { user_id: user.id, used_at: null },
             order: [['created_at', 'DESC']],
@@ -207,34 +268,24 @@ export async function externalRequestCode(req, res) {
 
         if (last?.last_sent_at) {
             const diffSec = (Date.now() - new Date(last.last_sent_at).getTime()) / 1000;
-            if (diffSec < OTP_RESEND_SEC) return neutralOk(res);
+            if (diffSec < OTP_RESEND_SEC) {
+                console.warn('[auth.external.request] rate limited', { userId: user.id, diffSec, OTP_RESEND_SEC });
+                return neutralOk(res);
+            }
         }
 
         const code = genCode6();
         const codeHash = await bcrypt.hash(code, 10);
         const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60 * 1000);
 
-        await AuthAccessCode.create({
-            user_id: user.id,
-            code_hash: codeHash,
-            expires_at: expiresAt,
-            used_at: null,
-            attempts: 0,
-            last_sent_at: new Date(),
-            ip: req.ip,
-            user_agent: req.headers['user-agent'] || null,
-        });
+        await AuthAccessCode.create({ user_id: user.id, code_hash: codeHash, expires_at: expiresAt, used_at: null, attempts: 0, last_sent_at: new Date(), ip: req.ip, user_agent: req.headers['user-agent'] || null });
 
-        // ✅ FIX: o email.service estava recebendo "tipo/kind" undefined
-        await sendEmail('auth.academy.code', emailToSend, {
-            kind,
-            code,
-            minutes: OTP_TTL_MIN,
-        });
+        await sendEmail('auth.academy.code', emailToSend, { kind, code, minutes: OTP_TTL_MIN });
 
+        console.info('[auth.external.request] email sent', { kind, userId: user.id, emailToSend });
         return neutralOk(res);
     } catch (err) {
-        console.error('[auth.external.request]', err);
+        console.error('[auth.external.request] exception', err);
         return neutralOk(res);
     }
 }
