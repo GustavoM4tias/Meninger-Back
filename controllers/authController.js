@@ -246,7 +246,7 @@ export const identifyFace = async (req, res) => {
 export const getUserInfo = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id','username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update']
+      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update']
     });
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
@@ -270,7 +270,7 @@ export const updateMe = async (req, res) => {
     ]);
 
     if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
-    if (!cityRecord)    return responseHandler.error(res, 'Cidade inválida ou inativa');
+    if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
 
     const [affectedRows] = await User.update(
       {
@@ -308,7 +308,7 @@ export const updateUser = async (req, res) => {
     ]);
 
     if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
-    if (!cityRecord)    return responseHandler.error(res, 'Cidade inválida ou inativa');
+    if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
 
     const payload = {
       username,
@@ -344,7 +344,8 @@ export const getAllUsers = async (req, res) => {
           as: 'subordinates',
           attributes: ['id', 'username']
         }
-      ]
+      ],
+      where: { auth_provider: 'INTERNAL' }
     });
     if (users.length === 0) {
       return responseHandler.error(res, 'Nenhum usuário encontrado');
