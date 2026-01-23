@@ -6,6 +6,7 @@ export const EmailType = {
     SUPPORT_UPDATED: 'support.updated',
     INVITE_USER: 'invite.user',
     GENERIC_NOTIFICATION: 'generic.notification',
+    AUTH_ACADEMY_CODE: 'auth.academy.code',
 };
 
 // Contratos mínimos de dados por tipo (JSDoc p/ intellisense)

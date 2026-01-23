@@ -86,6 +86,11 @@ const META = {
         preview: (d) => d.preview || '',
         file: 'generic.notification.hbs',
     },
+    'auth.academy.code': {
+        subject: () => `Seu código de acesso`,
+        preview: () => `Use o código para entrar no Academy`,
+        file: 'auth.academy.code.hbs',
+    },
 };
 
 function compileTemplateOnce(file) {
