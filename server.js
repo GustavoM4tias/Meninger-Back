@@ -35,7 +35,8 @@ const corsOptions = {
   origin: [
     'http://localhost:5173',
     'https://meninger.vercel.app',
-    'https://office.menin.com.br'
+    'https://office.menin.com.br',
+    'https://academy.menin.com.br'
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // 👈 adicione PATCH
   credentials: true
