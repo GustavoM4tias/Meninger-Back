@@ -2,6 +2,7 @@
 import expenseService from '../services/expenseService.js';
 
 export default class expenseController {
+
   constructor() {
     this.service = new expenseService();
   }
@@ -12,40 +13,68 @@ export default class expenseController {
       const {
         costCenterId,
         costCenterName,
-        month,
+        month, // YYYY-MM
         billId,
         amount,
         description,
         departmentId,
         departmentName,
-        // 👇 NOVO
         departmentCategoryId,
         departmentCategoryName,
+
+        // ✅ NOVO (vem do front)
+        installmentNumber,
+        installmentsNumber,
       } = req.body;
 
-      if (!costCenterId || !month || !amount) {
+      if (!costCenterId || !month || amount == null) {
         return res
           .status(400)
           .json({ error: 'costCenterId, month e amount são obrigatórios' });
       }
 
+      // ✅ LOG 1: entrada do controller (antes do service)
+      console.log('[ExpenseController.add] body', {
+        costCenterId,
+        month,
+        billId,
+        amount,
+        installmentNumber,
+        installmentsNumber,
+        departmentName,
+        departmentCategoryId,
+      });
+
       const exp = await this.service.addExpense({
         costCenterId,
         costCenterName,
-        competenceMonth: month,
+        competenceMonth: month, // service espera competenceMonth
         billId,
         amount,
         description,
         departmentId,
         departmentName,
-        // 👇 NOVO
         departmentCategoryId,
         departmentCategoryName,
+
+        // ✅ repassa pro service gravar no Expense
+        installmentNumber,
+        installmentsNumber,
+      });
+
+      // ✅ LOG 2: retorno do service (após create)
+      console.log('[ExpenseController.add] created', {
+        id: exp?.id,
+        billId: exp?.bill_id,
+        competence_month: exp?.competence_month,
+        installment_number: exp?.installment_number,
+        installments_number: exp?.installments_number,
+        amount: exp?.amount,
       });
 
       res.json(exp);
     } catch (e) {
-      console.error(e);
+      console.error('[ExpenseController.add] error', e);
       res.status(500).send('Erro ao adicionar gastos');
     }
   };
@@ -134,15 +163,15 @@ export default class expenseController {
     }
   };
 
-  // DELETE /api/expenses/:id
   remove = async (req, res) => {
     try {
       const { id } = req.params;
-      await this.service.deleteExpense({ id: Number(id) });
-      res.json({ success: true });
+      const result = await this.service.deleteExpense({ id: Number(id) });
+      res.json({ success: true, ...result });
     } catch (e) {
       console.error(e);
       res.status(500).send('Erro ao remover gasto');
     }
   };
+
 }

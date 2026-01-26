@@ -3,91 +3,88 @@ import ViabilityService from '../services/viabilityService.js';
 
 const service = new ViabilityService();
 
-/**
- * GET /api/viability/enterprise/:erpId
- *   ?year=2025
- *   [&aliasId=default]
- *   [&cvEnterpriseId=123]   // idempreendimento do CV
- *   [&costCenterId=80001]   // centro de custo no módulo de despesas
- *   [&month=2025-03]        // limite até o mês (acumulado até esse mês)
- */
+function normYM(v) {
+    const ym = String(v || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(ym)) throw new Error(`month inválido: ${v}`);
+    return ym;
+}
+
 export async function getEnterpriseViability(req, res) {
     try {
-        if (!req.user) {
-            console.warn('[ViabilityController] getEnterpriseViability: usuário não autenticado');
-            return res.status(401).json({ error: 'Usuário não autenticado.' });
-        }
+        if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
         const { erpId } = req.params;
+
+        // compat (antigo)
         const { year, aliasId = 'default', cvEnterpriseId, costCenterId, month } = req.query;
 
-        console.log('[ViabilityController] getEnterpriseViability: IN', {
-            userId: req.user?.id,
-            erpId,
-            year,
-            aliasId,
-            cvEnterpriseId,
-            costCenterId,
-            month
-        });
+        // novo
+        const start_month = req.query.start_month ? normYM(req.query.start_month) : null;
+        const end_month = req.query.end_month ? normYM(req.query.end_month) : null;
 
-        const parsedYear = Number(year);
-        if (!parsedYear || parsedYear < 2000) {
-            console.warn('[ViabilityController] getEnterpriseViability: year inválido', { year });
-            return res.status(400).json({ error: 'Parâmetro year inválido.' });
+        const parsedYear = year ? Number(year) : null;
+        if (!start_month && !end_month) {
+            if (!parsedYear || parsedYear < 2000) return res.status(400).json({ error: 'Parâmetro year inválido.' });
+        } else {
+            if (!start_month || !end_month) return res.status(400).json({ error: 'Envie start_month e end_month juntos.' });
         }
+
+        // No novo padrão o identificador real é enterprise_key.
+        // Para não quebrar rota, vamos assumir:
+        // - enterpriseKey = erpId (se você ainda chama por ERP)
+        // Depois você pode trocar rota para /enterprise/:enterpriseKey
+        const enterpriseKey = String(erpId);
 
         const data = await service.computeEnterpriseViability({
             year: parsedYear,
-            erpId,
-            aliasId,
-            cvEnterpriseId: cvEnterpriseId ? Number(cvEnterpriseId) : undefined,
-            costCenterId: costCenterId ? Number(costCenterId) : Number(erpId),
-            upToMonth: month || null
-        });
+            upToMonth: month ? normYM(month) : null,
 
-        console.log('[ViabilityController] getEnterpriseViability: OUT ok', {
-            erpId,
-            year: parsedYear,
-            month: month || null
+            startMonth: start_month,
+            endMonth: end_month,
+
+            enterpriseKey,
+            aliasId,
+            erpId, // mantém vendas com ERP se existir
+            cvEnterpriseId: cvEnterpriseId ? Number(cvEnterpriseId) : undefined,
+            costCenterId: costCenterId ? Number(costCenterId) : (erpId ? Number(erpId) : null)
         });
 
         return res.json(data);
     } catch (e) {
-        console.error('[ViabilityController] getEnterpriseViability: erro', {
-            error: e.message,
-            stack: e.stack
-        });
+        console.error('[ViabilityController] getEnterpriseViability: erro', e);
         return res.status(500).json({ error: e.message || 'Erro ao calcular viabilidade.' });
     }
 }
 
-/**
- * GET /api/viability/enterprises
- *   ?year=2025
- *   [&aliasId=default]
- *   [&month=2025-03]   // acumulado até esse mês
- *
- * Retorna a lista de empreendimentos que têm projeção ativa no ano/alias,
- * com o HEADER de viabilidade calculado para cada um.
- */
 export const getEnterprisesViability = async (req, res) => {
     try {
-        const userId = req.user.id;
+        if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+
         const { year, aliasId, month } = req.query;
 
-        const svc = new ViabilityService();
+        const start_month = req.query.start_month ? normYM(req.query.start_month) : null;
+        const end_month = req.query.end_month ? normYM(req.query.end_month) : null;
 
-        const out = await svc.listEnterprisesViability({
-            year: Number(year),
-            aliasId: aliasId || 'default',
-            upToMonth: month || null,
-            userId
+        const parsedYear = year ? Number(year) : null;
+        if (!start_month && !end_month) {
+            if (!parsedYear || parsedYear < 2000) return res.status(400).json({ error: 'Parâmetro year inválido.' });
+        } else {
+            if (!start_month || !end_month) return res.status(400).json({ error: 'Envie start_month e end_month juntos.' });
+        }
+
+        const out = await service.listEnterprisesViability({
+            year: parsedYear,
+            upToMonth: month ? normYM(month) : null,
+
+            startMonth: start_month,
+            endMonth: end_month,
+
+            aliasId: aliasId || 'default'
         });
 
-        res.json(out);
+        return res.json(out);
     } catch (e) {
         console.error('[ViabilityController] getEnterprisesViability erro', e);
-        res.status(500).json({ error: 'Erro ao carregar viabilidade de empreendimentos' });
+        return res.status(500).json({ error: e.message || 'Erro ao carregar viabilidade de empreendimentos' });
     }
 };
