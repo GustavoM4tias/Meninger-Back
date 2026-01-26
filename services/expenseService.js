@@ -16,10 +16,22 @@ export default class expenseService {
     departmentName,
     departmentCategoryId,
     departmentCategoryName,
+
+    // ✅ NOVO
+    installmentNumber,
+    installmentsNumber,
   }) {
     const [y, m] = competenceMonth.split('-').map(Number);
     const monthStart = new Date(y, m - 1, 1);
     const compDate = monthStart.toISOString().slice(0, 10);
+
+    console.log('[ExpenseService.addExpense] input', {
+      billId,
+      competenceMonth,
+      installmentNumber,
+      installmentsNumber,
+      amount,
+    });
 
     const expense = await Expense.create({
       cost_center_id: costCenterId,
@@ -32,6 +44,18 @@ export default class expenseService {
       department_name: departmentName || null,
       department_category_id: departmentCategoryId || null,
       department_category_name: departmentCategoryName || null,
+
+      // ✅ NOVO
+      installment_number: installmentNumber ?? null,
+      installments_number: installmentsNumber ?? null,
+    });
+
+    console.log('[ExpenseService.addExpense] created', {
+      id: expense?.id,
+      bill_id: expense?.bill_id,
+      competence_month: expense?.competence_month,
+      installment_number: expense?.installment_number,
+      installments_number: expense?.installments_number,
     });
 
     return expense;
@@ -77,6 +101,11 @@ export default class expenseService {
         id: e.id,
         amount: Number(e.amount),
         description: e.description,
+
+        // ✅ NOVO (vem do expense)
+        installmentNumber: e.installment_number ?? null,
+        installmentsNumber: e.installments_number ?? null,
+
         departmentId: e.department_id,
         departmentName: e.department_name,
 
@@ -97,6 +126,13 @@ export default class expenseService {
 
             document_identification_id: e.bill.document_identification_id,
             document_number: e.bill.document_number,
+
+            // ✅ adicionar
+            installmentNumber: Number(e.bill.installment_number || 0),
+
+            // ✅ já tem
+            installmentsNumber: Number(e.bill.installments_number || 0),
+
             creditor_json: e.bill.creditor_json,
           }
           : null,
@@ -152,6 +188,11 @@ export default class expenseService {
           id: e.id,
           amount: Number(e.amount),
           description: e.description,
+
+          // ✅ NOVO (vem do expense)
+          installmentNumber: e.installment_number ?? null,
+          installmentsNumber: e.installments_number ?? null,
+
           departmentId: e.department_id,
           departmentName: e.department_name,
 
@@ -172,9 +213,17 @@ export default class expenseService {
 
               document_identification_id: e.bill.document_identification_id,
               document_number: e.bill.document_number,
+
+              // ✅ adicionar
+              installmentNumber: Number(e.bill.installment_number || 0),
+
+              // ✅ já tem
+              installmentsNumber: Number(e.bill.installments_number || 0),
+
               creditor_json: e.bill.creditor_json,
             }
             : null,
+
         })),
       });
     }
@@ -240,8 +289,18 @@ export default class expenseService {
 
     return exp;
   }
-
   async deleteExpense({ id }) {
+    const exp = await Expense.findByPk(id);
+    if (!exp) return;
+
+    // se tem vínculo com título, apaga tudo daquele título (todas as parcelas)
+    if (exp.bill_id) {
+      await Expense.destroy({ where: { bill_id: exp.bill_id } });
+      return;
+    }
+
+    // sem título vinculado: apaga só o registro
     await Expense.destroy({ where: { id } });
   }
+
 }
