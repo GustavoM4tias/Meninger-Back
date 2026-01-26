@@ -6,9 +6,6 @@ const {
     SalesProjection,
     SalesProjectionLine,
     SalesProjectionEnterprise,
-    CvEnterpriseStage,
-    CvEnterpriseBlock,
-    CvEnterpriseUnit,
     Expense,
     EnterpriseCity,
     Sequelize
@@ -16,59 +13,104 @@ const {
 
 const { Op } = Sequelize;
 
+/* =========================
+   Helpers de período (YM)
+========================= */
+function normYM(v) {
+    const ym = String(v || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(ym)) throw new Error(`year_month inválido: ${v}`);
+    return ym;
+}
+
+function ymToDateStart(ym) {
+    return `${ym}-01`;
+}
+
+function nextYm(ym) {
+    const [y, m] = ym.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1, 1));
+    d.setUTCMonth(d.getUTCMonth() + 1);
+    const yy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return `${yy}-${mm}`;
+}
+
+function buildYmRange(startYm, endYm) {
+    const start = normYM(startYm);
+    const end = normYM(endYm);
+    if (start > end) throw new Error('start_month não pode ser maior que end_month');
+
+    const out = [];
+    let cur = start;
+    while (cur <= end) {
+        out.push(cur);
+        cur = nextYm(cur);
+    }
+    return out;
+}
+
 /**
- * Gera array ["2025-01", ..., "2025-12"]
+ * Compatibilidade com front atual:
+ * - se vier year + month (upToMonth), usamos start = `${year}-01`, end = upToMonth
+ * - se vier start_month/end_month, usa eles.
  */
-function buildYearMonths(year) {
-  return Array.from({ length: 12 }, (_, i) =>
-    `${year}-${String(i + 1).padStart(2, '0')}`
-  );
+function resolveRange({ year, upToMonth, startMonth, endMonth }) {
+    // prioridade: range explícito
+    if (startMonth && endMonth) {
+        const start = normYM(startMonth);
+        const end = normYM(endMonth);
+        if (start > end) throw new Error('start_month não pode ser maior que end_month');
+        return { startMonth: start, endMonth: end };
+    }
+
+    // fallback: year + upToMonth (igual comportamento atual)
+    const y = Number(year);
+    if (!y || y < 2000) throw new Error('year inválido');
+    const start = `${y}-01`;
+    const end = upToMonth ? normYM(upToMonth) : `${y}-12`;
+    if (start > end) throw new Error('range inválido para year/month');
+    return { startMonth: start, endMonth: end };
 }
 
 export default class ViabilityService {
-    /**
-     * Projeção ativa do ano.
-     */
-    async getActiveProjectionForYear(year) {
+    /* =========================
+       Projeção ativa (novo)
+    ========================= */
+    async getActiveProjection() {
         const proj = await SalesProjection.findOne({
-            where: {
-                year: Number(year),
-                is_active: true
-            },
+            where: { is_active: true },
             order: [['updated_at', 'DESC']]
         });
 
         if (!proj) {
-            throw new Error(`Nenhuma projeção ativa encontrada para o ano ${year}.`);
+            throw new Error('Nenhuma projeção ativa encontrada.');
         }
 
         return proj;
     }
 
-    /**
-     * Carrega linhas e defaults de projeção para um ERP/Alias.
-     */
-    async loadProjectionData({ projectionId, erpId }) {
+    /* =========================
+       Carrega defaults+lines (novo)
+       por (enterprise_key, alias_id)
+    ========================= */
+    async loadProjectionData({ projectionId, enterpriseKey, aliasId = 'default' }) {
         const projection = await SalesProjection.findByPk(projectionId);
         if (!projection) throw new Error('Projeção não encontrada.');
 
-        // pega TODOS os defaults daquele ERP (todos os módulos)
-        const defaultsArray = await SalesProjectionEnterprise.findAll({
+        const defaults = await SalesProjectionEnterprise.findOne({
             where: {
                 projection_id: projectionId,
-                erp_id: String(erpId)
+                enterprise_key: String(enterpriseKey),
+                alias_id: String(aliasId)
             },
             order: [['id', 'ASC']]
         });
 
-        // usa o primeiro como "representante" (nome, % mkt, etc)
-        const defaults = defaultsArray[0] || null;
-
-        // pega TODAS as linhas (todos alias)
         const lines = await SalesProjectionLine.findAll({
             where: {
                 projection_id: projectionId,
-                erp_id: String(erpId)
+                enterprise_key: String(enterpriseKey),
+                alias_id: String(aliasId)
             },
             order: [['year_month', 'ASC']]
         });
@@ -76,49 +118,35 @@ export default class ViabilityService {
         return { projection, defaults, lines };
     }
 
-    /**
-     * Resume unidades do CV (snapshot atual).
-     * Busca toda a árvore: etapas -> blocos -> unidades,
-     * classifica pelo mapa de disponibilidade e devolve:
-     *  - totalUnits
-     *  - soldUnits / soldUnitsStock
-     *  - reservedUnits
-     *  - blockedUnits
-     *  - availableUnits
-     *  - availableInventory (não vendidas = disp + reserv + bloqueadas)
-     */
     async summarizeUnits({ cvEnterpriseId }) {
+        if (!cvEnterpriseId) {
+            return {
+                totalUnits: 0,
+                soldUnits: 0,
+                soldUnitsStock: 0,
+                reservedUnits: 0,
+                blockedUnits: 0,
+                availableUnits: 0,
+                availableInventory: 0
+            };
+        }
         return summarizeUnitsFromDb(cvEnterpriseId);
     }
 
-    /**
-     * Despesas de marketing por mês no ano.
-     */
-    async loadExpensesByMonth({ costCenterId, year }) {
-        console.log('[Viability] loadExpensesByMonth: IN', { costCenterId, year });
-
-        const months = buildYearMonths(year);
+    /* =========================
+       Despesas por mês (novo)
+       usando range start/end
+    ========================= */
+    async loadExpensesByMonth({ costCenterId, ymList, startDate, endDate }) {
         const result = {};
-        for (const ym of months) {
-            result[ym] = {
-                month: ym,
-                total: 0,
-                items: []
-            };
-        }
-
-        const start = `${year}-01-01`;
-        const end = `${year + 1}-01-01`;
-
-        console.log('[Viability] loadExpensesByMonth: filtro', { start, end });
+        ymList.forEach(ym => {
+            result[ym] = { month: ym, total: 0, items: [] };
+        });
 
         const rows = await Expense.findAll({
             where: {
                 cost_center_id: costCenterId,
-                competence_month: {
-                    [Op.gte]: start,
-                    [Op.lt]: end
-                }
+                competence_month: { [Op.gte]: startDate, [Op.lt]: endDate }
             },
             attributes: [
                 'id',
@@ -132,55 +160,32 @@ export default class ViabilityService {
             ]
         });
 
-        console.log('[Viability] loadExpensesByMonth: rows', {
-            count: rows.length,
-            first5: rows.slice(0, 5).map(r => (r.toJSON ? r.toJSON() : r))
-        });
-
         for (const e of rows) {
-            let ym;
-            if (e.competence_month instanceof Date) {
-                ym = e.competence_month.toISOString().slice(0, 7);
-            } else {
-                ym = String(e.competence_month).slice(0, 7);
-            }
+            const ym = (e.competence_month instanceof Date)
+                ? e.competence_month.toISOString().slice(0, 7)
+                : String(e.competence_month).slice(0, 7);
 
             if (!result[ym]) continue;
-
             const amount = Number(e.amount || 0);
             result[ym].total += amount;
             result[ym].items.push(e.toJSON ? e.toJSON() : e);
         }
 
-        console.log('[Viability] loadExpensesByMonth: OUT', {
-            costCenterId,
-            year,
-            months: months.map(ym => ({ ym, total: result[ym].total }))
-        });
-
         return result;
     }
 
-    /**
-     * Vendas reais por mês para um ERP no ano.
-     */
-    async loadSalesByMonth({ erpId, year }) {
-        console.log('[Viability] loadSalesByMonth: IN', { erpId, year });
-
-        const months = buildYearMonths(year);
+    /* =========================
+       Vendas por mês (novo)
+       usando range start/end
+    ========================= */
+    async loadSalesByMonth({ erpId, ymList, startDate, endDate }) {
         const result = {};
-        for (const ym of months) {
-            result[ym] = {
-                month: ym,
-                soldUnits: 0,
-                contracts: []
-            };
-        }
+        ymList.forEach(ym => {
+            result[ym] = { month: ym, soldUnits: 0, contracts: [] };
+        });
 
-        const start = `${year}-01-01`;
-        const end = `${year + 1}-01-01`;
-
-        console.log('[Viability] loadSalesByMonth: intervalo', { start, end });
+        // sem erpId => sem vendas (manual line)
+        if (!erpId) return result;
 
         const sql = `
       SELECT
@@ -200,14 +205,8 @@ export default class ViabilityService {
     `;
 
         const rows = await db.sequelize.query(sql, {
-            replacements: { erpId: String(erpId), start, end },
+            replacements: { erpId: String(erpId), start: startDate, end: endDate },
             type: db.Sequelize.QueryTypes.SELECT
-        });
-
-        console.log('[Viability] loadSalesByMonth: contratos', {
-            erpId,
-            count: rows.length,
-            first5: rows.slice(0, 5)
         });
 
         for (const r of rows) {
@@ -215,92 +214,43 @@ export default class ViabilityService {
             if (!result[ym]) continue;
 
             let unitsCount = 1;
-            if (Array.isArray(r.units)) {
-                unitsCount = r.units.length || 1;
-            }
+            if (Array.isArray(r.units)) unitsCount = r.units.length || 1;
 
             result[ym].soldUnits += unitsCount;
             result[ym].contracts.push(r);
         }
 
-        console.log('[Viability] loadSalesByMonth: OUT', {
-            erpId,
-            year,
-            months: months.map(ym => ({
-                ym,
-                soldUnits: result[ym].soldUnits
-            }))
-        });
-
         return result;
     }
 
-    /**
-     * Resolve idempreendimento do CV via vínculo ERP/CRM.
-     */
+    /* =========================
+       Resolve CV id (igual)
+    ========================= */
     async resolveCvEnterpriseId({ erpId, cvEnterpriseIdFromProjection }) {
-        console.log('[Viability] resolveCvEnterpriseId: IN', {
-            erpId,
-            cvEnterpriseIdFromProjection
-        });
-
         if (cvEnterpriseIdFromProjection != null) {
             const parsed = Number(cvEnterpriseIdFromProjection);
-            console.log('[Viability] resolveCvEnterpriseId: usando id da projeção', {
-                cvEnterpriseId: parsed
-            });
             return parsed;
         }
 
-        if (!erpId) {
-            console.log('[Viability] resolveCvEnterpriseId: sem erpId');
-            return undefined;
-        }
+        if (!erpId) return undefined;
 
         try {
             const row = await EnterpriseCity.findOne({
-                where: {
-                    source: 'crm',
-                    erp_id: String(erpId)
-                },
-                attributes: [
-                    'id',
-                    'crm_id',
-                    'erp_id',
-                    'enterprise_name',
-                    'default_city',
-                    'city_override'
-                ]
+                where: { source: 'crm', erp_id: String(erpId) },
+                attributes: ['crm_id']
             });
 
-            if (!row) {
-                console.log('[Viability] resolveCvEnterpriseId: nenhum vínculo', { erpId });
-                return undefined;
-            }
-
-            const rawCrmId = row.crm_id;
-            const cvId = rawCrmId != null ? Number(rawCrmId) : undefined;
-
-            console.log('[Viability] resolveCvEnterpriseId: vínculo encontrado', {
-                erpId,
-                rowId: row.id,
-                crm_id: rawCrmId,
-                enterprise_name: row.enterprise_name,
-                default_city: row.default_city,
-                city_override: row.city_override,
-                cvId
-            });
-
-            return cvId;
+            if (!row) return undefined;
+            return row.crm_id != null ? Number(row.crm_id) : undefined;
         } catch (e) {
             console.error('[Viability] resolveCvEnterpriseId: erro', e);
             return undefined;
         }
     }
 
-    /**
-     * Redistribui orçamento de marketing para meses futuros.
-     */
+    /* =========================
+       Redistribuição (igual)
+    ========================= */
     redistributeBudget({ ymList, plannedBudgetByMonth, expensesByMonth, unitsTargetByMonth, budgetTotal }) {
         let lastIndexWithExpense = -1;
         ymList.forEach((ym, idx) => {
@@ -311,10 +261,7 @@ export default class ViabilityService {
         const adjusted = {};
         ymList.forEach(ym => { adjusted[ym] = plannedBudgetByMonth[ym]; });
 
-        if (lastIndexWithExpense === -1) {
-            // ninguém gastou ainda → plano original
-            return adjusted;
-        }
+        if (lastIndexWithExpense === -1) return adjusted;
 
         let spentSoFar = 0;
         for (let i = 0; i <= lastIndexWithExpense; i++) {
@@ -350,85 +297,97 @@ export default class ViabilityService {
     }
 
     /**
-     * Coração da regra.
+     * True se existir ao menos 1 lançamento no financeiro para o centro de custo,
+     * independente de período.
+     *
+     * Observações:
+     * - aceita costCenterId string/number
+     * - não quebra se vier null/undefined
+     * - usa consulta leve (SELECT 1 / LIMIT 1)
      */
+    async hasAnyExpenseEver(costCenterId) {
+        const cc = Number(costCenterId);
+        if (!Number.isFinite(cc) || cc <= 0) return false;
+
+        const row = await Expense.findOne({
+            where: { cost_center_id: cc },
+            attributes: ['id'],
+            order: [['id', 'DESC']], // opcional
+        });
+
+        return !!row;
+    }
+
+    /* =========================
+       Coração (novo padrão)
+       - calcula para um par (enterprise_key, alias_id)
+       - período arbitrário
+       - mantém header compatível
+    ========================= */
     async computeEnterpriseViability({
+        // compat
         year,
-        erpId,
-        aliasId,
-        cvEnterpriseId,
-        costCenterId,
-        upToMonth = null
+        upToMonth = null,
+
+        // novo padrão
+        startMonth = null,
+        endMonth = null,
+
+        enterpriseKey,
+        aliasId = 'default',
+
+        // fontes externas
+        erpId = null,
+        cvEnterpriseId = undefined,
+        costCenterId = null
     }) {
-        console.log('[Viability] computeEnterpriseViability: IN', {
+        if (!enterpriseKey) throw new Error('enterpriseKey é obrigatório.');
+
+        const { startMonth: startYM, endMonth: endYM } = resolveRange({
             year,
-            erpId,
-            aliasId,
-            cvEnterpriseId,
-            costCenterId,
-            upToMonth
+            upToMonth,
+            startMonth,
+            endMonth
         });
 
-        const ymFullList = buildYearMonths(year);
-        const ymCutList = upToMonth
-            ? ymFullList.filter(ym => ym <= upToMonth)
-            : ymFullList;
+        const ymList = buildYmRange(startYM, endYM);
+        const startDate = ymToDateStart(startYM);
+        const endDate = ymToDateStart(nextYm(endYM));
 
-        // 1) Projeção ativa
-        const activeProj = await this.getActiveProjectionForYear(year);
-        console.log('[Viability] computeEnterpriseViability: activeProj', {
-            id: activeProj.id,
-            year: activeProj.year
-        });
+        // header compat: year/upToMonth como antes
+        const compatYear = Number(String(endYM).slice(0, 4));
+        const compatUpToMonth = endYM;
+
+        const activeProj = await this.getActiveProjection();
 
         const { projection, defaults, lines } = await this.loadProjectionData({
             projectionId: activeProj.id,
-            erpId
+            enterpriseKey,
+            aliasId
         });
 
-        console.log('[Viability] computeEnterpriseViability: projection data', {
-            projectionId: projection.id,
-            defaults: defaults
-                ? {
-                    id: defaults.id,
-                    erp_id: defaults.erp_id,
-                    alias_id: defaults.alias_id,
-                    default_marketing_pct: defaults.default_marketing_pct,
-                    enterprise_name_cache: defaults.enterprise_name_cache
-                }
-                : null,
-            linesCount: lines.length,
-            first5Lines: lines.slice(0, 5).map(l => (l.toJSON ? l.toJSON() : l))
-        });
+        const defaultMarketingPctRaw = defaults?.default_marketing_pct;
+        const defaultMarketingPct = defaultMarketingPctRaw != null ? Number(defaultMarketingPctRaw) : null;
 
+        // mapa por mês apenas no range
         const byMonth = {};
         const unitsTargetByMonth = {};
         const avgPriceByMonth = {};
         const marketingPctByMonth = {};
 
-        ymFullList.forEach(ym => {
-            byMonth[ym] = {
-                yearMonth: ym,
-                unitsTarget: 0,
-                avgPriceTarget: 0,
-                marketingPct: null
-            };
+        ymList.forEach(ym => {
+            byMonth[ym] = { yearMonth: ym, unitsTarget: 0, avgPriceTarget: 0, marketingPct: null };
             unitsTargetByMonth[ym] = 0;
             avgPriceByMonth[ym] = 0;
             marketingPctByMonth[ym] = null;
         });
 
-        const defaultMarketingPctRaw = defaults?.default_marketing_pct;
-        const defaultMarketingPct =
-            defaultMarketingPctRaw != null ? Number(defaultMarketingPctRaw) : null;
-
-        // 2) Targets + % marketing efetivo por mês
+        // aplica lines (range)
         for (const l of lines) {
             const ym = String(l.year_month).slice(0, 7);
             if (!byMonth[ym]) continue;
 
             const obj = byMonth[ym];
-
             obj.unitsTarget = Number(l.units_target || 0);
             obj.avgPriceTarget = Number(l.avg_price_target || 0);
 
@@ -436,13 +395,9 @@ export default class ViabilityService {
             const linePct = rawLinePct != null ? Number(rawLinePct) : null;
 
             let effectivePct = null;
-            if (linePct != null && linePct > 0) {
-                effectivePct = linePct;
-            } else if (defaultMarketingPct != null && defaultMarketingPct > 0) {
-                effectivePct = defaultMarketingPct;
-            } else if (linePct != null) {
-                effectivePct = linePct; // 0 explícito
-            }
+            if (linePct != null && linePct > 0) effectivePct = linePct;
+            else if (defaultMarketingPct != null && defaultMarketingPct > 0) effectivePct = defaultMarketingPct;
+            else if (linePct != null) effectivePct = linePct; // 0 explícito
 
             obj.marketingPct = effectivePct;
 
@@ -452,21 +407,12 @@ export default class ViabilityService {
             marketingPctByMonth[ym] = obj.marketingPct;
         }
 
-        console.log('[Viability] computeEnterpriseViability: byMonth', {
-            months: ymFullList.map(ym => ({
-                ym,
-                unitsTarget: byMonth[ym].unitsTarget,
-                avgPriceTarget: byMonth[ym].avgPriceTarget,
-                marketingPct: byMonth[ym].marketingPct
-            }))
-        });
-
-        // 3) Totais de projeção (ANO INTEIRO)
+        // totais DO PERÍODO (antes era ano inteiro)
         let unitsTargetTotal = 0;
         let revenueTargetTotal = 0;
         let marketingPctChosen = 0;
 
-        ymFullList.forEach(ym => {
+        ymList.forEach(ym => {
             const obj = byMonth[ym];
             unitsTargetTotal += obj.unitsTarget;
             revenueTargetTotal += obj.unitsTarget * obj.avgPriceTarget;
@@ -478,164 +424,83 @@ export default class ViabilityService {
 
         if (marketingPctChosen === 0 && defaultMarketingPct != null && defaultMarketingPct > 0) {
             marketingPctChosen = defaultMarketingPct;
-            console.log('[Viability] computeEnterpriseViability: usando defaultMarketingPct', {
-                defaultMarketingPct,
-                marketingPctChosen
-            });
         }
 
-        const avgTicketGlobal =
-            unitsTargetTotal > 0 ? revenueTargetTotal / unitsTargetTotal : 0;
+        const avgTicketGlobal = unitsTargetTotal > 0 ? revenueTargetTotal / unitsTargetTotal : 0;
 
         const pct = marketingPctChosen / 100;
-        const budgetTotal = revenueTargetTotal * pct; // orçamento ANUAL
+        const budgetTotal = revenueTargetTotal * pct; // agora é "budget do período"
 
-        // Projeção só até o mês de competência (upToMonth)
-        let unitsTargetUpToMonth = 0;
-        let revenueTargetUpToMonth = 0;
+        // compat: "upToMonth" = endYM, então upTo == total do período
+        const unitsTargetUpToMonth = unitsTargetTotal;
+        const budgetUpToMonth = budgetTotal;
 
-        if (upToMonth) {
-            ymCutList.forEach(ym => {
-                const obj = byMonth[ym];
-                unitsTargetUpToMonth += obj.unitsTarget;
-                revenueTargetUpToMonth += obj.unitsTarget * obj.avgPriceTarget;
-            });
-        }
+        // CV resolve (preferir defaults.erp_id se não vier erpId)
+        const effectiveErpId = (erpId != null && String(erpId).trim() !== '')
+            ? String(erpId)
+            : (defaults?.erp_id != null ? String(defaults.erp_id) : null);
 
-        const budgetUpToMonth = revenueTargetUpToMonth * pct;
-
-        console.log('[Viability] computeEnterpriseViability: projeção ano', {
-            unitsTargetTotal,
-            revenueTargetTotal,
-            marketingPctChosen,
-            avgTicketGlobal,
-            budgetTotal
-        });
-
-        // 4) Resolver cvEnterpriseId
         const cvIdResolved = await this.resolveCvEnterpriseId({
-            erpId,
+            erpId: effectiveErpId,
             cvEnterpriseIdFromProjection: cvEnterpriseId
         });
 
-        console.log('[Viability] computeEnterpriseViability: cvEnterpriseId resolvido', {
-            erpId,
-            rawCvEnterpriseId: cvEnterpriseId,
-            cvIdResolved
-        });
+        const unitsSummary = await this.summarizeUnits({ cvEnterpriseId: cvIdResolved });
+        const availableInventory = Number(unitsSummary.availableInventory || 0);
 
-        // 5) Estoque (snapshot)
-        const unitsSummary = await this.summarizeUnits({
-            cvEnterpriseId: cvIdResolved
-        });
+        // despesas e vendas no período
+        const effectiveCostCenterId =
+            costCenterId != null ? Number(costCenterId)
+                : (effectiveErpId ? Number(effectiveErpId) : null);
 
-        console.log('[Viability] computeEnterpriseViability: unitsSummary', unitsSummary);
+        const expensesByMonth = effectiveCostCenterId
+            ? await this.loadExpensesByMonth({ costCenterId: effectiveCostCenterId, ymList, startDate, endDate })
+            : (() => {
+                const empty = {};
+                ymList.forEach(ym => empty[ym] = { month: ym, total: 0, items: [] });
+                return empty;
+            })();
 
-        const availableInventory = unitsSummary.availableInventory;
-
-        // 6) Despesas reais (ano todo)
-        const expensesByMonth = await this.loadExpensesByMonth({
-            costCenterId,
-            year
-        });
-
-        // 7) Vendas reais (ano todo)
         const salesByMonth = await this.loadSalesByMonth({
-            erpId,
-            year
+            erpId: effectiveErpId,
+            ymList,
+            startDate,
+            endDate
         });
 
-        // YTD (até upToMonth)
-        const soldUnitsRealYtd = ymCutList.reduce(
-            (acc, ym) => acc + (salesByMonth[ym]?.soldUnits || 0),
-            0
-        );
-
-        const spentTotal = ymCutList.reduce(
-            (acc, ym) => acc + (expensesByMonth[ym]?.total || 0),
-            0
-        );
+        const soldUnitsRealYtd = ymList.reduce((acc, ym) => acc + (salesByMonth[ym]?.soldUnits || 0), 0);
+        const spentTotal = ymList.reduce((acc, ym) => acc + (expensesByMonth[ym]?.total || 0), 0);
 
         const remainingBudgetTotalRaw = budgetTotal - spentTotal;
         const remainingBudgetTotal = Math.max(remainingBudgetTotalRaw, 0);
 
-        const plannedCostPerUnit =
-            unitsTargetTotal > 0 ? budgetTotal / unitsTargetTotal : 0;
+        const plannedCostPerUnit = unitsTargetTotal > 0 ? budgetTotal / unitsTargetTotal : 0;
+        const currentRealCostPerUnit = soldUnitsRealYtd > 0 ? spentTotal / soldUnitsRealYtd : 0;
 
-        const currentRealCostPerUnit =
-            soldUnitsRealYtd > 0 ? spentTotal / soldUnitsRealYtd : 0;
-
-        // Unidades restantes do plano anual
         const remainingUnitsPlan = Math.max(unitsTargetTotal - soldUnitsRealYtd, 0);
 
-        // Quanto "poderíamos" ter gasto até agora seguindo a viabilidade planejada
         const allowedBudgetSoFar = soldUnitsRealYtd * plannedCostPerUnit;
-
-        // Diferença entre o que gastamos e esse permitido
         const overUnderSoFar = spentTotal - allowedBudgetSoFar;
-        // > 0 => gastou mais do que deveria
-        // < 0 => gastou menos (tem "crédito")
 
-        // Orçamento restante padrão (ignorando histórico)
         const remainingBudgetStandard = remainingUnitsPlan * plannedCostPerUnit;
-
-        // Orçamento restante REAL (considerando o histórico de gastos)
         const remainingBudgetEffective = remainingBudgetTotal;
 
-        // Viabilidade por unidade PARA AS UNIDADES RESTANTES
         const remainingCostPerUnitEffective =
             remainingUnitsPlan > 0 ? remainingBudgetEffective / remainingUnitsPlan : 0;
 
-        console.log('[Viability] computeEnterpriseViability: gastos x vendas', {
-            spentTotal,
-            soldUnitsRealYtd,
-            remainingBudgetTotal,
-            plannedCostPerUnit,
-            currentRealCostPerUnit,
-            remainingUnitsPlan,
-            allowedBudgetSoFar,
-            overUnderSoFar,
-            remainingBudgetStandard,
-            remainingBudgetEffective,
-            remainingCostPerUnitEffective
-        });
-
-        // 7.1) Estoque x Projeção (considerando vendas já realizadas + estoque atual)
+        // estoque vs plano (mesma lógica)
         const logicalUnitsForPlan = availableInventory + soldUnitsRealYtd;
-
-        // Quantas unidades eu tenho (vendidas + estoque) em relação ao plano anual
         const remainingUnitsVsPlan = logicalUnitsForPlan - unitsTargetTotal;
-
-        // Se for >= 0, tenho unidades sobrando para cumprir a projeção
-        // Se for < 0, faltam unidades
         const inventoryAfterProjectionUnits = Math.max(remainingUnitsVsPlan, 0);
-        // const inventoryShortfallUnits =
-        //     remainingUnitsVsPlan < 0 ? Math.abs(remainingUnitsVsPlan) : 0;
 
-        // Converte "unidades que sobram" em receita e orçamento de marketing
-        const inventoryAfterProjectionRevenue =
-            inventoryAfterProjectionUnits * avgTicketGlobal;
+        const inventoryAfterProjectionRevenue = inventoryAfterProjectionUnits * avgTicketGlobal;
+        const inventoryAfterProjectionMarketingBudget = inventoryAfterProjectionRevenue * pct;
 
-        const inventoryAfterProjectionMarketingBudget =
-            inventoryAfterProjectionRevenue * pct;
-
-        console.log('[Viability] computeEnterpriseViability: estoque vs projeção (corrigido)', {
-            availableInventory,
-            soldUnitsRealYtd,
-            unitsTargetTotal,
-            logicalUnitsForPlan,
-            remainingUnitsVsPlan,
-            inventoryAfterProjectionUnits,
-            // inventoryShortfallUnits,
-            inventoryAfterProjectionRevenue,
-            inventoryAfterProjectionMarketingBudget
-        });
-
-        // 8) Plano mensal (proporcional no ANO)
+        // plano mensal proporcional ao PERÍODO
         const plannedBudgetByMonth = {};
         let plannedSum = 0;
 
-        ymFullList.forEach(ym => {
+        ymList.forEach(ym => {
             const unitsTarget = unitsTargetByMonth[ym] || 0;
             const planned = unitsTarget * plannedCostPerUnit;
             plannedBudgetByMonth[ym] = planned;
@@ -643,42 +508,26 @@ export default class ViabilityService {
         });
 
         const factor = plannedSum > 0 ? budgetTotal / plannedSum : 1;
-        ymFullList.forEach(ym => {
+        ymList.forEach(ym => {
             plannedBudgetByMonth[ym] = plannedBudgetByMonth[ym] * factor;
         });
 
-        console.log('[Viability] computeEnterpriseViability: plannedBudgetByMonth', {
-            months: ymFullList.map(ym => ({
-                ym,
-                planned: plannedBudgetByMonth[ym]
-            }))
-        });
-
-        // 9) Redistribuição ANUAL
         const adjustedBudgetByMonth = this.redistributeBudget({
-            ymList: ymFullList,
+            ymList,
             plannedBudgetByMonth,
             expensesByMonth,
             unitsTargetByMonth,
             budgetTotal
         });
 
-        console.log('[Viability] computeEnterpriseViability: adjustedBudgetByMonth', {
-            months: ymFullList.map(ym => ({
-                ym,
-                adjusted: adjustedBudgetByMonth[ym],
-                spent: expensesByMonth[ym]?.total || 0
-            }))
-        });
-
-        // 10) Meses detalhados (ANO TODO)
+        // meses detalhados (somente no range)
         const monthsOut = [];
         let cumulativePlanned = 0;
         let cumulativeAdjusted = 0;
         let cumulativeSpent = 0;
 
-        ymFullList.forEach(ym => {
-            const proj = byMonth[ym];
+        ymList.forEach(ym => {
+            const projM = byMonth[ym];
             const exp = expensesByMonth[ym] || { total: 0, items: [] };
             const sales = salesByMonth[ym] || { soldUnits: 0, contracts: [] };
 
@@ -697,9 +546,9 @@ export default class ViabilityService {
 
             monthsOut.push({
                 yearMonth: ym,
-                unitsTarget: proj.unitsTarget,
-                avgPriceTarget: proj.avgPriceTarget,
-                revenueTarget: proj.unitsTarget * proj.avgPriceTarget,
+                unitsTarget: projM.unitsTarget,
+                avgPriceTarget: projM.avgPriceTarget,
+                revenueTarget: projM.unitsTarget * projM.avgPriceTarget,
                 unitsSoldReal: sales.soldUnits,
                 plannedBudget: planned,
                 adjustedBudget: adjusted,
@@ -716,14 +565,14 @@ export default class ViabilityService {
             });
         });
 
-        // 11) Contexto do mês
+        // monthContext = endYM (igual comportamento antigo: mês de competência)
         let monthContext = null;
-        if (upToMonth) {
-            const row = monthsOut.find(m => m.yearMonth === upToMonth);
+        {
+            const row = monthsOut.find(m => m.yearMonth === endYM);
             if (row) {
                 const monthBudget = (row.adjustedBudget ?? row.plannedBudget) || 0;
                 monthContext = {
-                    yearMonth: upToMonth,
+                    yearMonth: endYM,
                     unitsTargetMonth: row.unitsTarget,
                     unitsSoldRealMonth: row.unitsSoldReal,
                     plannedBudgetMonth: row.plannedBudget,
@@ -731,7 +580,7 @@ export default class ViabilityService {
                     spentMonth: row.spent,
                     remainingBudgetMonth: row.adjustedBudget - row.spent,
 
-                    // aliases usados pelo front (sem quebrar nada existente)
+                    // aliases pro front
                     monthBudget,
                     monthSpent: row.spent,
                     monthRemaining: monthBudget - row.spent
@@ -739,25 +588,23 @@ export default class ViabilityService {
             }
         }
 
-        console.log('[Viability] computeEnterpriseViability: OUT header resumo', {
-            erpId,
-            aliasId,
-            year,
-            upToMonth,
-            unitsTargetTotal,
-            revenueTargetTotal,
-            budgetTotal,
-            spentTotal,
-            availableInventory,
-            // inventoryShortfallUnits
-        });
-
         return {
             header: {
+                // compat
                 projectionId: projection.id,
-                erpId,
-                year,
-                upToMonth,
+                year: compatYear,
+                upToMonth: compatUpToMonth,
+
+                // novo padrão (útil pra evoluir front depois)
+                startMonth: startYM,
+                endMonth: endYM,
+                enterpriseKey,
+                aliasId,
+
+                // ids para UI
+                erpId: effectiveErpId,
+                costCenterId: effectiveCostCenterId ?? null,
+                cvEnterpriseId: cvIdResolved ?? null,
 
                 enterpriseName: defaults?.enterprise_name_cache || null,
 
@@ -770,27 +617,26 @@ export default class ViabilityService {
                 availableUnits: unitsSummary.availableUnits,
                 availableInventory,
 
-                // Projeção anual
+                // "Projeção anual" (agora = período)
                 unitsTargetTotal,
                 revenueTargetTotal,
                 avgTicketGlobal,
                 marketingPct: marketingPctChosen,
                 budgetTotal,
 
-                // Projeção até o mês de competência
+                // compat antigos (upToMonth = endYM)
                 unitsTargetUpToMonth,
                 budgetUpToMonth,
 
-                // Realizado até o mês de competência
+                // realizado período
                 spentTotal,
                 remainingBudgetTotal,
-                soldUnitsRealYtd,
+                soldUnitsRealYtd, // mantém nome pra não quebrar
 
-                // Viabilidade por unidade (planejada x real)
+                // viabilidade
                 plannedCostPerUnit,
                 currentRealCostPerUnit,
 
-                // Regra de viabilidade "carregando" saldo entre unidades
                 remainingUnitsPlan,
                 allowedBudgetSoFar,
                 overUnderSoFar,
@@ -798,105 +644,103 @@ export default class ViabilityService {
                 remainingBudgetEffective,
                 remainingCostPerUnitEffective,
 
-                // Diferenças globais vs budget anual
                 diffTotal: spentTotal - budgetTotal,
                 diffPerUnit: currentRealCostPerUnit - plannedCostPerUnit,
 
-                // Estoque x projeção (pós-projeção)
                 inventoryAfterProjectionUnits,
-                // inventoryShortfallUnits,
                 inventoryAfterProjectionRevenue,
                 inventoryAfterProjectionMarketingBudget,
 
-                // Contexto mensal
                 monthContext
             },
             months: monthsOut
         };
     }
 
-    /**
-     * Lista viabilidade por empreendimento (header).
-     */
-    async listEnterprisesViability({ year, upToMonth = null }) {
-        console.log('[Viability] listEnterprisesViability: IN', { year, upToMonth });
+    /* =========================
+       Lista (novo padrão)
+       - retorna por enterprise_key (não por ERP)
+       - mantém erpId para o MultiSelector atual
+    ========================= */
+    async listEnterprisesViability({
+        // compat
+        year,
+        upToMonth = null,
 
-        const activeProj = await this.getActiveProjectionForYear(year);
+        // novo
+        startMonth = null,
+        endMonth = null,
 
-        // pega TODOS os processos (todos alias) da projeção
+        aliasId = 'default',
+    }) {
+        const { startMonth: startYM, endMonth: endYM } = resolveRange({
+            year,
+            upToMonth,
+            startMonth,
+            endMonth
+        });
+
+        const activeProj = await this.getActiveProjection();
+
+        // pega defaults da projeção (novo padrão)
         const enterprises = await SalesProjectionEnterprise.findAll({
-            where: {
-                projection_id: activeProj.id
-            },
-            order: [
-                ['enterprise_name_cache', 'ASC'],
-                ['erp_id', 'ASC']
-            ]
+            where: { projection_id: activeProj.id, alias_id: String(aliasId) },
+            order: [['enterprise_name_cache', 'ASC'], ['enterprise_key', 'ASC']]
         });
 
         if (!enterprises.length) {
             return {
-                year,
-                upToMonth,
+                year: Number(String(endYM).slice(0, 4)),
+                upToMonth: endYM,
+                startMonth: startYM,
+                endMonth: endYM,
                 projectionId: activeProj.id,
                 count: 0,
                 results: []
             };
         }
 
-        // agrupa por ERP
-        const byErp = new Map(); // erpId -> [ent1, ent2, ...]
-        for (const ent of enterprises) {
-            const erpId = String(ent.erp_id);
-            if (!byErp.has(erpId)) byErp.set(erpId, []);
-            byErp.get(erpId).push(ent);
-        }
-
         const results = [];
 
-        for (const [erpId, group] of byErp.entries()) {
-            const first = group[0];
+        for (const ent of enterprises) {
+            const enterpriseKey = ent.enterprise_key;
+            const erpId = ent.erp_id ? String(ent.erp_id) : null;
 
-            const cvEnterpriseIdFromProjection =
-                first.cv_enterprise_id != null ? Number(first.cv_enterprise_id) : undefined;
+            const costCenterId =
+                ent.cost_center_id != null ? Number(ent.cost_center_id)
+                    : (erpId ? Number(erpId) : null);
+
+            // ✅ filtro: só entra se tiver algo lançado no financeiro (qualquer data)
+            const hasExpense = await this.hasAnyExpenseEver(costCenterId);
+            if (!hasExpense) continue;
 
             const cvEnterpriseIdResolved = await this.resolveCvEnterpriseId({
                 erpId,
-                cvEnterpriseIdFromProjection
+                cvEnterpriseIdFromProjection: ent.cv_enterprise_id != null ? Number(ent.cv_enterprise_id) : undefined
             });
-
-            const costCenterId =
-                first.cost_center_id != null
-                    ? Number(first.cost_center_id)
-                    : Number(first.erp_id);
 
             const viability = await this.computeEnterpriseViability({
                 year,
+                upToMonth,
+                startMonth: startYM,
+                endMonth: endYM,
+                enterpriseKey,
+                aliasId,
                 erpId,
                 cvEnterpriseId: cvEnterpriseIdResolved,
-                costCenterId,
-                upToMonth
+                costCenterId
             });
 
             const h = viability.header || {};
+            const hasProjectionInPeriod = Number(h.unitsTargetTotal || 0) > 0;
+            if (!hasProjectionInPeriod) continue;
 
-            // 🔴 Regra: só entra se houver projeção de vendas no período
-            const hasProjectionInPeriod =
-                Number(h.unitsTargetUpToMonth || 0) > 0 ||
-                Number(h.unitsTargetTotal || 0) > 0;
-
-            if (!hasProjectionInPeriod) {
-                continue;
-            }
-
-            // Nome agregado: se tiver mais de um módulo, deixa claro
-            let enterpriseName = first.enterprise_name_cache || h.enterpriseName || erpId;
-            if (group.length > 1) {
-                enterpriseName = `${enterpriseName} (+${group.length - 1} módulos)`;
-            }
+            const enterpriseName = ent.enterprise_name_cache || h.enterpriseName || enterpriseKey;
 
             results.push({
-                erpId,
+                erpId: erpId ? String(erpId) : null,
+                displayId: erpId ? String(erpId) : enterpriseKey,
+                enterpriseKey,
                 cvEnterpriseId: cvEnterpriseIdResolved ?? null,
                 costCenterId,
                 enterpriseName,
@@ -905,8 +749,10 @@ export default class ViabilityService {
         }
 
         return {
-            year,
-            upToMonth,
+            year: Number(String(endYM).slice(0, 4)),
+            upToMonth: endYM,
+            startMonth: startYM,
+            endMonth: endYM,
             projectionId: activeProj.id,
             count: results.length,
             results

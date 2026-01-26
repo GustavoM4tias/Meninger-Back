@@ -43,6 +43,14 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.STRING(120),
             allowNull: true,
         },
+        installment_number: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+        },
+        installments_number: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+        },
     }, {
         tableName: 'expenses',
         underscored: true,

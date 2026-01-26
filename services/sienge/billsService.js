@@ -36,6 +36,11 @@ export default class BillsService {
             document_identification_id: raw.documentIdentificationId,
             document_number: raw.documentNumber,
             issue_date: d(raw.issueDate),
+
+            // ✅ NOVO: parcela atual
+            installment_number: raw.installmentNumber ?? raw.installment_number ?? null,
+
+            // ✅ já tinha
             installments_number: raw.installmentsNumber,
 
             total_invoice_amount: raw.totalInvoiceAmount,
@@ -285,7 +290,6 @@ export default class BillsService {
 
         if (cached && now - cached.ts < this.cacheTtlMs) {
             console.log('💾 [Bills] retornando resultados do cache em memória');
-            // retorna uma cópia pra evitar mutações externas
             return cached.data.map(b => ({ ...b }));
         }
 
@@ -297,12 +301,26 @@ export default class BillsService {
             return [];
         }
 
+        // ✅ NÃO salvar títulos do tipo PCT
+        const BLOCKED_DOC_IDS = new Set(['PCT']);
+
+        // documentIdentificationId (API) -> document_identification_id (DB)
+        const filteredBills = (rawBills || []).filter(b => {
+            const docId = String(b?.documentIdentificationId || '').trim().toUpperCase();
+            return !BLOCKED_DOC_IDS.has(docId);
+        });
+
+        if (!filteredBills.length) {
+            console.log('ℹ️ [Bills] Nenhum título após filtro (PCT removidos).');
+            return [];
+        }
+
         // 2) upsert básico de todos no banco (em paralelo por blocos)
         const pairs = [];
         const UPSERT_CHUNK = 50;
 
-        for (let i = 0; i < rawBills.length; i += UPSERT_CHUNK) {
-            const slice = rawBills.slice(i, i + UPSERT_CHUNK);
+        for (let i = 0; i < filteredBills.length; i += UPSERT_CHUNK) {
+            const slice = filteredBills.slice(i, i + UPSERT_CHUNK);
 
             const createdOrUpdated = await Promise.all(
                 slice.map(raw => this.upsertBasic(raw, { costCenterId }))
@@ -339,8 +357,9 @@ export default class BillsService {
         // 4) creditor_json: completa para quem não tem (agrupado por creditorId)
         await this.ensureCreditorsForBatch(pairs);
 
-        // 5) carregar tudo do banco de uma vez e devolver na MESMA ordem que o Sienge mandou
-        const ids = rawBills.map(b => b.id);
+        // 5) carregar tudo do banco de uma vez e devolver na MESMA ordem do Sienge (já filtrada)
+        const ids = filteredBills.map(b => b.id);
+
         const dbRows = await SiengeBill.findAll({
             where: { id: { [Op.in]: ids } },
         });
@@ -351,9 +370,9 @@ export default class BillsService {
             .filter(Boolean)
             .map(b => b.toJSON());
 
-        console.log(`✅ [Bills] listFromSiengeWithDepartments retornando ${result.length} títulos (ordem do Sienge)`);
+        console.log(`✅ [Bills] listFromSiengeWithDepartments retornando ${result.length} títulos`);
 
-        // 👇 grava no cache
+        // 👇 grava no cache (já filtrado)
         this.cache.set(cacheKey, {
             ts: Date.now(),
             data: result,
@@ -361,4 +380,5 @@ export default class BillsService {
 
         return result;
     }
+
 }
