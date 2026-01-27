@@ -46,7 +46,7 @@ app.use(cors(corsOptions));
 app.use(express.json());
 
 app.use('/api/admin', admin);
-app.use('/api/auth', authRoutes);  
+app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
 app.use('/api/cv', cvRoutes);

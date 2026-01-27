@@ -16,7 +16,7 @@ import {
 const { User, AuthAccessCode, ExternalOrganization } = db;
 
 const OTP_TTL_MIN = Number(process.env.AUTH_OTP_TTL_MIN || 10);
-const OTP_RESEND_SEC = Number(process.env.AUTH_OTP_RESEND_SEC || 60);
+const OTP_RESEND_SEC = Number(process.env.AUTH_OTP_RESEND_SEC || 20);
 const OTP_MAX_ATTEMPTS = Number(process.env.AUTH_OTP_MAX_ATTEMPTS || 5);
 
 function normalizeKind(kind) {
