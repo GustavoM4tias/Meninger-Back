@@ -17,15 +17,22 @@ if (!EMAIL_HOST || !EMAIL_USER || !EMAIL_PASS || !EMAIL_FROM) {
     console.error('❌ .env incompleto: EMAIL_HOST, EMAIL_USER, EMAIL_PASS, EMAIL_FROM');
 }
 
+// api/email/email.service.js
 const transporter = nodemailer.createTransport({
     host: EMAIL_HOST,
     port: EMAIL_PORT,
-    secure: EMAIL_SECURE, // 465 true, 587 false
+    secure: EMAIL_SECURE,
     auth: { user: EMAIL_USER, pass: EMAIL_PASS },
     requireTLS: !EMAIL_SECURE,
+
+    // ✅ evita pendurar conexão
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+
     tls: {
         minVersion: 'TLSv1.2',
-        rejectUnauthorized: process.env.EMAIL_TLS_REJECT_UNAUTHORIZED !== 'false', // 👈 aceita self-signed
+        rejectUnauthorized: process.env.EMAIL_TLS_REJECT_UNAUTHORIZED !== 'false',
     },
 });
 
@@ -101,12 +108,18 @@ function compileTemplateOnce(file) {
     return tpl;
 }
 
-/**
- * Envia um e-mail por tipo.
- * @param {string} type
- * @param {string|string[]} to
- * @param {object} data
- */
+
+function withTimeout(promise, ms, label = 'timeout') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(label)), ms)),
+    ]);
+}
+
+function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
 export async function sendEmail(type, to, data = {}) {
     const cfg = META[type];
     if (!cfg) throw new Error(`Tipo desconhecido: ${type}`);
@@ -118,10 +131,35 @@ export async function sendEmail(type, to, data = {}) {
         previewText: cfg.preview(data),
     });
 
-    return transporter.sendMail({
+    const mail = {
         from: EMAIL_FROM,
         to: Array.isArray(to) ? to.join(',') : to,
         subject: cfg.subject(data),
         html,
-    });
+    };
+
+    // ✅ envia com timeout hard
+    return withTimeout(transporter.sendMail(mail), 12_000, 'sendMail timeout');
+}
+
+export async function sendEmailWithRetry(type, to, data = {}, opts = {}) {
+    const retries = Number(opts.retries ?? 2);
+    const timeoutMs = Number(opts.timeoutMs ?? 12_000);
+    const backoffMs = Number(opts.backoffMs ?? 1500);
+
+    let lastErr = null;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            // força timeout por tentativa
+            return await withTimeout(sendEmail(type, to, data), timeoutMs, 'sendEmail timeout');
+        } catch (err) {
+            lastErr = err;
+            if (attempt < retries) {
+                await sleep(backoffMs * (attempt + 1));
+            }
+        }
+    }
+
+    throw lastErr;
 }
