@@ -227,9 +227,20 @@ async function upsertExternalUserFromCv(kind, document, cvPayload) {
     return null;
 }
 
+function reqId(req) {
+    return req.headers['x-railway-request-id'] || req.headers['x-request-id'] || 'no-rid';
+}
 
 export async function externalRequestCode(req, res) {
-    let ctx = { kind: null, document: null, userId: null, emailToSend: null };
+    const rid = reqId(req);
+
+    let ctx = { rid, kind: null, document: null, userId: null, emailToSend: null };
+
+    console.info('[auth.external.request] start', {
+        rid,
+        origin: req.headers.origin,
+        ip: req.ip,
+    });
 
     try {
         const kind = normalizeKind(req.body?.kind);
@@ -239,22 +250,22 @@ export async function externalRequestCode(req, res) {
         ctx.document = document;
 
         if (!kind || document.length !== 11) {
-            console.warn('[auth.external.request] invalid input', { kind, documentLen: document?.length });
+            console.info('[auth.external.request] invalid input', { rid, kind, documentLen: document?.length });
             return neutralOk(res);
         }
 
         const cvPayload = await getCvPayload(kind, document);
         if (!cvPayload) {
-            console.warn('[auth.external.request] cvPayload not found', { kind, document });
+            console.info('[auth.external.request] cvPayload not found', { rid, kind, document });
             return neutralOk(res);
         }
 
         const result = await upsertExternalUserFromCv(kind, document, cvPayload);
         if (!result?.user || !result?.emailToSend) {
-            console.warn('[auth.external.request] upsert failed or missing email', {
+            console.info('[auth.external.request] upsert failed/missing email', {
+                rid,
                 kind,
                 hasUser: !!result?.user,
-                emailToSend: result?.emailToSend,
                 cvEmail: cvPayload?.email,
             });
             return neutralOk(res);
@@ -272,7 +283,7 @@ export async function externalRequestCode(req, res) {
         if (last?.last_sent_at) {
             const diffSec = (Date.now() - new Date(last.last_sent_at).getTime()) / 1000;
             if (diffSec < OTP_RESEND_SEC) {
-                console.warn('[auth.external.request] rate limited', { userId: user.id, diffSec, OTP_RESEND_SEC });
+                console.info('[auth.external.request] rate limited', { rid, userId: user.id, diffSec, OTP_RESEND_SEC });
                 return neutralOk(res);
             }
         }
@@ -281,7 +292,7 @@ export async function externalRequestCode(req, res) {
         const codeHash = await bcrypt.hash(code, 10);
         const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60 * 1000);
 
-        await AuthAccessCode.create({
+        const row = await AuthAccessCode.create({
             user_id: user.id,
             code_hash: codeHash,
             expires_at: expiresAt,
@@ -292,18 +303,38 @@ export async function externalRequestCode(req, res) {
             user_agent: req.headers['user-agent'] || null,
         });
 
-        // ✅ RESPONDE AGORA (não segura request por SMTP)
-        neutralOk(res);
+        console.info('[auth.external.request] otp created', {
+            rid,
+            userId: user.id,
+            emailToSend,
+            otpId: row?.id,
+            expiresAt,
+        });
 
-        // ✅ ENVIO EM BACKGROUND com timeout + retry
+        // ✅ responde rápido
+        neutralOk(res);
+        console.info('[auth.external.request] responded', { rid });
+
+        // ✅ envio em background (mas com LOG detalhado em email.service.js)
         sendEmailWithRetry('auth.academy.code', emailToSend, { kind, code, minutes: OTP_TTL_MIN }, {
-            retries: 2,               // total 3 tentativas (1 + 2)
-            timeoutMs: 12000,         // 12s por tentativa
-            backoffMs: 1500,          // 1.5s, 3s...
+            retries: 2,
+            timeoutMs: 12000,
+            backoffMs: 1500,
         })
-            .then(() => console.info('[auth.external.request] email sent', { kind, userId: user.id, emailToSend }))
-            .catch((err) => console.error('[auth.external.request] email failed', {
-                kind, userId: user.id, emailToSend, err: err?.message || err,
+            .then((info) => console.info('[auth.external.request] email sent (controller)', {
+                rid,
+                userId: user.id,
+                emailToSend,
+                messageId: info?.messageId,
+                accepted: info?.accepted,
+                rejected: info?.rejected,
+                response: info?.response,
+            }))
+            .catch((err) => console.error('[auth.external.request] email failed (controller)', {
+                rid,
+                userId: user.id,
+                emailToSend,
+                err: err?.message || err,
             }));
 
         return;
