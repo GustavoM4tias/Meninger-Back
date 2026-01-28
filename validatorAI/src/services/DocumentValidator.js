@@ -17,7 +17,7 @@ Para cada contrato, verifique e compare de forma objetiva:
 
 1. **Dados Pessoais**
    - Todos os compradores (e seus cônjuges/associados) listados no Contrato Caixa devem constar na Confissão de Dívida.
-   - Dados pessoais sensiveis como documentos, nomes diferentes causam (incorreto) (caso somente acentuação, causa somente "alerta"), já data de nascimento, nacionalidade, informações pessoais e etc. podem causar (alerta) caso haja divergência. 
+   - Dados pessoais sensiveis como documentos, nomes diferentes causam (incorreto) (caso somente acentuação, causa somente "alerta"), já data de nascimento, nacionalidade, profissão, informações pessoais e etc. podem causar (alerta) caso haja divergência. 
    - A Confissão pode ter fiadores ou responsáveis adicionais.
    - Da construtora, pode estar descrita como CONSTRUTORA MENIN, MENIN ENGENHARIA, ou até a INCORPORADORA MF... sendo ambos do grupo da empresa e podendo conter variações mas sempre com esse padrão. 
    - Em alguns contratos podem ter alguma outra empresa junto da construtora, que no caso são os representantes pela área/terreno do local.
@@ -27,7 +27,7 @@ Para cada contrato, verifique e compare de forma objetiva:
     - Valores totais, subsídios (federal e estadual), recursos próprios, FGTS, parcelas e descontos devem coincidir.
     - Em caso de "desconto construtora", abata-o do "recurso a pagar" do contrato caixa para bater os valores.
     - O valor destinado à aquisição de imóvel (cláusula B.4 no Contrato Caixa) deve bater com o "O valor destinado à aquisição de imóvel" da Confissão.
-    - Valor da Garantia Fiduciária e do Imóvel (cláusula B.6 no Contrato Caixa) deve ser utilizado como base para aplicação correta do desconto, o valor de avaliação menos o valor de "Desconto Construtora" deve resultar no valor de venda (B.4), exceto em casos em que não haja desconto, ou o valor da B.6 seja menor que a B.4.
+    - Valor da Garantia Fiduciária e do Imóvel (cláusula B.6 no Contrato Caixa) deve ser utilizado como base para aplicação correta do desconto, o valor de avaliação menos o valor de "Desconto Construtora" deve resultar no valor de venda (B.4), exceto em casos em que não haja desconto, ou o valor da B.6 seja menor ou igual a B.4.
     - Quaisquer divergências em valores da confissão para contrato caixa deve gerar (incorreto).
     - O parcelamento do valor de recurso do cliente aparece somente na confissão de dívida, mas a somatoria junto do desconto caso exista, deve retornar o valor de recurso do contrato caixa. 
     - Os conjuntos de parcelamento podem variar, podendo ser feito em um unico grupo ou 2+, nesse caso a somatoria das parcelas de cada grupo deve ser somada e caso exista, somada tambem ao desconto, resultando no valor de recurso a parcelar.
