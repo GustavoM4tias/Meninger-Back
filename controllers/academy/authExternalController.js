@@ -1,10 +1,11 @@
 // controllers/academy/authExternalController.js
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import jwtConfig from '../../config/jwtConfig.js';
 import db from '../../models/sequelize/index.js';
+import jwtConfig from '../../config/jwtConfig.js';
 import responseHandler from '../../utils/responseHandler.js';
-import { sendEmailWithRetry } from '../../email/email.service.js';
+import { sendEmail } from '../../email/email.service.js';
+import { EmailType } from '../../email/types.js';
 import {
     onlyDigits,
     fetchBrokerByDocument,
@@ -20,9 +21,13 @@ const OTP_MAX_ATTEMPTS = Number(process.env.AUTH_OTP_MAX_ATTEMPTS || 5);
 
 function normalizeKind(kind) {
     const k = String(kind || '').toUpperCase().trim();
+
     if (k === 'CORRETOR' || k === 'BROKER') return 'BROKER';
     if (k === 'IMOBILIARIA' || k === 'IMOBILIÁRIA' || k === 'REALESTATE' || k === 'REAL_ESTATE') return 'REALESTATE';
+
+    // novo: correspondente
     if (k === 'CORRESPONDENTE' || k === 'CORRESPONDENT') return 'CORRESPONDENT';
+
     return '';
 }
 
@@ -30,8 +35,8 @@ function genCode6() {
     return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+// resposta neutra (anti enumeração)
 function neutralOk(res) {
-    // GARANTA que seu responseHandler.success retorna { success:true }
     return responseHandler.success(res, {
         message: 'Se existir cadastro, enviaremos um código para o e-mail.',
     });
@@ -227,53 +232,34 @@ async function upsertExternalUserFromCv(kind, document, cvPayload) {
     return null;
 }
 
-function reqId(req) {
-    return req.headers['x-railway-request-id'] || req.headers['x-request-id'] || 'no-rid';
-}
-
 export async function externalRequestCode(req, res) {
-    const rid = reqId(req);
-
-    let ctx = { rid, kind: null, document: null, userId: null, emailToSend: null };
-
-    console.info('[auth.external.request] start', {
-        rid,
-        origin: req.headers.origin,
-        ip: req.ip,
-    });
-
     try {
         const kind = normalizeKind(req.body?.kind);
         const document = onlyDigits(req.body?.document);
 
-        ctx.kind = kind;
-        ctx.document = document;
-
         if (!kind || document.length !== 11) {
-            console.info('[auth.external.request] invalid input', { rid, kind, documentLen: document?.length });
+            console.warn('[auth.external.request] invalid input', { kind, documentLen: document?.length });
             return neutralOk(res);
         }
 
         const cvPayload = await getCvPayload(kind, document);
         if (!cvPayload) {
-            console.info('[auth.external.request] cvPayload not found', { rid, kind, document });
+            console.warn('[auth.external.request] cvPayload not found', { kind, document });
             return neutralOk(res);
         }
 
         const result = await upsertExternalUserFromCv(kind, document, cvPayload);
         if (!result?.user || !result?.emailToSend) {
-            console.info('[auth.external.request] upsert failed/missing email', {
-                rid,
+            console.warn('[auth.external.request] upsert failed or missing email', {
                 kind,
                 hasUser: !!result?.user,
+                emailToSend: result?.emailToSend,
                 cvEmail: cvPayload?.email,
             });
             return neutralOk(res);
         }
 
         const { user, emailToSend } = result;
-        ctx.userId = user.id;
-        ctx.emailToSend = emailToSend;
 
         const last = await AuthAccessCode.findOne({
             where: { user_id: user.id, used_at: null },
@@ -283,7 +269,7 @@ export async function externalRequestCode(req, res) {
         if (last?.last_sent_at) {
             const diffSec = (Date.now() - new Date(last.last_sent_at).getTime()) / 1000;
             if (diffSec < OTP_RESEND_SEC) {
-                console.info('[auth.external.request] rate limited', { rid, userId: user.id, diffSec, OTP_RESEND_SEC });
+                console.warn('[auth.external.request] rate limited', { userId: user.id, diffSec, OTP_RESEND_SEC });
                 return neutralOk(res);
             }
         }
@@ -292,54 +278,14 @@ export async function externalRequestCode(req, res) {
         const codeHash = await bcrypt.hash(code, 10);
         const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60 * 1000);
 
-        const row = await AuthAccessCode.create({
-            user_id: user.id,
-            code_hash: codeHash,
-            expires_at: expiresAt,
-            used_at: null,
-            attempts: 0,
-            last_sent_at: new Date(),
-            ip: req.ip,
-            user_agent: req.headers['user-agent'] || null,
-        });
+        await AuthAccessCode.create({ user_id: user.id, code_hash: codeHash, expires_at: expiresAt, used_at: null, attempts: 0, last_sent_at: new Date(), ip: req.ip, user_agent: req.headers['user-agent'] || null });
 
-        console.info('[auth.external.request] otp created', {
-            rid,
-            userId: user.id,
-            emailToSend,
-            otpId: row?.id,
-            expiresAt,
-        });
+        await sendEmail('auth.academy.code', emailToSend, { kind, code, minutes: OTP_TTL_MIN });
 
-        // ✅ responde rápido
-        neutralOk(res);
-        console.info('[auth.external.request] responded', { rid });
-
-        // ✅ envio em background (mas com LOG detalhado em email.service.js)
-        sendEmailWithRetry('auth.academy.code', emailToSend, { kind, code, minutes: OTP_TTL_MIN }, {
-            retries: 2,
-            timeoutMs: 12000,
-            backoffMs: 1500,
-        })
-            .then((info) => console.info('[auth.external.request] email sent (controller)', {
-                rid,
-                userId: user.id,
-                emailToSend,
-                messageId: info?.messageId,
-                accepted: info?.accepted,
-                rejected: info?.rejected,
-                response: info?.response,
-            }))
-            .catch((err) => console.error('[auth.external.request] email failed (controller)', {
-                rid,
-                userId: user.id,
-                emailToSend,
-                err: err?.message || err,
-            }));
-
-        return;
+        console.info('[auth.external.request] email sent', { kind, userId: user.id, emailToSend });
+        return neutralOk(res);
     } catch (err) {
-        console.error('[auth.external.request] exception', { ctx, err: err?.message || err });
+        console.error('[auth.external.request] exception', err);
         return neutralOk(res);
     }
 }
