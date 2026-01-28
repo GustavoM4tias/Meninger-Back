@@ -1,11 +1,10 @@
 // controllers/academy/authExternalController.js
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import db from '../../models/sequelize/index.js';
 import jwtConfig from '../../config/jwtConfig.js';
+import db from '../../models/sequelize/index.js';
 import responseHandler from '../../utils/responseHandler.js';
-import { sendEmail } from '../../email/email.service.js';
-import { EmailType } from '../../email/types.js';
+import { sendEmailWithRetry } from '../../email/email.service.js';
 import {
     onlyDigits,
     fetchBrokerByDocument,
@@ -21,13 +20,9 @@ const OTP_MAX_ATTEMPTS = Number(process.env.AUTH_OTP_MAX_ATTEMPTS || 5);
 
 function normalizeKind(kind) {
     const k = String(kind || '').toUpperCase().trim();
-
     if (k === 'CORRETOR' || k === 'BROKER') return 'BROKER';
     if (k === 'IMOBILIARIA' || k === 'IMOBILIÁRIA' || k === 'REALESTATE' || k === 'REAL_ESTATE') return 'REALESTATE';
-
-    // novo: correspondente
     if (k === 'CORRESPONDENTE' || k === 'CORRESPONDENT') return 'CORRESPONDENT';
-
     return '';
 }
 
@@ -35,8 +30,8 @@ function genCode6() {
     return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-// resposta neutra (anti enumeração)
 function neutralOk(res) {
+    // GARANTA que seu responseHandler.success retorna { success:true }
     return responseHandler.success(res, {
         message: 'Se existir cadastro, enviaremos um código para o e-mail.',
     });
@@ -232,10 +227,16 @@ async function upsertExternalUserFromCv(kind, document, cvPayload) {
     return null;
 }
 
+
 export async function externalRequestCode(req, res) {
+    let ctx = { kind: null, document: null, userId: null, emailToSend: null };
+
     try {
         const kind = normalizeKind(req.body?.kind);
         const document = onlyDigits(req.body?.document);
+
+        ctx.kind = kind;
+        ctx.document = document;
 
         if (!kind || document.length !== 11) {
             console.warn('[auth.external.request] invalid input', { kind, documentLen: document?.length });
@@ -260,6 +261,8 @@ export async function externalRequestCode(req, res) {
         }
 
         const { user, emailToSend } = result;
+        ctx.userId = user.id;
+        ctx.emailToSend = emailToSend;
 
         const last = await AuthAccessCode.findOne({
             where: { user_id: user.id, used_at: null },
@@ -278,14 +281,34 @@ export async function externalRequestCode(req, res) {
         const codeHash = await bcrypt.hash(code, 10);
         const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60 * 1000);
 
-        await AuthAccessCode.create({ user_id: user.id, code_hash: codeHash, expires_at: expiresAt, used_at: null, attempts: 0, last_sent_at: new Date(), ip: req.ip, user_agent: req.headers['user-agent'] || null });
+        await AuthAccessCode.create({
+            user_id: user.id,
+            code_hash: codeHash,
+            expires_at: expiresAt,
+            used_at: null,
+            attempts: 0,
+            last_sent_at: new Date(),
+            ip: req.ip,
+            user_agent: req.headers['user-agent'] || null,
+        });
 
-        await sendEmail('auth.academy.code', emailToSend, { kind, code, minutes: OTP_TTL_MIN });
+        // ✅ RESPONDE AGORA (não segura request por SMTP)
+        neutralOk(res);
 
-        console.info('[auth.external.request] email sent', { kind, userId: user.id, emailToSend });
-        return neutralOk(res);
+        // ✅ ENVIO EM BACKGROUND com timeout + retry
+        sendEmailWithRetry('auth.academy.code', emailToSend, { kind, code, minutes: OTP_TTL_MIN }, {
+            retries: 2,               // total 3 tentativas (1 + 2)
+            timeoutMs: 12000,         // 12s por tentativa
+            backoffMs: 1500,          // 1.5s, 3s...
+        })
+            .then(() => console.info('[auth.external.request] email sent', { kind, userId: user.id, emailToSend }))
+            .catch((err) => console.error('[auth.external.request] email failed', {
+                kind, userId: user.id, emailToSend, err: err?.message || err,
+            }));
+
+        return;
     } catch (err) {
-        console.error('[auth.external.request] exception', err);
+        console.error('[auth.external.request] exception', { ctx, err: err?.message || err });
         return neutralOk(res);
     }
 }
