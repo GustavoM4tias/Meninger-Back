@@ -78,7 +78,8 @@ export const loginUser = async (req, res) => {
       id: user.id,
       position: user.position,
       city: user.city,
-      role: user.role
+      role: user.role,
+      auth_provider: user.auth_provider,
     }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
 
     return responseHandler.success(res, { token });
@@ -246,7 +247,7 @@ export const identifyFace = async (req, res) => {
 export const getUserInfo = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update']
+      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update', 'auth_provider', 'external_kind', 'external_id']
     });
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
