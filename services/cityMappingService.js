@@ -5,6 +5,7 @@ import apiSienge from '../lib/apiSienge.js';
 import { Op } from 'sequelize';
 
 const asDate = v => (v ? new Date(v) : new Date());
+const asErpId = v => (v == null ? null : String(v)); // ✅ padronização
 
 // ---------- infra de logs ----------
 function makeLogger({ verbose = false } = {}) {
@@ -45,11 +46,14 @@ export function extractCityFromCostCenterName(name = '') {
 
 // ----------------------- upsert genérico -----------------------
 async function upsertEnterpriseCity({ source, crm_id, erp_id, enterprise_name, default_city, raw }) {
-  const where = source === 'crm' ? { source, crm_id } : { source, erp_id };
+  const where = source === 'crm'
+    ? { source, crm_id }
+    : { source, erp_id: asErpId(erp_id) }; // ✅ garante string
+
   const payload = {
     source,
     crm_id: crm_id ?? null,
-    erp_id: erp_id ?? null,
+    erp_id: asErpId(erp_id) ?? null,       // ✅ garante string
     enterprise_name: enterprise_name ?? null,
     default_city: default_city ?? null,
     raw_payload: raw ?? {},
@@ -68,6 +72,7 @@ async function upsertEnterpriseCity({ source, crm_id, erp_id, enterprise_name, d
     row.last_seen_at = payload.last_seen_at;
     await row.save();
   }
+
   return row;
 }
 
@@ -81,13 +86,15 @@ export async function syncFromCRM() {
     const row = await upsertEnterpriseCity({
       source: 'crm',
       crm_id: it.idempreendimento,
-      erp_id: it.idempreendimento_int ?? null,
+      erp_id: asErpId(it.idempreendimento_int ?? null), // ✅ garante string
       enterprise_name: it.nome,
       default_city: it.cidade,
       raw: it
     });
+
     results.push({ id: row.id, crm_id: row.crm_id, effective_city: row.effective_city });
   }
+
   return { count: results.length, items: results };
 }
 
@@ -129,10 +136,11 @@ export async function syncFromSiengeCostCenters({
         logger.log(`ERP SYNC ⛔ maxCount atingido (${maxCount}). Encerrando processamento.`);
         break;
       }
+
       seen++;
 
       try {
-        const erp_id = it.id;
+        const erp_id = asErpId(it.id); // ✅ AQUI está o fix principal
         const name = String(it.name || '').trim();
         const cidade = extractCityFromCostCenterName(name);
 
@@ -143,14 +151,16 @@ export async function syncFromSiengeCostCenters({
 
         // MERGE preferindo CRM (quando existir mapeamento CRM desse ERP)
         const existingCrm = await db.EnterpriseCity.findOne({
-          where: { source: 'crm', erp_id }
+          where: { source: 'crm', erp_id } // ✅ agora erp_id é string
         });
+
         if (existingCrm) {
           existingCrm.enterprise_name = existingCrm.enterprise_name ?? enterprise_name;
           existingCrm.default_city = existingCrm.default_city ?? cidade;
           existingCrm.raw_payload = { ...existingCrm.raw_payload, sienge_cost_center: it };
           existingCrm.last_seen_at = new Date();
           await existingCrm.save();
+
           itemsOut.push({ id: existingCrm.id, crm_id: existingCrm.crm_id, erp_id, effective_city: existingCrm.effective_city });
           merged++;
           continue;
@@ -158,7 +168,7 @@ export async function syncFromSiengeCostCenters({
 
         const row = await upsertEnterpriseCity({
           source: 'erp',
-          erp_id: String(erp_id),
+          erp_id, // ✅ já string
           crm_id: null,
           enterprise_name,
           default_city: cidade,
@@ -200,10 +210,12 @@ export async function syncFromSiengeCostCenters({
 // ----------------------- resolver/listagem/override -----------------------
 export async function resolveCity({ crm_id, erp_id }) {
   let rows = [];
+
   if (crm_id || erp_id) {
     const or = [];
     if (crm_id) or.push({ source: 'crm', crm_id });
-    if (erp_id) or.push({ erp_id: String(erp_id) }); // pega CRM e ERP desse erp_id
+    if (erp_id) or.push({ erp_id: asErpId(erp_id) }); // ✅ garante string
+
     rows = await db.EnterpriseCity.findAll({
       where: { [Op.or]: or },
       order: [
@@ -221,9 +233,6 @@ export async function resolveCity({ crm_id, erp_id }) {
 
 /**
  * Resolve em lote por ERP IDs.
- * Opções:
- *  - prefer: 'crm' | 'erp' (ordem de preferência quando existir dos dois)
- *  - sources: array de fontes a considerar (default ['crm','erp'])
  * Retorna Map<string, string|null> (key = erp_id string)
  */
 export async function resolveCityBulkByErpIds(
@@ -233,7 +242,7 @@ export async function resolveCityBulkByErpIds(
   const ids = Array.from(
     new Set(
       (erpIds || [])
-        .map(x => (x == null ? null : String(x)))
+        .map(asErpId)
         .filter(Boolean)
     )
   );
@@ -254,13 +263,13 @@ export async function resolveCityBulkByErpIds(
 
   const out = new Map(); // erp_id -> city
   for (const r of rows) {
-    const k = String(r.erp_id);
-    if (out.has(k)) continue; // primeira ocorrência já é a "melhor"
+    const k = asErpId(r.erp_id);
+    if (!k) continue;
+    if (out.has(k)) continue;
     const city = r.city_override || r.default_city || null;
     out.set(k, city);
   }
 
-  // garante existência de todas as chaves
   for (const id of ids) if (!out.has(id)) out.set(id, null);
   return out;
 }
@@ -270,13 +279,14 @@ export async function listEnterpriseCities({ q, page = 1, pageSize = 50, source,
   if (source) where.source = source;
   if (hasOverride === true) where.city_override = { [Op.ne]: null };
   if (hasOverride === false) where.city_override = null;
+
   if (q) {
     where[Op.or] = [
       { enterprise_name: { [Op.iLike]: `%${q}%` } },
       { default_city: { [Op.iLike]: `%${q}%` } },
       { city_override: { [Op.iLike]: `%${q}%` } },
       { crm_id: isNaN(Number(q)) ? -1 : Number(q) },
-      { erp_id: q }
+      { erp_id: asErpId(q) } // ✅ garante string
     ];
   }
 
@@ -293,11 +303,12 @@ export async function listEnterpriseCities({ q, page = 1, pageSize = 50, source,
 
   const seenCrmErp = new Set();
   const dedupedCrmSameErp = [];
+
   for (const r of rows) {
     if (r.source === 'crm' && r.erp_id) {
-      const k = String(r.erp_id);
-      if (seenCrmErp.has(k)) continue;
-      seenCrmErp.add(k);
+      const k = asErpId(r.erp_id);
+      if (k && seenCrmErp.has(k)) continue;
+      if (k) seenCrmErp.add(k);
     }
     dedupedCrmSameErp.push(r);
   }
@@ -323,6 +334,7 @@ export async function updateCityOverride({ id, city_override }) {
   if (!row) throw new Error('Registro não encontrado');
   row.city_override = city_override || null;
   await row.save();
+
   return {
     id: row.id,
     effective_city: row.city_override || row.default_city,
