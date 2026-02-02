@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import UserDefine from './user.js';
 import PositionDefine from './position.js';
-import UserCityDefine from './userCity.js'; 
+import UserCityDefine from './userCity.js';
 import DepartmentDefine from './department.js';
 import DepartmentCategoryDefine from './departmentCategory.js';
 import FavoriteDefine from './favorite.js';
@@ -14,7 +14,7 @@ import TokenUsageDefine from './tokenUsage.js';
 import ValidationHistoryDefine from './validationHistory.js';
 
 // Singe imports
-import SalesContractDefine         from './sienge/salesContract.js'; 
+import SalesContractDefine from './sienge/salesContract.js';
 import SiengeBillDefine from './sienge/bill.js';
 
 import ExpenseDefine from './expense.js';
@@ -24,25 +24,25 @@ import LeadDefine from './cv/lead.js';
 // ...
 import RepasseDefine from './cv/repasse.js';
 // ...
-import ReservaDefine from './cv/reserva.js'; 
+import ReservaDefine from './cv/reserva.js';
 // 👇 IMPORTES NOVOS
 import SupportMessageDefine from './supportMessage.js';
 import SupportTicketDefine from './supportTicket.js';
 
 import EnterpriseCityDefine from './enterpriseCity.js';
 
-import SalesProjectionDefine     from './projection/salesProjection.js';
+import SalesProjectionDefine from './projection/salesProjection.js';
 import SalesProjectionLineDefine from './projection/salesProjectionLine.js';
-import SalesProjectionLogDefine  from './projection/salesProjectionLog.js';
+import SalesProjectionLogDefine from './projection/salesProjectionLog.js';
 import SalesProjectionEnterpriseDefine from './projection/salesProjectionEnterprise.js';
 
 // ... imports existentes
-import CvEnterpriseDefine       from './cv/enterprise.js';
-import CvEnterpriseStageDefine  from './cv/enterpriseStage.js';
-import CvEnterpriseBlockDefine  from './cv/enterpriseBlock.js';
-import CvEnterpriseUnitDefine   from './cv/enterpriseUnit.js';
+import CvEnterpriseDefine from './cv/enterprise.js';
+import CvEnterpriseStageDefine from './cv/enterpriseStage.js';
+import CvEnterpriseBlockDefine from './cv/enterpriseBlock.js';
+import CvEnterpriseUnitDefine from './cv/enterpriseUnit.js';
 import CvEnterpriseMaterialDefine from './cv/enterpriseMaterial.js';
-import CvEnterprisePlanDefine   from './cv/enterprisePlan.js';
+import CvEnterprisePlanDefine from './cv/enterprisePlan.js';
 
 import CvWorkflowGroupDefine from './cv/workflowGroup.js';
 
@@ -75,18 +75,18 @@ const sequelize = new Sequelize(cfg.database, cfg.username, cfg.password, {
 });
 
 const db = {};
-db.User     = UserDefine(sequelize, DataTypes);
+db.User = UserDefine(sequelize, DataTypes);
 db.Position = PositionDefine(sequelize, DataTypes);
 db.UserCity = UserCityDefine(sequelize, DataTypes);
 db.Department = DepartmentDefine(sequelize, DataTypes);
 db.DepartmentCategory = DepartmentCategoryDefine(sequelize, DataTypes);
 db.Favorite = FavoriteDefine(sequelize, DataTypes);
-db.Event    = EventDefine(sequelize, DataTypes);
+db.Event = EventDefine(sequelize, DataTypes);
 db.TokenUsage = TokenUsageDefine(sequelize, DataTypes);
 db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
 
 // sienge db 
-db.SalesContract          = SalesContractDefine(sequelize, DataTypes);
+db.SalesContract = SalesContractDefine(sequelize, DataTypes);
 db.SiengeBill = SiengeBillDefine(sequelize, DataTypes);
 
 db.Expense = ExpenseDefine(sequelize, DataTypes);
@@ -104,18 +104,18 @@ db.SupportMessage = SupportMessageDefine(sequelize, DataTypes);
 
 db.EnterpriseCity = EnterpriseCityDefine(sequelize, DataTypes);
 
-db.SalesProjection            = SalesProjectionDefine(sequelize, DataTypes);
-db.SalesProjectionLine        = SalesProjectionLineDefine(sequelize, DataTypes);
-db.SalesProjectionLog         = SalesProjectionLogDefine(sequelize, DataTypes);
-db.SalesProjectionEnterprise  = SalesProjectionEnterpriseDefine(sequelize, DataTypes);
+db.SalesProjection = SalesProjectionDefine(sequelize, DataTypes);
+db.SalesProjectionLine = SalesProjectionLineDefine(sequelize, DataTypes);
+db.SalesProjectionLog = SalesProjectionLogDefine(sequelize, DataTypes);
+db.SalesProjectionEnterprise = SalesProjectionEnterpriseDefine(sequelize, DataTypes);
 
 // ... modelos já existentes
-db.CvEnterprise        = CvEnterpriseDefine(sequelize, DataTypes);
-db.CvEnterpriseStage   = CvEnterpriseStageDefine(sequelize, DataTypes);
-db.CvEnterpriseBlock   = CvEnterpriseBlockDefine(sequelize, DataTypes);
-db.CvEnterpriseUnit    = CvEnterpriseUnitDefine(sequelize, DataTypes);
-db.CvEnterpriseMaterial= CvEnterpriseMaterialDefine(sequelize, DataTypes);
-db.CvEnterprisePlan    = CvEnterprisePlanDefine(sequelize, DataTypes);
+db.CvEnterprise = CvEnterpriseDefine(sequelize, DataTypes);
+db.CvEnterpriseStage = CvEnterpriseStageDefine(sequelize, DataTypes);
+db.CvEnterpriseBlock = CvEnterpriseBlockDefine(sequelize, DataTypes);
+db.CvEnterpriseUnit = CvEnterpriseUnitDefine(sequelize, DataTypes);
+db.CvEnterpriseMaterial = CvEnterpriseMaterialDefine(sequelize, DataTypes);
+db.CvEnterprisePlan = CvEnterprisePlanDefine(sequelize, DataTypes);
 
 db.CvWorkflowGroup = CvWorkflowGroupDefine(sequelize, DataTypes);
 
