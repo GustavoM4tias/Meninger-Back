@@ -5,8 +5,15 @@ export default (sequelize, DataTypes) => {
 
         // Identificadores externos
         source: { type: DataTypes.ENUM('crm', 'erp'), allowNull: false }, // de onde veio o registro base
-        crm_id: { type: DataTypes.INTEGER },         // idempreendimento (CRM)
-        erp_id: { type: DataTypes.STRING(50) },     // id interno do ERP (p.ex. "50001")
+        crm_id: { type: DataTypes.INTEGER }, // idempreendimento (CRM)
+
+        // id interno do ERP (p.ex. "50001")
+        erp_id: {
+            type: DataTypes.STRING(50),
+            set(value) {
+                this.setDataValue('erp_id', value == null ? null : String(value));
+            }
+        },
 
         // Metadados do empreendimento
         enterprise_name: { type: DataTypes.STRING(255) },
