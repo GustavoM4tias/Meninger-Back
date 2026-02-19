@@ -26,12 +26,14 @@ export async function getContracts(req, res) {
     const enterpriseIdNum =
       enterpriseId != null && enterpriseId !== '' ? Number(enterpriseId) : null
 
+    const enterpriseIdSafe = Number.isFinite(enterpriseIdNum) && enterpriseIdNum > 0 ? enterpriseIdNum : null
+
     const enterpriseIdsArr =
       typeof enterpriseIds === 'string'
         ? enterpriseIds
           .split(',')
           .map((s) => Number(s.trim()))
-          .filter(Number.isFinite)
+          .filter((n) => Number.isFinite(n) && n > 0)
         : []
 
     const hasEnterpriseIds = enterpriseIdsArr.length > 0
@@ -91,15 +93,16 @@ pivots AS (
     b.enterprise_id,
     b.enterprise_name,
     b.company_id,
+    b.company_name,
     b.company_id::text AS company_id_str,
     b.financial_institution_date,
 
     CASE
       WHEN b.land_value IS NULL THEN NULL
       WHEN position(',' in b.land_value::text) > 0
-        THEN replace(regexp_replace(b.land_value::text, '\.', '', 'g'), ',', '.')::numeric
+        THEN replace(regexp_replace(b.land_value::text, '\\.', '', 'g'), ',', '.')::numeric
       ELSE
-        regexp_replace(b.land_value::text, '[^0-9\.]', '', 'g')::numeric
+        regexp_replace(b.land_value::text, '[^0-9\\.]', '', 'g')::numeric
     END AS land_value,
 
     COALESCE(
@@ -133,7 +136,6 @@ pivots AS (
        LIMIT 1)
     ) AS main_customer,
 
-    /* ✅ VOLTA associates (igual ao antigo) */
     COALESCE(
       (
         WITH cust AS (
@@ -152,7 +154,7 @@ pivots AS (
                 regexp_replace(unaccent(upper(c ->> 'name')), '[^A-Z0-9]+', ' ', 'g'),
                 '(^| )(DE|DA|DO|DAS|DOS|E)( |$)', ' ', 'g'
               ),
-              '\s+', '', 'g'
+              '\\s+', '', 'g'
             ) AS cname_norm
           FROM jsonb_array_elements(b.customers) c
         ),
@@ -174,7 +176,7 @@ pivots AS (
                 )), '[^A-Z0-9]+', ' ', 'g'),
                 '(^| )(DE|DA|DO|DAS|DOS|E)( |$)', ' ', 'g'
               ),
-              '\s+', '', 'g'
+              '\\s+', '', 'g'
             ) AS main_name_norm
         ),
         picked AS (
@@ -205,8 +207,6 @@ pivots AS (
     ) AS associates,
 
     COALESCE(b.payment_conditions, '[]'::jsonb) AS payment_conditions,
-
-    /* ✅ Igual ao antigo: campo chama links */
     COALESCE(b.links_json, '[]'::jsonb) AS links,
 
     regexp_replace(upper(
@@ -240,7 +240,6 @@ ec_resolved AS (
   ) ec ON TRUE
 ),
 
-/* 1) melhor repasse por unit_id (rápido) */
 rp_by_unit AS (
   SELECT *
   FROM (
@@ -279,7 +278,6 @@ missing_keys AS (
   FROM missing m
 ),
 
-/* 2) candidatos fallback: reduz pelo empreendimento/etapa (indexável) */
 rp_candidates_fallback AS (
   SELECT
     r.*,
@@ -296,7 +294,6 @@ rp_candidates_fallback AS (
   )
 ),
 
-/* 2b) melhor repasse por contrato (somente missing) — com id_match priorizado */
 rp_fallback_per_contract AS (
   SELECT *
   FROM (
@@ -306,7 +303,6 @@ rp_fallback_per_contract AS (
       ROW_NUMBER() OVER (
         PARTITION BY m.contract_id
         ORDER BY
-          /* equivalente ao antigo: id_match primeiro */
           (CASE WHEN r.codigointerno_unidade::text = m.unit_id::text THEN 0 ELSE 1 END),
           (CASE WHEN r.status_repasse ILIKE 'Cancelado' THEN 1 ELSE 0 END),
           r.data_mais_recente DESC NULLS LAST,
@@ -324,9 +320,6 @@ rp_fallback_per_contract AS (
   WHERE x.rn = 1
 ),
 
-/* repasse final: prioriza unit_id, senão fallback
-   ✅ carrega idreserva junto (pra linkar reservas corretamente)
-*/
 rp_final AS (
   SELECT
     p.contract_id,
@@ -344,6 +337,8 @@ SELECT
   p.contract_id,
   p.enterprise_id,
   p.enterprise_name,
+  p.company_id AS company_id,
+  p.company_name AS company_name,
   p.financial_institution_date,
   p.unit_name,
   p.unit_id,
@@ -353,7 +348,6 @@ SELECT
   (p.main_customer ->> 'name')                                       AS customer_name,
   NULLIF(p.main_customer ->> 'participationPercentage', '')::numeric AS participation_percentage,
 
-  /* ✅ igual ao antigo */
   p.associates,
   p.payment_conditions,
   p.links,
@@ -377,7 +371,6 @@ LEFT JOIN ec_resolved ec
 LEFT JOIN rp_final rf
   ON rf.contract_id = p.contract_id
 
-/* ✅ CORRIGIDO: reserva liga por idreserva do repasse */
 LEFT JOIN reservas res
   ON res.idreserva = rf.idreserva
 
@@ -392,9 +385,7 @@ WHERE
   )
 
 ORDER BY p.financial_institution_date, p.contract_id;
-
 `
-
     const replacements = {
       start: start.format('YYYY-MM-DD'),
       end: end.format('YYYY-MM-DD'),
