@@ -4,8 +4,28 @@ import bcrypt from 'bcryptjs';
 import db from '../models/sequelize/index.js';
 import jwtConfig from '../config/jwtConfig.js';
 import responseHandler from '../utils/responseHandler.js';
+import { sendEmail } from '../email/email.service.js';
 
 const { User, Position, UserCity } = db;
+
+const PASSWORD_RESET_TTL_MIN = Number(process.env.PASSWORD_RESET_TTL_MIN || 10);
+const PASSWORD_RESET_RESEND_SEC = Number(process.env.PASSWORD_RESET_RESEND_SEC || 20);
+const PASSWORD_RESET_MAX_ATTEMPTS = Number(process.env.PASSWORD_RESET_MAX_ATTEMPTS || 5);
+
+function genCode6() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function neutralResetResponse(res) {
+  return responseHandler.success(res, {
+    message: 'Enviaremos um código para o e-mail informado.',
+  });
+}
+
+function isStrongPassword(password) {
+  const p = String(password || '');
+  return /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(p);
+}
 
 export const registerUser = async (req, res) => {
   const { username, password, email, position, city, birth_date } = req.body;
@@ -56,12 +76,16 @@ export const registerUser = async (req, res) => {
 };
 
 export const loginUser = async (req, res) => {
-  const { email, password } = req.body;
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
+
   try {
     const user = await User.findOne({ where: { email } });
+
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
+
     if (!user.status) {
       return responseHandler.error(res, 'Conta inativa. Entre em contato com o administrador.');
     }
@@ -86,6 +110,177 @@ export const loginUser = async (req, res) => {
   } catch (error) {
     console.error('Erro no login:', error);
     return responseHandler.error(res, error);
+  }
+};
+
+
+export const changePassword = async (req, res) => {
+  try {
+    const currentPassword = String(req.body?.currentPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+    const confirmNewPassword = String(req.body?.confirmNewPassword || '');
+
+    if (!currentPassword || !newPassword || !confirmNewPassword) {
+      return responseHandler.error(res, 'Todos os campos são obrigatórios');
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      return responseHandler.error(res, 'As senhas não conferem');
+    }
+
+    if (!isStrongPassword(newPassword)) {
+      return responseHandler.error(res, 'A senha deve ter no mínimo 8 caracteres, com letra e número');
+    }
+
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      return responseHandler.error(res, 'Usuário não encontrado');
+    }
+
+    if (user.auth_provider !== 'INTERNAL') {
+      return responseHandler.error(res, 'Alteração de senha não disponível para este tipo de conta');
+    }
+
+    const passwordMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!passwordMatch) {
+      return responseHandler.error(res, 'Senha atual incorreta');
+    }
+
+    // Prevent reuse of same password
+    const isSame = await bcrypt.compare(newPassword, user.password);
+    if (isSame) {
+      return responseHandler.error(res, 'A nova senha não pode ser igual à senha atual');
+    }
+
+    user.password = newPassword; // model hook hashes on save
+    await user.save();
+
+    return responseHandler.success(res, { message: 'Senha alterada com sucesso.' });
+  } catch (error) {
+    console.error('[changePassword] erro:', error);
+    return responseHandler.error(res, 'Erro ao alterar senha');
+  }
+};
+
+export const requestPasswordReset = async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+
+    if (!email) {
+      return neutralResetResponse(res);
+    }
+
+    const user = await User.findOne({
+      where: {
+        email,
+        auth_provider: 'INTERNAL',
+        status: true,
+      },
+    });
+
+    if (!user) {
+      return neutralResetResponse(res);
+    }
+
+    if (user.reset_password_last_sent_at) {
+      const diffSec = (Date.now() - new Date(user.reset_password_last_sent_at).getTime()) / 1000;
+      if (diffSec < PASSWORD_RESET_RESEND_SEC) {
+        return neutralResetResponse(res);
+      }
+    }
+
+    const code = genCode6();
+    const codeHash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MIN * 60 * 1000);
+
+    await user.update({
+      reset_password_code: codeHash,
+      reset_password_expires_at: expiresAt,
+      reset_password_attempts: 0,
+      reset_password_last_sent_at: new Date(),
+    });
+
+    await sendEmail('auth.password.reset', user.email, {
+      username: user.username,
+      code,
+      minutes: PASSWORD_RESET_TTL_MIN,
+    });
+
+    return neutralResetResponse(res);
+  } catch (error) {
+    console.error('[requestPasswordReset] erro:', error);
+    return neutralResetResponse(res);
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const code = String(req.body?.code || '').trim();
+    const password = String(req.body?.password || '');
+    const confirmPassword = String(req.body?.confirmPassword || '');
+
+    if (!email || !code || !password || !confirmPassword) {
+      return responseHandler.error(res, 'Todos os campos são obrigatórios');
+    }
+
+    if (code.length !== 6) {
+      return responseHandler.error(res, 'Código inválido');
+    }
+
+    if (password !== confirmPassword) {
+      return responseHandler.error(res, 'As senhas não conferem');
+    }
+
+    if (!isStrongPassword(password)) {
+      return responseHandler.error(res, 'A senha deve ter no mínimo 8 caracteres, com letra e número');
+    }
+
+    const user = await User.findOne({
+      where: {
+        email,
+        auth_provider: 'INTERNAL',
+        status: true,
+      },
+    });
+
+    if (!user || !user.reset_password_code) {
+      return responseHandler.error(res, 'Código inválido');
+    }
+
+    if (!user.reset_password_expires_at || new Date(user.reset_password_expires_at).getTime() < Date.now()) {
+      return responseHandler.error(res, 'Código expirado');
+    }
+
+    if ((user.reset_password_attempts || 0) >= PASSWORD_RESET_MAX_ATTEMPTS) {
+      return responseHandler.error(res, 'Muitas tentativas. Solicite um novo código.');
+    }
+
+    const validCode = await bcrypt.compare(code, user.reset_password_code);
+
+    if (!validCode) {
+      await user.update({
+        reset_password_attempts: (user.reset_password_attempts || 0) + 1,
+      });
+
+      return responseHandler.error(res, 'Código inválido');
+    }
+
+    user.password = password;
+    user.reset_password_code = null;
+    user.reset_password_expires_at = null;
+    user.reset_password_attempts = 0;
+    user.reset_password_last_sent_at = null;
+
+    await user.save();
+
+    return responseHandler.success(res, {
+      message: 'Senha redefinida com sucesso.',
+    });
+  } catch (error) {
+    console.error('[resetPassword] erro:', error);
+    return responseHandler.error(res, 'Erro ao redefinir senha');
   }
 };
 

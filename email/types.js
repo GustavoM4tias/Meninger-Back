@@ -7,6 +7,7 @@ export const EmailType = {
     INVITE_USER: 'invite.user',
     GENERIC_NOTIFICATION: 'generic.notification',
     AUTH_ACADEMY_CODE: 'auth.academy.code',
+    AUTH_PASSWORD_RESET: 'auth.password.reset',
 };
 
 // Contratos mínimos de dados por tipo (JSDoc p/ intellisense)

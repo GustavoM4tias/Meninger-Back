@@ -15,14 +15,14 @@ export default (sequelize, DataTypes) => {
       allowNull: false,
     },
     role: {
-      type: DataTypes.ENUM('admin', 'user'), // ajuste os cargos aqui
+      type: DataTypes.ENUM('admin', 'user'),
       allowNull: false,
       defaultValue: 'user'
     },
     status: { type: DataTypes.BOOLEAN, defaultValue: true },
     birth_date: DataTypes.DATEONLY,
     last_login: DataTypes.DATE,
-    manager_id: {  // <- Novo campo
+    manager_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
       references: {
@@ -31,9 +31,9 @@ export default (sequelize, DataTypes) => {
       },
     },
     auth_provider: { type: DataTypes.STRING(50), allowNull: false, defaultValue: 'INTERNAL' },
-    external_kind: { type: DataTypes.STRING(50), allowNull: true }, // 'BROKER' | 'REALESTATE_USER'
-    external_id: { type: DataTypes.STRING(50), allowNull: true },   // idcorretor | idusuarioimobiliaria_cv
-    document: { type: DataTypes.STRING(20), allowNull: true },      // CPF digits
+    external_kind: { type: DataTypes.STRING(50), allowNull: true },
+    external_id: { type: DataTypes.STRING(50), allowNull: true },
+    document: { type: DataTypes.STRING(20), allowNull: true },
     external_organization_id: { type: DataTypes.INTEGER, allowNull: true },
     microsoft_access_token: {
       type: DataTypes.TEXT,
@@ -48,9 +48,14 @@ export default (sequelize, DataTypes) => {
       allowNull: true,
     },
     face_enabled: { type: DataTypes.BOOLEAN, defaultValue: false },
-    face_template: { type: DataTypes.JSONB }, // [128 floats]
+    face_template: { type: DataTypes.JSONB },
     face_threshold: { type: DataTypes.FLOAT, defaultValue: 0.6 },
-    face_last_update: { type: DataTypes.DATE }
+    face_last_update: { type: DataTypes.DATE },
+
+    reset_password_code: { type: DataTypes.STRING(255), allowNull: true },
+    reset_password_expires_at: { type: DataTypes.DATE, allowNull: true },
+    reset_password_attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    reset_password_last_sent_at: { type: DataTypes.DATE, allowNull: true },
   }, {
     tableName: 'users',
     underscored: true,

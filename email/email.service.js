@@ -91,6 +91,11 @@ const META = {
         preview: () => `Use o código para entrar no Academy`,
         file: 'auth.academy.code.hbs',
     },
+    'auth.password.reset': {
+        subject: () => `Seu código para alterar a senha é`,
+        preview: () => `Use o código para redefinir sua senha`,
+        file: 'auth.password.reset.hbs',
+    },
 };
 
 function compileTemplateOnce(file) {
