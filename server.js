@@ -62,7 +62,7 @@ app.use('/api/academy', academyRoutes);
 
 const PORT = process.env.PORT || 5000;
 
-db.sequelize.sync({ alter: false })  // ⚠️ alter: true = adapta sem apagar dados
+db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar dados
   .then(() => {
     console.log('Banco sincronizado com sucesso!');
 

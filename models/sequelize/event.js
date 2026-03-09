@@ -24,6 +24,10 @@ export default (sequelize, DataTypes) => {
       allowNull: false, 
       defaultValue: { users: [], positions: [], emails: [] }
     },
+    // NOVOS CAMPOS
+    enterprise_id:   { type: DataTypes.INTEGER, allowNull: true },
+    enterprise_name: { type: DataTypes.STRING(255), allowNull: true },
+    enterprise_logo: { type: DataTypes.TEXT, allowNull: true },
   }, {
     sequelize,
     modelName: 'Event',
