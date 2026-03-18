@@ -1,9 +1,19 @@
 // playwright/modules/sienge/login.js
 import { createPage } from "../../core/browser.js";
-import { SIENGE_USER, SIENGE_PASS } from "../../config/env.js";
 import { log, success } from "../../core/logger.js";
 
-export async function siengeLogin() {
+/**
+ * Realiza login no Sienge via Playwright.
+ * @param {object} [credentials] - { email, password } — se não passado, usa env vars como fallback
+ */
+export async function siengeLogin(credentials = {}) {
+    const email = credentials.email || process.env.SIENGE_USER;
+    const password = credentials.password || process.env.SIENGE_PASS;
+
+    if (!email || !password) {
+        throw new Error('Credenciais Sienge não configuradas. Configure em Minha Conta → Credenciais Sienge.');
+    }
+
     const { browser, context, page } = await createPage();
 
     log("LOGIN", "Acessando página inicial...");
@@ -29,7 +39,7 @@ export async function siengeLogin() {
     const campoEmail = page.getByRole("textbox", { name: "Seu e-mail" });
     if (await campoEmail.count()) {
         log("LOGIN", "Preenchendo e-mail...");
-        await campoEmail.fill(SIENGE_USER);
+        await campoEmail.fill(email);
 
         log("LOGIN", "Clicando CONTINUAR...");
         await page
@@ -44,7 +54,7 @@ export async function siengeLogin() {
     await campoSenha.waitFor({ timeout: 15000 });
 
     log("LOGIN", "Preenchendo senha...");
-    await campoSenha.fill(SIENGE_PASS);
+    await campoSenha.fill(password);
 
     log("LOGIN", "Clicando ENTRAR...");
     await page.getByRole("button", { name: "ENTRAR" }).click();

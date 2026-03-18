@@ -5,6 +5,7 @@ import db from '../models/sequelize/index.js';
 import jwtConfig from '../config/jwtConfig.js';
 import responseHandler from '../utils/responseHandler.js';
 import { sendEmail } from '../email/email.service.js';
+import { encrypt, decrypt } from '../utils/encryption.js';
 
 const { User, Position, UserCity } = db;
 
@@ -550,6 +551,58 @@ export const getAllUsers = async (req, res) => {
   } catch (error) {
     return responseHandler.error(res, error);
   }
+};
+
+// ── Credenciais Sienge ────────────────────────────────────────────────────────
+
+/**
+ * GET /api/auth/user/sienge-credentials
+ * Retorna se o usuário tem credenciais Sienge configuradas e o email mascarado.
+ */
+export const getSiengeCredentials = async (req, res) => {
+    try {
+        const user = await User.findByPk(req.user.id, {
+            attributes: ['id', 'sienge_email', 'sienge_password'],
+        });
+        if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+        const hasCredentials = !!(user.sienge_email && user.sienge_password);
+        let maskedEmail = null;
+        if (hasCredentials) {
+            const email = decrypt(user.sienge_email);
+            if (email) {
+                const [local, domain] = email.split('@');
+                maskedEmail = `${local.slice(0, 3)}***@${domain}`;
+            }
+        }
+        return res.json({ hasCredentials, maskedEmail });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+/**
+ * PUT /api/auth/user/sienge-credentials
+ * Salva email e senha Sienge criptografados no perfil do usuário.
+ */
+export const saveSiengeCredentials = async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email?.trim() || !password?.trim()) {
+            return res.status(422).json({ error: 'Email e senha são obrigatórios.' });
+        }
+        const user = await User.findByPk(req.user.id);
+        if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+        await user.update({
+            sienge_email: encrypt(email.trim()),
+            sienge_password: encrypt(password),
+        });
+
+        return res.json({ success: true, message: 'Credenciais Sienge salvas com segurança.' });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
 };
 
 export const getUserById = async (req, res) => {

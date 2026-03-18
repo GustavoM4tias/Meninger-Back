@@ -51,6 +51,8 @@ import landSyncEnterpriseDefine from './landSyncEnterprise.js';
 import SiengeAwardDefine from './sienge/award.js';
 import SiengeAwardLinkDefine from './sienge/awardLink.js';
 import SiengeAwardLogDefine from './sienge/awardLog.js';
+import PaymentLaunchDefine from './sienge/paymentLaunch.js';
+import LaunchTypeConfigDefine from './sienge/launchTypeConfig.js';
 
 import AcademyArticleDefine from './academy/article.js';
 import AcademyTopicDefine from './academy/topic.js';
@@ -65,6 +67,7 @@ import AcademyUserQuizAttemptDefine from './academy/userQuizAttempt.js';
 
 import ExternalOrganizationDefine from './academy/external/externalOrganization.js';
 import AuthAccessCodeDefine from './academy/external/authAccessCode.js';
+
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -124,6 +127,8 @@ db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
 db.Award = SiengeAwardDefine(sequelize, DataTypes);
 db.AwardLink = SiengeAwardLinkDefine(sequelize, DataTypes);
 db.AwardLog = SiengeAwardLogDefine(sequelize, DataTypes);
+db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);
+db.LaunchTypeConfig = LaunchTypeConfigDefine(sequelize, DataTypes);
 
 db.AcademyArticle = AcademyArticleDefine(sequelize, DataTypes);
 db.AcademyTopic = AcademyTopicDefine(sequelize, DataTypes);

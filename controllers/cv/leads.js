@@ -98,7 +98,7 @@ export async function getLeads(req, res) {
     addIlikeCsv(whereClauses, replacements, 'imobiliaria', `l.imobiliaria->>'nome'`, imobiliaria);
     addIlikeCsv(whereClauses, replacements, 'corretor', `l.corretor->>'nome'`, corretor);
 
-    // filtro por empreendimento (pelo nome, como já fazia)
+    // filtro por empreendimento (match exato, case-insensitive)
     if (empreendimento) {
       const termos = String(empreendimento).split(',').map(s => s.trim()).filter(Boolean);
       if (termos.length) {
@@ -106,10 +106,10 @@ export async function getLeads(req, res) {
           EXISTS (
             SELECT 1
             FROM jsonb_array_elements(l.empreendimento) AS e
-            WHERE (e->>'nome') ILIKE :emp_${i}
+            WHERE LOWER(e->>'nome') = LOWER(:emp_${i})
           )`);
         whereClauses.push(`(${existsClauses.join(' OR ')})`);
-        termos.forEach((t, i) => (replacements[`emp_${i}`] = `%${t}%`));
+        termos.forEach((t, i) => (replacements[`emp_${i}`] = t));
       }
     }
 

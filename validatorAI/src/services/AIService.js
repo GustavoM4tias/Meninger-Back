@@ -12,34 +12,35 @@ function isQuotaOrTransient(err) {
 }
 
 export class AIService {
-  static async generateResponse(systemPrompt, userMessage, preferredModels) {
-    const fullPrompt = `${systemPrompt}\n\nPergunta/Mensagem do usuário:\n${userMessage}`;
+  // ── Helpers internos ────────────────────────────────────────────────────────
 
+  static _resolveModels(preferredModels) {
     const envModels = (process.env.GEMINI_MODELS || '')
       .split(',').map(m => m.trim()).filter(Boolean);
-    // ordem: preferidos → .env → padrão (2.5-pro, 2.5-flash) 
-    const modelsToTry = [
+    return [
       ...(Array.isArray(preferredModels) ? preferredModels : []),
       ...envModels,
-    ].filter((v, i, a) => v && a.indexOf(v) === i); // únicos e definidos
+    ].filter((v, i, a) => v && a.indexOf(v) === i);
+  }
 
+  static async _runWithRetry(modelsToTry, buildParts, context = "document") {
     let lastErr;
 
     for (const modelToUse of modelsToTry) {
-      const maxAttempts = Math.max(1, getKeyCount()); // tenta 1x por chave disponível
+      const maxAttempts = Math.max(1, getKeyCount());
       let attempts = 0;
       while (attempts < maxAttempts) {
         const { client, index } = nextClient();
         if (!client) {
           console.warn(`Todas as chaves estão em cooldown para ${modelToUse}; alternando para próximo modelo.`);
-          break; // sai do loop de chaves e tenta próximo modelo
+          break;
         }
         attempts++;
 
         try {
-          const aiModel = client.getGenerativeModel({ model: modelToUse, responseSchema: "application/json" });
+          const aiModel = client.getGenerativeModel({ model: modelToUse });
           const result = await aiModel.generateContent({
-            contents: [{ role: "user", parts: [{ text: fullPrompt }] }]
+            contents: [{ role: "user", parts: buildParts() }],
           });
 
           const responseText = (await result.response.text()).trim();
@@ -49,8 +50,8 @@ export class AIService {
           await TokenUsage.create({
             model: modelToUse,
             tokensUsed: totalTokens,
-            context: "document",
-            providerMeta: JSON.stringify({ provider: "gemini", keyIndex: index })
+            context,
+            providerMeta: JSON.stringify({ provider: "gemini", keyIndex: index }),
           });
 
           return { response: responseText, tokensUsed: totalTokens, model: modelToUse, keyIndex: index };
@@ -62,7 +63,6 @@ export class AIService {
 
           console.error(`[Debug] Tentativa ${attempts}/${maxAttempts} para modelo ${modelToUse}`);
 
-          // 404: modelo inexistente/indisponível → fatal só para ESTE modelo: sai do loop de chaves e vai para o próximo modelo
           if (code === 404) {
             console.warn(`Pulando modelo ${modelToUse} por 404 (não suportado/não encontrado).`);
             break;
@@ -70,32 +70,53 @@ export class AIService {
 
           if (isQuotaOrTransient(err)) {
             markCooldown(index);
-            // backoff rápido para reduzir 429 em rajada
             await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 300)));
             continue;
           }
 
           return {
-            response: null,
-            tokensUsed: 0,
-            model: modelToUse,
-            keyIndex: index,
-            error: `Erro fatal na chave [${index}] (${modelToUse}): ${msg}`
+            response: null, tokensUsed: 0, model: modelToUse, keyIndex: index,
+            error: `Erro fatal na chave [${index}] (${modelToUse}): ${msg}`,
           };
         }
       }
 
-      // se chegou aqui: todas as chaves desse modelo falharam → tenta próximo modelo
       console.warn(`Todas as chaves falharam para ${modelToUse}, tentando próximo modelo...`);
     }
 
-    // se nenhum modelo respondeu → devolve erro
     return {
-      response: null,
-      tokensUsed: 0,
-      model: modelsToTry[0] || "gemini",
-      keyIndex: -1,
-      error: `Falha geral: todos os modelos e chaves falharam (${lastErr?.message || "desconhecido"})`
+      response: null, tokensUsed: 0,
+      model: modelsToTry[0] || "gemini", keyIndex: -1,
+      error: `Falha geral: todos os modelos e chaves falharam (${lastErr?.message || "desconhecido"})`,
     };
+  }
+
+  // ── Chamada texto → texto (fluxo original) ────────────────────────────────
+
+  static async generateResponse(systemPrompt, userMessage, preferredModels) {
+    const fullPrompt = `${systemPrompt}\n\nPergunta/Mensagem do usuário:\n${userMessage}`;
+    const modelsToTry = this._resolveModels(preferredModels);
+    return this._runWithRetry(
+      modelsToTry,
+      () => [{ text: fullPrompt }],
+      "document"
+    );
+  }
+
+  // ── Chamada PDF (buffer) → texto  ─────────────────────────────────────────
+  // Usado para PDFs escaneados (sem camada de texto).
+  // O Gemini processa o PDF como imagem e extrai os dados diretamente.
+
+  static async generateResponseFromPdf(prompt, pdfBuffer, preferredModels) {
+    const base64Data = pdfBuffer.toString("base64");
+    const modelsToTry = this._resolveModels(preferredModels);
+    return this._runWithRetry(
+      modelsToTry,
+      () => [
+        { inlineData: { mimeType: "application/pdf", data: base64Data } },
+        { text: prompt },
+      ],
+      "document_ocr"
+    );
   }
 } 

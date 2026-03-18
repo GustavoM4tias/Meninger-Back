@@ -1,7 +1,7 @@
 // src/services/sienge/awardService.js
 import db from "../../models/sequelize/index.js";
-import { parseNfseXml } from "../../playwright/modules/sienge/nfsParser.js";
-import { parseNfsePdf } from "../../playwright/modules/sienge/nfsPdfParser.js";
+import { parseNfseXml } from "../../playwright/modules/sienge/utils/nfsParser.js";
+import { parseNfsePdf } from "../../playwright/modules/sienge/utils/nfsPdfParser.js";
 
 const { Award, AwardLink, AwardLog } = db
 const AWARD_STATUSES = new Set(["iniciado", "autorizacao", "andamento", "pago"])

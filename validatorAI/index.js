@@ -9,6 +9,7 @@ import { chatRoutes } from './src/routes/chatRoutes.js';
 import statsRoutes from './src/routes/statsRoutes.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
 import historyRoutes from './src/routes/historyRoutes.js';
+import { paymentFlowRoutes } from './src/routes/paymentFlowRoutes.js';
 
 const app = express();
 
@@ -33,6 +34,7 @@ app.use('/validator', documentRoutes(upload));
 app.use('/validator/history', authenticate, historyRoutes);
 app.use('/chat', chatRoutes);
 app.use('/token', statsRoutes);
+app.use('/payment-flow', authenticate, paymentFlowRoutes(upload));
 
 app.use(errorHandler);
 

@@ -1,0 +1,48 @@
+<h2 style="margin:0 0 16px 0;color:#1B3F6E;">Solicitação de Cadastro de Novo Fornecedor</h2>
+
+<p style="margin:0 0 16px 0;">
+    Olá, equipe de fornecedores!
+</p>
+
+<p style="margin:0 0 16px 0;">
+    O usuário <strong>{{requesterName}}</strong> está solicitando o cadastro de um novo fornecedor no sistema Sienge.
+    Os dados do fornecedor estão no formulário <strong>RID</strong> em anexo neste e-mail.
+</p>
+
+<div style="background:#F0F4F8;border-left:4px solid #1B3F6E;border-radius:4px;padding:16px 20px;margin:24px 0;">
+    <p style="margin:0 0 8px 0;font-size:13px;color:#555;font-weight:bold;text-transform:uppercase;letter-spacing:0.05em;">Dados do Fornecedor</p>
+    <table style="width:100%;border-collapse:collapse;">
+        <tr>
+            <td style="padding:4px 0;color:#888;font-size:14px;width:40%;">Razão Social</td>
+            <td style="padding:4px 0;color:#1a1a1a;font-size:14px;font-weight:600;">{{providerName}}</td>
+        </tr>
+        <tr>
+            <td style="padding:4px 0;color:#888;font-size:14px;">CNPJ</td>
+            <td style="padding:4px 0;color:#1a1a1a;font-size:14px;font-weight:600;font-family:monospace;">{{providerCnpj}}</td>
+        </tr>
+        {{#if launchType}}
+        <tr>
+            <td style="padding:4px 0;color:#888;font-size:14px;">Tipo de Lançamento</td>
+            <td style="padding:4px 0;color:#1a1a1a;font-size:14px;">{{launchType}}</td>
+        </tr>
+        {{/if}}
+        {{#if enterpriseName}}
+        <tr>
+            <td style="padding:4px 0;color:#888;font-size:14px;">Empreendimento</td>
+            <td style="padding:4px 0;color:#1a1a1a;font-size:14px;">{{enterpriseName}}</td>
+        </tr>
+        {{/if}}
+    </table>
+</div>
+
+<div style="background:#FFF8E1;border:1px solid #F59E0B;border-radius:4px;padding:12px 16px;margin:16px 0;">
+    <p style="margin:0;font-size:13px;color:#92400E;">
+        <strong>⚠️ Ação necessária:</strong> Por favor, realize o cadastro deste fornecedor no sistema Sienge com os dados do formulário RID em anexo.
+        Após o cadastro, o usuário {{requesterName}} receberá o retorno automaticamente pelo sistema.
+    </p>
+</div>
+
+<p style="margin:16px 0 0 0;font-size:13px;color:#888;">
+    Solicitado em: {{sentAt}}<br>
+    O e-mail do solicitante está em cópia nesta mensagem.
+</p>
