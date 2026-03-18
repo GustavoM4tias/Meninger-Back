@@ -45,21 +45,20 @@ export async function getContracts(req, res) {
     const validSituations = ['Emitido', 'Autorizado', 'Cancelado']
     const sit = validSituations.includes(situation) ? situation : 'Emitido'
 
-    // filtro por nome de empreendimento (lista)
+    // filtro por nome de empreendimento (match exato, case-insensitive)
     let nameList = []
     if (Array.isArray(enterpriseName)) {
-      nameList = enterpriseName.map((name) => `%${name.trim()}%`)
+      nameList = enterpriseName.map((name) => name.trim()).filter(Boolean)
     } else if (typeof enterpriseName === 'string') {
       nameList = enterpriseName
         .split(',')
         .map((n) => n.trim())
         .filter(Boolean)
-        .map((name) => `%${name}%`)
     }
 
     const whereNameClause =
       nameList.length > 0
-        ? ` AND (${nameList.map((_, i) => `sc.enterprise_name ILIKE :name${i}`).join(' OR ')})`
+        ? ` AND (${nameList.map((_, i) => `LOWER(sc.enterprise_name) = LOWER(:name${i})`).join(' OR ')})`
         : ''
 
     const whereEnterpriseIdClause =
