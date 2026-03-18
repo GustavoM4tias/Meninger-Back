@@ -19,13 +19,18 @@ import projectionRoutes from './routes/projectionsRoutes.js';
 import expensesRoutes from './routes/expensesRoutes.js';
 import viabilityRoutes from './routes/viabilityRoutes.js';
 import academyRoutes from './routes/academyRoutes.js'; 
+import uploadRoutes from './routes/uploadRoutes.js';
+
+import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
 import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
 import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
 import landScheduler from './scheduler/landScheduler.js';
-import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js'; 
+import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js';
+import creditorPollingScheduler from './scheduler/creditorPollingScheduler.js';
+import contractApprovalScheduler from './scheduler/contractApprovalScheduler.js';
 
 const app = express();
 
@@ -59,12 +64,16 @@ app.use('/api/projections', projectionRoutes);
 app.use('/api/expenses', expensesRoutes);
 app.use('/api/viability', viabilityRoutes);
 app.use('/api/academy', academyRoutes); 
+app.use('/api/uploads', uploadRoutes);
 
 const PORT = process.env.PORT || 5000;
 
-db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar dados
-  .then(() => {
+db.sequelize.sync({ alter: false })  // alter: true = adapta estrutura sem apagar dados
+  .then(async () => {
     console.log('Banco sincronizado com sucesso!');
+
+    // Seed tipos de lançamento iniciais (só faz algo se a tabela estiver vazia)
+    await seedInitialTypes();
 
     // Start schedulers só depois do sync:
     if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') {
@@ -87,7 +96,12 @@ db.sequelize.sync({ alter: true })  // ⚠️ alter: true = adapta sem apagar da
     } 
     if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') {
       enterpriseCvScheduler.start();
-    }  
+    }
+    // Polling de fornecedores aguardando cadastro RID (sempre ativo)
+    creditorPollingScheduler.start();
+    // Polling de alçada de aprovação dos contratos Sienge (sempre ativo)
+    contractApprovalScheduler.start();
+
     app.listen(PORT, () => {
       console.log(`Servidor rodando na porta: ${PORT}`);
     });

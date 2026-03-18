@@ -56,6 +56,10 @@ export default (sequelize, DataTypes) => {
     reset_password_expires_at: { type: DataTypes.DATE, allowNull: true },
     reset_password_attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     reset_password_last_sent_at: { type: DataTypes.DATE, allowNull: true },
+
+    // ── Credenciais Sienge (armazenadas criptografadas via AES-256) ────────────
+    sienge_email: { type: DataTypes.TEXT, allowNull: true },
+    sienge_password: { type: DataTypes.TEXT, allowNull: true },
   }, {
     tableName: 'users',
     underscored: true,

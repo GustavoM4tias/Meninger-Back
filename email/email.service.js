@@ -96,6 +96,11 @@ const META = {
         preview: () => `Use o código para redefinir sua senha`,
         file: 'auth.password.reset.hbs',
     },
+    'supplier.rid.request': {
+        subject: (d) => `Solicitação de cadastro de fornecedor: ${d.providerName || d.providerCnpj || ''}`,
+        preview: (d) => `Solicitado por ${d.requesterName || 'usuário do sistema'}`,
+        file: 'supplier.rid.request.hbs',
+    },
 };
 
 function compileTemplateOnce(file) {
@@ -111,8 +116,11 @@ function compileTemplateOnce(file) {
  * @param {string} type
  * @param {string|string[]} to
  * @param {object} data
+ * @param {object} [options]
+ * @param {string|string[]} [options.cc]        - Emails em cópia
+ * @param {Array}           [options.attachments] - Nodemailer attachments array
  */
-export async function sendEmail(type, to, data = {}) {
+export async function sendEmail(type, to, data = {}, options = {}) {
     const cfg = META[type];
     if (!cfg) throw new Error(`Tipo desconhecido: ${type}`);
 
@@ -123,10 +131,19 @@ export async function sendEmail(type, to, data = {}) {
         previewText: cfg.preview(data),
     });
 
-    return transporter.sendMail({
+    const mailOptions = {
         from: EMAIL_FROM,
         to: Array.isArray(to) ? to.join(',') : to,
         subject: cfg.subject(data),
         html,
-    });
+    };
+
+    if (options.cc) {
+        mailOptions.cc = Array.isArray(options.cc) ? options.cc.join(',') : options.cc;
+    }
+    if (options.attachments?.length) {
+        mailOptions.attachments = options.attachments;
+    }
+
+    return transporter.sendMail(mailOptions);
 }

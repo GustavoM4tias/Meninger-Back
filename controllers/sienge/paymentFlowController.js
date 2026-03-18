@@ -1,0 +1,532 @@
+// controllers/paymentFlowController.js
+import path from 'path';
+import { fileURLToPath } from 'url';
+import db from '../../models/sequelize/index.js';
+import {
+    runFullPipeline,
+    stepFindCreditor,
+    stepFindContract,
+    stepCreateContract,
+    stepValidateItems,
+    pollContractStatus,
+} from '../../services/sienge/PaymentFlowPipelineService.js';
+import { sendEmail } from '../../email/email.service.js';
+import { generateRidDocx } from '../../services/sienge/RidDocumentService.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const RID_TEMPLATE_PATH = path.resolve(__dirname, '../../assets/RID_Modelo.docx');
+
+const Model = () => db.PaymentLaunch;
+const TypeModel = () => db.LaunchTypeConfig;
+
+function actor(req) {
+    // createdBy é NOT NULL — usa 0 como sentinela se authenticate não rodou
+    return { id: req.user?.id || 0, name: req.user?.name || req.user?.username || 'Sistema' };
+}
+
+/** Retorna os defaults do tipo de lançamento direto do BD. */
+async function typeDefaults(launchType) {
+    if (!launchType) return {};
+    try {
+        const t = await TypeModel().findOne({
+            where: { name: launchType, active: true },
+            attributes: ['documento', 'budgetItem', 'budgetItemCode', 'financialAccountNumber'],
+        });
+        if (!t) return {};
+        return {
+            documento:             t.documento,
+            budgetItem:            t.budgetItem,
+            budgetItemCode:        t.budgetItemCode ? String(t.budgetItemCode) : null,
+            financialAccountNumber: t.financialAccountNumber,
+        };
+    } catch { return {}; }
+}
+
+/** Retorna o lançamento se o usuário tem acesso (dono ou admin). Lança 403/404. */
+async function ownedLaunch(req, id) {
+    const isAdmin = req.user?.role === 'admin';
+    const launch = await Model().findByPk(id ?? req.params.id);
+    if (!launch) return { launch: null, status: 404, error: 'Lançamento não encontrado.' };
+    if (!isAdmin && launch.createdBy !== req.user?.id) {
+        return { launch: null, status: 403, error: 'Acesso não permitido.' };
+    }
+    return { launch };
+}
+
+// ── CREATE ────────────────────────────────────────────────────────────────────
+export async function createLaunch(req, res, next) {
+    try {
+        const u = actor(req);
+        const b = req.body;
+        const td = b.launchType ? await typeDefaults(b.launchType) : {};
+        const today = new Date().toISOString().slice(0, 10);
+        const endOfYear = `${today.slice(0, 4)}-12-31`;
+
+        // ── Verificação de duplicidade: mesmo nfNumber + providerCnpj (exceto cancelados) ──
+        if (b.nfNumber && b.providerCnpj && !b.cancelExisting) {
+            const existing = await Model().findOne({
+                where: {
+                    nfNumber: b.nfNumber,
+                    providerCnpj: b.providerCnpj,
+                    status: { [db.Sequelize.Op.ne]: 'cancelado' },
+                },
+                attributes: ['id', 'status', 'launchType', 'createdByName', 'createdAt', 'providerName', 'nfNumber'],
+            });
+            if (existing) {
+                return res.status(409).json({
+                    duplicate: true,
+                    error: `Já existe um lançamento ativo com NF "${b.nfNumber}" para este fornecedor.`,
+                    existing: existing.toJSON(),
+                });
+            }
+        }
+
+        // ── Cancelar lançamento anterior (se usuário confirmou) ───────────────
+        if (b.cancelExisting) {
+            const toCancel = await Model().findByPk(b.cancelExisting);
+            if (toCancel && toCancel.status !== 'cancelado') {
+                await toCancel.update({ status: 'cancelado', updatedBy: u.id, updatedByName: u.name });
+            }
+        }
+
+        const launch = await Model().create({
+            companyName: b.companyName || null,
+            companyId: b.companyId || null,
+            enterpriseName: b.enterpriseName || null,
+            enterpriseId: b.enterpriseId || null,
+            providerName: b.providerName || null,
+            providerCnpj: b.providerCnpj || null,
+            startDate: b.startDate || today,
+            endDate: b.endDate || endOfYear,
+            documentDate: b.documentDate || null,
+            launchType: b.launchType,
+            budgetItem: b.budgetItem || td.budgetItem || null,
+            budgetItemCode: b.budgetItemCode || td.budgetItemCode || null,
+            financialAccountNumber: b.financialAccountNumber || td.financialAccountNumber || null,
+            allocationPercentage: b.allocationPercentage ?? 100,
+            unitPrice: b.unitPrice || null,
+            // Datas do contrato
+            contractStartDate: b.contractStartDate || null,
+            contractEndDate: b.contractEndDate || null,
+            // NF
+            nfUrl: b.nfUrl || null,
+            nfPath: b.nfPath || null,
+            nfFilename: b.nfFilename || null,
+            nfNumber: b.nfNumber || null,
+            nfType: b.nfType || null,
+            nfIssueDate: b.nfIssueDate || null,
+            // Boleto
+            boletoUrl: b.boletoUrl || null,
+            boletoPath: b.boletoPath || null,
+            boletoFilename: b.boletoFilename || null,
+            boletoBarcode: b.boletoBarcode || null,
+            boletoIssueDate: b.boletoIssueDate || null,
+            boletoDueDate: b.boletoDueDate || null,
+            boletoAmount: b.boletoAmount || null,
+            // Extras e IA
+            extraAttachments: Array.isArray(b.extraAttachments) ? b.extraAttachments : [],
+            aiExtractedData: b.aiExtractedData || null,
+            aiModel: b.aiModel || null,
+            aiTokensUsed: b.aiTokensUsed || null,
+            // Meta
+            status: 'fornecedor',
+            notes: b.notes || null,
+            createdBy: u.id,
+            createdByName: u.name,
+        });
+
+        return res.status(201).json(launch);
+    } catch (err) { next(err); }
+}
+
+// ── LIST ──────────────────────────────────────────────────────────────────────
+export async function listLaunches(req, res, next) {
+    try {
+        const { status, excludeStatus, launchType, companyId, enterpriseId, search, createdBy, page = 1, limit = 20 } = req.query;
+        const isAdmin = req.user?.role === 'admin';
+        const userId = req.user?.id;
+
+        const where = {};
+
+        // Não-admin vê apenas seus próprios lançamentos
+        if (!isAdmin) {
+            where.createdBy = userId;
+        } else if (createdBy) {
+            // Admin pode filtrar por usuário específico
+            where.createdBy = Number(createdBy);
+        }
+
+        if (status) {
+            where.status = status;
+        } else if (excludeStatus) {
+            // Suporta múltiplos status separados por vírgula: cancelado,erro
+            const excluded = excludeStatus.split(',').map(s => s.trim()).filter(Boolean);
+            where.status = excluded.length === 1
+                ? { [db.Sequelize.Op.ne]: excluded[0] }
+                : { [db.Sequelize.Op.notIn]: excluded };
+        }
+        if (launchType) where.launchType = launchType;
+        if (companyId) where.companyId = Number(companyId);
+        if (enterpriseId) where.enterpriseId = Number(enterpriseId);
+        if (search) {
+            where[db.Sequelize.Op.or] = [
+                { providerName: { [db.Sequelize.Op.iLike]: `%${search}%` } },
+                { companyName: { [db.Sequelize.Op.iLike]: `%${search}%` } },
+                { enterpriseName: { [db.Sequelize.Op.iLike]: `%${search}%` } },
+                { nfNumber: { [db.Sequelize.Op.iLike]: `%${search}%` } },
+                { siengeCreditorName: { [db.Sequelize.Op.iLike]: `%${search}%` } },
+                // Admin pode buscar pelo nome do criador
+                ...(isAdmin ? [{ createdByName: { [db.Sequelize.Op.iLike]: `%${search}%` } }] : []),
+            ];
+        }
+        const offset = (Number(page) - 1) * Number(limit);
+        const { count, rows } = await Model().findAndCountAll({
+            where,
+            order: [['createdAt', 'DESC']],
+            limit: Number(limit),
+            offset,
+            // Omite JSONBs pesados da listagem
+            attributes: { exclude: ['aiExtractedData', 'extraAttachments', 'siengeContractRaw', 'siengeItemsRaw'] },
+        });
+        return res.json({
+            total: count,
+            page: Number(page),
+            limit: Number(limit),
+            pages: Math.ceil(count / Number(limit)),
+            data: rows,
+            isAdmin,
+        });
+    } catch (err) { next(err); }
+}
+
+// ── GET ONE ───────────────────────────────────────────────────────────────────
+export async function getLaunch(req, res, next) {
+    try {
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+        return res.json(launch);
+    } catch (err) { next(err); }
+}
+
+// ── UPDATE ────────────────────────────────────────────────────────────────────
+export async function updateLaunch(req, res, next) {
+    try {
+        const u = actor(req);
+        const launch = await Model().findByPk(req.params.id);
+        if (!launch) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+        if (['cancelado', 'titulo_pago'].includes(launch.status)) {
+            return res.status(409).json({ error: `Lançamento "${launch.status}" não pode ser editado.` });
+        }
+        const b = req.body;
+        const td = b.launchType && b.launchType !== launch.launchType ? await typeDefaults(b.launchType) : {};
+        const patch = {};
+        const scalars = [
+            'companyName', 'companyId', 'enterpriseName', 'enterpriseId',
+            'providerName', 'providerCnpj',
+            'contractStartDate', 'contractEndDate',
+            'launchType', 'unitPrice', 'notes',
+            'nfUrl', 'nfPath', 'nfFilename', 'nfNumber', 'nfType', 'nfIssueDate',
+            'boletoUrl', 'boletoPath', 'boletoFilename', 'boletoBarcode', 'boletoIssueDate', 'boletoDueDate', 'boletoAmount',
+            'budgetItemCode',
+        ];
+        scalars.forEach(k => { if (b[k] !== undefined) patch[k] = b[k]; });
+        if (b.budgetItem !== undefined) patch.budgetItem = b.budgetItem;
+        else if (td.budgetItem) patch.budgetItem = td.budgetItem;
+
+        if (b.budgetItemCode !== undefined) patch.budgetItemCode = b.budgetItemCode;
+        else if (td.budgetItemCode) patch.budgetItemCode = td.budgetItemCode;
+
+        if (b.financialAccountNumber !== undefined) patch.financialAccountNumber = b.financialAccountNumber;
+        else if (td.financialAccountNumber) patch.financialAccountNumber = td.financialAccountNumber;
+        if (Array.isArray(b.extraAttachments)) {
+            const existing = Array.isArray(launch.extraAttachments) ? launch.extraAttachments : [];
+            patch.extraAttachments = [...existing, ...b.extraAttachments];
+        }
+        if (b.removeExtraPath) {
+            const existing = Array.isArray(launch.extraAttachments) ? launch.extraAttachments : [];
+            patch.extraAttachments = existing.filter(a => a.path !== b.removeExtraPath);
+        }
+        patch.updatedBy = u.id; patch.updatedByName = u.name;
+        await launch.update(patch);
+        return res.json(launch);
+    } catch (err) { next(err); }
+}
+
+// ── SUMMARY ───────────────────────────────────────────────────────────────────
+export async function getSummary(req, res, next) {
+    try {
+        const isAdmin = req.user?.role === 'admin';
+        const where = isAdmin ? {} : { createdBy: req.user?.id };
+        const rows = await Model().findAll({
+            where,
+            attributes: [
+                'status',
+                [db.Sequelize.fn('COUNT', db.Sequelize.col('id')), 'count'],
+                [db.Sequelize.fn('SUM', db.Sequelize.col('unit_price')), 'totalAmount'],
+            ],
+            group: ['status'],
+            raw: true,
+        });
+        const summary = {};
+        rows.forEach(({ status, count, totalAmount }) => {
+            summary[status] = { count: Number(count), totalAmount: parseFloat(totalAmount) || 0 };
+        });
+        return res.json(summary);
+    } catch (err) { next(err); }
+}
+
+// ── PIPELINE ──────────────────────────────────────────────────────────────────
+export async function runPipeline(req, res, next) {
+    try {
+        const launchId = Number(req.params.id);
+        const userId = req.user?.id || null;
+
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+
+        // Responde imediatamente (202 Accepted) — pipeline roda em background
+        res.status(202).json({ message: 'Pipeline iniciado em background.', launchId });
+
+        // Fire-and-forget: não bloqueia o HTTP request
+        runFullPipeline(launchId, userId).catch(err => {
+            console.error(`[Pipeline] Erro inesperado no lançamento ${launchId}:`, err.message);
+        });
+    } catch (err) { next(err); }
+}
+export async function findCreditor(req, res, next) {
+    try { return res.json(await stepFindCreditor(Number(req.params.id))); }
+    catch (err) { next(err); }
+}
+export async function findContract(req, res, next) {
+    try { return res.json(await stepFindContract(Number(req.params.id))); }
+    catch (err) { next(err); }
+}
+export async function createContract(req, res, next) {
+    try { return res.json(await stepCreateContract(Number(req.params.id))); }
+    catch (err) { next(err); }
+}
+export async function validateItems(req, res, next) {
+    try { return res.json(await stepValidateItems(Number(req.params.id))); }
+    catch (err) { next(err); }
+}
+export async function pollContract(req, res, next) {
+    try {
+        const result = await pollContractStatus(Number(req.params.id));
+        if (!result) return res.status(404).json({ error: 'Contrato não encontrado no Sienge.' });
+        return res.json(result);
+    } catch (err) { next(err); }
+}
+
+// ── STATUS TRANSITIONS ────────────────────────────────────────────────────────
+
+/** Avança manualmente para a próxima etapa (ex: contrato → aditivo, etc.) */
+export async function advanceStage(req, res, next) {
+    try {
+        const u = actor(req);
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+        const FLOW = ['fornecedor', 'contrato', 'aditivo', 'medicao', 'titulo'];
+        const idx = FLOW.indexOf(launch.status);
+        if (idx < 0 || idx >= FLOW.length - 1) {
+            return res.status(409).json({ error: 'Não é possível avançar a partir deste status.' });
+        }
+        const next_status = FLOW[idx + 1];
+        await launch.update({ status: next_status, updatedBy: u.id, updatedByName: u.name });
+        return res.json(launch);
+    } catch (err) { next(err); }
+}
+
+export async function cancelLaunch(req, res, next) {
+    try {
+        const u = actor(req);
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+        if (['cancelado', 'titulo_pago'].includes(launch.status)) return res.status(409).json({ error: 'Não pode ser cancelado.' });
+        await launch.update({ status: 'cancelado', updatedBy: u.id, updatedByName: u.name });
+        return res.json(launch);
+    } catch (err) { next(err); }
+}
+
+export async function markPaid(req, res, next) {
+    try {
+        const u = actor(req);
+        if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores podem marcar como pago.' });
+        const launch = await Model().findByPk(req.params.id);
+        if (!launch) return res.status(404).json({ error: 'Não encontrado.' });
+        if (launch.status !== 'titulo') return res.status(409).json({ error: 'Apenas títulos podem ser marcados como pagos.' });
+        await launch.update({ status: 'titulo_pago', paidAt: new Date(), updatedBy: u.id, updatedByName: u.name });
+        return res.json(launch);
+    } catch (err) { next(err); }
+}
+
+// ── RID (Registro de Informações do Fornecedor) ───────────────────────────────
+
+/**
+ * POST /payment-flow/:id/rid/send-form
+ * Recebe os dados do formulário RID como JSON, gera o DOCX preenchido
+ * e envia por email para fornecedores@menin.com.br com CC para o solicitante.
+ */
+export async function sendRidForm(req, res, next) {
+    try {
+        const u = actor(req);
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+
+        if (launch.siengeCreditorStatus !== 'not_found') {
+            return res.status(409).json({ error: 'Fornecedor já está cadastrado no Sienge.' });
+        }
+
+        // Suporta multipart (com anexos) e JSON puro (sem anexos)
+        let formData;
+        if (req.body?.formData) {
+            try { formData = JSON.parse(req.body.formData); }
+            catch { return res.status(422).json({ error: 'Dados do formulário inválidos (JSON).' }); }
+        } else {
+            formData = req.body;
+        }
+
+        if (!formData || !formData.razaoSocial) {
+            return res.status(422).json({ error: 'Dados do formulário são obrigatórios.' });
+        }
+
+        // Valida que pelo menos 1 empresa foi informada na seção 2.3
+        const empresas = Array.isArray(formData.empresas) ? formData.empresas : [];
+        const empresaValida = empresas.some(e => e?.razaoSocial?.trim());
+        if (!empresaValida) {
+            return res.status(422).json({ error: 'Informe ao menos uma empresa para a qual o fornecedor fornece (seção 2.3).' });
+        }
+
+        const userEmail = req.user?.email || null;
+
+        // Garante que os dados pré-preenchidos do lançamento estejam no doc
+        const docData = {
+            ...formData,
+            cnpj: formData.cnpj || launch.providerCnpj || '',
+            razaoSocial: formData.razaoSocial || launch.providerName || '',
+            requesterName: u.name,
+            requesterEmail: userEmail,
+        };
+
+        // Gera o DOCX preenchido
+        const docBuffer = await generateRidDocx(docData);
+
+        const sentAt = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        const emailData = {
+            requesterName: u.name,
+            providerName: launch.providerName || docData.razaoSocial || '—',
+            providerCnpj: launch.providerCnpj || docData.cnpj || '—',
+            launchType: launch.launchType || null,
+            enterpriseName: launch.enterpriseName || null,
+            sentAt,
+        };
+
+        const ccList = userEmail ? [userEmail] : [];
+
+        // Monta lista de anexos: RID gerado + outros anexos enviados pelo usuário
+        const attachments = [
+            {
+                filename: `RID_${(launch.providerName || launch.providerCnpj || 'Fornecedor').replace(/[^a-zA-Z0-9]/g, '_')}.docx`,
+                content: docBuffer,
+                contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            },
+        ];
+        const extraFiles = req.files?.anexos || [];
+        for (const f of extraFiles) {
+            attachments.push({
+                filename: f.originalname,
+                content: f.buffer,
+                contentType: f.mimetype || 'application/octet-stream',
+            });
+        }
+
+        await sendEmail(
+            'supplier.rid.request',
+            'fornecedores@menin.com.br',
+            emailData,
+            { cc: ccList, attachments }
+        );
+
+        await launch.update({
+            ridEmailSent: true,
+            ridEmailSentAt: new Date(),
+            ridRequestedByEmail: userEmail,
+            updatedBy: u.id,
+            updatedByName: u.name,
+        });
+
+        return res.json({
+            ok: true,
+            message: 'Formulário RID gerado e email enviado com sucesso para fornecedores@menin.com.br',
+            sentAt: launch.ridEmailSentAt,
+        });
+    } catch (err) { next(err); }
+}
+
+/** GET /payment-flow/rid-template — baixa o modelo Word da RID */
+export async function downloadRidTemplate(req, res, next) {
+    try {
+        return res.download(RID_TEMPLATE_PATH, 'RID_Modelo.docx', (err) => {
+            if (err) next(err);
+        });
+    } catch (err) { next(err); }
+}
+
+/**
+ * POST /payment-flow/:id/rid/send-email
+ * Recebe o arquivo RID preenchido (multipart) e envia por email para fornecedores@menin.com.br
+ * com CC para o usuário solicitante.
+ */
+export async function sendRidEmail(req, res, next) {
+    try {
+        const u = actor(req);
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+
+        if (launch.siengeCreditorStatus !== 'not_found') {
+            return res.status(409).json({ error: 'Fornecedor já está cadastrado no Sienge.' });
+        }
+
+        // req.file vem do multer (campo 'rid')
+        if (!req.file) return res.status(422).json({ error: 'Arquivo RID é obrigatório.' });
+
+        const userEmail = req.user?.email || null;
+        const sentAt = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+        const data = {
+            requesterName: u.name,
+            providerName: launch.providerName || '—',
+            providerCnpj: launch.providerCnpj || '—',
+            launchType: launch.launchType || null,
+            enterpriseName: launch.enterpriseName || null,
+            sentAt,
+        };
+
+        const attachments = [{
+            filename: req.file.originalname || 'RID_Preenchida.docx',
+            content: req.file.buffer,
+        }];
+
+        const ccList = userEmail ? [userEmail] : [];
+
+        await sendEmail(
+            'supplier.rid.request',
+            'fornecedores@menin.com.br',
+            data,
+            { cc: ccList, attachments }
+        );
+
+        await launch.update({
+            ridEmailSent: true,
+            ridEmailSentAt: new Date(),
+            ridRequestedByEmail: userEmail,
+            updatedBy: u.id,
+            updatedByName: u.name,
+        });
+
+        return res.json({
+            ok: true,
+            message: 'Email enviado com sucesso para fornecedores@menin.com.br',
+            sentAt: launch.ridEmailSentAt,
+        });
+    } catch (err) { next(err); }
+}

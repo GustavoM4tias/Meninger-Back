@@ -12,6 +12,8 @@ import {
   updateUser,
   getAllUsers,
   getUserById,
+  getSiengeCredentials,
+  saveSiengeCredentials,
 } from '../controllers/authController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import { authorizeByRole } from '../middlewares/permissionMiddleware.js';
@@ -27,6 +29,11 @@ router.put('/user/password', authenticate, changePassword);
 
 router.get('/user', authenticate, getUserInfo);
 router.put('/user', authenticate, updateMe);
+
+// ── Credenciais Sienge — deve vir ANTES de /user/:id para evitar conflito de rota
+router.get('/user/sienge-credentials', authenticate, getSiengeCredentials);
+router.put('/user/sienge-credentials', authenticate, saveSiengeCredentials);
+
 router.get('/user/:id', authenticate, authorizeByRole(['admin']), getUserById);
 router.get('/users', authenticate, authorizeByRole(['admin']), getAllUsers);
 router.put('/users', authenticate, authorizeByRole(['admin']), updateUser);
