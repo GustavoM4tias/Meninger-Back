@@ -7,6 +7,12 @@ const CITY_EQ = (col) => `
   unaccent(upper(regexp_replace(${col}, '[^A-Z0-9]+',' ','g')))
 `;
 
+/**
+ * Estado de sync por empreendimento (costCenterId -> state).
+ * Vive no módulo para persistir entre requisições (mesmo processo Node).
+ */
+const enterpriseSyncState = new Map();
+
 export default class BillsController {
     constructor() {
         this.service = new BillsService();
@@ -48,6 +54,19 @@ export default class BillsController {
 
             if (ids.length > 3) {
                 return res.status(400).json({ error: 'Máximo de 3 centros de custo por consulta.' });
+            }
+
+            // Valida range máximo de 6 meses
+            if (startDate && endDate) {
+                const start = new Date(startDate);
+                const end = new Date(endDate);
+                const diffMonths = (end.getFullYear() - start.getFullYear()) * 12
+                    + (end.getMonth() - start.getMonth());
+                if (diffMonths > 6) {
+                    return res.status(400).json({
+                        error: 'O período máximo de consulta é 6 meses. Reduza o intervalo de datas.'
+                    });
+                }
             }
 
             const isAdmin = req.user.role === 'admin';
@@ -115,6 +134,118 @@ export default class BillsController {
                 error: providerMsg || 'Erro ao listar títulos do Sienge',
             });
         }
+    };
+
+    /**
+     * POST /api/sienge/bills/sync-enterprise
+     * Dispara (fire-and-forget) o sync completo de um empreendimento.
+     * Retorna 202 imediatamente; o progresso pode ser consultado via GET /sync-enterprise/status/:costCenterId.
+     */
+    startEnterpriseSync = async (req, res) => {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Usuário não autenticado.' });
+        }
+
+        const isAdmin = req.user.role === 'admin';
+        const { costCenterId } = req.body;
+
+        if (!costCenterId) {
+            return res.status(400).json({ error: 'costCenterId é obrigatório.' });
+        }
+
+        const id = Number(costCenterId);
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({ error: 'costCenterId inválido.' });
+        }
+
+        // Não-admin: valida permissão por cidade
+        if (!isAdmin) {
+            const userCity = (req.user.city || '').trim();
+            if (!userCity) {
+                return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+            }
+
+            const sql = `
+        SELECT 1
+        FROM enterprise_cities ec
+        WHERE ec.erp_id IS NOT NULL
+          AND ec.erp_id::int = :costCenterId
+          AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
+        LIMIT 1;
+      `;
+
+            const rows = await db.sequelize.query(sql, {
+                replacements: { costCenterId: id, userCity },
+                type: db.Sequelize.QueryTypes.SELECT,
+            });
+
+            if (!rows.length) {
+                return res.status(403).json({ error: 'Centro de custo não permitido para sua cidade.' });
+            }
+        }
+
+        // Verifica se já está rodando
+        const existing = enterpriseSyncState.get(id);
+        if (existing?.running) {
+            return res.status(409).json({
+                error: 'Sync já em andamento para este empreendimento.',
+                status: existing,
+            });
+        }
+
+        // Inicializa estado
+        const state = {
+            running: true,
+            phase: 'starting',
+            fetched: 0,
+            total: null,
+            done: 0,
+            startedAt: new Date().toISOString(),
+            finishedAt: null,
+            error: null,
+            result: null,
+        };
+        enterpriseSyncState.set(id, state);
+
+        // Dispara em background
+        (async () => {
+            try {
+                const result = await this.service.syncEnterpriseFull(id, (progress) => {
+                    Object.assign(state, progress);
+                });
+                state.running = false;
+                state.phase = 'done';
+                state.result = result;
+                state.finishedAt = new Date().toISOString();
+            } catch (err) {
+                console.error(`❌ [SyncEnterprise] Erro no sync do empreendimento ${id}:`, err.message);
+                state.running = false;
+                state.phase = 'error';
+                state.error = err.message;
+                state.finishedAt = new Date().toISOString();
+            }
+        })();
+
+        return res.status(202).json({ message: 'Sync iniciado.', costCenterId: id });
+    };
+
+    /**
+     * GET /api/sienge/bills/sync-enterprise/status/:costCenterId
+     * Retorna o estado atual do sync do empreendimento.
+     */
+    getEnterpriseSyncStatus = async (req, res) => {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Usuário não autenticado.' });
+        }
+
+        const id = Number(req.params.costCenterId);
+        const state = enterpriseSyncState.get(id);
+
+        if (!state) {
+            return res.json({ running: false, phase: null, costCenterId: id });
+        }
+
+        return res.json({ ...state, costCenterId: id });
     };
 
     /**

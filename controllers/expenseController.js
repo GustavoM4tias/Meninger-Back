@@ -79,26 +79,21 @@ export default class expenseController {
     }
   };
 
-  /** GET /api/expenses?month=2025-10[&costCenterId=80001] */
+  /** GET /api/expenses?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD[&costCenterId=80001] */
   listMonth = async (req, res) => {
     try {
-      const { costCenterId, month } = req.query;
-      if (!month) {
+      const { costCenterId, startDate, endDate } = req.query;
+
+      if (!startDate || !endDate) {
         return res
           .status(400)
-          .json({ error: 'month é obrigatório no formato YYYY-MM' });
-      }
-
-      if (costCenterId) {
-        const data = await this.service.summarizeMonth({
-          costCenterId: Number(costCenterId),
-          competenceMonth: month,
-        });
-        return res.json(data);
+          .json({ error: 'startDate e endDate são obrigatórios (YYYY-MM-DD)' });
       }
 
       const data = await this.service.summarizeAllMonth({
-        competenceMonth: month,
+        startDate,
+        endDate,
+        costCenterId: costCenterId ? Number(costCenterId) : undefined,
       });
 
       res.json(data);

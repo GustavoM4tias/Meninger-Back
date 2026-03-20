@@ -599,6 +599,12 @@ export const saveSiengeCredentials = async (req, res) => {
             sienge_password: encrypt(password),
         });
 
+        // Limpa o flag de credenciais inválidas em todos os lançamentos do usuário
+        await db.PaymentLaunch.update(
+            { siengeCredentialsInvalid: false },
+            { where: { createdBy: req.user.id, siengeCredentialsInvalid: true } }
+        );
+
         return res.json({ success: true, message: 'Credenciais Sienge salvas com segurança.' });
     } catch (err) {
         return res.status(500).json({ error: err.message });

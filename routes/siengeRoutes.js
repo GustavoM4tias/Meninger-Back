@@ -45,6 +45,10 @@ router.post('/contracts/sync/delta', bulk.deltaSync.bind(bulk));
 router.post('/bills/sync', authenticate, ctrl.sync);
 router.get('/bills', authenticate, ctrl.list);
 
+// Sync completo de empreendimento (fire-and-forget + polling)
+router.post('/bills/sync-enterprise', authenticate, ctrl.startEnterpriseSync);
+router.get('/bills/sync-enterprise/status/:costCenterId', authenticate, ctrl.getEnterpriseSyncStatus);
+
 router.post("/awards/nfse", authenticate, upload.single("file"), uploadNfseAward);
 router.post("/awards/nfse/bulk", authenticate, upload.single("file"), bulkAttachNfse);
 router.post("/awards/nfse/clear", authenticate, clearNfseFromAwards);

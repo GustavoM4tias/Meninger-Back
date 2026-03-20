@@ -16,6 +16,7 @@ import ValidationHistoryDefine from './validationHistory.js';
 // Singe imports
 import SalesContractDefine from './sienge/salesContract.js';
 import SiengeBillDefine from './sienge/bill.js';
+import SiengeBillInstallmentDefine from './sienge/billInstallment.js';
 
 import ExpenseDefine from './expense.js';
 
@@ -91,6 +92,7 @@ db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
 // sienge db 
 db.SalesContract = SalesContractDefine(sequelize, DataTypes);
 db.SiengeBill = SiengeBillDefine(sequelize, DataTypes);
+db.SiengeBillInstallment = SiengeBillInstallmentDefine(sequelize, DataTypes);
 
 db.Expense = ExpenseDefine(sequelize, DataTypes);
 

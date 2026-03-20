@@ -101,15 +101,13 @@ export default class expenseService {
         id: e.id,
         amount: Number(e.amount),
         description: e.description,
+        competenceMonth: e.competence_month,
 
-        // ✅ NOVO (vem do expense)
         installmentNumber: e.installment_number ?? null,
         installmentsNumber: e.installments_number ?? null,
 
         departmentId: e.department_id,
         departmentName: e.department_name,
-
-        // 👇 NOVO
         departmentCategoryId: e.department_category_id,
         departmentCategoryName: e.department_category_name,
 
@@ -123,16 +121,10 @@ export default class expenseService {
             totalInvoiceAmount: Number(e.bill.total_invoice_amount),
             mainDepartmentName: e.bill.main_department_name,
             notes: e.bill.notes,
-
             document_identification_id: e.bill.document_identification_id,
             document_number: e.bill.document_number,
-
-            // ✅ adicionar
             installmentNumber: Number(e.bill.installment_number || 0),
-
-            // ✅ já tem
             installmentsNumber: Number(e.bill.installments_number || 0),
-
             creditor_json: e.bill.creditor_json,
           }
           : null,
@@ -141,16 +133,29 @@ export default class expenseService {
   }
 
   /**
-   * Lista TODOS os gastos do mês (todos os centros de custo)
-   * e agrupa por cost_center_id
+   * Lista TODOS os gastos no período (todos os centros de custo)
+   * e agrupa por cost_center_id.
+   * startDate e endDate: 'YYYY-MM-DD' (competence_month BETWEEN startDate AND endDate)
    */
-  async summarizeAllMonth({ competenceMonth }) {
-    const [y, m] = competenceMonth.split('-').map(Number);
-    const monthStart = new Date(y, m - 1, 1);
-    const compDate = monthStart.toISOString().slice(0, 10);
+  async summarizeAllMonth({ competenceMonth, startDate, endDate, costCenterId }) {
+    let whereClause;
+
+    if (startDate && endDate) {
+      whereClause = { competence_month: { [Op.between]: [startDate, endDate] } };
+    } else {
+      // fallback: compatibilidade com código legado que passa competenceMonth
+      const [y, m] = (competenceMonth || '').split('-').map(Number);
+      const compDate = new Date(y, m - 1, 1).toISOString().slice(0, 10);
+      whereClause = { competence_month: compDate };
+    }
+
+    // Filtro opcional por centro de custo
+    if (costCenterId) {
+      whereClause.cost_center_id = costCenterId;
+    }
 
     const rows = await Expense.findAll({
-      where: { competence_month: compDate },
+      where: whereClause,
       include: [
         {
           model: SiengeBill,
@@ -188,15 +193,14 @@ export default class expenseService {
           id: e.id,
           amount: Number(e.amount),
           description: e.description,
+          competenceMonth: e.competence_month,
+          dueDate: e.due_date,
 
-          // ✅ NOVO (vem do expense)
           installmentNumber: e.installment_number ?? null,
           installmentsNumber: e.installments_number ?? null,
 
           departmentId: e.department_id,
           departmentName: e.department_name,
-
-          // 👇 NOVO
           departmentCategoryId: e.department_category_id,
           departmentCategoryName: e.department_category_name,
 
@@ -210,26 +214,20 @@ export default class expenseService {
               totalInvoiceAmount: Number(e.bill.total_invoice_amount),
               mainDepartmentName: e.bill.main_department_name,
               notes: e.bill.notes,
-
               document_identification_id: e.bill.document_identification_id,
               document_number: e.bill.document_number,
-
-              // ✅ adicionar
               installmentNumber: Number(e.bill.installment_number || 0),
-
-              // ✅ já tem
               installmentsNumber: Number(e.bill.installments_number || 0),
-
               creditor_json: e.bill.creditor_json,
             }
             : null,
-
         })),
       });
     }
 
     return {
-      competenceMonth,
+      startDate: startDate || competenceMonth,
+      endDate: endDate || competenceMonth,
       total: totalAll,
       groups,
     };

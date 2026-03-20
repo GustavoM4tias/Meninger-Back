@@ -43,6 +43,12 @@ export default (sequelize, DataTypes) => {
 
         creditor_json: DataTypes.JSONB,
         links_json: DataTypes.JSONB,
+
+        // ── Controle de sincronização ────────────────────────────────
+        // true = departamentos já foram buscados na API (não rebusca mesmo se departments_json estiver vazio)
+        departments_fetched: { type: DataTypes.BOOLEAN, defaultValue: false },
+        // true = installments já foram buscados na API e expenses criados (não rebusca, mesmo se count=0)
+        installments_fetched: { type: DataTypes.BOOLEAN, defaultValue: false },
     }, {
         tableName: 'sienge_bills',
         underscored: true,
@@ -54,6 +60,17 @@ export default (sequelize, DataTypes) => {
             { fields: ['installment_number'] },
         ]
     });
+
+    SiengeBill.associate = models => {
+        SiengeBill.hasMany(models.SiengeBillInstallment, {
+            foreignKey: 'bill_id',
+            as: 'installments',
+        });
+        SiengeBill.hasMany(models.Expense, {
+            foreignKey: 'bill_id',
+            as: 'expenses',
+        });
+    };
 
     return SiengeBill;
 };
