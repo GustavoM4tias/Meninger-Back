@@ -12,6 +12,7 @@ import { EnterpriseResolverService } from '../sienge/EnterpriseResolverService.j
 import { SiengeBillsService } from '../sienge/SiengeBillsService.js';
 import { runPlaywrightContract } from '../../playwright/services/contractService.js';
 import { runPlaywrightAdditive } from '../../playwright/services/additiveService.js';
+import { runPlaywrightMeasurement } from '../../playwright/services/measurementService.js';
 import { decrypt } from '../../utils/encryption.js';
 
 const Model = () => db.PaymentLaunch;
@@ -368,11 +369,13 @@ export async function stepCreateContract(launchId, userId = null) {
         return { success: true, ...result };
     } catch (err) {
         const msg = err.message || 'Erro desconhecido no Playwright';
+        const isCredentialsError = msg.startsWith('CREDENCIAIS_INVALIDAS:');
         await patch(launch, {
             pipelineStage: 'contract_error',
             siengeContractStatus: 'error',
             status: 'erro',
             siengeContractError: msg,
+            ...(isCredentialsError && { siengeCredentialsInvalid: true }),
         });
         return { success: false, error: msg };
     }
@@ -452,16 +455,109 @@ export async function stepCreateAdditive(launchId, userId = null) {
         return { success: true };
     } catch (err) {
         const msg = err.message || 'Erro desconhecido no Playwright (aditivo)';
+        const isCredentialsError = msg.startsWith('CREDENCIAIS_INVALIDAS:');
         await patch(launch, {
             pipelineStage: 'additive_error',
             status: 'erro',
             siengeContractError: msg,
+            ...(isCredentialsError && { siengeCredentialsInvalid: true }),
         });
         return { success: false, error: msg };
     }
 }
 
-// ── Polling ───────────────────────────────────────────────────────────────────
+// ── Etapa 6: Criar medição via Playwright ─────────────────────────────────────
+export async function stepCreateMeasurement(launchId, userId = null) {
+    const launch = await Model().findByPk(launchId);
+    if (!launch) throw new Error(`Lançamento ${launchId} não encontrado`);
+    if (!launch.siengeDocumentId || !launch.siengeContractNumber) {
+        throw new Error('Execute stepFindContract primeiro.');
+    }
+
+    await patch(launch, {
+        pipelineStage: 'creating_measurement',
+        status: 'medicao',
+        siengeMeasurementError: null,
+    });
+
+    const { erpId } = await resolveEnterpriseIds(launch);
+
+    // Data de vencimento = boletoDueDate formatado como DD/MM/YYYY
+    const dataVencimento = fmtDate(launch.boletoDueDate || launch.contractEndDate || '');
+
+    const credentials = await getUserSiengeCredentials(userId || launch.createdBy);
+
+    const playwrightPayload = {
+        documentType: launch.siengeDocumentId,
+        contractNumber: String(launch.siengeContractNumber),
+        obraCod: String(erpId || launch.enterpriseId || ''),
+        dataVencimento,
+        value: String(launch.unitPrice || ''),
+        credentials,
+    };
+
+    try {
+        const result = await runPlaywrightMeasurement(playwrightPayload);
+
+        await patch(launch, {
+            pipelineStage: 'measurement_created',
+            siengeMeasurementNumber: result.measurementNumber || null,
+            siengeMeasurementAuthorized: false,
+            siengeMeasurementApproval: 'PENDING',
+            siengeMeasurementError: null,
+        });
+
+        // Avança para aguardar autorização da medição
+        await patch(launch, { pipelineStage: 'awaiting_measurement_authorization' });
+
+        return { success: true, measurementNumber: result.measurementNumber };
+    } catch (err) {
+        const msg = err.message || 'Erro desconhecido no Playwright (medição)';
+        const isCredentialsError = msg.startsWith('CREDENCIAIS_INVALIDAS:');
+        await patch(launch, {
+            pipelineStage: 'measurement_error',
+            status: 'erro',
+            siengeMeasurementError: msg,
+            ...(isCredentialsError && { siengeCredentialsInvalid: true }),
+        });
+        return { success: false, error: msg };
+    }
+}
+
+// ── Polling de autorização da medição ─────────────────────────────────────────
+export async function pollMeasurementStatus(launchId) {
+    const launch = await Model().findByPk(launchId);
+    if (!launch?.siengeMeasurementNumber) return null;
+
+    const { erpId } = await resolveEnterpriseIds(launch);
+    const buildingId = erpId || launch.enterpriseId;
+    if (!buildingId) return null;
+
+    const measurement = await SiengeContractService.getMeasurement(
+        launch.siengeDocumentId,
+        launch.siengeContractNumber,
+        buildingId,
+        launch.siengeMeasurementNumber
+    );
+    if (!measurement) return null;
+
+    const isAuthorized = measurement.authorized === true;
+    const approval = measurement.statusApproval || null;
+
+    await launch.update({
+        siengeMeasurementAuthorized: isAuthorized,
+        siengeMeasurementApproval: approval,
+    });
+
+    // Quando autorizada: fluxo concluído — pronto para geração de título
+    if (isAuthorized && launch.pipelineStage === 'awaiting_measurement_authorization') {
+        await launch.update({ pipelineStage: 'ready' });
+    }
+
+    return measurement;
+}
+
+// ── Polling de autorização do contrato/aditivo ────────────────────────────────
 export async function pollContractStatus(launchId) {
     const launch = await Model().findByPk(launchId);
     if (!launch?.siengeDocumentId || !launch?.siengeContractNumber) return null;
@@ -480,18 +576,29 @@ export async function pollContractStatus(launchId) {
         contractStartDate: contract.startDate || launch.contractStartDate,
         contractEndDate: contract.endDate || launch.contractEndDate,
     });
+
+    // Quando autorizado E ainda em awaiting_authorization → dispara medição automaticamente
+    if (contract.isAuthorized && launch.pipelineStage === 'awaiting_authorization') {
+        console.log(`🚀 [Pipeline] #${launchId}: contrato/aditivo autorizado — iniciando medição automaticamente...`);
+        // Não await — roda em background para não bloquear o scheduler
+        stepCreateMeasurement(launchId, launch.createdBy).catch(err =>
+            console.error(`❌ [Pipeline] #${launchId}: falha ao criar medição automática: ${err.message}`)
+        );
+    }
+
     return contract;
 }
 
 // ── Pipeline completo ─────────────────────────────────────────────────────────
+// Fluxo automático contínuo:
+//   Tem contrato → Aditivo → awaiting_authorization → [scheduler] → Medição → awaiting_measurement_authorization
+//   Sem contrato → Cria    → awaiting_authorization → [scheduler] → Medição → awaiting_measurement_authorization
 export async function runFullPipeline(launchId, userId = null) {
     const creditorResult = await stepFindCreditor(launchId);
 
     if (!creditorResult.found) {
-        // Verifica se o email de solicitação RID já foi enviado
         const launch = await Model().findByPk(launchId, { attributes: ['ridEmailSent'] });
         if (launch?.ridEmailSent) {
-            // Aguardando cadastro — não tenta novamente, o scheduler fará isso periodicamente
             return { stage: 'creditor_not_found', awaitingRegistration: true, ...creditorResult };
         }
         return { stage: 'creditor_not_found', awaitingRegistration: false, ...creditorResult };
@@ -500,21 +607,19 @@ export async function runFullPipeline(launchId, userId = null) {
     const contractResult = await stepFindContract(launchId);
 
     if (!contractResult.found) {
-        // Sem contrato: cria contrato novo
+        // Sem contrato: cria contrato novo → aguarda autorização → scheduler dispara medição
         const createResult = await stepCreateContract(launchId, userId);
         if (!createResult.success) return { stage: 'contract_error', ...createResult };
 
-        // Aguarda autorização após criação do contrato
         const launch = await Model().findByPk(launchId);
         await patch(launch, { pipelineStage: 'awaiting_authorization', status: 'contrato' });
         return { stage: 'awaiting_authorization', ...createResult };
     }
 
-    // Contrato existente: cria aditivo (independente de saldo)
+    // Contrato existente: cria aditivo → aguarda autorização → scheduler dispara medição
     const additiveResult = await stepCreateAdditive(launchId, userId);
     if (!additiveResult.success) return { stage: 'additive_error', ...additiveResult };
 
-    // Aguarda autorização após criação do aditivo
     const launch = await Model().findByPk(launchId);
     await patch(launch, { pipelineStage: 'awaiting_authorization', status: 'aditivo' });
     return { stage: 'awaiting_authorization', ...additiveResult };

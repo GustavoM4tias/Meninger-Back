@@ -224,6 +224,27 @@ export class SiengeContractService {
     }
 
     /**
+     * Busca dados de uma medição pelo número (para polling de autorização).
+     */
+    static async getMeasurement(documentId, contractNumber, buildingId, measurementNumber) {
+        if (!documentId || !contractNumber || !buildingId || !measurementNumber) return null;
+        try {
+            const { data } = await apiSienge.get('/v1/supply-contracts/measurements', {
+                params: {
+                    documentId,
+                    contractNumber,
+                    buildingId: Number(buildingId),
+                    measurementNumber: Number(measurementNumber),
+                },
+            });
+            return data;
+        } catch (err) {
+            if (err.response?.status === 404) return null;
+            throw err;
+        }
+    }
+
+    /**
      * Valida se o contrato tem saldo suficiente para o lançamento.
      * buildingId = enterprise_cities.erp_id (centro de custo, ex: 35067)
      */

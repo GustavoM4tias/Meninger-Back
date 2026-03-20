@@ -28,7 +28,7 @@ export default (sequelize, DataTypes) => {
             },
             siengeCreditorStatus: {
                 field: "sienge_creditor_status",
-                type: DataTypes.ENUM("pending", "found", "not_found"),
+                type: DataTypes.STRING(20),
                 defaultValue: "pending",
             },
 
@@ -45,10 +45,7 @@ export default (sequelize, DataTypes) => {
             },
             siengeContractStatus: {
                 field: "sienge_contract_status",
-                type: DataTypes.ENUM(
-                    "not_searched", "found", "not_found",
-                    "creating", "created", "error"
-                ),
+                type: DataTypes.STRING(20),
                 defaultValue: "not_searched",
             },
             siengeContractApproval: {
@@ -170,12 +167,7 @@ export default (sequelize, DataTypes) => {
             // Especiais: cancelado (interrompido), erro (falha em alguma etapa)
             status: {
                 field: "status",
-                type: DataTypes.ENUM(
-                    "fornecedor", "contrato",
-                    "aditivo", "medicao", "titulo",
-                    "titulo_pago",
-                    "cancelado", "erro"
-                ),
+                type: DataTypes.STRING(20),
                 allowNull: false,
                 defaultValue: "fornecedor",
             },
@@ -183,27 +175,7 @@ export default (sequelize, DataTypes) => {
             // ── Estágio da esteira Sienge ─────────────────────────────────────
             pipelineStage: {
                 field: "pipeline_stage",
-                type: DataTypes.ENUM(
-                    "idle",
-                    "searching_creditor",
-                    "creditor_found",
-                    "creditor_not_found",
-                    "searching_contract",
-                    "contract_found",
-                    "contract_not_found",
-                    "creating_contract",
-                    "contract_created",
-                    "contract_error",
-                    "creating_additive",
-                    "additive_created",
-                    "additive_error",
-                    "awaiting_authorization",
-                    // legado — mantidos por compatibilidade com o Postgres
-                    "validating_items",
-                    "items_ok",
-                    "items_insufficient",
-                    "ready"
-                ),
+                type: DataTypes.STRING(60),
                 defaultValue: "idle",
             },
 
@@ -223,6 +195,40 @@ export default (sequelize, DataTypes) => {
                 field: "rid_requested_by_email",
                 type: DataTypes.STRING,
                 comment: "Email do usuário que solicitou o cadastro (copiado no envio)",
+            },
+
+            // ── Medição no Sienge ─────────────────────────────────────────────
+            siengeMeasurementNumber: {
+                field: "sienge_measurement_number",
+                type: DataTypes.INTEGER,
+                comment: "Número da medição criada no Sienge",
+            },
+            siengeMeasurementAuthorized: {
+                field: "sienge_measurement_authorized",
+                type: DataTypes.BOOLEAN,
+                defaultValue: false,
+            },
+            siengeMeasurementApproval: {
+                field: "sienge_measurement_approval",
+                type: DataTypes.STRING,
+                comment: "statusApproval da medição: APPROVED | DISAPPROVED | PENDING",
+            },
+            siengeMeasurementAuthLevel: {
+                field: "sienge_measurement_auth_level",
+                type: DataTypes.STRING,
+            },
+            siengeMeasurementError: {
+                field: "sienge_measurement_error",
+                type: DataTypes.TEXT,
+                comment: "Erro do playwright ao tentar criar medição",
+            },
+
+            // ── Credenciais Sienge inválidas ──────────────────────────────────
+            siengeCredentialsInvalid: {
+                field: "sienge_credentials_invalid",
+                type: DataTypes.BOOLEAN,
+                defaultValue: false,
+                comment: "True quando o Playwright falhou por senha/email errados no Sienge",
             },
 
             rejectionReason: { field: "rejection_reason", type: DataTypes.TEXT },

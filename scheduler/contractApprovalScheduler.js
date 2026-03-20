@@ -4,15 +4,15 @@
 
 import cron from 'node-cron';
 import db from '../models/sequelize/index.js';
-import { pollContractStatus } from '../services/sienge/PaymentFlowPipelineService.js';
+import { pollContractStatus, pollMeasurementStatus } from '../services/sienge/PaymentFlowPipelineService.js';
 
 const CRON_EXP = process.env.CONTRACT_APPROVAL_CRON || '*/30 * * * *';
 
 async function checkContractApprovals() {
     console.log('🔍 [ContractApproval] Verificando alçadas de aprovação...');
 
-    // Busca lançamentos com contrato criado/encontrado que ainda não foram aprovados ou reprovados
-    const pending = await db.PaymentLaunch.findAll({
+    // ── Contrato/Aditivo aguardando autorização ───────────────────────────────
+    const pendingContracts = await db.PaymentLaunch.findAll({
         where: {
             siengeContractStatus: ['found', 'created'],
             status: { [db.Sequelize.Op.notIn]: ['cancelado', 'titulo_pago'] },
@@ -21,26 +21,50 @@ async function checkContractApprovals() {
                 { siengeContractApproval: 'PENDING' },
             ],
         },
-        attributes: ['id', 'siengeDocumentId', 'siengeContractNumber', 'siengeContractApproval'],
+        attributes: ['id', 'siengeDocumentId', 'siengeContractNumber', 'siengeContractApproval', 'pipelineStage'],
     });
 
-    if (!pending.length) {
+    if (pendingContracts.length) {
+        console.log(`🔍 [ContractApproval] ${pendingContracts.length} contrato(s) para verificar.`);
+        for (const launch of pendingContracts) {
+            try {
+                const contract = await pollContractStatus(launch.id);
+                if (!contract) {
+                    console.log(`⚠️ [ContractApproval] #${launch.id}: contrato não encontrado no Sienge.`);
+                    continue;
+                }
+                console.log(`✅ [ContractApproval] #${launch.id}: alçada = ${contract.statusApproval ?? '?'} | autorizado = ${contract.isAuthorized}`);
+            } catch (err) {
+                console.error(`❌ [ContractApproval] Erro no lançamento #${launch.id}:`, err.message);
+            }
+        }
+    } else {
         console.log('🔍 [ContractApproval] Nenhum contrato aguardando aprovação.');
-        return;
     }
 
-    console.log(`🔍 [ContractApproval] ${pending.length} contrato(s) para verificar.`);
+    // ── Medição aguardando autorização ────────────────────────────────────────
+    const pendingMeasurements = await db.PaymentLaunch.findAll({
+        where: {
+            pipelineStage: 'awaiting_measurement_authorization',
+            status: { [db.Sequelize.Op.notIn]: ['cancelado', 'titulo_pago'] },
+            siengeMeasurementNumber: { [db.Sequelize.Op.not]: null },
+        },
+        attributes: ['id', 'siengeMeasurementNumber', 'siengeMeasurementApproval'],
+    });
 
-    for (const launch of pending) {
-        try {
-            const contract = await pollContractStatus(launch.id);
-            if (!contract) {
-                console.log(`⚠️ [ContractApproval] #${launch.id}: contrato não encontrado no Sienge.`);
-                continue;
+    if (pendingMeasurements.length) {
+        console.log(`🔍 [ContractApproval] ${pendingMeasurements.length} medição(ões) aguardando autorização.`);
+        for (const launch of pendingMeasurements) {
+            try {
+                const measurement = await pollMeasurementStatus(launch.id);
+                if (!measurement) {
+                    console.log(`⚠️ [ContractApproval] #${launch.id}: medição não encontrada no Sienge.`);
+                    continue;
+                }
+                console.log(`✅ [ContractApproval] #${launch.id}: medição ${launch.siengeMeasurementNumber} | autorizado = ${measurement.authorized}`);
+            } catch (err) {
+                console.error(`❌ [ContractApproval] Erro na medição #${launch.id}:`, err.message);
             }
-            console.log(`✅ [ContractApproval] #${launch.id}: alçada = ${contract.statusApproval ?? '?'} | autorizado = ${contract.isAuthorized}`);
-        } catch (err) {
-            console.error(`❌ [ContractApproval] Erro no lançamento #${launch.id}:`, err.message);
         }
     }
 }

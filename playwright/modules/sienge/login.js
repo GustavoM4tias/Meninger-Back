@@ -69,7 +69,24 @@ export async function siengeLogin(credentials = {}) {
     }
 
     log("LOGIN", "Aguardando painel Sienge...");
-    await page.waitForURL("**/sienge/**", { timeout: 45000 });
+    try {
+        await page.waitForURL("**/sienge/**", { timeout: 45000 });
+    } catch {
+        // Timeout — verifica se é erro de credenciais na página
+        const bodyText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
+        const lower = bodyText.toLowerCase();
+        const isCredentialsError =
+            lower.includes('senha incorreta') ||
+            lower.includes('e-mail ou senha') ||
+            lower.includes('invalid credentials') ||
+            lower.includes('incorrect password') ||
+            lower.includes('credenciais inválidas') ||
+            lower.includes('acesso negado');
+        if (isCredentialsError) {
+            throw new Error('CREDENCIAIS_INVALIDAS: Senha ou e-mail incorretos no Sienge. Atualize em Minha Conta → Credenciais Sienge.');
+        }
+        throw new Error('Timeout ao aguardar login no Sienge. Verifique as credenciais e tente novamente.');
+    }
 
     success("LOGIN", "Login realizado com sucesso!");
     return { browser, context, page };

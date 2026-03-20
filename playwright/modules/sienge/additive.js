@@ -456,6 +456,11 @@ export async function createAdditive(page, params = {}) {
         await closeBlockingPopups(page);
         frame = await getMainFrame(page);
 
+        // Aguarda os itens da planilha carregarem completamente após o AJAX do save
+        log("ADDITIVE", "Aguardando itens da unidade/obra após salvamento...");
+        await frame.waitForSelector('tr#linhaUnidObContrato_0', { state: 'visible', timeout: 60000 });
+        await frame.waitForTimeout(1500);
+
         // ── FASE 4: Abrir planilha ────────────────────────────────────────────────
         log("ADDITIVE", "Abrindo planilha...");
         page._planilhaAlocadaDetected = false;

@@ -18,6 +18,10 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.DATEONLY,
             allowNull: false,
         },
+        due_date: {
+            type: DataTypes.DATEONLY,
+            allowNull: true,
+        },
         bill_id: {
             type: DataTypes.INTEGER,
             allowNull: true,
@@ -57,6 +61,8 @@ export default (sequelize, DataTypes) => {
         indexes: [
             { fields: ['cost_center_id', 'competence_month'] },
             { fields: ['bill_id'] },
+            // Garante idempotência: um expense por parcela de cada bill
+            { unique: true, fields: ['bill_id', 'installment_number'] },
         ]
     });
 

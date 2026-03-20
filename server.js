@@ -68,47 +68,60 @@ app.use('/api/uploads', uploadRoutes);
 
 const PORT = process.env.PORT || 5000;
 
-db.sequelize.sync({ alter: false })  // alter: true = adapta estrutura sem apagar dados
+db.sequelize.sync({ alter: false })
   .then(async () => {
     console.log('Banco sincronizado com sucesso!');
-
-    // Seed tipos de lançamento iniciais (só faz algo se a tabela estiver vazia)
-    await seedInitialTypes();
-
-    // Start schedulers só depois do sync:
-    if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') {
-      contractValidatorScheduler.start();
-    }
-    if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') {
-      contractSiengeScheduler.start();
-    }
-    if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') {
-      leadCvScheduler.start();
-    }
-    if (process.env.ENABLE_CV_REPASSE_SCHEDULE === 'true') {
-      repasseCvScheduler.start();
-    }
-    if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') {  // 👈 NOVO
-      reservaCvScheduler.start();
-    }
-    if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') {  // 👈 NOVO
-      landScheduler.start();
-    } 
-    if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') {
-      enterpriseCvScheduler.start();
-    }
-    // Polling de fornecedores aguardando cadastro RID (sempre ativo)
-    creditorPollingScheduler.start();
-    // Polling de alçada de aprovação dos contratos Sienge (sempre ativo)
-    contractApprovalScheduler.start();
-
-    app.listen(PORT, () => {
-      console.log(`Servidor rodando na porta: ${PORT}`);
-    });
+    await bootServer();
   })
-  .catch((err) => {
-    console.error('Erro ao sincronizar o banco:', err);
+  .catch(async (err) => {
+    // ECONNRESET em conexões remotas durante ALTER TABLE — tabelas críticas sincronizadas separadamente
+    if (err?.parent?.code === 'ECONNRESET' || err?.original?.code === 'ECONNRESET') {
+      console.warn('⚠️  Sync interrompido por ECONNRESET — forçando sync das tabelas críticas...');
+      for (const [name, model] of [['User', db.User], ['PaymentLaunch', db.PaymentLaunch]]) {
+        try {
+          await model.sync({ alter: true });
+          console.log(`✅ ${name} sincronizado.`);
+        } catch (e) {
+          console.warn(`⚠️  Falha ao sincronizar ${name}:`, e.message);
+        }
+      }
+      await bootServer();
+    } else {
+      console.error('Erro ao sincronizar o banco:', err);
+    }
   });
+
+async function bootServer() {
+  // Garante que tabelas críticas tenham todas as colunas atualizadas
+  for (const [name, model] of [
+    ['PaymentLaunch', db.PaymentLaunch],
+    ['SiengeBill', db.SiengeBill],
+    ['SiengeBillInstallment', db.SiengeBillInstallment],
+  ]) {
+    try {
+      await model.sync({ alter: true });
+      console.log(`✅ ${name} sincronizado.`);
+    } catch (e) {
+      console.warn(`⚠️  Falha ao sincronizar ${name}:`, e.message);
+    }
+  }
+
+  await seedInitialTypes();
+
+  if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') contractValidatorScheduler.start();
+  if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractSiengeScheduler.start();
+  if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCvScheduler.start();
+  if (process.env.ENABLE_CV_REPASSE_SCHEDULE === 'true') repasseCvScheduler.start();
+  if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') reservaCvScheduler.start();
+  if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') landScheduler.start();
+  if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') enterpriseCvScheduler.start();
+  creditorPollingScheduler.start();
+  contractApprovalScheduler.start();
+
+  app.listen(PORT, () => {
+    console.log(`Servidor rodando na porta: ${PORT}`);
+  });
+}
 
 //   | Ambiente        | Método recomendado            | Observações                             |
 // | --------------- | ----------------------------- | --------------------------------------- |
