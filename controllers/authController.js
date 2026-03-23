@@ -8,6 +8,7 @@ import { sendEmail } from '../email/email.service.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 
 const { User, Position, UserCity } = db;
+const { Op } = db.Sequelize;
 
 const PASSWORD_RESET_TTL_MIN = Number(process.env.PASSWORD_RESET_TTL_MIN || 10);
 const PASSWORD_RESET_RESEND_SEC = Number(process.env.PASSWORD_RESET_RESEND_SEC || 20);
@@ -443,7 +444,7 @@ export const identifyFace = async (req, res) => {
 export const getUserInfo = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update', 'auth_provider', 'external_kind', 'external_id']
+      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update', 'auth_provider', 'external_kind', 'external_id', 'phone']
     });
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
@@ -455,7 +456,7 @@ export const getUserInfo = async (req, res) => {
 };
 
 export const updateMe = async (req, res) => {
-  const { username, email, position, city, status, birth_date, face_enabled } = req.body;
+  const { username, email, position, city, status, birth_date, face_enabled, phone } = req.body;
   if (!username || !email || !position || !city || status === undefined || !birth_date || face_enabled === undefined) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
@@ -478,6 +479,7 @@ export const updateMe = async (req, res) => {
         status,
         birth_date,
         face_enabled,
+        phone: phone ?? null,
       },
       { where: { id: req.user.id } }
     );
@@ -492,7 +494,7 @@ export const updateMe = async (req, res) => {
 };
 
 export const updateUser = async (req, res) => {
-  const { id, username, email, position, role, manager_id, city, status, birth_date } = req.body;
+  const { id, username, email, position, role, manager_id, city, status, birth_date, show_in_organogram, phone } = req.body;
 
   if (!id || !username || !email || !position || !city || status === undefined || !birth_date) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
@@ -515,6 +517,8 @@ export const updateUser = async (req, res) => {
       city: cityRecord.name,
       status,
       birth_date,
+      show_in_organogram: show_in_organogram ?? false,
+      phone: phone ?? null,
     };
     if (role !== undefined) payload.role = role; // admin/user
 
@@ -529,7 +533,7 @@ export const updateUser = async (req, res) => {
 export const getAllUsers = async (req, res) => {
   try {
     const users = await User.findAll({
-      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update'],
+      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update', 'microsoft_id', 'sienge_email', 'show_in_organogram', 'auth_provider', 'phone'],
       include: [
         {
           model: User,
@@ -542,7 +546,9 @@ export const getAllUsers = async (req, res) => {
           attributes: ['id', 'username']
         }
       ],
-      where: { auth_provider: 'INTERNAL' }
+      where: {
+        auth_provider: { [Op.ne]: 'CVCRM' },
+      },
     });
     if (users.length === 0) {
       return responseHandler.error(res, 'Nenhum usuário encontrado');

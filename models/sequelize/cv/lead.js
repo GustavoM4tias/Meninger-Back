@@ -44,6 +44,8 @@ export default (sequelize, DataTypes) => {
         link_interesses: { type: DataTypes.STRING(500) },
         idrd_station: { type: DataTypes.STRING(100) },
         link_rdstation: { type: DataTypes.STRING(500) },
+        motivo_cancelamento: { type: DataTypes.STRING(255) },
+        submotivo_cancelamento: { type: DataTypes.TEXT },
     }, {
         tableName: 'leads',
         underscored: true,

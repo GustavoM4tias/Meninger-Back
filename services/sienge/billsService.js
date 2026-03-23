@@ -643,7 +643,10 @@ export default class BillsService {
             if (i + DEP_CHUNK < missingDeps.length) await sleep(500);
         }
 
-        // ── 4. Installments/expenses para os que ainda não foram buscados ────
+        // ── 4. Creditors para os que ainda não têm creditor_json ────────────
+        await this.ensureCreditorsForBatch(pairs);
+
+        // ── 5. Installments/expenses para os que ainda não foram buscados ────
         // Reload para pegar `installments_fetched` atualizado após upsert
         const allIds = pairs.map(({ bill }) => bill.id);
         const refreshed = await SiengeBill.findAll({ where: { id: { [Op.in]: allIds } } });

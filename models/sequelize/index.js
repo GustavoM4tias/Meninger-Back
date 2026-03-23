@@ -69,6 +69,8 @@ import AcademyUserQuizAttemptDefine from './academy/userQuizAttempt.js';
 import ExternalOrganizationDefine from './academy/external/externalOrganization.js';
 import AuthAccessCodeDefine from './academy/external/authAccessCode.js';
 
+import MeetingTranscriptDefine from './meetingTranscript.js';
+
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -145,6 +147,8 @@ db.AcademyUserQuizAttempt = AcademyUserQuizAttemptDefine(sequelize, DataTypes);
 
 db.ExternalOrganization = ExternalOrganizationDefine(sequelize, DataTypes);
 db.AuthAccessCode = AuthAccessCodeDefine(sequelize, DataTypes);
+
+db.MeetingTranscript = MeetingTranscriptDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

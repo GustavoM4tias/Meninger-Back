@@ -31,6 +31,7 @@ import landScheduler from './scheduler/landScheduler.js';
 import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js';
 import creditorPollingScheduler from './scheduler/creditorPollingScheduler.js';
 import contractApprovalScheduler from './scheduler/contractApprovalScheduler.js';
+import leadCancelReasonScheduler from './scheduler/leadCancelReasonScheduler.js';
 
 const app = express();
 
@@ -94,9 +95,11 @@ db.sequelize.sync({ alter: false })
 async function bootServer() {
   // Garante que tabelas críticas tenham todas as colunas atualizadas
   for (const [name, model] of [
+    ['User', db.User],                                    // microsoft_id + outros campos novos
     ['PaymentLaunch', db.PaymentLaunch],
     ['SiengeBill', db.SiengeBill],
     ['SiengeBillInstallment', db.SiengeBillInstallment],
+    ['Lead', db.Lead],                                    // motivo_cancelamento + submotivo_cancelamento
   ]) {
     try {
       await model.sync({ alter: true });
@@ -117,6 +120,7 @@ async function bootServer() {
   if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') enterpriseCvScheduler.start();
   creditorPollingScheduler.start();
   contractApprovalScheduler.start();
+  if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
 
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta: ${PORT}`);
