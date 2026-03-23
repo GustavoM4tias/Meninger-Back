@@ -101,6 +101,11 @@ const META = {
         preview: (d) => `Solicitado por ${d.requesterName || 'usuário do sistema'}`,
         file: 'supplier.rid.request.hbs',
     },
+    'meeting.report': {
+        subject: (d) => `Relatório de Reunião: ${d.subject || 'Reunião'}`,
+        preview: (d) => d.resumoPreview || 'Resumo e ações gerados por IA',
+        file: 'meeting.report.hbs',
+    },
 };
 
 function compileTemplateOnce(file) {

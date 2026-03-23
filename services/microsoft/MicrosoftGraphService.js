@@ -98,6 +98,21 @@ class MicrosoftGraphService {
         return this.call(user, 'delete', path);
     }
 
+    /**
+     * Streaming GET — retorna o response axios com responseType:'stream'.
+     * Usado para proxy de arquivos binários (download, preview).
+     */
+    async stream(user, path) {
+        const token = await microsoftAuthService.getValidToken(user);
+        if (!token) throw new Error('Conta Microsoft não conectada ou sessão expirada.');
+        const response = await axios.get(`${GRAPH_BASE}${path}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            responseType: 'stream',
+            maxRedirects: 10,
+        });
+        return response;
+    }
+
     // ── Helpers comuns ────────────────────────────────────────────────────────
 
     /** Retorna o perfil do usuário logado na Microsoft (/me) */
