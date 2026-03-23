@@ -40,6 +40,7 @@ router.get('/banners', fetchBanners);
 
 router.post('/leads/sync/full', authenticate, cvLeads.fullSync.bind(cvLeads));
 router.post('/leads/sync/delta', authenticate, cvLeads.deltaSync.bind(cvLeads));
+router.post('/leads/sync/cancel-reasons', authenticate, cvLeads.cancelReasonSync.bind(cvLeads));
 
 router.get('/leads', authenticate, getLeads);
 

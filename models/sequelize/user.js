@@ -35,6 +35,12 @@ export default (sequelize, DataTypes) => {
     external_id: { type: DataTypes.STRING(50), allowNull: true },
     document: { type: DataTypes.STRING(20), allowNull: true },
     external_organization_id: { type: DataTypes.INTEGER, allowNull: true },
+    // ── Microsoft OAuth ───────────────────────────────────────────────────────
+    microsoft_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      unique: true,  // cada conta Microsoft só vincula a um usuário
+    },
     microsoft_access_token: {
       type: DataTypes.TEXT,
       allowNull: true,
@@ -45,7 +51,7 @@ export default (sequelize, DataTypes) => {
     },
     microsoft_token_expires_at: {
       type: DataTypes.BIGINT,
-      allowNull: true,
+      allowNull: true,  // Unix timestamp em ms
     },
     face_enabled: { type: DataTypes.BOOLEAN, defaultValue: false },
     face_template: { type: DataTypes.JSONB },
@@ -60,6 +66,9 @@ export default (sequelize, DataTypes) => {
     // ── Credenciais Sienge (armazenadas criptografadas via AES-256) ────────────
     sienge_email: { type: DataTypes.TEXT, allowNull: true },
     sienge_password: { type: DataTypes.TEXT, allowNull: true },
+
+    show_in_organogram: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    phone: { type: DataTypes.STRING(20), allowNull: true },
   }, {
     tableName: 'users',
     underscored: true,

@@ -121,14 +121,20 @@ export default class CvLeadSyncService {
             link_reservas: raw.link_reservas,
             link_interesses: raw.link_interesses,
             idrd_station: raw.idrd_station,
-            link_rdstation: raw.link_rdstation
+            link_rdstation: raw.link_rdstation,
+            motivo_cancelamento: raw.motivo_cancelamento?.nome ?? null,
+            submotivo_cancelamento: raw.submotivo_cancelamento?.nome ?? null,
         };
 
         const existing = await Lead.findByPk(data.idlead);
         if (!existing) {
             await Lead.create(data);
         } else {
-            // compara hash para evitar update desnecessário
+            // Se o raw não trouxe motivo mas o banco já tem, preserva
+            if (!data.motivo_cancelamento && existing.motivo_cancelamento) {
+                data.motivo_cancelamento = existing.motivo_cancelamento;
+                data.submotivo_cancelamento = existing.submotivo_cancelamento;
+            }
             const oldHash = hashObj(existing.toJSON());
             const newHash = hashObj(data);
             if (oldHash !== newHash) {

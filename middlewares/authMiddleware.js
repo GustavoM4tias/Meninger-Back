@@ -14,7 +14,7 @@ const authenticate = async (req, res, next) => {
 
     // ✅ carrega usuário do banco
     const user = await db.User.findByPk(decoded.id, {
-      attributes: ['id', 'role', 'position', 'auth_provider', 'status', 'username', 'email'],
+      attributes: ['id', 'role', 'position', 'auth_provider', 'status', 'username', 'email', 'microsoft_id'],
     });
 
     if (!user || user.status === false) {
@@ -28,9 +28,10 @@ const authenticate = async (req, res, next) => {
       role: user.role,
       position: user.position,
       auth_provider: user.auth_provider,
-      name: user.username,      // garante que name esteja sempre preenchido
+      name: user.username,
       username: user.username,
       email: user.email,
+      microsoft_id: user.microsoft_id || null,
     };
 
     next();
