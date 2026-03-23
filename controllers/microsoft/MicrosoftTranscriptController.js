@@ -1,6 +1,7 @@
 // controllers/microsoft/MicrosoftTranscriptController.js
 import transcriptService, { cuesToText } from '../../services/microsoft/MicrosoftTranscriptService.js';
 import { MeetingSummaryService } from '../../validatorAI/src/services/MeetingSummaryService.js';
+import { sendEmail } from '../../email/email.service.js';
 import db from '../../models/sequelize/index.js';
 
 function guard(req, res) {
@@ -52,9 +53,26 @@ class MicrosoftTranscriptController {
             if (!joinUrl) return res.status(400).json({ error: 'joinUrl obrigatório' });
 
             const meetingId = await transcriptService.getMeetingIdByJoinUrl(req.user, joinUrl);
-            if (!meetingId) return res.json({ available: false, transcripts: [] });
+            if (!meetingId) {
+                return res.json({
+                    available: false,
+                    transcripts: [],
+                    reason: 'meeting_not_found',
+                    hint: 'A reunião não foi encontrada via Graph API. Apenas reuniões onde você é o organizador são acessíveis pela API. Use /transcripts/diagnose para diagnóstico detalhado.',
+                });
+            }
 
             const transcripts = await transcriptService.listTranscripts(req.user, meetingId);
+
+            if (!transcripts.length) {
+                return res.json({
+                    available: false,
+                    meetingId,
+                    transcripts: [],
+                    reason: 'no_transcripts',
+                    hint: 'Reunião encontrada, mas sem transcrições. A transcrição precisa ter sido iniciada durante a reunião no Teams.',
+                });
+            }
 
             // Verifica quais já temos no banco
             const saved = await db.MeetingTranscript.findAll({
@@ -64,7 +82,7 @@ class MicrosoftTranscriptController {
             const savedMap = Object.fromEntries(saved.map(r => [r.transcript_id, r]));
 
             res.json({
-                available: transcripts.length > 0,
+                available: true,
                 meetingId,
                 transcripts: transcripts.map(t => ({
                     ...t,
@@ -74,6 +92,20 @@ class MicrosoftTranscriptController {
                     reportGeneratedAt: savedMap[t.id]?.report_generated_at || null,
                 })),
             });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    }
+
+    // ── GET /transcripts/diagnose?joinUrl=... ─────────────────────────────────
+    // Endpoint de diagnóstico — retorna dados brutos do Graph API para depuração
+    async diagnose(req, res) {
+        if (!guard(req, res)) return;
+        try {
+            const { joinUrl } = req.query;
+            if (!joinUrl) return res.status(400).json({ error: 'joinUrl obrigatório' });
+            const result = await transcriptService.diagnoseMeeting(req.user, joinUrl);
+            res.json(result);
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
@@ -261,6 +293,64 @@ class MicrosoftTranscriptController {
                 cues: record.parsed_transcript ? JSON.parse(record.parsed_transcript) : [],
                 report: record.report_json,
             });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    }
+
+    // ── POST /transcripts/reports/:id/email ───────────────────────────────────
+    // Envia o relatório por e-mail para os destinatários informados
+    async emailReport(req, res) {
+        if (!guard(req, res)) return;
+        try {
+            const record = await db.MeetingTranscript.findOne({
+                where: { id: req.params.id, user_id: req.user.id },
+            });
+            if (!record) return res.status(404).json({ error: 'Relatório não encontrado.' });
+            if (!record.report_json) return res.status(400).json({ error: 'Relatório ainda não foi gerado.' });
+
+            const { recipients, subject, observations } = req.body;
+            if (!recipients?.length) return res.status(400).json({ error: 'Informe ao menos um destinatário.' });
+
+            const report = record.report_json;
+            const meetingDateFormatted = record.meeting_date
+                ? new Date(record.meeting_date).toLocaleDateString('pt-BR', {
+                      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+                  })
+                : null;
+
+            const acoes = (report.acoes || []).map(a => ({
+                descricao:   a.descricao || a.acao || '',
+                responsavel: a.responsavel || '—',
+                prazo:       a.prazo || '—',
+            }));
+
+            const templateData = {
+                subject:           subject || `Relatório de Reunião: ${record.subject || 'Reunião'}`,
+                meetingSubject:    record.subject || '(Sem título)',
+                meetingDate:       meetingDateFormatted,
+                durationMin:       record.duration_min,
+                organizerName:     record.organizer_name,
+                attendees:         (record.attendees_json || []).map(a => a.name || a.email).filter(Boolean),
+                tags:              report.tags || [],
+                sentimentoGeral:   report.sentimento_geral || null,
+                observations:      observations || null,
+                resumo:            report.resumo || null,
+                resumoPreview:     (report.resumo || '').slice(0, 120),
+                decisoes:          report.decisoes || [],
+                acoes,
+                proximosPassos:    report.proximos_passos || [],
+                pontosAtencao:     report.pontos_atencao || [],
+                kpis:              report.kpis || [],
+                joinUrl:           record.join_url || null,
+                reportGeneratedAt: record.report_generated_at
+                    ? new Date(record.report_generated_at).toLocaleDateString('pt-BR')
+                    : null,
+            };
+
+            await sendEmail('meeting.report', recipients, templateData);
+
+            res.json({ ok: true, sentTo: recipients.length });
         } catch (err) {
             res.status(500).json({ error: err.message });
         }

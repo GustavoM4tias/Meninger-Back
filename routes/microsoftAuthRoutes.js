@@ -4,6 +4,7 @@ import MicrosoftAuthController from '../controllers/microsoft/MicrosoftAuthContr
 import MicrosoftSharepointController from '../controllers/microsoft/MicrosoftSharepointController.js';
 import MicrosoftTeamsController from '../controllers/microsoft/MicrosoftTeamsController.js';
 import MicrosoftTranscriptController from '../controllers/microsoft/MicrosoftTranscriptController.js';
+import InPersonMeetingController from '../controllers/InPersonMeetingController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
@@ -25,6 +26,7 @@ router.get('/sharepoint/sites', authenticate, sharepointController.sites);
 router.get('/sharepoint/sites/:siteId/drives', authenticate, sharepointController.drives);
 router.get('/sharepoint/drives/:driveId/root', authenticate, sharepointController.driveRoot);
 router.get('/sharepoint/drives/:driveId/items/:itemId/children', authenticate, sharepointController.folderChildren);
+router.get('/sharepoint/drives/:driveId/items/:itemId/content', authenticate, sharepointController.itemContent);
 router.get('/sharepoint/drives/:driveId/items/:itemId', authenticate, sharepointController.item);
 router.get('/sharepoint/drives/:driveId/search', authenticate, sharepointController.search);
 
@@ -52,9 +54,21 @@ router.delete('/teams/events/:eventId',                 authenticate, teamsContr
 const tc = MicrosoftTranscriptController;
 router.get('/transcripts/meetings',                             authenticate, tc.listMeetings.bind(tc));
 router.get('/transcripts/check',                                authenticate, tc.checkTranscripts.bind(tc));
+router.get('/transcripts/diagnose',                             authenticate, tc.diagnose.bind(tc));
 router.get('/transcripts/reports',                              authenticate, tc.listReports.bind(tc));
 router.get('/transcripts/reports/:id',                          authenticate, tc.getReport.bind(tc));
+router.post('/transcripts/reports/:id/email',                   authenticate, tc.emailReport.bind(tc));
 router.get('/transcripts/:meetingId/:transcriptId',             authenticate, tc.getTranscript.bind(tc));
 router.post('/transcripts/:meetingId/:transcriptId/report',     authenticate, tc.generateReport.bind(tc));
+
+// ── Reuniões Presenciais ──────────────────────────────────────────────────────
+const ipc = InPersonMeetingController;
+router.get('/inperson/meetings',                authenticate, ipc.list.bind(ipc));
+router.post('/inperson/meetings',               authenticate, ipc.create.bind(ipc));
+router.get('/inperson/meetings/:id',            authenticate, ipc.get.bind(ipc));
+router.put('/inperson/meetings/:id',            authenticate, ipc.update.bind(ipc));
+router.delete('/inperson/meetings/:id',         authenticate, ipc.remove.bind(ipc));
+router.post('/inperson/meetings/:id/report',    authenticate, ipc.generateReport.bind(ipc));
+router.post('/inperson/meetings/:id/email',     authenticate, ipc.emailReport.bind(ipc));
 
 export default router;

@@ -140,6 +140,44 @@ export default class MicrosoftSharepointController {
         }
     };
 
+    // ── GET /api/microsoft/sharepoint/drives/:driveId/items/:itemId/content?dl=1
+    // dl=1  → força download (Content-Disposition: attachment)
+    // dl=0  → inline / preview (Content-Disposition: inline)
+    itemContent = async (req, res) => {
+        try {
+            const user = await this._getUser(req.user.id);
+            if (!user?.microsoft_id) return this._notConnected(res);
+
+            const { driveId, itemId } = req.params;
+            const forceDownload = req.query.dl === '1';
+
+            // Busca metadados (nome, mimeType) e stream em paralelo
+            const [item, { stream, contentType, contentLength }] = await Promise.all([
+                sharepointService.getItem(user, driveId, itemId),
+                sharepointService.streamItemContent(user, driveId, itemId),
+            ]);
+
+            const encoded = encodeURIComponent(item.name);
+            const disposition = forceDownload
+                ? `attachment; filename*=UTF-8''${encoded}`
+                : `inline; filename*=UTF-8''${encoded}`;
+
+            res.setHeader('Content-Type', contentType || item.mimeType || 'application/octet-stream');
+            res.setHeader('Content-Disposition', disposition);
+            if (contentLength) res.setHeader('Content-Length', contentLength);
+            res.setHeader('Cache-Control', 'private, max-age=300');
+
+            stream.pipe(res);
+            stream.on('error', (err) => {
+                console.error('❌ [SharePoint] stream error:', err.message);
+                if (!res.headersSent) res.status(500).json({ error: 'Erro ao transmitir arquivo.' });
+            });
+        } catch (err) {
+            console.error('❌ [SharePoint] itemContent:', err?.response?.data || err.message);
+            if (!res.headersSent) return res.status(err?.response?.status || 500).json({ error: err.message });
+        }
+    };
+
     // ── POST /api/microsoft/sharepoint/drives/:driveId/items/:itemId/link
     createLink = async (req, res) => {
         try {

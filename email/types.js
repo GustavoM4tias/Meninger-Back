@@ -8,6 +8,7 @@ export const EmailType = {
     GENERIC_NOTIFICATION: 'generic.notification',
     AUTH_ACADEMY_CODE: 'auth.academy.code',
     AUTH_PASSWORD_RESET: 'auth.password.reset',
+    MEETING_REPORT: 'meeting.report',
 };
 
 // Contratos mínimos de dados por tipo (JSDoc p/ intellisense)

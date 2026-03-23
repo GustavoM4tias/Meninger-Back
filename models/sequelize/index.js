@@ -70,6 +70,7 @@ import ExternalOrganizationDefine from './academy/external/externalOrganization.
 import AuthAccessCodeDefine from './academy/external/authAccessCode.js';
 
 import MeetingTranscriptDefine from './meetingTranscript.js';
+import InPersonMeetingDefine from './inPersonMeeting.js';
 
 
 const env = process.env.NODE_ENV || 'development';
@@ -149,6 +150,7 @@ db.ExternalOrganization = ExternalOrganizationDefine(sequelize, DataTypes);
 db.AuthAccessCode = AuthAccessCodeDefine(sequelize, DataTypes);
 
 db.MeetingTranscript = MeetingTranscriptDefine(sequelize, DataTypes);
+db.InPersonMeeting   = InPersonMeetingDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

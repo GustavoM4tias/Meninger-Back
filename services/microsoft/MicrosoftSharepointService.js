@@ -98,6 +98,20 @@ class MicrosoftSharepointService {
         return result.link?.webUrl || null;
     }
 
+    /**
+     * Transmite o conteúdo binário de um arquivo via Graph API.
+     * O endpoint /content do Graph redireciona para o Azure Blob Storage;
+     * axios segue o redirect e retorna o stream final.
+     */
+    async streamItemContent(user, driveId, itemId) {
+        const response = await graphService.stream(user, `/drives/${driveId}/items/${itemId}/content`);
+        return {
+            stream: response.data,
+            contentType: response.headers['content-type'] || 'application/octet-stream',
+            contentLength: response.headers['content-length'] || null,
+        };
+    }
+
     // ── Normalização ──────────────────────────────────────────────────────────
     _normalizeItems(items) {
         return items.map(item => this._normalizeItem(item));
