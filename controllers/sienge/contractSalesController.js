@@ -565,6 +565,20 @@ SELECT
   sc.contract_date,
   sc.financial_institution_date,
 
+  -- Cadeia de fallback para data efetiva de distrato:
+  --   1) cancellation_date         → data real do distrato (Sienge)
+  --   2) last_update_date          → última atualização pelo Sienge (≈ data do distrato quando 1 é NULL)
+  --   3) updated_at::date          → quando nosso cron gravou a situação Cancelado
+  --   4) financial_institution_date → data de repasse (menos precisa)
+  --   5) contract_date             → último recurso (data da compra original)
+  COALESCE(
+    sc.cancellation_date,
+    sc.last_update_date,
+    sc.updated_at::date,
+    sc.financial_institution_date,
+    sc.contract_date
+  ) AS effective_date,
+
   COALESCE(
     (SELECT c ->> 'name'
      FROM jsonb_array_elements(sc.customers) c
@@ -600,7 +614,16 @@ LEFT JOIN LATERAL (
 ) ec ON TRUE
 
 WHERE sc.situation = 'Cancelado'
-  AND sc.cancellation_date BETWEEN :start AND :end
+  -- Usa a mesma cadeia de fallback do SELECT para garantir consistência.
+  -- Contratos sem cancellation_date são filtrados por last_update_date ou updated_at,
+  -- evitando que contract_date (data de compra, geralmente anos atrás) exclua o registro.
+  AND COALESCE(
+        sc.cancellation_date,
+        sc.last_update_date,
+        sc.updated_at::date,
+        sc.financial_institution_date,
+        sc.contract_date
+      ) BETWEEN :start AND :end
   ${whereNameClause}
   ${whereEnterpriseIdClause}
   ${whereEnterpriseIdsClause}
@@ -613,7 +636,9 @@ WHERE sc.situation = 'Cancelado'
     )
   )
 
-ORDER BY sc.cancellation_date DESC NULLS LAST, sc.id DESC
+ORDER BY
+  COALESCE(sc.cancellation_date, sc.last_update_date, sc.updated_at::date, sc.financial_institution_date, sc.contract_date) DESC NULLS LAST,
+  sc.id DESC
 `
 
     const replacements = {
