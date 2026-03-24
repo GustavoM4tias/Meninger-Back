@@ -44,6 +44,7 @@ router.get('/distratos', authenticate, getDistratos);
 
 router.post('/contracts/sync/full', bulk.fullSync.bind(bulk));
 router.post('/contracts/sync/delta', bulk.deltaSync.bind(bulk));
+router.get('/contracts/sync/status', bulk.syncStatus.bind(bulk));
 
 router.post('/bills/sync', authenticate, ctrl.sync);
 router.get('/bills', authenticate, ctrl.list);
