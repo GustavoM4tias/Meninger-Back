@@ -495,3 +495,146 @@ export async function clearCache(req, res) {
   _enterprisesCacheTs = 0
   return res.json({ message: 'Caches limpos.' })
 }
+
+/**
+ * GET /api/sienge/distratos
+ * Retorna contratos cancelados (situation = 'Cancelado') com todos os campos
+ * de distrato, filtrando por cancellation_date (não financial_institution_date).
+ *
+ * Query params:
+ *   startDate      YYYY-MM-DD  (default: primeiro dia do ano atual)
+ *   endDate        YYYY-MM-DD  (default: hoje)
+ *   enterpriseName string|string[]  nome(s) de empreendimento
+ *   enterpriseId   number
+ *   enterpriseIds  string  IDs separados por vírgula
+ */
+export async function getDistratos(req, res) {
+  try {
+    const {
+      startDate,
+      endDate,
+      enterpriseName,
+      enterpriseId,
+      enterpriseIds,
+    } = req.query
+
+    const today = dayjs()
+    const start = startDate ? dayjs(startDate) : dayjs().startOf('year')
+    const end   = endDate   ? dayjs(endDate)   : today
+
+    // ── Enterprise name filter ─────────────────────────────────────────────
+    let nameList = []
+    if (Array.isArray(enterpriseName)) {
+      nameList = enterpriseName.map((n) => n.trim()).filter(Boolean)
+    } else if (typeof enterpriseName === 'string' && enterpriseName.trim()) {
+      nameList = enterpriseName.split(',').map((n) => n.trim()).filter(Boolean)
+    }
+
+    const whereNameClause = nameList.length > 0
+      ? ` AND (${nameList.map((_, i) => `LOWER(sc.enterprise_name) = LOWER(:name${i})`).join(' OR ')})`
+      : ''
+
+    // ── Enterprise ID filter ───────────────────────────────────────────────
+    const enterpriseIdNum  = enterpriseId != null && enterpriseId !== '' ? Number(enterpriseId) : null
+    const enterpriseIdSafe = Number.isFinite(enterpriseIdNum) && enterpriseIdNum > 0 ? enterpriseIdNum : null
+    const whereEnterpriseIdClause = enterpriseIdSafe ? ` AND sc.enterprise_id = :enterpriseId` : ''
+
+    const enterpriseIdsArr = typeof enterpriseIds === 'string'
+      ? enterpriseIds.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0)
+      : []
+    const hasEnterpriseIds = enterpriseIdsArr.length > 0
+    const whereEnterpriseIdsClause = hasEnterpriseIds ? ` AND sc.enterprise_id IN (:enterpriseIds)` : ''
+
+    // ── Auth ───────────────────────────────────────────────────────────────
+    const isAdmin    = req.user?.role === 'admin'
+    const userCityRaw = isAdmin ? null : (req.user?.city || null)
+
+    const sql = `
+SELECT
+  sc.id                           AS contract_id,
+  sc.number,
+  sc.enterprise_id,
+  sc.enterprise_name,
+  sc.company_id,
+  sc.company_name,
+  sc.cancellation_date,
+  sc.cancellation_reason,
+  sc.total_cancellation_amount,
+  sc.value                        AS contract_value,
+  sc.total_selling_value,
+  sc.contract_date,
+  sc.financial_institution_date,
+
+  COALESCE(
+    (SELECT c ->> 'name'
+     FROM jsonb_array_elements(sc.customers) c
+     WHERE (c ->> 'main')::boolean = true
+     LIMIT 1),
+    (SELECT c ->> 'name'
+     FROM jsonb_array_elements(sc.customers) c
+     ORDER BY (c ->> 'id')::int NULLS LAST
+     LIMIT 1)
+  ) AS customer_name,
+
+  COALESCE(
+    (SELECT u ->> 'name'
+     FROM jsonb_array_elements(sc.units) u
+     WHERE (u ->> 'main')::boolean = true
+     LIMIT 1),
+    (SELECT u ->> 'name'
+     FROM jsonb_array_elements(sc.units) u
+     LIMIT 1)
+  ) AS unit_name,
+
+  ec.city_resolved
+
+FROM contracts sc
+
+LEFT JOIN LATERAL (
+  SELECT COALESCE(ec2.city_override, ec2.default_city) AS city_resolved
+  FROM enterprise_cities ec2
+  WHERE ec2.erp_id IS NOT NULL
+    AND ec2.erp_id = sc.enterprise_id::text
+  ORDER BY ec2.updated_at DESC
+  LIMIT 1
+) ec ON TRUE
+
+WHERE sc.situation = 'Cancelado'
+  AND sc.cancellation_date BETWEEN :start AND :end
+  ${whereNameClause}
+  ${whereEnterpriseIdClause}
+  ${whereEnterpriseIdsClause}
+  AND (
+    :isAdmin = TRUE
+    OR (
+      ec.city_resolved IS NOT NULL
+      AND unaccent(upper(regexp_replace(ec.city_resolved,   '[^A-Z0-9]+',' ','g'))) =
+          unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g')))
+    )
+  )
+
+ORDER BY sc.cancellation_date DESC NULLS LAST, sc.id DESC
+`
+
+    const replacements = {
+      start:    start.format('YYYY-MM-DD'),
+      end:      end.format('YYYY-MM-DD'),
+      isAdmin,
+      userCity: userCityRaw,
+    }
+
+    if (enterpriseIdSafe)    replacements.enterpriseId  = enterpriseIdSafe
+    if (hasEnterpriseIds)    replacements.enterpriseIds = enterpriseIdsArr
+    nameList.forEach((val, i) => { replacements[`name${i}`] = val })
+
+    const results = await db.sequelize.query(sql, {
+      replacements,
+      type: db.Sequelize.QueryTypes.SELECT,
+    })
+
+    return res.json({ count: results.length, results })
+  } catch (err) {
+    console.error('[getDistratos]', err)
+    return res.status(500).json({ error: 'Erro ao buscar distratos.' })
+  }
+}
