@@ -1,6 +1,10 @@
 // controllers/projectionsController.js
 import db from '../models/sequelize/index.js';
-import { summarizeUnitsFromDb } from '../services/cv/enterpriseUnitsSummaryService.js';
+import {
+  summarizeUnitsFromDb,
+  summarizeUnitsFromStageInt,
+  summarizeMasterCcFromDb,
+} from '../services/cv/enterpriseUnitsSummaryService.js';
 
 const {
   SalesProjection,
@@ -8,6 +12,7 @@ const {
   SalesProjectionLog,
   SalesProjectionEnterprise,
   EnterpriseCity,
+  CvEnterpriseStage,
   Sequelize,
   User,
 } = db;
@@ -77,6 +82,69 @@ async function getUnitsSummaryCached(cvEnterpriseId) {
   }
 }
 
+/**
+ * Tenta resolver o summary de unidades pelo idetapa_int (CC Sienge) antes de
+ * cair no lookup de nível empresa. Isso permite que módulos distintos de um
+ * mesmo empreendimento (ex: MÓD 1 → 99901, MÓD 2 → 99903, MÓD 3 → 99905)
+ * mostrem a contagem correta de unidades da sua etapa específica no CV.
+ *
+ * Retorna o summary (pode ser { totalUnits:0,... }) ou null quando a etapa
+ * não existe — nesse caso o caller pode tentar o fallback de nível empresa.
+ */
+// TTL reduzido para resultados "não encontrado": etapas podem ser cadastradas
+// a qualquer momento no CV, então não queremos cachear o vazio por muito tempo.
+const STAGE_NULL_TTL = 5_000; // 5 s para null; resultados positivos usam UNITS_TTL
+
+async function getUnitsSummaryByStageIntCached(idetapa_int) {
+  if (!idetapa_int) return null;
+
+  const key = `stage:${idetapa_int}`;
+  const now = Date.now();
+  const memo = unitsCache.get(key);
+  if (memo) {
+    const ttl = memo.data !== null ? UNITS_TTL : STAGE_NULL_TTL;
+    if (now - memo.ts < ttl) return memo.data;
+  }
+
+  try {
+    const data = await summarizeUnitsFromStageInt(String(idetapa_int));
+    unitsCache.set(key, { ts: now, data });
+    return data; // null = etapa não encontrada (expira em 5 s)
+  } catch (e) {
+    console.error('[projections][units_summary] erro ao carregar CV por etapa', {
+      idetapa_int,
+      message: e?.message,
+    });
+    unitsCache.set(key, { ts: now, data: null });
+    return null;
+  }
+}
+
+/**
+ * Cache para CC mestre — chave única por (cvEnterpriseId, masterErpId).
+ * Permite reusar o resultado sem re-calcular na mesma janela de 30 s.
+ */
+async function getMasterCcSummaryCached(cvEnterpriseId, masterErpId) {
+  if (!cvEnterpriseId || !masterErpId) return null;
+
+  const key = `master:${cvEnterpriseId}:${masterErpId}`;
+  const now = Date.now();
+  const memo = unitsCache.get(key);
+  if (memo && now - memo.ts < UNITS_TTL) return memo.data;
+
+  try {
+    const data = await summarizeMasterCcFromDb(Number(cvEnterpriseId), masterErpId);
+    unitsCache.set(key, { ts: now, data });
+    return data;
+  } catch (e) {
+    console.error('[projections][units_summary] erro ao calcular CC mestre', {
+      cvEnterpriseId, masterErpId, message: e?.message,
+    });
+    unitsCache.set(key, { ts: now, data: null });
+    return null;
+  }
+}
+
 async function resolveCvEnterpriseIdByErp({ erpId }) {
   if (!erpId) return undefined;
 
@@ -92,61 +160,55 @@ async function resolveCvEnterpriseIdByErp({ erpId }) {
 async function enrichDefaultsWithUnits(defaults) {
   if (!Array.isArray(defaults) || defaults.length === 0) return defaults;
 
-  // dedup ERP->cvId e cvId->summary
-  const cvIdByErp = new Map();
-  const summaryByCvId = new Map();
-
-  // 1) resolve cvId para cada item
-  const itemsWithCv = await Promise.all(
+  const items = await Promise.all(
     defaults.map(async (d) => {
       const erpId = d?.erp_id != null ? String(d.erp_id) : null;
-
       let cvId = d?.cv_enterprise_id != null ? Number(d.cv_enterprise_id) : undefined;
 
-      if (!cvId && erpId) {
-        if (cvIdByErp.has(erpId)) {
-          cvId = cvIdByErp.get(erpId);
-        } else {
-          const resolved = await resolveCvEnterpriseIdByErp({ erpId });
-          cvIdByErp.set(erpId, resolved);
-          cvId = resolved;
+      let unitsSummary = null;
+
+      // 1) PRIORIDADE: etapa específica no CV via idetapa_int
+      if (erpId) {
+        const stageData = await getUnitsSummaryByStageIntCached(erpId);
+        if (stageData) {
+          unitsSummary = stageData;
+          if (!cvId) cvId = stageData.cvEnterpriseId ?? null;
         }
       }
 
-      return { d, cvId: cvId ?? null };
-    })
-  );
-
-  // 2) carrega summaries (dedup por cvId)
-  const uniqueCvIds = [...new Set(itemsWithCv.map((x) => x.cvId).filter(Boolean))];
-
-  await Promise.all(
-    uniqueCvIds.map(async (cvId) => {
-      const summary = await getUnitsSummaryCached(cvId);
-      summaryByCvId.set(cvId, summary);
-    })
-  );
-
-  // 3) injeta no payload (formato que o front já espera no AvailabilityInline)
-  return itemsWithCv.map(({ d, cvId }) => {
-    const unitsSummary = cvId ? summaryByCvId.get(cvId) : null;
-
-    return {
-      ...d,
-      cv_enterprise_id: cvId,
-      units_summary: unitsSummary
-        ? {
-          totalUnits: unitsSummary.totalUnits,
-          soldUnits: unitsSummary.soldUnits,
-          soldUnitsStock: unitsSummary.soldUnitsStock ?? unitsSummary.soldUnits ?? 0,
-          reservedUnits: unitsSummary.reservedUnits,
-          blockedUnits: unitsSummary.blockedUnits,
-          availableUnits: unitsSummary.availableUnits,
-          availableInventory: unitsSummary.availableInventory,
+      // 2) FALLBACK: se não existe etapa, tenta resolver como CC mestre
+      if (!unitsSummary && erpId) {
+        const resolvedCvId = await resolveCvEnterpriseIdByErp({ erpId });
+        if (resolvedCvId) {
+          cvId = resolvedCvId;
+          unitsSummary = await getMasterCcSummaryCached(cvId, erpId);
         }
-        : null,
-    };
-  });
+      }
+
+      // 3) FALLBACK final: resumo do empreendimento completo
+      if (!unitsSummary && cvId) {
+        unitsSummary = await getUnitsSummaryCached(cvId);
+      }
+
+      return {
+        ...d,
+        cv_enterprise_id: cvId ?? null,
+        units_summary: unitsSummary
+          ? {
+              totalUnits: unitsSummary.totalUnits,
+              soldUnits: unitsSummary.soldUnitsStock ?? unitsSummary.soldUnits ?? 0,
+              soldUnitsStock: unitsSummary.soldUnitsStock ?? unitsSummary.soldUnits ?? 0,
+              reservedUnits: unitsSummary.reservedUnits,
+              blockedUnits: unitsSummary.blockedUnits,
+              availableUnits: unitsSummary.availableUnits,
+              availableInventory: unitsSummary.availableInventory,
+            }
+          : null,
+      };
+    })
+  );
+
+  return items;
 }
 
 /**
@@ -201,7 +263,8 @@ SELECT
   COALESCE(d.default_avg_price,0) AS default_avg_price,
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
-  d.total_units
+  d.total_units,
+  d.manual_city
 FROM pairs_in_view p
 LEFT JOIN sales_projection_enterprises d
   ON d.projection_id = :pid
@@ -256,7 +319,8 @@ SELECT
   COALESCE(d.default_avg_price,0) AS default_avg_price,
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
-  d.total_units
+  d.total_units,
+  d.manual_city
 FROM pairs p
 LEFT JOIN sales_projection_enterprises d
   ON d.projection_id = :pid
@@ -298,7 +362,8 @@ SELECT
   COALESCE(d.default_avg_price,0) AS default_avg_price,
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
-  d.total_units
+  d.total_units,
+  d.manual_city
 FROM pairs_in_view p
 LEFT JOIN sales_projection_enterprises d
   ON d.projection_id = :pid
@@ -362,7 +427,8 @@ SELECT
   COALESCE(d.default_avg_price,0) AS default_avg_price,
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
-  d.total_units
+  d.total_units,
+  d.manual_city
 FROM pairs p
 LEFT JOIN sales_projection_enterprises d
   ON d.projection_id = :pid
@@ -530,6 +596,7 @@ export async function cloneProjection(req, res) {
           default_marketing_pct: Number(d.default_marketing_pct || 0),
           default_commission_pct: Number(d.default_commission_pct || 0),
           total_units: d.total_units ?? null,
+          manual_city: d.manual_city ?? null,
         })),
         { transaction: trx }
       );
@@ -1062,6 +1129,10 @@ export async function upsertProjectionDefaults(req, res) {
         total_units = Math.max(0, parseInt(i.totalUnits, 10) || 0);
       }
 
+      const manual_city = i.city != null ? (String(i.city).trim() || null)
+        : i.manual_city != null ? (String(i.manual_city).trim() || null)
+        : null;
+
       dedup.set(key({ enterprise_key, alias_id }), {
         projection_id: id,
         enterprise_key,
@@ -1072,6 +1143,7 @@ export async function upsertProjectionDefaults(req, res) {
         default_marketing_pct: Number(i.default_marketing_pct ?? 0),
         default_commission_pct: Number(i.default_commission_pct ?? 0),
         total_units,
+        manual_city,
       });
     }
 
@@ -1086,6 +1158,7 @@ export async function upsertProjectionDefaults(req, res) {
         'default_marketing_pct',
         'default_commission_pct',
         'total_units',
+        'manual_city',
         'updated_at',
       ],
     });
