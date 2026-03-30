@@ -88,8 +88,8 @@ export async function syncObstitToLandValue({ log = console.log } = {}) {
     // Busca externa + parsing por fatias para não estourar memória/conexões
     const parsedMap = new Map();
 
-    for (let i = 0; i < numbers.length; i += 1000) {
-        const slice = numbers.slice(i, i + 1000);
+    for (let i = 0; i < numbers.length; i += 200) {
+        const slice = numbers.slice(i, i + 200);
         const fetched = await fetchObstitByNumbers(slice);
 
         for (const [num, texts] of fetched.entries()) {
