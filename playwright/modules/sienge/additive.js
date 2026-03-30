@@ -45,6 +45,39 @@ async function waitVisible(target, selector, timeout = 60000) {
 
 async function closeBlockingPopups(page) {
     await dismissCommonPopups(page, 3000).catch(() => {});
+
+    // ── MUI Dialog/Modal (MuiDialog-root intercepta pointer events) ────────
+    const muiSelectors = [
+        'div.MuiDialog-root',
+        'div.MuiModal-root:not([aria-hidden="true"])',
+    ];
+    for (const sel of muiSelectors) {
+        const dialog = page.locator(sel).first();
+        if (await dialog.count().catch(() => 0) === 0) continue;
+        if (!await dialog.isVisible().catch(() => false)) continue;
+
+        // Tenta fechar pelo botão interno (Fechar, Cancelar, X, Não)
+        const closeBtn = dialog.locator([
+            'button[aria-label*="lose"]',
+            'button[aria-label*="echar"]',
+            'button:has-text("Fechar")',
+            'button:has-text("Cancelar")',
+            'button:has-text("Não")',
+            '[class*="closeButton"]',
+            '[class*="close-button"]',
+        ].join(', ')).first();
+
+        if (await closeBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+            log("POPUP", "Fechando MuiDialog via botão interno...");
+            await closeBtn.click({ force: true, timeout: 1000 }).catch(() => {});
+        } else {
+            log("POPUP", "Fechando MuiDialog via Escape...");
+            await page.keyboard.press("Escape").catch(() => {});
+        }
+        await page.waitForTimeout(400);
+    }
+
+    // ── Overlays jQuery / Beamer ───────────────────────────────────────────
     const overlays = [
         ".beamerAnnouncementPopupContainer.beamerAnnouncementPopupActive",
         ".beamer_defaultBeamerSelector",
@@ -303,13 +336,13 @@ export async function createAdditive(page, params = {}) {
         await page.goto(CONTRACTS_PAGE_URL, { waitUntil: "domcontentloaded" });
         await waitForPageSettled(page);
         await closeBlockingPopups(page);
+        await page.waitForTimeout(1200); // aguarda modais que carregam após networkidle
+        await closeBlockingPopups(page); // segunda passagem
 
         // Preencher campo Documento (MUI Autocomplete)
-        // O Autocomplete demora alguns ms para filtrar — aguarda a opção exata aparecer
         log("ADDITIVE", `Preenchendo Documento: ${documentType}`);
+        await safeClick(page, page, '.MuiAutocomplete-root[name="cdDocumento"] input[type="text"]', { timeout: 30000 });
         const docInput = page.locator('.MuiAutocomplete-root[name="cdDocumento"] input[type="text"]');
-        await docInput.waitFor({ state: "visible", timeout: 30000 });
-        await docInput.click();
         await docInput.fill("");
         await docInput.type(documentType, { delay: 1200 }); // digita devagar para o filtro reagir
 

@@ -5,9 +5,9 @@ import crypto from 'crypto';
 import db from '../models/sequelize/index.js';
 
 const GCS_BUCKET = process.env.GCS_BUCKET || 'bucket-menin';
-const GCS_FOLDER = process.env.GCS_FOLDER || 'encaminhados';
 
-// Sheets a extrair e seus nomes de saída
+const VALID_FOLDERS = ['encaminhados', 'test-robot'];
+
 const SHEET_MAP = [
     { sheetName: 'Engenharia',           outputName: 'Engenharia.csv' },
     { sheetName: 'Area Contruida Total', outputName: 'Area_construida_total.csv' },
@@ -24,7 +24,8 @@ try {
     } else if (keyFile) {
         storage = new Storage({ keyFilename: keyFile });
     } else {
-        storage = new Storage(); // Application Default Credentials
+        console.warn('[BucketUpload] GCS_CREDENTIALS_JSON e GCS_KEY_FILE não configurados. Upload desativado.');
+        // Não instancia Storage sem credenciais — evita tentativa de ADC que trava em ambientes não-GCP
     }
 } catch (e) {
     console.error('[BucketUpload] GCS init error:', e.message);
@@ -40,12 +41,13 @@ setInterval(() => {
 }, 60_000);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
 function sanitize(value) {
     if (value === null || value === undefined) return '';
     return String(value)
         .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')   // remove diacritics
-        .replace(/[^\x00-\x7F]/g, '')      // remove non-ASCII
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\x00-\x7F]/g, '')
         .trim();
 }
 
@@ -63,9 +65,8 @@ function sheetToCSV(sheet) {
         .join('\n');
 }
 
-function sheetToPreviewRows(sheet, maxRows = 20) {
+function sheetToPreviewRows(sheet) {
     return XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' })
-        .slice(0, maxRows)
         .map(row => row.map(sanitize));
 }
 
@@ -79,6 +80,7 @@ function countDataRows(sheet) {
 /**
  * POST /api/bucket-upload/preview
  * Recebe o arquivo XLSX, extrai as abas, gera preview e armazena CSVs em memória.
+ * Os nomes dos arquivos já seguem o padrão {dataType}_{yyyymmdd}_{hhmmss}.csv.
  */
 export async function previewUpload(req, res) {
     try {
@@ -87,7 +89,6 @@ export async function previewUpload(req, res) {
         const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
         const available = workbook.SheetNames;
 
-        // Valida que todas as abas existem
         const missing = SHEET_MAP.filter(m => !workbook.Sheets[m.sheetName]);
         if (missing.length > 0) {
             return res.status(400).json({
@@ -95,7 +96,6 @@ export async function previewUpload(req, res) {
             });
         }
 
-        // Processa cada aba
         const files = SHEET_MAP.map(({ sheetName, outputName }) => {
             const sheet = workbook.Sheets[sheetName];
             return {
@@ -116,9 +116,9 @@ export async function previewUpload(req, res) {
         return res.json({
             tempId,
             files: files.map(f => ({
-                name: f.name,
+                name:        f.name,
                 previewRows: f.previewRows,
-                totalRows: f.totalRows,
+                totalRows:   f.totalRows,
             })),
         });
     } catch (err) {
@@ -129,12 +129,19 @@ export async function previewUpload(req, res) {
 
 /**
  * POST /api/bucket-upload/confirm
- * Confirma o envio dos CSVs gerados no preview para o GCS.
+ * Confirma o envio dos CSVs para o GCS.
+ * Body: { tempId, folder } — folder: 'encaminhados' (padrão) | 'test-robot'
  */
 export async function confirmUpload(req, res) {
-    const { tempId } = req.body;
+    const { tempId, folder = 'encaminhados' } = req.body;
 
     if (!tempId) return res.status(400).json({ message: 'tempId é obrigatório.' });
+
+    if (!VALID_FOLDERS.includes(folder)) {
+        return res.status(400).json({
+            message: `Pasta inválida: "${folder}". Use "encaminhados" ou "test-robot".`,
+        });
+    }
 
     const temp = tempStore.get(tempId);
     if (!temp) return res.status(400).json({ message: 'Preview expirado ou inválido. Recarregue o arquivo.' });
@@ -146,15 +153,15 @@ export async function confirmUpload(req, res) {
     }
 
     try {
-        const bucket = storage.bucket(GCS_BUCKET);
+        const bucket   = storage.bucket(GCS_BUCKET);
         const uploaded = [];
 
         for (const file of temp.files) {
-            const destPath = `${GCS_FOLDER}/${file.name}`;
+            const destPath = `${folder}/${file.name}`;
             await bucket.file(destPath).save(file.csv, {
                 contentType: 'text/csv; charset=utf-8',
-                resumable: false,
-                metadata: { cacheControl: 'no-cache' },
+                resumable:   false,
+                metadata:    { cacheControl: 'no-cache' },
             });
             uploaded.push({ name: file.name, path: destPath });
         }
@@ -162,19 +169,21 @@ export async function confirmUpload(req, res) {
         tempStore.delete(tempId);
 
         await db.BucketUploadHistory.create({
-            userId: req.user?.id ?? null,
-            userName: req.user?.username ?? req.user?.name ?? 'Desconhecido',
-            userEmail: req.user?.email ?? null,
-            sourceFile: temp.originalFileName,
-            status: 'success',
+            userId:        req.user?.id ?? null,
+            userName:      req.user?.username ?? req.user?.name ?? 'Desconhecido',
+            userEmail:     req.user?.email ?? null,
+            sourceFile:    temp.originalFileName,
+            folder,
+            status:        'success',
             filesUploaded: uploaded.map(u => u.name),
-            gcsPaths: uploaded.map(u => u.path),
-            errorMessage: null,
+            gcsPaths:      uploaded.map(u => u.path),
+            errorMessage:  null,
         });
 
         return res.json({
             success: true,
-            message: 'Arquivos enviados com sucesso ao bucket!',
+            message: `Arquivos enviados com sucesso para ${GCS_BUCKET}/${folder}/`,
+            folder,
             files: uploaded,
         });
     } catch (err) {
@@ -182,14 +191,15 @@ export async function confirmUpload(req, res) {
 
         try {
             await db.BucketUploadHistory.create({
-                userId: req.user?.id ?? null,
-                userName: req.user?.username ?? req.user?.name ?? 'Desconhecido',
-                userEmail: req.user?.email ?? null,
-                sourceFile: temp.originalFileName,
-                status: 'error',
+                userId:        req.user?.id ?? null,
+                userName:      req.user?.username ?? req.user?.name ?? 'Desconhecido',
+                userEmail:     req.user?.email ?? null,
+                sourceFile:    temp.originalFileName,
+                folder,
+                status:        'error',
                 filesUploaded: [],
-                gcsPaths: [],
-                errorMessage: err.message,
+                gcsPaths:      [],
+                errorMessage:  err.message,
             });
         } catch { /* ignorar falha de log */ }
 
@@ -199,7 +209,6 @@ export async function confirmUpload(req, res) {
 
 /**
  * GET /api/bucket-upload/history
- * Retorna o histórico de envios.
  */
 export async function getHistory(req, res) {
     try {
