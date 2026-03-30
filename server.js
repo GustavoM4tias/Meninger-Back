@@ -20,6 +20,8 @@ import expensesRoutes from './routes/expensesRoutes.js';
 import viabilityRoutes from './routes/viabilityRoutes.js';
 import academyRoutes from './routes/academyRoutes.js'; 
 import uploadRoutes from './routes/uploadRoutes.js';
+import bucketUploadRoutes from './routes/bucketUploadRoutes.js';
+import permissionRoutes from './routes/permissionRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -66,6 +68,8 @@ app.use('/api/expenses', expensesRoutes);
 app.use('/api/viability', viabilityRoutes);
 app.use('/api/academy', academyRoutes); 
 app.use('/api/uploads', uploadRoutes);
+app.use('/api/bucket-upload', bucketUploadRoutes);
+app.use('/api/permissions', permissionRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -100,6 +104,8 @@ async function bootServer() {
     ['SiengeBill', db.SiengeBill],
     ['SiengeBillInstallment', db.SiengeBillInstallment],
     ['Lead', db.Lead],                                    // motivo_cancelamento + submotivo_cancelamento
+    ['BucketUploadHistory', db.BucketUploadHistory],
+    ['UserPermission', db.UserPermission],
   ]) {
     try {
       await model.sync({ alter: true });
