@@ -17,6 +17,11 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.STRING,
             allowNull: true,
         },
+        folder: {
+            type: DataTypes.STRING(50),
+            allowNull: true,
+            defaultValue: 'encaminhados',
+        },
         status: {
             type: DataTypes.ENUM('success', 'error'),
             allowNull: false,

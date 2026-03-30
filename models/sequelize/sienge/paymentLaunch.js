@@ -223,6 +223,14 @@ export default (sequelize, DataTypes) => {
                 comment: "Erro do playwright ao tentar criar medição",
             },
 
+            // ── Contrato criado pela automação (flag imutável) ────────────────
+            siengeContractCreatedByAutomation: {
+                field: "sienge_contract_created_by_automation",
+                type: DataTypes.BOOLEAN,
+                defaultValue: false,
+                comment: "true quando stepCreateContract criou o contrato no Sienge. Pode ser definido manualmente para contratos históricos criados antes do rastreamento.",
+            },
+
             // ── Credenciais Sienge inválidas ──────────────────────────────────
             siengeCredentialsInvalid: {
                 field: "sienge_credentials_invalid",

@@ -34,6 +34,7 @@ import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js';
 import creditorPollingScheduler from './scheduler/creditorPollingScheduler.js';
 import contractApprovalScheduler from './scheduler/contractApprovalScheduler.js';
 import leadCancelReasonScheduler from './scheduler/leadCancelReasonScheduler.js';
+import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.js';
 
 const app = express();
 
@@ -126,6 +127,7 @@ async function bootServer() {
   if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') enterpriseCvScheduler.start();
   creditorPollingScheduler.start();
   contractApprovalScheduler.start();
+  supabaseKeepAliveScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
 
   app.listen(PORT, () => {

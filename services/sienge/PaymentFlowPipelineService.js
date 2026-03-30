@@ -360,6 +360,7 @@ export async function stepCreateContract(launchId, userId = null) {
         await patch(launch, {
             pipelineStage: 'contract_created',
             siengeContractStatus: 'created',
+            siengeContractCreatedByAutomation: true,   // flag permanente — nunca sobrescrito
             siengeDocumentId: result.documentId || documentType,
             siengeContractNumber: result.contractNumber || null,
             siengeContractApproval: 'PENDING',
@@ -616,11 +617,55 @@ export async function runFullPipeline(launchId, userId = null) {
         return { stage: 'awaiting_authorization', ...createResult };
     }
 
-    // Contrato existente: cria aditivo → aguarda autorização → scheduler dispara medição
+    // Contrato existente: valida se foi criado pela automação antes de criar aditivo
+    const launch = await Model().findByPk(launchId);
+
+    // 1️⃣ O próprio lançamento teve o contrato criado pela automação (flag imutável)?
+    //    Cobre: re-execuções do mesmo lançamento + override manual de contratos históricos.
+    // 2️⃣ Fallback: outro lançamento no banco criou o mesmo contrato anteriormente.
+    const { Op } = db.Sequelize;
+    const AUTOMATION_STAGES = [
+        'contract_created',
+        'awaiting_authorization',
+        'additive_created',
+        'additive_error',
+        'measurement_created',
+        'awaiting_measurement_authorization',
+        'ready',
+    ];
+
+    const selfCreated = launch.siengeContractCreatedByAutomation === true;
+    const peerCreated = selfCreated ? null : await Model().findOne({
+        where: {
+            id: { [Op.ne]: launch.id },
+            siengeDocumentId: launch.siengeDocumentId,
+            siengeContractNumber: launch.siengeContractNumber,
+            [Op.or]: [
+                { siengeContractCreatedByAutomation: true },
+                { siengeContractStatus: 'created' },
+                { pipelineStage: { [Op.in]: AUTOMATION_STAGES } },
+            ],
+        },
+    });
+
+    const automationEvidence = selfCreated || peerCreated;
+
+    if (!automationEvidence) {
+        // Contrato pré-existente (criado manualmente) — não cria aditivo automaticamente
+        const msg = `Contrato ${launch.siengeDocumentId}/${launch.siengeContractNumber} encontrado no Sienge mas não foi criado pela automação. Requer verificação manual antes de prosseguir.`;
+        await patch(launch, {
+            pipelineStage: 'contract_manual_block',
+            status: 'erro',
+            siengeContractError: msg,
+        });
+        console.warn(`⚠️  [Pipeline] #${launchId}: ${msg}`);
+        return { stage: 'contract_manual_block', blocked: true, error: msg };
+    }
+
+    // Contrato criado pela automação → cria aditivo → aguarda autorização → scheduler dispara medição
     const additiveResult = await stepCreateAdditive(launchId, userId);
     if (!additiveResult.success) return { stage: 'additive_error', ...additiveResult };
 
-    const launch = await Model().findByPk(launchId);
     await patch(launch, { pipelineStage: 'awaiting_authorization', status: 'aditivo' });
     return { stage: 'awaiting_authorization', ...additiveResult };
 }

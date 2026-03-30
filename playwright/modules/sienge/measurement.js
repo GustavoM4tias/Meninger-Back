@@ -44,6 +44,39 @@ async function waitVisible(target, selector, timeout = 60000) {
 
 async function closeBlockingPopups(page) {
     await dismissCommonPopups(page, 3000).catch(() => {});
+
+    // ── MUI Dialog/Modal (MuiDialog-root intercepta pointer events) ────────
+    const muiSelectors = [
+        'div.MuiDialog-root',
+        'div.MuiModal-root:not([aria-hidden="true"])',
+    ];
+    for (const sel of muiSelectors) {
+        const dialog = page.locator(sel).first();
+        if (await dialog.count().catch(() => 0) === 0) continue;
+        if (!await dialog.isVisible().catch(() => false)) continue;
+
+        // Tenta fechar pelo botão interno (X, Fechar, Cancelar)
+        const closeBtn = dialog.locator([
+            'button[aria-label*="lose"]',
+            'button[aria-label*="echar"]',
+            'button:has-text("Fechar")',
+            'button:has-text("Cancelar")',
+            'button:has-text("Não")',
+            '[class*="closeButton"]',
+            '[class*="close-button"]',
+        ].join(', ')).first();
+
+        if (await closeBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+            log("POPUP", "Fechando MuiDialog via botão interno...");
+            await closeBtn.click({ force: true, timeout: 1000 }).catch(() => {});
+        } else {
+            log("POPUP", "Fechando MuiDialog via Escape...");
+            await page.keyboard.press("Escape").catch(() => {});
+        }
+        await page.waitForTimeout(400);
+    }
+
+    // ── Overlays jQuery / Beamer ───────────────────────────────────────────
     const overlays = [
         ".beamerAnnouncementPopupContainer.beamerAnnouncementPopupActive",
         ".beamer_defaultBeamerSelector",
@@ -130,8 +163,9 @@ async function safeFillMoney2(page, target, selector, value) {
  * Preenche um MUI Autocomplete, aguarda as opções e seleciona a melhor correspondência.
  * matchText é uma string ou RegExp usada para filtrar as opções.
  */
-async function fillAutocomplete(page, fieldName, searchText, matchText) {
-    const input = page.locator(`[name="${fieldName}"] input[type="text"]`);
+async function fillAutocomplete(page, fieldName, searchText, matchText, container = null) {
+    const root = container ?? page;
+    const input = root.locator(`[name="${fieldName}"] input[type="text"]`);
     await input.waitFor({ state: "visible", timeout: 20000 });
     await input.click();
     await input.fill("");
@@ -165,7 +199,7 @@ async function fillAutocomplete(page, fieldName, searchText, matchText) {
         await input.press("Tab");
     }
 
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(400).catch(() => {}); // page pode navegar após seleção
     return selected;
 }
 
@@ -204,26 +238,47 @@ export async function createMeasurement(page, params = {}) {
     await page.goto(MEASUREMENTS_PAGE_URL, { waitUntil: "domcontentloaded" });
     await waitForPageSettled(page);
     await closeBlockingPopups(page);
+    await page.waitForTimeout(1200); // aguarda modais que carregam após networkidle
+    await closeBlockingPopups(page); // segunda passagem
 
     // ── FASE 2: Clicar em "Nova Medição" ─────────────────────────────────────
+    // ATENÇÃO: NÃO usar safeClick aqui — ele chama waitUiStability após o clique,
+    // que fecha o próprio modal de criação achando que é um popup bloqueante.
     log("MEASUREMENT", "Clicando em Nova Medição...");
-    const novaBtn = page.locator('button:has-text("Nova Medição")');
-    await novaBtn.waitFor({ state: "visible", timeout: 30000 });
-    await novaBtn.click();
+    {
+        const novaBtn = page.locator('button:has-text("Nova Medição")');
+        await novaBtn.waitFor({ state: "visible", timeout: 30000 });
+        await novaBtn.scrollIntoViewIfNeeded().catch(() => {});
+
+        // Tenta clicar com retry se MuiDialog interceptar — mas sem fechar popups APÓS o clique
+        let clicked = false;
+        for (let attempt = 0; attempt < 4 && !clicked; attempt++) {
+            await closeBlockingPopups(page); // fecha qualquer bloqueante ANTES
+            try {
+                await novaBtn.click({ timeout: 5000 });
+                clicked = true;
+            } catch (err) {
+                if (!isPointerInterceptError(err)) throw err;
+                log("MEASUREMENT", `Tentativa ${attempt + 1}: bloqueio detectado, fechando popup e retentando...`);
+                await page.waitForTimeout(600);
+            }
+        }
+        if (!clicked) throw new Error("Não foi possível clicar em 'Nova Medição' após 4 tentativas.");
+    }
 
     const modalDialog = page.locator('[role="dialog"]');
     await modalDialog.waitFor({ state: "visible", timeout: 15000 });
 
     // ── FASE 3: Preencher modal ───────────────────────────────────────────────
-    // 3a. Contrato
-    log("MEASUREMENT", `Preenchendo Contrato: ${contractNumber}`);
-    // Tenta combinar pelo número do contrato e tipo de documento
-    const contratoPattern = new RegExp(`${contractNumber}`);
-    await fillAutocomplete(page, "contrato", contractNumber, contratoPattern);
+    // 3a. Contrato — busca por "PREM 1" (documentType + contractNumber) para não ambiguidade
+    log("MEASUREMENT", `Preenchendo Contrato: ${documentType}/${contractNumber}`);
+    const contratoSearch = `${documentType}/${contractNumber}`;
+    const contratoPattern = new RegExp(`${documentType}.*${contractNumber}`, "i");
+    await fillAutocomplete(page, "contrato", contratoSearch, contratoPattern, modalDialog);
 
-    // 3b. Obra — preenchida após contrato para que filtros inteligentes já estejam ativos
+    // 3b. Obra — escopa ao modalDialog também
     log("MEASUREMENT", `Preenchendo Obra: ${obraCod}`);
-    await fillAutocomplete(page, "codigoObra", String(obraCod), null);
+    await fillAutocomplete(page, "codigoObra", String(obraCod), null, modalDialog);
 
     // 3c. Data de vencimento
     if (dataVencimento) {
