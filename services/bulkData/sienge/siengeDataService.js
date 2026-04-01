@@ -35,6 +35,7 @@ export default class SiengeService {
         }
 
         console.log(`🎉 Carga FULL concluída: ${total} contratos em ${((Date.now() - startTs) / 1000).toFixed(1)}s`);
+        await this.deduplicateContracts();
     }
 
     async loadDelta(lastRunAt) {
@@ -58,6 +59,52 @@ export default class SiengeService {
         const uniq = new Map();
         [...created, ...modified, ...issued, ...cancelled].forEach(r => uniq.set(r.id, r));
         await this.upsertBatch([...uniq.values()]);
+        await this.deduplicateContracts();
+    }
+
+    /**
+     * Remove contratos órfãos duplicados do banco local.
+     *
+     * Contexto: o Sienge pode criar um novo ID de contrato para o mesmo número de contrato
+     * dentro da mesma empresa quando um empreendimento é migrado/copiado entre módulos
+     * (ex: MOD. III → MOD. IV). O contrato antigo permanece "Emitido" no Sienge e o sync
+     * espelha ambos fielmente — gerando duplicatas locais.
+     *
+     * Regra: dentro da mesma empresa (company_id), o número de contrato (number) deve ser
+     * único entre os registros não-cancelados. Quando há mais de um, mantemos o mais
+     * recentemente atualizado (updated_at DESC) e deletamos os demais.
+     */
+    async deduplicateContracts() {
+        try {
+            const [deleted] = await db.sequelize.query(`
+                WITH ranked AS (
+                    SELECT id,
+                           number,
+                           company_id,
+                           enterprise_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY company_id, number
+                               ORDER BY updated_at DESC, id DESC
+                           ) AS rn
+                    FROM contracts
+                    WHERE situation != 'Cancelado'
+                )
+                DELETE FROM contracts
+                WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+                RETURNING id, number, company_id, enterprise_id
+            `);
+
+            if (deleted.length > 0) {
+                console.log(
+                    `🧹 [Sync] Deduplicação removeu ${deleted.length} contrato(s) órfão(s): ` +
+                    deleted.map(d => `id=${d.id} n°${d.number} emp=${d.enterprise_id}`).join(' | ')
+                );
+            }
+            return deleted.length;
+        } catch (err) {
+            console.warn(`⚠️  [Sync] deduplicateContracts falhou (não crítico): ${err.message}`);
+            return 0;
+        }
     }
 
     async upsertBatch(batch) {
