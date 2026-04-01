@@ -102,6 +102,7 @@ async function bootServer() {
   for (const [name, model] of [
     ['User', db.User],                                    // microsoft_id + outros campos novos
     ['PaymentLaunch', db.PaymentLaunch],
+    ['LaunchTypeConfig', db.LaunchTypeConfig],            // departamento_id + novos campos
     ['SiengeBill', db.SiengeBill],
     ['SiengeBillInstallment', db.SiengeBillInstallment],
     ['Lead', db.Lead],                                    // motivo_cancelamento + submotivo_cancelamento

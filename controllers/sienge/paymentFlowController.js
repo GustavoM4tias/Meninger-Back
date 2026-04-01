@@ -9,6 +9,12 @@ import {
     stepCreateContract,
     stepValidateItems,
     pollContractStatus,
+    pollMeasurementStatus,
+    pollTituloStatus,
+    stepCreateTitulo,
+    stepRegisterBoleto,
+    stepUpdateBoleto,
+    continueExistingContractPipeline,
 } from '../../services/sienge/PaymentFlowPipelineService.js';
 import { sendEmail } from '../../email/email.service.js';
 import { generateRidDocx } from '../../services/sienge/RidDocumentService.js';
@@ -316,6 +322,59 @@ export async function pollContract(req, res, next) {
         return res.json(result);
     } catch (err) { next(err); }
 }
+export async function createTituloController(req, res, next) {
+    try {
+        const u = actor(req);
+        return res.json(await stepCreateTitulo(Number(req.params.id), u.id));
+    } catch (err) { next(err); }
+}
+export async function registerBoletoController(req, res, next) {
+    try {
+        // Permite sobrescrever siengeTituloNumber via body (para títulos criados manualmente)
+        const id = Number(req.params.id);
+        const { tituloNumber } = req.body || {};
+        if (tituloNumber) {
+            const launch = await db.PaymentLaunch.findByPk(id, { attributes: ['id'] });
+            if (launch) await launch.update({ siengeTituloNumber: Number(tituloNumber) });
+        }
+        return res.json(await stepRegisterBoleto(id));
+    } catch (err) { next(err); }
+}
+
+export async function pollNowController(req, res, next) {
+    try {
+        const id = Number(req.params.id);
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+
+        const stage = launch.pipelineStage;
+        const contractStages  = ['awaiting_authorization', 'contract_found', 'contract_created', 'additive_created'];
+        const measureStages   = ['awaiting_measurement_authorization', 'measurement_created'];
+        const tituloStages    = ['awaiting_titulo_authorization', 'titulo_created'];
+
+        let result = null;
+        if (contractStages.includes(stage))  result = await pollContractStatus(id);
+        else if (measureStages.includes(stage)) result = await pollMeasurementStatus(id);
+        else if (tituloStages.includes(stage))  result = await pollTituloStatus(id);
+
+        return res.json({ polled: stage, result: result ? 'ok' : 'nenhum' });
+    } catch (err) { next(err); }
+}
+
+export async function updateBoletoController(req, res, next) {
+    try {
+        const id = Number(req.params.id);
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+
+        const { boletoUrl, boletoPath, boletoFilename, boletoBarcode, boletoDueDate, boletoAmount } = req.body;
+        if (!boletoBarcode) return res.status(422).json({ error: 'Código de barras é obrigatório.' });
+        if (!boletoUrl)     return res.status(422).json({ error: 'URL do boleto é obrigatória.' });
+
+        const result = await stepUpdateBoleto(id, { boletoUrl, boletoPath, boletoFilename, boletoBarcode, boletoDueDate, boletoAmount });
+        return res.json(result);
+    } catch (err) { next(err); }
+}
 
 // ── STATUS TRANSITIONS ────────────────────────────────────────────────────────
 
@@ -529,4 +588,23 @@ export async function sendRidEmail(req, res, next) {
             sentAt: launch.ridEmailSentAt,
         });
     } catch (err) { next(err); }
+}
+
+export async function continueExistingContract(req, res) {
+    try {
+        const { id } = req.params;
+        const userId = req.user?.id || null;
+
+        const result = await continueExistingContractPipeline(id, userId);
+
+        return res.json({
+            success: true,
+            ...result,
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            error: error.message,
+        });
+    }
 }

@@ -225,6 +225,7 @@ export class SiengeContractService {
 
     /**
      * Busca dados de uma medição pelo número (para polling de autorização).
+     * Retorna o objeto direto com authorized: boolean e statusApproval: "APPROVED"|"DISAPPROVED"|null.
      */
     static async getMeasurement(documentId, contractNumber, buildingId, measurementNumber) {
         if (!documentId || !contractNumber || !buildingId || !measurementNumber) return null;
@@ -237,7 +238,7 @@ export class SiengeContractService {
                     measurementNumber: Number(measurementNumber),
                 },
             });
-            return data;
+            return data ?? null;
         } catch (err) {
             if (err.response?.status === 404) return null;
             throw err;
@@ -284,5 +285,37 @@ export class SiengeContractService {
             }
             return { ok: false, items: [], balanceAvailable: 0, error: err.message };
         }
+    }
+
+    /**
+     * Anexa um arquivo a uma medição no Sienge.
+     * POST /supply-contracts/measurements/attachments
+     *
+     * @param {object} opts
+     * @param {string}  opts.documentId       - Sigla do documento (ex: "PREM")
+     * @param {string}  opts.contractNumber   - Número do contrato (ex: "1")
+     * @param {number}  opts.buildingId       - Id da obra
+     * @param {number}  opts.measurementNumber- Número da medição
+     * @param {string}  opts.description      - Descrição do anexo (máx 500 chars)
+     * @param {Buffer}  opts.fileBuffer       - Conteúdo do arquivo
+     * @param {string}  opts.filename         - Nome do arquivo (máx 100 chars)
+     * @param {string}  opts.mimeType         - MIME type do arquivo
+     */
+    static async attachMeasurementFile({ documentId, contractNumber, buildingId, measurementNumber, description, fileBuffer, filename, mimeType }) {
+        const form = new FormData();
+        const blob = new Blob([fileBuffer], { type: mimeType || 'application/octet-stream' });
+        form.append('file', blob, String(filename).slice(0, 100));
+
+        await apiSienge.post('/v1/supply-contracts/measurements/attachments', form, {
+            params: {
+                documentId,
+                contractNumber,
+                buildingId: Number(buildingId),
+                measurementNumber: Number(measurementNumber),
+                description: String(description).slice(0, 500),
+            },
+            headers: { 'Content-Type': 'multipart/form-data' },
+            timeout: 60000,
+        });
     }
 }

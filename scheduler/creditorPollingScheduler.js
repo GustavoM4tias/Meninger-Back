@@ -5,12 +5,7 @@
 
 import cron from 'node-cron';
 import db from '../models/sequelize/index.js';
-import {
-    stepFindCreditor,
-    stepFindContract,
-    stepCreateContract,
-    stepValidateItems,
-} from '../services/sienge/PaymentFlowPipelineService.js';
+import { runFullPipeline } from '../services/sienge/PaymentFlowPipelineService.js';
 
 const CRON_EXP = process.env.CREDITOR_POLLING_CRON || '*/20 * * * *'; // a cada 20 min
 
@@ -35,30 +30,16 @@ async function checkPendingCreditors() {
     for (const launch of pending) {
         try {
             console.log(`🔍 [CreditorPolling] Verificando lançamento #${launch.id} (${launch.providerCnpj})`);
-            const creditorResult = await stepFindCreditor(launch.id);
 
-            if (!creditorResult.found) {
+            // runFullPipeline reusa toda a orquestração:
+            // credor → contrato/aditivo → awaiting_authorization → (scheduler dispara medição)
+            const result = await runFullPipeline(launch.id, launch.createdBy);
+
+            if (result.stage === 'creditor_not_found') {
                 console.log(`⏳ [CreditorPolling] #${launch.id}: fornecedor ainda não cadastrado.`);
-                continue;
+            } else {
+                console.log(`✅ [CreditorPolling] #${launch.id}: esteira avançou para "${result.stage}".`);
             }
-
-            console.log(`✅ [CreditorPolling] #${launch.id}: fornecedor encontrado! Continuando esteira...`);
-
-            // Tenta buscar contrato existente
-            const contractResult = await stepFindContract(launch.id);
-
-            if (!contractResult.found) {
-                // Cria contrato via Playwright
-                const createResult = await stepCreateContract(launch.id, launch.createdBy);
-                if (!createResult.success) {
-                    console.error(`❌ [CreditorPolling] #${launch.id}: falha ao criar contrato: ${createResult.error}`);
-                    continue;
-                }
-            }
-
-            // Valida itens/saldo
-            await stepValidateItems(launch.id);
-            console.log(`✅ [CreditorPolling] #${launch.id}: esteira concluída.`);
         } catch (err) {
             console.error(`❌ [CreditorPolling] Erro no lançamento #${launch.id}:`, err.message);
         }
