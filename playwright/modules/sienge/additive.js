@@ -300,6 +300,7 @@ export async function createAdditive(page, params = {}) {
         documentType = "PCEF",
         contractNumber = "",
         obraCod = "",
+        unidade = "1",           // Unidade construtiva (DEFAULT_BUILDING_UNIT)
         descricao = "ADITIVO AUTOMÁTICO PAYMENT FLOW",
         dataAditivo = getTodayFormatted(),
         itemOrcamentoCode = null,
@@ -489,10 +490,50 @@ export async function createAdditive(page, params = {}) {
         await closeBlockingPopups(page);
         frame = await getMainFrame(page);
 
-        // Aguarda os itens da planilha carregarem completamente após o AJAX do save
-        log("ADDITIVE", "Aguardando itens da unidade/obra após salvamento...");
-        await frame.waitForSelector('tr#linhaUnidObContrato_0', { state: 'visible', timeout: 60000 });
-        await frame.waitForTimeout(1500);
+        // Clicar em "Adicionar" para abrir o formulário de unidade construtiva
+        log("ADDITIVE", "Clicando em Adicionar para abrir formulário de unidade/obra...");
+        const adicionarBtn = frame.locator('#btNovaLinhaUnidObContrato');
+        await adicionarBtn.waitFor({ state: 'visible', timeout: 30000 });
+        await adicionarBtn.scrollIntoViewIfNeeded().catch(() => {});
+        await adicionarBtn.click();
+        await frame.waitForTimeout(800);
+
+        // Preencher "Unidade Construtiva" no formulário que aparece após Adicionar
+        log("ADDITIVE", `Preenchendo Unidade Construtiva: ${unidade}`);
+        const unidInput = frame.locator('#unidObContratoPK\\.cdUnidObraContrato');
+        await unidInput.waitFor({ state: 'visible', timeout: 15000 });
+        await unidInput.fill(String(unidade));
+        await unidInput.press('Tab');
+        await frame.waitForTimeout(800); // aguarda AJAX de validação da unidade
+
+        // Confirmar a unidade — insere a linha na grid
+        log("ADDITIVE", "Confirmando unidade construtiva...");
+        const confirmarBtn = frame.locator('#UnidObContratoFormConfirmar');
+        await confirmarBtn.waitFor({ state: 'visible', timeout: 10000 });
+        await confirmarBtn.click();
+
+        // Aguarda a linha da grid aparecer após confirmar
+        log("ADDITIVE", "Aguardando linha de unidade/obra...");
+        await frame.waitForSelector('tr#linhaUnidObContrato_0', { state: 'visible', timeout: 30000 });
+        await frame.waitForTimeout(500);
+
+        // Salvar o aditivo com a unidade construtiva preenchida
+        // (necessário antes de abrir a planilha — Sienge exige salvar primeiro)
+        log("ADDITIVE", "Salvando aditivo com unidade construtiva...");
+        const salvarBtn = frame.locator('#botaoSubmit');
+        await salvarBtn.waitFor({ state: 'visible', timeout: 15000 });
+        await salvarBtn.click();
+        await waitForPageSettled(page);
+        await closeBlockingPopups(page);
+        frame = await getMainFrame(page);
+
+        // Aguarda a linha reaparecer com onclick populado após o save
+        await frame.waitForSelector('tr#linhaUnidObContrato_0', { state: 'visible', timeout: 30000 });
+        await frame.waitForFunction(() => {
+            const img = document.querySelector('tr#linhaUnidObContrato_0 img[alt="Editar planilha"]');
+            return img && img.getAttribute('onclick') && !img.getAttribute('onclick').includes("'','',''");
+        }, { timeout: 15000 }).catch(() => {});
+        await frame.waitForTimeout(800);
 
         // ── FASE 4: Abrir planilha ────────────────────────────────────────────────
         log("ADDITIVE", "Abrindo planilha...");
@@ -618,18 +659,61 @@ export async function createAdditive(page, params = {}) {
         const itensAditivoLink = context.locator('a:has-text("Itens do Aditivo")');
         await itensAditivoLink.waitFor({ state: "visible", timeout: 30000 });
         await itensAditivoLink.click();
+
+        // Espera o context (popup ou frame) estabilizar após a navegação
+        if ("waitForLoadState" in context) {
+            await context.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
+            await context.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+        }
         await waitForPageSettled(page);
         await closeBlockingPopups(page);
 
-        // Em aditivos, o item 0 é sempre o item base/pai do orçamento.
-        // O item recém criado fica sempre no índice 1.
-        const targetRowIndex = 1;
-        log("ADDITIVE", `Abrindo edição do item ${targetRowIndex}...`);
-        await safeClick(
-            page,
-            context,
-            `img[id="row[${targetRowIndex}].editar_${targetRowIndex}"]`
-        );
+        // Encontra o índice exato do item recém-criado pelo código do item de orçamento
+        // (garante que não edita itens anteriores do mesmo contrato)
+        log("ADDITIVE", `Localizando item do aditivo (código: ${itemOrcamentoCode || itemOrcamento})...`);
+        await context.waitForSelector('tr[id^="linhaRow_"]:not([id*="-1"])', { state: "visible", timeout: 30000 });
+
+        const targetRowIndex = await context.evaluate(({ code, name }) => {
+            const rows = document.querySelectorAll('tr[id^="linhaRow_"]:not([id*="-1"])');
+            for (const row of rows) {
+                const flAditado = row.querySelector('input[id*=".flAditado_"]:checked');
+                if (!flAditado) continue;
+
+                // Verifica se o código do item bate (coluna serviceCode)
+                const tds = row.querySelectorAll('td');
+                const codeSpan = tds[3]?.querySelector('span'); // col índice 3 = serviceCode
+                const rowCode = codeSpan?.innerText?.trim() || '';
+
+                if (code && rowCode === String(code)) {
+                    const m = row.id.match(/linhaRow_(\d+)/);
+                    return m ? Number(m[1]) : 0;
+                }
+                if (name && row.innerText.toLowerCase().includes(name.toLowerCase())) {
+                    const m = row.id.match(/linhaRow_(\d+)/);
+                    return m ? Number(m[1]) : 0;
+                }
+            }
+            // Fallback: último row com flAditado checked (item mais recente)
+            const allChecked = [...document.querySelectorAll('input[id*=".flAditado_"]:checked')];
+            if (allChecked.length) {
+                const lastId = allChecked[allChecked.length - 1].id;
+                const m = lastId.match(/row\[(\d+)\]/);
+                return m ? Number(m[1]) : 0;
+            }
+            return 0;
+        }, { code: itemOrcamentoCode ? String(itemOrcamentoCode) : null, name: itemOrcamento || null })
+        .catch(() => 0);
+
+        log("ADDITIVE", `Abrindo edição do item ${targetRowIndex} (código: ${itemOrcamentoCode})...`);
+        const editItemBtn = context.locator(`img[id="row[${targetRowIndex}].editar_${targetRowIndex}"]`);
+        await editItemBtn.waitFor({ state: "visible", timeout: 15000 });
+        await editItemBtn.scrollIntoViewIfNeeded().catch(() => {});
+        await editItemBtn.click();
+
+        // Espera o context estabilizar após abrir a edição inline
+        if ("waitForLoadState" in context) {
+            await context.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+        }
         await waitForPageSettled(page);
 
         // Preencher Quantidade (sempre 1 — saldo = 1 × preço)

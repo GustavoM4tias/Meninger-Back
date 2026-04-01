@@ -10,8 +10,9 @@ import {
     advanceStage, cancelLaunch, markPaid,
     getSummary,
     runPipeline, findCreditor, findContract, createContract,
-    validateItems, pollContract,
-    downloadRidTemplate, sendRidEmail, sendRidForm,
+    validateItems, pollContract, createTituloController, registerBoletoController,
+    pollNowController, updateBoletoController,
+    downloadRidTemplate, sendRidEmail, sendRidForm, continueExistingContract
 } from '../controllers/sienge/paymentFlowController.js';
 import {
     listFlowEnterprises,
@@ -86,6 +87,10 @@ router.post('/payment-flow/:id/pipeline/find-contract', authenticate, findContra
 router.post('/payment-flow/:id/pipeline/create-contract', authenticate, createContract);
 router.post('/payment-flow/:id/pipeline/validate-items', authenticate, validateItems);
 router.get('/payment-flow/:id/pipeline/poll-contract', authenticate, pollContract);
+router.post('/payment-flow/:id/pipeline/create-titulo', authenticate, createTituloController);
+router.post('/payment-flow/:id/pipeline/register-boleto', authenticate, registerBoletoController);
+router.get('/payment-flow/:id/pipeline/poll-now', authenticate, pollNowController);
+router.post('/payment-flow/:id/pipeline/update-boleto', authenticate, updateBoletoController);
 
 // ── RID (cadastro de fornecedor) ──────────────────────────────────────────────
 router.get('/payment-flow/rid-template', authenticate, downloadRidTemplate);
@@ -96,5 +101,8 @@ router.post('/payment-flow/:id/rid/send-form', authenticate, upload.fields([{ na
 router.post('/payment-flow/:id/advance-stage', authenticate, advanceStage);
 router.post('/payment-flow/:id/cancel', authenticate, cancelLaunch);
 router.post('/payment-flow/:id/mark-paid', authenticate, markPaid);
+
+router.post('/payment-flow/:id/continue-existing-contract', authenticate, continueExistingContract);
+
 
 export default router;

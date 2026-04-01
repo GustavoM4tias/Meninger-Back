@@ -79,4 +79,95 @@ export class SiengeBillsService {
 
         return { status: 'nenhum', bill: null, bills };
     }
+
+    /**
+     * Busca o título pelo ID.
+     * @returns {object|null}
+     */
+    static async getBill(billId) {
+        if (!billId) return null;
+        try {
+            const { data } = await apiSienge.get(`/v1/bills/${Number(billId)}`);
+            return data ?? null;
+        } catch (err) {
+            if (err.response?.status === 404) return null;
+            throw err;
+        }
+    }
+
+    /**
+     * Busca as parcelas de um título.
+     * @returns {Array}
+     */
+    static async getInstallments(billId) {
+        if (!billId) return [];
+        try {
+            const { data } = await apiSienge.get(`/v1/bills/${Number(billId)}/installments`, {
+                params: { limit: 200, offset: 0 },
+            });
+            return data?.results || [];
+        } catch (err) {
+            if (err.response?.status === 404) return [];
+            throw err;
+        }
+    }
+
+    /**
+     * Anexa um arquivo ao título.
+     * POST /v1/bills/{billId}/attachments
+     * @param {number} billId
+     * @param {string} description  - descrição do anexo (máx 500 chars)
+     * @param {Buffer} fileBuffer   - conteúdo do arquivo
+     * @param {string} filename     - nome do arquivo (máx 100 chars)
+     * @param {string} [mimeType]   - ex: 'application/pdf'
+     */
+    static async attachBillFile(billId, description, fileBuffer, filename, mimeType = 'application/pdf') {
+        const url = `/v1/bills/${Number(billId)}/attachments`;
+        const form = new FormData();
+        const blob = new Blob([fileBuffer], { type: mimeType });
+        form.append('file', blob, String(filename || 'boleto.pdf').slice(0, 100));
+        try {
+            await apiSienge.post(url, form, {
+                params: { description: String(description || 'Boleto').slice(0, 500) },
+                headers: { 'Content-Type': 'multipart/form-data' },
+                timeout: 60000,
+            });
+        } catch (err) {
+            const detail = err.response?.data;
+            const status = err.response?.status;
+            console.error(`[SiengeBillsService] attachBillFile ${status} | url=${url} | response=${JSON.stringify(detail)}`);
+            throw new Error(
+                `Sienge ${status}: ${detail?.clientMessage || detail?.developerMessage || err.message}`
+            );
+        }
+    }
+
+    /**
+     * Registra informação de pagamento (boleto bancário) em uma parcela.
+     * paymentTypeId 2 = Boleto Bancário
+     * @param {number} billId
+     * @param {number} installmentId
+     * @param {string} barcodeNumber  - código de barras do boleto
+     */
+    static async registerBoletoPayment(billId, installmentId, barcodeNumber) {
+        const url = `/v1/bills/${Number(billId)}/installments/${Number(installmentId)}/payment-information/boleto-bancario`;
+
+        // Sienge aceita no máximo 47 caracteres — remove espaços e limita
+        const sanitized = String(barcodeNumber || '').replace(/\s/g, '').slice(0, 47);
+
+        const body = {
+            paymentTypeId: 2,
+            boletoBancarioManualBarCodeNumber: sanitized,
+        };
+        try {
+            await apiSienge.patch(url, body);
+        } catch (err) {
+            const detail = err.response?.data;
+            const status = err.response?.status;
+            console.error(`[SiengeBillsService] registerBoletoPayment ${status} | url=${url} | body=${JSON.stringify(body)} | response=${JSON.stringify(detail)}`);
+            throw new Error(
+                `Sienge ${status}: ${detail?.clientMessage || detail?.developerMessage || detail?.userMessage?.[0] || err.message}`
+            );
+        }
+    }
 }

@@ -5,15 +5,17 @@ import {
     SiengeContractService,
     getLaunchDocument,
     DEFAULT_CONTRACT_TYPE,
-    DEFAULT_BUILDING_UNIT, 
+    DEFAULT_BUILDING_UNIT,
     getAccountIndex,
 } from '../sienge/SiengeContractService.js';
 import { EnterpriseResolverService } from '../sienge/EnterpriseResolverService.js';
-import { SiengeBillsService } from '../sienge/SiengeBillsService.js';
+import { SiengeBillsService } from './SiengeBillsService.js';
 import { runPlaywrightContract } from '../../playwright/services/contractService.js';
 import { runPlaywrightAdditive } from '../../playwright/services/additiveService.js';
 import { runPlaywrightMeasurement } from '../../playwright/services/measurementService.js';
+import { runPlaywrightTitulo } from '../../playwright/services/tituloService.js';
 import { decrypt } from '../../utils/encryption.js';
+import axios from 'axios';
 
 const Model = () => db.PaymentLaunch;
 
@@ -37,6 +39,71 @@ async function getUserSiengeCredentials(userId) {
 async function patch(launch, data) {
     await launch.update(data);
     return launch;
+}
+
+// ── Anexar arquivos do lançamento à medição criada ────────────────────────────
+async function attachMeasurementFiles(launch, buildingId, measurementNumber) {
+    // Coleta todos os arquivos disponíveis no lançamento
+    const files = [];
+
+    if (launch.nfUrl) {
+        files.push({
+            url: launch.nfUrl,
+            filename: launch.nfFilename || 'nota-fiscal.pdf',
+            description: `Nota Fiscal${launch.nfNumber ? ` #${launch.nfNumber}` : ''}`,
+            mimeType: 'application/pdf',
+        });
+    }
+
+    if (launch.boletoUrl) {
+        files.push({
+            url: launch.boletoUrl,
+            filename: launch.boletoFilename || 'boleto.pdf',
+            description: 'Boleto',
+            mimeType: 'application/pdf',
+        });
+    }
+
+    const extras = Array.isArray(launch.extraAttachments) ? launch.extraAttachments : [];
+    extras.forEach((att, i) => {
+        if (att?.url) {
+            files.push({
+                url: att.url,
+                filename: att.filename || `anexo-extra-${i + 1}.pdf`,
+                description: att.description || `Anexo Extra ${i + 1}`,
+                mimeType: att.mimeType || 'application/pdf',
+            });
+        }
+    });
+
+    const results = [];
+    for (const file of files) {
+        try {
+            const { data: buffer } = await axios.get(file.url, {
+                responseType: 'arraybuffer',
+                timeout: 30000,
+            });
+
+            await SiengeContractService.attachMeasurementFile({
+                documentId: launch.siengeDocumentId,
+                contractNumber: launch.siengeContractNumber,
+                buildingId: Number(buildingId),
+                measurementNumber: Number(measurementNumber),
+                description: file.description,
+                fileBuffer: Buffer.from(buffer),
+                filename: file.filename,
+                mimeType: file.mimeType,
+            });
+
+            console.log(`📎 [Pipeline] Anexo "${file.description}" enviado com sucesso`);
+            results.push({ file: file.description, ok: true });
+        } catch (err) {
+            console.warn(`⚠️  [Pipeline] Falha ao anexar "${file.description}": ${err.message}`);
+            results.push({ file: file.description, ok: false, error: err.message });
+        }
+    }
+
+    return results;
 }
 
 // ── helpers de data ───────────────────────────────────────────────────────────
@@ -435,6 +502,7 @@ export async function stepCreateAdditive(launchId, userId = null) {
         documentType: launch.siengeDocumentId,
         contractNumber: String(launch.siengeContractNumber),
         obraCod: String(erpId || launch.enterpriseId || ''),
+        unidade: String(DEFAULT_BUILDING_UNIT),
         descricao,
         itemOrcamento: budgetItemName,
         itemOrcamentoCode: String(budgetItemCode),
@@ -479,6 +547,10 @@ export async function stepCreateMeasurement(launchId, userId = null) {
         pipelineStage: 'creating_measurement',
         status: 'medicao',
         siengeMeasurementError: null,
+        // Reseta campos anteriores para evitar dados obsoletos em reprocessamento
+        siengeMeasurementNumber: null,
+        siengeMeasurementAuthorized: false,
+        siengeMeasurementApproval: null,
     });
 
     const { erpId } = await resolveEnterpriseIds(launch);
@@ -508,6 +580,20 @@ export async function stepCreateMeasurement(launchId, userId = null) {
             siengeMeasurementError: null,
         });
 
+        // Anexar arquivos do lançamento à medição (NF, boleto, extras)
+        if (result.measurementNumber) {
+            const attachResults = await attachMeasurementFiles(
+                launch,
+                erpId || launch.enterpriseId,
+                result.measurementNumber
+            ).catch(err => {
+                console.warn(`⚠️  [Pipeline] #${launchId}: Erro geral ao anexar arquivos: ${err.message}`);
+                return [];
+            });
+            const ok = attachResults.filter(r => r.ok).length;
+            console.log(`📎 [Pipeline] #${launchId}: ${ok}/${attachResults.length} anexo(s) enviado(s) à medição #${result.measurementNumber}`);
+        }
+
         // Avança para aguardar autorização da medição
         await patch(launch, { pipelineStage: 'awaiting_measurement_authorization' });
 
@@ -523,6 +609,139 @@ export async function stepCreateMeasurement(launchId, userId = null) {
         });
         return { success: false, error: msg };
     }
+}
+
+// ── Etapa 7: Criar título (liberação de medição) via Playwright ───────────────
+export async function stepCreateTitulo(launchId, userId = null) {
+    const launch = await Model().findByPk(launchId);
+    if (!launch) throw new Error(`Lançamento ${launchId} não encontrado`);
+    if (!launch.siengeMeasurementNumber) throw new Error('Medição não encontrada — execute stepCreateMeasurement primeiro.');
+
+    await patch(launch, {
+        pipelineStage: 'creating_titulo',
+        status: 'titulo',
+        siengeTituloError: null,
+        // Reseta campos anteriores para evitar dados obsoletos em reprocessamento
+        siengeTituloNumber: null,
+        siengeTituloStatus: null,
+    });
+
+    const { erpId } = await resolveEnterpriseIds(launch);
+    const credentials = await getUserSiengeCredentials(userId || launch.createdBy);
+
+    // Busca departamentoId configurado no banco; fallback para '24' (Comercial)
+    let departamento = '24';
+    try {
+        const typeConfig = await db.LaunchTypeConfig.findOne({ where: { name: launch.launchType } });
+        if (typeConfig?.departamentoId) departamento = String(typeConfig.departamentoId);
+    } catch (_) { /* segue com o fallback */ }
+
+    const playwrightPayload = {
+        documentType: launch.siengeDocumentId,
+        contractNumber: String(launch.siengeContractNumber),
+        measurementNumber: Number(launch.siengeMeasurementNumber),
+        nfType: launch.nfType || 'NFS',
+        nfNumber: launch.nfNumber || '',
+        nfIssueDate: launch.nfIssueDate || '',
+        boletoDueDate: launch.boletoDueDate || '',
+        departamento,
+        unitPrice: String(launch.unitPrice || ''),
+        credentials,
+    };
+
+    try {
+        const result = await runPlaywrightTitulo(playwrightPayload);
+
+        await patch(launch, {
+            pipelineStage: 'titulo_created',
+            siengeTituloNumber: result.tituloNumber || null,
+            siengeTituloError: null,
+        });
+
+        console.log(`✅ [Pipeline] #${launchId}: título #${result.tituloNumber} criado com sucesso`);
+
+        // Registra boleto automaticamente em background
+        if (result.tituloNumber) {
+            stepRegisterBoleto(launchId).catch(err =>
+                console.error(`❌ [Pipeline] #${launchId}: falha ao registrar boleto: ${err.message}`)
+            );
+        }
+
+        return { success: true, tituloNumber: result.tituloNumber };
+    } catch (err) {
+        const msg = err.message || 'Erro desconhecido no Playwright (título)';
+        const isCredentialsError = msg.startsWith('CREDENCIAIS_INVALIDAS:');
+        await patch(launch, {
+            pipelineStage: 'titulo_error',
+            status: 'erro',
+            siengeTituloError: msg,
+            ...(isCredentialsError && { siengeCredentialsInvalid: true }),
+        });
+        return { success: false, error: msg };
+    }
+}
+
+// ── Etapa 8: Registrar boleto na parcela do título ────────────────────────────
+export async function stepRegisterBoleto(launchId) {
+    const launch = await Model().findByPk(launchId);
+    if (!launch?.siengeTituloNumber) return { success: false, reason: 'sem_titulo' };
+    if (!launch.boletoBarcode) return { success: false, reason: 'sem_barcode' };
+
+    try {
+        const installments = await SiengeBillsService.getInstallments(launch.siengeTituloNumber);
+        if (!installments.length) {
+            console.warn(`⚠️  [Pipeline] #${launchId}: nenhuma parcela encontrada para título #${launch.siengeTituloNumber}`);
+            return { success: false, reason: 'sem_parcelas' };
+        }
+
+        const installment = installments[0]; // título único → 1 parcela
+        console.log(`[Pipeline] #${launchId}: parcela encontrada → ${JSON.stringify(installment)}`);
+
+        // Sienge usa installmentNumber como id da parcela no path
+        const installmentId = installment.installmentNumber ?? installment.indexId ?? 1;
+        await SiengeBillsService.registerBoletoPayment(
+            launch.siengeTituloNumber,
+            installmentId,
+            launch.boletoBarcode
+        );
+
+        await launch.update({ pipelineStage: 'awaiting_titulo_authorization' });
+        console.log(`✅ [Pipeline] #${launchId}: boleto registrado na parcela #${installment.installmentNumber} do título #${launch.siengeTituloNumber}`);
+        return { success: true, installmentNumber: installment.installmentNumber };
+    } catch (err) {
+        // Não bloqueia o fluxo — salva o erro no banco para visibilidade no frontend
+        console.error(`❌ [Pipeline] #${launchId}: erro ao registrar boleto: ${err.message}`);
+        try {
+            const l = await Model().findByPk(launchId, { attributes: ['id', 'pipelineStage'] });
+            // Só salva o erro se o stage ainda é titulo_created (não sobrescreve se já avançou)
+            if (l?.pipelineStage === 'titulo_created') {
+                await l.update({ siengeTituloError: `Erro ao registrar boleto: ${err.message}` });
+            }
+        } catch (_) { /* silencioso */ }
+        return { success: false, error: err.message };
+    }
+}
+
+// ── Polling de status do título ────────────────────────────────────────────────
+export async function pollTituloStatus(launchId) {
+    const launch = await Model().findByPk(launchId);
+    if (!launch?.siengeTituloNumber) return null;
+
+    const bill = await SiengeBillsService.getBill(launch.siengeTituloNumber);
+    if (!bill) return null;
+
+    const isPaid = ['Q', 'QU', 'P', 'PG'].includes(String(bill.status || '').toUpperCase());
+
+    await launch.update({ siengeTituloStatus: bill.status || null });
+
+    console.log(`🔍 [Pipeline] #${launchId}: título #${launch.siengeTituloNumber} | status=${bill.status} | pago=${isPaid}`);
+
+    if (isPaid && launch.pipelineStage === 'awaiting_titulo_authorization') {
+        await launch.update({ pipelineStage: 'titulo_pago', status: 'titulo_pago' });
+        console.log(`✅ [Pipeline] #${launchId}: título pago → titulo_pago`);
+    }
+
+    return bill;
 }
 
 // ── Polling de autorização da medição ─────────────────────────────────────────
@@ -543,16 +762,31 @@ export async function pollMeasurementStatus(launchId) {
     if (!measurement) return null;
 
     const isAuthorized = measurement.authorized === true;
-    const approval = measurement.statusApproval || null;
 
     await launch.update({
         siengeMeasurementAuthorized: isAuthorized,
-        siengeMeasurementApproval: approval,
+        // statusApproval: D=DISAPPROVED | A=APPROVED | null = aguardando
+        siengeMeasurementApproval: measurement.statusApproval || null,
     });
 
-    // Quando autorizada: fluxo concluído — pronto para geração de título
+    console.log(`🔍 [Pipeline] #${launchId}: medição #${launch.siengeMeasurementNumber} | authorized=${isAuthorized}`);
+
+    // Quando autorizada: dispara criação de título automaticamente
+    // Update atômico: apenas 1 chamada concurrent (scheduler vs pollNow) avança o stage
     if (isAuthorized && launch.pipelineStage === 'awaiting_measurement_authorization') {
-        await launch.update({ pipelineStage: 'ready' });
+        const [changed] = await Model().update(
+            { pipelineStage: 'creating_titulo' },
+            { where: { id: launchId, pipelineStage: 'awaiting_measurement_authorization' } }
+        );
+        if (changed > 0) {
+            console.log(`🚀 [Pipeline] #${launchId}: medição autorizada → iniciando criação de título automaticamente...`);
+            // Não await — roda em background para não bloquear o scheduler
+            stepCreateTitulo(launchId, launch.createdBy).catch(err =>
+                console.error(`❌ [Pipeline] #${launchId}: falha ao criar título automático: ${err.message}`)
+            );
+        } else {
+            console.log(`ℹ️  [Pipeline] #${launchId}: título já iniciado por outra instância — ignorando.`);
+        }
     }
 
     return measurement;
@@ -579,22 +813,101 @@ export async function pollContractStatus(launchId) {
     });
 
     // Quando autorizado E ainda em awaiting_authorization → dispara medição automaticamente
+    // Update atômico: apenas 1 chamada concurrent (scheduler vs pollNow) avança o stage
     if (contract.isAuthorized && launch.pipelineStage === 'awaiting_authorization') {
-        console.log(`🚀 [Pipeline] #${launchId}: contrato/aditivo autorizado — iniciando medição automaticamente...`);
-        // Não await — roda em background para não bloquear o scheduler
-        stepCreateMeasurement(launchId, launch.createdBy).catch(err =>
-            console.error(`❌ [Pipeline] #${launchId}: falha ao criar medição automática: ${err.message}`)
+        const [changed] = await Model().update(
+            { pipelineStage: 'creating_measurement' },
+            { where: { id: launchId, pipelineStage: 'awaiting_authorization' } }
         );
+        if (changed > 0) {
+            console.log(`🚀 [Pipeline] #${launchId}: contrato/aditivo autorizado — iniciando medição automaticamente...`);
+            // Não await — roda em background para não bloquear o scheduler
+            stepCreateMeasurement(launchId, launch.createdBy).catch(err =>
+                console.error(`❌ [Pipeline] #${launchId}: falha ao criar medição automática: ${err.message}`)
+            );
+        } else {
+            console.log(`ℹ️  [Pipeline] #${launchId}: medição já iniciada por outra instância — ignorando.`);
+        }
     }
 
     return contract;
+}
+
+// ── Etapa 9: Atualizar boleto de um título já existente ───────────────────────
+export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boletoFilename, boletoBarcode, boletoDueDate, boletoAmount }) {
+    const launch = await Model().findByPk(launchId);
+    if (!launch) throw new Error(`Lançamento ${launchId} não encontrado`);
+    if (!launch.siengeTituloNumber) return { success: false, reason: 'sem_titulo' };
+    if (!boletoBarcode) return { success: false, reason: 'sem_barcode' };
+    if (!boletoUrl) return { success: false, reason: 'sem_url' };
+
+    // 1. Atualiza dados do boleto no banco
+    await launch.update({
+        boletoUrl: boletoUrl,
+        boletoPath: boletoPath || launch.boletoPath,
+        boletoFilename: boletoFilename || launch.boletoFilename,
+        boletoBarcode,
+        boletoDueDate: boletoDueDate || launch.boletoDueDate,
+        boletoAmount: boletoAmount || launch.boletoAmount,
+        siengeTituloError: null,
+    });
+
+    // 2. Atualiza o código de barras na parcela do Sienge
+    try {
+        const installments = await SiengeBillsService.getInstallments(launch.siengeTituloNumber);
+        if (!installments.length) throw new Error('Nenhuma parcela encontrada para o título');
+        const installment = installments[0];
+        const installmentId = installment.installmentNumber ?? installment.indexId ?? 1;
+        await SiengeBillsService.registerBoletoPayment(launch.siengeTituloNumber, installmentId, boletoBarcode);
+        console.log(`✅ [Pipeline] #${launchId}: barcode atualizado na parcela #${installmentId} do título #${launch.siengeTituloNumber}`);
+    } catch (err) {
+        console.error(`❌ [Pipeline] #${launchId}: falha ao atualizar barcode no Sienge: ${err.message}`);
+        throw err; // propaga para o controller retornar 500 ao frontend
+    }
+
+    // 3. Anexa o novo arquivo de boleto ao título no Sienge (não-bloqueante)
+    try {
+        const { data: buffer } = await axios.get(boletoUrl, { responseType: 'arraybuffer', timeout: 30000 });
+        const desc = `Boleto${boletoDueDate ? ` — Vence ${boletoDueDate}` : ''}`;
+        await SiengeBillsService.attachBillFile(
+            launch.siengeTituloNumber,
+            desc,
+            Buffer.from(buffer),
+            boletoFilename || 'boleto.pdf'
+        );
+        console.log(`📎 [Pipeline] #${launchId}: novo boleto anexado ao título #${launch.siengeTituloNumber}`);
+    } catch (err) {
+        // Falha no anexo não deve travar o fluxo — barcode já foi atualizado
+        console.warn(`⚠️  [Pipeline] #${launchId}: falha ao anexar boleto ao título (continuando): ${err.message}`);
+    }
+
+    // 4. Avança para aguardando pagamento (ou mantém se já estava lá)
+    const refreshed = await Model().findByPk(launchId, { attributes: ['id', 'pipelineStage'] });
+    if (!['awaiting_titulo_authorization', 'titulo_pago'].includes(refreshed?.pipelineStage)) {
+        await refreshed.update({ pipelineStage: 'awaiting_titulo_authorization' });
+    }
+
+    console.log(`✅ [Pipeline] #${launchId}: boleto atualizado com sucesso no título #${launch.siengeTituloNumber}`);
+    return { success: true };
 }
 
 // ── Pipeline completo ─────────────────────────────────────────────────────────
 // Fluxo automático contínuo:
 //   Tem contrato → Aditivo → awaiting_authorization → [scheduler] → Medição → awaiting_measurement_authorization
 //   Sem contrato → Cria    → awaiting_authorization → [scheduler] → Medição → awaiting_measurement_authorization
+// Estágios onde o Playwright pode ter travado — permite forçar reprocessamento
+const STUCK_STAGES = ['creating_contract', 'creating_additive', 'creating_measurement', 'creating_titulo', 'contract_manual_block'];
+
 export async function runFullPipeline(launchId, userId = null) {
+    // Se travado em um estado creating_* ou contract_manual_block, reseta para idle antes de rodar
+    const current = await Model().findByPk(launchId, { attributes: ['id', 'pipelineStage'] });
+    // Captura se estava bloqueado manualmente ANTES de resetar o stage
+    const bypassAutoCheck = current?.pipelineStage === 'contract_manual_block';
+    if (current && STUCK_STAGES.includes(current.pipelineStage)) {
+        console.warn(`⚠️  [Pipeline] #${launchId}: stage "${current.pipelineStage}" travado — resetando para idle antes de reprocessar.`);
+        await current.update({ pipelineStage: 'idle', siengeContractError: null });
+    }
+
     const creditorResult = await stepFindCreditor(launchId);
 
     if (!creditorResult.found) {
@@ -631,6 +944,11 @@ export async function runFullPipeline(launchId, userId = null) {
         'additive_error',
         'measurement_created',
         'awaiting_measurement_authorization',
+        'creating_titulo',
+        'titulo_created',
+        'titulo_error',
+        'awaiting_titulo_authorization',
+        'titulo_pago',
         'ready',
     ];
 
@@ -650,7 +968,7 @@ export async function runFullPipeline(launchId, userId = null) {
 
     const automationEvidence = selfCreated || peerCreated;
 
-    if (!automationEvidence) {
+    if (!automationEvidence && !bypassAutoCheck) {
         // Contrato pré-existente (criado manualmente) — não cria aditivo automaticamente
         const msg = `Contrato ${launch.siengeDocumentId}/${launch.siengeContractNumber} encontrado no Sienge mas não foi criado pela automação. Requer verificação manual antes de prosseguir.`;
         await patch(launch, {
@@ -662,10 +980,42 @@ export async function runFullPipeline(launchId, userId = null) {
         return { stage: 'contract_manual_block', blocked: true, error: msg };
     }
 
+    if (!automationEvidence && bypassAutoCheck) {
+        // Usuário confirmou que o contrato pré-existente é válido — marca como criado pela automação
+        console.log(`✅ [Pipeline] #${launchId}: bypass do bloqueio manual — marcando contrato como criado pela automação.`);
+        await patch(launch, { siengeContractCreatedByAutomation: true, siengeContractError: null });
+    }
+
     // Contrato criado pela automação → cria aditivo → aguarda autorização → scheduler dispara medição
     const additiveResult = await stepCreateAdditive(launchId, userId);
     if (!additiveResult.success) return { stage: 'additive_error', ...additiveResult };
 
     await patch(launch, { pipelineStage: 'awaiting_authorization', status: 'aditivo' });
+    return { stage: 'awaiting_authorization', ...additiveResult };
+}
+
+export async function continueExistingContractPipeline(launchId, userId = null) {
+    const launch = await Model().findByPk(launchId);
+    if (!launch) throw new Error(`Lançamento ${launchId} não encontrado`);
+
+    if (!launch.siengeDocumentId || !launch.siengeContractNumber) {
+        throw new Error('Contrato não encontrado para prosseguir.');
+    }
+
+    // Marca como criado pela automação para futuras re-execuções não bloquearem
+    await patch(launch, { siengeContractCreatedByAutomation: true, siengeContractError: null });
+
+    const additiveResult = await stepCreateAdditive(launchId, userId);
+    if (!additiveResult.success) {
+        return { stage: 'additive_error', ...additiveResult };
+    }
+
+    const refreshed = await Model().findByPk(launchId);
+    await patch(refreshed, {
+        pipelineStage: 'awaiting_authorization',
+        status: 'aditivo',
+        siengeContractError: null,
+    });
+
     return { stage: 'awaiting_authorization', ...additiveResult };
 }

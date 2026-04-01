@@ -13,6 +13,7 @@ const INITIAL_TYPES = [
         financialAccountNumber: '2.02.02.80',
         budgetIndex: 5,
         accountIndex: 158,
+        departamentoId: '24',
     },
     {
         name: 'ITBI',
@@ -22,6 +23,7 @@ const INITIAL_TYPES = [
         financialAccountNumber: '2.02.02.12',
         budgetIndex: 16,
         accountIndex: 105,
+        departamentoId: '24',
     },
     {
         name: 'Marketing',
@@ -31,6 +33,7 @@ const INITIAL_TYPES = [
         financialAccountNumber: '2.02.02.75',
         budgetIndex: 9,
         accountIndex: 154,
+        departamentoId: '16',
     },
     {
         name: 'CEF',
@@ -40,6 +43,7 @@ const INITIAL_TYPES = [
         financialAccountNumber: '2.17.03',
         budgetIndex: 16,
         accountIndex: 424,
+        departamentoId: '24',
     },
     {
         name: 'Cartório',
@@ -49,6 +53,7 @@ const INITIAL_TYPES = [
         financialAccountNumber: '2.02.02.12',
         budgetIndex: 16,
         accountIndex: 105,
+        departamentoId: '24',
     },
     {
         name: 'Stand',
@@ -58,6 +63,7 @@ const INITIAL_TYPES = [
         financialAccountNumber: '2.02.07',
         budgetIndex: 10,
         accountIndex: 184,
+        departamentoId: '25',
     },
 ];
 
@@ -72,7 +78,7 @@ export async function seedInitialTypes() {
         let inserted = 0;
         let updated = 0;
         // Campos que podem ser corrigidos pelo seed mesmo após o registro já existir
-        const syncFields = ['budgetItem', 'budgetItemCode', 'financialAccountNumber', 'budgetIndex', 'accountIndex', 'documento'];
+        const syncFields = ['budgetItem', 'budgetItemCode', 'financialAccountNumber', 'budgetIndex', 'accountIndex', 'documento', 'departamentoId'];
         for (const type of INITIAL_TYPES) {
             const [record, created] = await Model().findOrCreate({
                 where: { name: type.name },
@@ -121,7 +127,7 @@ export async function createLaunchType(req, res, next) {
         if (req.user?.role !== 'admin') {
             return res.status(403).json({ error: 'Apenas administradores podem criar tipos de lançamento.' });
         }
-        const { name, documento, budgetItem, budgetItemCode, financialAccountNumber, budgetIndex, accountIndex } = req.body;
+        const { name, documento, budgetItem, budgetItemCode, financialAccountNumber, budgetIndex, accountIndex, departamentoId } = req.body;
         if (!name || !documento || !budgetItem || !financialAccountNumber) {
             return res.status(422).json({ error: 'Campos obrigatórios: name, documento, budgetItem, financialAccountNumber' });
         }
@@ -137,6 +143,7 @@ export async function createLaunchType(req, res, next) {
             financialAccountNumber,
             budgetIndex: budgetIndex || null,
             accountIndex: accountIndex || null,
+            departamentoId: departamentoId || null,
             active: true,
             createdBy: req.user?.id || null,
         });
@@ -152,7 +159,7 @@ export async function updateLaunchType(req, res, next) {
         }
         const type = await Model().findByPk(req.params.id);
         if (!type) return res.status(404).json({ error: 'Tipo não encontrado.' });
-        const allowed = ['documento', 'budgetItem', 'budgetItemCode', 'financialAccountNumber', 'budgetIndex', 'accountIndex', 'active'];
+        const allowed = ['documento', 'budgetItem', 'budgetItemCode', 'financialAccountNumber', 'budgetIndex', 'accountIndex', 'departamentoId', 'active'];
         const patch = {};
         allowed.forEach(k => { if (req.body[k] !== undefined) patch[k] = req.body[k]; });
         await type.update(patch);

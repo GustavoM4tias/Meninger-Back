@@ -223,6 +223,23 @@ export default (sequelize, DataTypes) => {
                 comment: "Erro do playwright ao tentar criar medição",
             },
 
+            // ── Título no Sienge ──────────────────────────────────────────────
+            siengeTituloNumber: {
+                field: "sienge_titulo_number",
+                type: DataTypes.INTEGER,
+                comment: "Número do título gerado na liberação de medição no Sienge",
+            },
+            siengeTituloError: {
+                field: "sienge_titulo_error",
+                type: DataTypes.TEXT,
+                comment: "Erro do playwright ao tentar criar o título",
+            },
+            siengeTituloStatus: {
+                field: "sienge_titulo_status",
+                type: DataTypes.STRING(10),
+                comment: "Status do título no Sienge (ex: A=Aberto, Q=Quitado)",
+            },
+
             // ── Contrato criado pela automação (flag imutável) ────────────────
             siengeContractCreatedByAutomation: {
                 field: "sienge_contract_created_by_automation",

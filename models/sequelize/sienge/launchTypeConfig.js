@@ -51,6 +51,14 @@ export default (sequelize, DataTypes) => {
                 comment: 'Índice 1-based da conta financeira no modal Sienge',
             },
 
+            // ID do departamento no Sienge (ex: '24' Comercial, '25' Stand/Consumo, '16' Marketing)
+            departamentoId: {
+                field: 'departamento_id',
+                type: DataTypes.STRING(10),
+                allowNull: true,
+                comment: 'ID do departamento no Sienge (ex: 24, 25, 16). Quando preenchido, sobrescreve o mapa legado.',
+            },
+
             active: {
                 type: DataTypes.BOOLEAN,
                 defaultValue: true,
