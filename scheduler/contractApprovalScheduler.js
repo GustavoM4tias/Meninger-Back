@@ -10,22 +10,22 @@ const CRON_EXP = process.env.CONTRACT_APPROVAL_CRON || '*/20 * * * *';
 
 async function checkContractApprovals() {
     console.log('🔍 [ContractApproval] Verificando alçadas de aprovação...');
+    const { Op } = db.Sequelize;
+    const skipStatuses = { [Op.notIn]: ['cancelado', 'titulo_pago', 'aborted'] };
 
     // ── Contrato/Aditivo aguardando autorização ───────────────────────────────
     const pendingContracts = await db.PaymentLaunch.findAll({
         where: {
-            siengeContractStatus: ['found', 'created'],
-            status: { [db.Sequelize.Op.notIn]: ['cancelado', 'titulo_pago'] },
-            [db.Sequelize.Op.or]: [
-                { siengeContractApproval: null },
-                { siengeContractApproval: 'PENDING' },
-            ],
+            pipelineStage: 'awaiting_authorization',
+            status: skipStatuses,
+            siengeDocumentId: { [Op.not]: null },
+            siengeContractNumber: { [Op.not]: null },
         },
         attributes: ['id', 'siengeDocumentId', 'siengeContractNumber', 'siengeContractApproval', 'pipelineStage'],
     });
 
     if (pendingContracts.length) {
-        console.log(`🔍 [ContractApproval] ${pendingContracts.length} contrato(s) para verificar.`);
+        console.log(`🔍 [ContractApproval] ${pendingContracts.length} contrato(s) aguardando autorização.`);
         for (const launch of pendingContracts) {
             try {
                 const contract = await pollContractStatus(launch.id);
@@ -46,8 +46,8 @@ async function checkContractApprovals() {
     const pendingMeasurements = await db.PaymentLaunch.findAll({
         where: {
             pipelineStage: 'awaiting_measurement_authorization',
-            status: { [db.Sequelize.Op.notIn]: ['cancelado', 'titulo_pago'] },
-            siengeMeasurementNumber: { [db.Sequelize.Op.not]: null },
+            status: skipStatuses,
+            siengeMeasurementNumber: { [Op.not]: null },
         },
         attributes: ['id', 'siengeMeasurementNumber', 'siengeMeasurementApproval'],
     });
@@ -72,9 +72,9 @@ async function checkContractApprovals() {
     const pendingBoleto = await db.PaymentLaunch.findAll({
         where: {
             pipelineStage: 'titulo_created',
-            status: { [db.Sequelize.Op.notIn]: ['cancelado', 'titulo_pago'] },
-            siengeTituloNumber: { [db.Sequelize.Op.not]: null },
-            boletoBarcode: { [db.Sequelize.Op.not]: null },
+            status: skipStatuses,
+            siengeTituloNumber: { [Op.not]: null },
+            boletoBarcode: { [Op.not]: null },
         },
         attributes: ['id', 'siengeTituloNumber', 'boletoBarcode', 'siengeTituloError'],
     });
@@ -99,8 +99,8 @@ async function checkContractApprovals() {
     const pendingTitulos = await db.PaymentLaunch.findAll({
         where: {
             pipelineStage: 'awaiting_titulo_authorization',
-            status: { [db.Sequelize.Op.notIn]: ['cancelado', 'titulo_pago'] },
-            siengeTituloNumber: { [db.Sequelize.Op.not]: null },
+            status: skipStatuses,
+            siengeTituloNumber: { [Op.not]: null },
         },
         attributes: ['id', 'siengeTituloNumber', 'siengeTituloStatus'],
     });

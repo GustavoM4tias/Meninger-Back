@@ -896,19 +896,38 @@ export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boleto
 //   Tem contrato → Aditivo → awaiting_authorization → [scheduler] → Medição → awaiting_measurement_authorization
 //   Sem contrato → Cria    → awaiting_authorization → [scheduler] → Medição → awaiting_measurement_authorization
 // Estágios onde o Playwright pode ter travado — permite forçar reprocessamento
-const STUCK_STAGES = ['creating_contract', 'creating_additive', 'creating_measurement', 'creating_titulo', 'contract_manual_block'];
+const STUCK_STAGES = ['creating_contract', 'creating_additive', 'creating_measurement', 'creating_titulo', 'contract_manual_block', 'aborted'];
 
 export async function runFullPipeline(launchId, userId = null) {
     // Se travado em um estado creating_* ou contract_manual_block, reseta para idle antes de rodar
     const current = await Model().findByPk(launchId, { attributes: ['id', 'pipelineStage'] });
+    const currentStage = current?.pipelineStage;
+
+    // ── Retomada direta: não voltar atrás quando a etapa de medição ou título falhou ──
+    if (currentStage === 'measurement_error') {
+        console.log(`⏩ [Pipeline] #${launchId}: retomando da medição (stage: measurement_error)`);
+        await current.update({ siengeMeasurementError: null });
+        const result = await stepCreateMeasurement(launchId, userId);
+        return { stage: result.success ? 'measurement_created' : 'measurement_error', ...result };
+    }
+    if (currentStage === 'titulo_error') {
+        console.log(`⏩ [Pipeline] #${launchId}: retomando do título (stage: titulo_error)`);
+        const result = await stepCreateTitulo(launchId, userId);
+        return { stage: result.success ? 'titulo_created' : 'titulo_error', ...result };
+    }
+
     // Captura se estava bloqueado manualmente ANTES de resetar o stage
-    const bypassAutoCheck = current?.pipelineStage === 'contract_manual_block';
-    if (current && STUCK_STAGES.includes(current.pipelineStage)) {
-        console.warn(`⚠️  [Pipeline] #${launchId}: stage "${current.pipelineStage}" travado — resetando para idle antes de reprocessar.`);
+    const bypassAutoCheck = currentStage === 'contract_manual_block';
+    if (current && STUCK_STAGES.includes(currentStage)) {
+        console.warn(`⚠️  [Pipeline] #${launchId}: stage "${currentStage}" travado — resetando para idle antes de reprocessar.`);
         await current.update({ pipelineStage: 'idle', siengeContractError: null });
     }
 
     const creditorResult = await stepFindCreditor(launchId);
+
+    // Verifica abort entre etapas
+    const afterCreditor = await Model().findByPk(launchId, { attributes: ['pipelineStage'] });
+    if (afterCreditor?.pipelineStage === 'aborted') return { stage: 'aborted' };
 
     if (!creditorResult.found) {
         const launch = await Model().findByPk(launchId, { attributes: ['ridEmailSent'] });
@@ -919,6 +938,10 @@ export async function runFullPipeline(launchId, userId = null) {
     }
 
     const contractResult = await stepFindContract(launchId);
+
+    // Verifica abort entre etapas
+    const afterContract = await Model().findByPk(launchId, { attributes: ['pipelineStage'] });
+    if (afterContract?.pipelineStage === 'aborted') return { stage: 'aborted' };
 
     if (!contractResult.found) {
         // Sem contrato: cria contrato novo → aguarda autorização → scheduler dispara medição
@@ -1018,4 +1041,19 @@ export async function continueExistingContractPipeline(launchId, userId = null) 
     });
 
     return { stage: 'awaiting_authorization', ...additiveResult };
+}
+
+export async function abortPipeline(launchId) {
+    const launch = await Model().findByPk(launchId);
+    if (!launch) throw new Error(`Lançamento ${launchId} não encontrado`);
+    if (['titulo_pago', 'cancelado'].includes(launch.status)) {
+        return { aborted: false, reason: 'already_finished' };
+    }
+    await launch.update({
+        pipelineStage: 'aborted',
+        status: 'erro',
+        siengeContractError: 'Processo interrompido pelo usuário.',
+    });
+    console.log(`🛑 [Pipeline] #${launchId}: pipeline abortado pelo usuário.`);
+    return { aborted: true };
 }

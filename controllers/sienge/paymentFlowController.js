@@ -15,6 +15,7 @@ import {
     stepRegisterBoleto,
     stepUpdateBoleto,
     continueExistingContractPipeline,
+    abortPipeline,
 } from '../../services/sienge/PaymentFlowPipelineService.js';
 import { sendEmail } from '../../email/email.service.js';
 import { generateRidDocx } from '../../services/sienge/RidDocumentService.js';
@@ -148,50 +149,82 @@ export async function createLaunch(req, res, next) {
 // ── LIST ──────────────────────────────────────────────────────────────────────
 export async function listLaunches(req, res, next) {
     try {
-        const { status, excludeStatus, launchType, companyId, enterpriseId, search, createdBy, page = 1, limit = 20 } = req.query;
+        const { Op } = db.Sequelize;
+        const { status, excludeStatus, launchType, companyId, enterpriseId, search, createdBy, page = 1, limit = 20, dateFrom, dateTo } = req.query;
         const isAdmin = req.user?.role === 'admin';
         const userId = req.user?.id;
 
         const where = {};
 
-        // Não-admin vê apenas seus próprios lançamentos
+        // ── Controle de acesso por usuário e cidade ───────────────────────────
         if (!isAdmin) {
-            where.createdBy = userId;
+            // Busca a cidade do usuário
+            const user = await db.User.findByPk(userId, { attributes: ['city'] });
+            const userCity = user?.city;
+
+            // Empreendimentos na mesma cidade
+            let cityEnterpriseIds = [];
+            if (userCity) {
+                const cityEnts = await db.EnterpriseCity.findAll({
+                    where: db.Sequelize.where(
+                        db.Sequelize.fn('COALESCE',
+                            db.Sequelize.col('city_override'),
+                            db.Sequelize.col('default_city')
+                        ),
+                        { [Op.iLike]: `%${userCity}%` }
+                    ),
+                    attributes: ['erp_id'],
+                    raw: true,
+                });
+                cityEnterpriseIds = cityEnts.map(e => e.erp_id).filter(Boolean).map(String);
+            }
+
+            where[Op.or] = [
+                { createdBy: userId },
+                ...(cityEnterpriseIds.length ? [{ enterpriseId: { [Op.in]: cityEnterpriseIds } }] : []),
+            ];
         } else if (createdBy) {
-            // Admin pode filtrar por usuário específico
             where.createdBy = Number(createdBy);
         }
 
+        // ── Filtro de período (padrão: mês corrente) ──────────────────────────
+        const today = new Date();
+        const defaultFrom = new Date(today.getFullYear(), today.getMonth(), 1);
+        const defaultTo   = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
+        where.createdAt = {
+            [Op.gte]: dateFrom ? new Date(dateFrom) : defaultFrom,
+            [Op.lte]: dateTo   ? new Date(dateTo + 'T23:59:59.999Z') : defaultTo,
+        };
+
+        // ── Filtros adicionais ────────────────────────────────────────────────
         if (status) {
             where.status = status;
         } else if (excludeStatus) {
-            // Suporta múltiplos status separados por vírgula: cancelado,erro
             const excluded = excludeStatus.split(',').map(s => s.trim()).filter(Boolean);
             where.status = excluded.length === 1
-                ? { [db.Sequelize.Op.ne]: excluded[0] }
-                : { [db.Sequelize.Op.notIn]: excluded };
+                ? { [Op.ne]: excluded[0] }
+                : { [Op.notIn]: excluded };
         }
         if (launchType) where.launchType = launchType;
         if (companyId) where.companyId = Number(companyId);
         if (enterpriseId) where.enterpriseId = Number(enterpriseId);
         if (search) {
-            where[db.Sequelize.Op.or] = [
-                { providerName: { [db.Sequelize.Op.iLike]: `%${search}%` } },
-                { companyName: { [db.Sequelize.Op.iLike]: `%${search}%` } },
-                { enterpriseName: { [db.Sequelize.Op.iLike]: `%${search}%` } },
-                { nfNumber: { [db.Sequelize.Op.iLike]: `%${search}%` } },
-                { siengeCreditorName: { [db.Sequelize.Op.iLike]: `%${search}%` } },
-                // Admin pode buscar pelo nome do criador
-                ...(isAdmin ? [{ createdByName: { [db.Sequelize.Op.iLike]: `%${search}%` } }] : []),
+            where[Op.or] = [
+                { providerName: { [Op.iLike]: `%${search}%` } },
+                { companyName: { [Op.iLike]: `%${search}%` } },
+                { enterpriseName: { [Op.iLike]: `%${search}%` } },
+                { nfNumber: { [Op.iLike]: `%${search}%` } },
+                { siengeCreditorName: { [Op.iLike]: `%${search}%` } },
+                ...(isAdmin ? [{ createdByName: { [Op.iLike]: `%${search}%` } }] : []),
             ];
         }
+
         const offset = (Number(page) - 1) * Number(limit);
         const { count, rows } = await Model().findAndCountAll({
             where,
             order: [['createdAt', 'DESC']],
             limit: Number(limit),
             offset,
-            // Omite JSONBs pesados da listagem
             attributes: { exclude: ['aiExtractedData', 'extraAttachments', 'siengeContractRaw', 'siengeItemsRaw'] },
         });
         return res.json({
@@ -261,8 +294,45 @@ export async function updateLaunch(req, res, next) {
 // ── SUMMARY ───────────────────────────────────────────────────────────────────
 export async function getSummary(req, res, next) {
     try {
+        const { Op } = db.Sequelize;
         const isAdmin = req.user?.role === 'admin';
-        const where = isAdmin ? {} : { createdBy: req.user?.id };
+        const userId = req.user?.id;
+        const { dateFrom, dateTo } = req.query;
+
+        const where = {};
+
+        if (!isAdmin) {
+            const user = await db.User.findByPk(userId, { attributes: ['city'] });
+            const userCity = user?.city;
+            let cityEnterpriseIds = [];
+            if (userCity) {
+                const cityEnts = await db.EnterpriseCity.findAll({
+                    where: db.Sequelize.where(
+                        db.Sequelize.fn('COALESCE',
+                            db.Sequelize.col('city_override'),
+                            db.Sequelize.col('default_city')
+                        ),
+                        { [Op.iLike]: `%${userCity}%` }
+                    ),
+                    attributes: ['erp_id'],
+                    raw: true,
+                });
+                cityEnterpriseIds = cityEnts.map(e => e.erp_id).filter(Boolean).map(String);
+            }
+            where[Op.or] = [
+                { createdBy: userId },
+                ...(cityEnterpriseIds.length ? [{ enterpriseId: { [Op.in]: cityEnterpriseIds } }] : []),
+            ];
+        }
+
+        const today = new Date();
+        const defaultFrom = new Date(today.getFullYear(), today.getMonth(), 1);
+        const defaultTo   = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
+        where.createdAt = {
+            [Op.gte]: dateFrom ? new Date(dateFrom) : defaultFrom,
+            [Op.lte]: dateTo   ? new Date(dateTo + 'T23:59:59.999Z') : defaultTo,
+        };
+
         const rows = await Model().findAll({
             where,
             attributes: [
@@ -299,6 +369,15 @@ export async function runPipeline(req, res, next) {
         });
     } catch (err) { next(err); }
 }
+export async function abortPipelineController(req, res, next) {
+    try {
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+        const result = await abortPipeline(Number(req.params.id));
+        return res.json(result);
+    } catch (err) { next(err); }
+}
+
 export async function findCreditor(req, res, next) {
     try { return res.json(await stepFindCreditor(Number(req.params.id))); }
     catch (err) { next(err); }
