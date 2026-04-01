@@ -11,7 +11,7 @@ import {
     getSummary,
     runPipeline, findCreditor, findContract, createContract,
     validateItems, pollContract, createTituloController, registerBoletoController,
-    pollNowController, updateBoletoController,
+    pollNowController, updateBoletoController, abortPipelineController,
     downloadRidTemplate, sendRidEmail, sendRidForm, continueExistingContract
 } from '../controllers/sienge/paymentFlowController.js';
 import {
@@ -91,6 +91,7 @@ router.post('/payment-flow/:id/pipeline/create-titulo', authenticate, createTitu
 router.post('/payment-flow/:id/pipeline/register-boleto', authenticate, registerBoletoController);
 router.get('/payment-flow/:id/pipeline/poll-now', authenticate, pollNowController);
 router.post('/payment-flow/:id/pipeline/update-boleto', authenticate, updateBoletoController);
+router.post('/payment-flow/:id/pipeline/abort', authenticate, abortPipelineController);
 
 // ── RID (cadastro de fornecedor) ──────────────────────────────────────────────
 router.get('/payment-flow/rid-template', authenticate, downloadRidTemplate);
