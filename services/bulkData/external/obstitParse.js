@@ -128,8 +128,8 @@ export function extractMoneyCandidates(text = '', { nextLineLookahead = 64 } = {
  * Sem fallback sem TR.
  */
 export function chooseLandValue(blocks = [], {
-  min = 10000,         // >= R$ 10.000,00
-  max = 1000000,     // até R$ 1.000.000,00 (evita cortar legítimos > 100k)
+  min = 1000,          // >= R$ 1.000,00  (antes era 10k, cortava terrenos menores como Moacir Marangoni R$8.780)
+  max = 1000000,       // até R$ 1.000.000,00 (evita cortar legítimos > 100k)
   digitLenMin = 6,     // "10000,00" → 1000000 centavos → len 7 (ok)
   digitLenMax = 10,    // margem ampla p/ valores grandes
   nextLineLookahead = 48,
