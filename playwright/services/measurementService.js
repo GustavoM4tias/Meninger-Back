@@ -27,6 +27,7 @@ async function waitForPageReady(page) {
  * @param {string} params.obraCod           - Código da obra (erpId)
  * @param {string} params.dataVencimento    - DD/MM/YYYY (data de vencimento do boleto)
  * @param {string|number} params.value      - Valor da medição (unitPrice)
+ * @param {number} [params.targetRowIndex]  - Índice 1-based do item editável a preencher (padrão: 1)
  * @param {object} params.credentials       - { email, password } do Sienge
  * @returns {{ success: true, measurementNumber: number|null }}
  */
@@ -38,6 +39,7 @@ export async function runPlaywrightMeasurement(params = {}) {
         obraCod: params.obraCod,
         dataVencimento: params.dataVencimento,
         value: params.value,
+        targetRowIndex: params.targetRowIndex ?? 1,
     })}`);
 
     const credentials = params.credentials || {};

@@ -187,14 +187,18 @@ export async function listLaunches(req, res, next) {
             where.createdBy = Number(createdBy);
         }
 
-        // ── Filtro de período (padrão: mês corrente) ──────────────────────────
-        const today = new Date();
-        const defaultFrom = new Date(today.getFullYear(), today.getMonth(), 1);
-        const defaultTo   = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
-        where.createdAt = {
-            [Op.gte]: dateFrom ? new Date(dateFrom) : defaultFrom,
-            [Op.lte]: dateTo   ? new Date(dateTo + 'T23:59:59.999Z') : defaultTo,
-        };
+        // ── Filtro de período ─────────────────────────────────────────────────
+        // Admin: sem restrição de data por padrão — aplica só se enviado explicitamente
+        // Não-admin: padrão = mês corrente se não informado
+        if (!isAdmin || dateFrom || dateTo) {
+            const today = new Date();
+            const defaultFrom = new Date(today.getFullYear(), today.getMonth(), 1);
+            const defaultTo   = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
+            where.createdAt = {
+                [Op.gte]: dateFrom ? new Date(dateFrom) : defaultFrom,
+                [Op.lte]: dateTo   ? new Date(dateTo + 'T23:59:59.999Z') : defaultTo,
+            };
+        }
 
         // ── Filtros adicionais ────────────────────────────────────────────────
         if (status) {
@@ -209,7 +213,7 @@ export async function listLaunches(req, res, next) {
         if (companyId) where.companyId = Number(companyId);
         if (enterpriseId) where.enterpriseId = Number(enterpriseId);
         if (search) {
-            where[Op.or] = [
+            const searchConds = [
                 { providerName: { [Op.iLike]: `%${search}%` } },
                 { companyName: { [Op.iLike]: `%${search}%` } },
                 { enterpriseName: { [Op.iLike]: `%${search}%` } },
@@ -217,6 +221,17 @@ export async function listLaunches(req, res, next) {
                 { siengeCreditorName: { [Op.iLike]: `%${search}%` } },
                 ...(isAdmin ? [{ createdByName: { [Op.iLike]: `%${search}%` } }] : []),
             ];
+            // Não-admin: combina filtro de acesso (cidade/usuário) com busca via Op.and
+            // para não sobrescrever o controle de acesso já definido em where[Op.or]
+            if (!isAdmin && where[Op.or]) {
+                where[Op.and] = [
+                    { [Op.or]: where[Op.or] },
+                    { [Op.or]: searchConds },
+                ];
+                delete where[Op.or];
+            } else {
+                where[Op.or] = searchConds;
+            }
         }
 
         const offset = (Number(page) - 1) * Number(limit);
@@ -325,13 +340,17 @@ export async function getSummary(req, res, next) {
             ];
         }
 
-        const today = new Date();
-        const defaultFrom = new Date(today.getFullYear(), today.getMonth(), 1);
-        const defaultTo   = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
-        where.createdAt = {
-            [Op.gte]: dateFrom ? new Date(dateFrom) : defaultFrom,
-            [Op.lte]: dateTo   ? new Date(dateTo + 'T23:59:59.999Z') : defaultTo,
-        };
+        // Admin: sem restrição de data por padrão — aplica só se enviado explicitamente
+        // Não-admin: padrão = mês corrente se não informado
+        if (!isAdmin || dateFrom || dateTo) {
+            const today = new Date();
+            const defaultFrom = new Date(today.getFullYear(), today.getMonth(), 1);
+            const defaultTo   = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
+            where.createdAt = {
+                [Op.gte]: dateFrom ? new Date(dateFrom) : defaultFrom,
+                [Op.lte]: dateTo   ? new Date(dateTo + 'T23:59:59.999Z') : defaultTo,
+            };
+        }
 
         const rows = await Model().findAll({
             where,

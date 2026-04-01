@@ -215,6 +215,7 @@ async function fillAutocomplete(page, fieldName, searchText, matchText, containe
  * @param {string} params.obraCod           - Código da obra (erpId)
  * @param {string} params.dataVencimento    - DD/MM/YYYY — data de vencimento (boleto)
  * @param {string|number} params.value      - Valor da medição (mesmo do boleto/lançamento)
+ * @param {number} [params.targetRowIndex]  - Índice 1-based do item editável a preencher (padrão: 1)
  * @returns {{ measurementNumber: number|null }}
  */
 export async function createMeasurement(page, params = {}) {
@@ -224,6 +225,7 @@ export async function createMeasurement(page, params = {}) {
         obraCod = "",
         dataVencimento = "",
         value = "",
+        targetRowIndex = 1,
     } = params;
 
     // ── PRÉ-FASE: libera qualquer alocação prévia da planilha ────────────────
@@ -351,16 +353,21 @@ export async function createMeasurement(page, params = {}) {
     frame = await getMainFrame(page);
 
     // ── FASE 7: Preencher valor da medição ────────────────────────────────────
-    log("MEASUREMENT", `Preenchendo valor da medição: ${value}`);
+    log("MEASUREMENT", `Preenchendo valor da medição: ${value} | item alvo (editável #${targetRowIndex})`);
     await frame.waitForSelector('tr[id^="linhaRow_"]:not([id$="-1"])', {
         state: "attached",
         timeout: 30000,
     });
 
-    // Obtém em uma única roundtrip: o número da medição e o primeiro campo editável
-    const rowInfo = await frame.evaluate(() => {
+    // Obtém em uma única roundtrip: número da medição e o campo editável alvo.
+    // targetRowIndex é 1-based e conta apenas linhas com qtMedida editável —
+    // itens com saldo zero ficam readonly no grid e são ignorados na contagem.
+    // Se targetRowIndex exceder o total de editáveis, usa o último encontrado (fallback).
+    const rowInfo = await frame.evaluate((targetIdx) => {
         let measurementNumber = null;
         let inputId = null;
+        let lastEditableId = null;
+        let editableCount = 0;
 
         const rows = document.querySelectorAll('tr[id^="linhaRow_"]:not([id$="-1"])');
         for (const row of rows) {
@@ -374,21 +381,30 @@ export async function createMeasurement(page, params = {}) {
                 }
             }
 
-            // Encontra o primeiro qtMedida editável (não readonly, não disabled)
+            // Conta apenas os qtMedida editáveis (não readonly, não disabled)
             const qtInput = row.querySelector(`input[id^="row[${idx}].qtMedida_"]`);
-            if (qtInput && !qtInput.readOnly && !qtInput.disabled && !inputId) {
-                inputId = qtInput.id;
+            if (qtInput && !qtInput.readOnly && !qtInput.disabled) {
+                editableCount++;
+                lastEditableId = qtInput.id;
+                if (editableCount === targetIdx) {
+                    inputId = qtInput.id;
+                }
             }
         }
 
-        return { measurementNumber, inputId };
-    });
+        // Fallback: se targetIdx > total de editáveis, usa o último encontrado
+        if (!inputId && lastEditableId) {
+            inputId = lastEditableId;
+        }
+
+        return { measurementNumber, inputId, editableCount };
+    }, targetRowIndex);
 
     if (!rowInfo.inputId) {
         throw new Error("Campo de valor da medição (qtMedida) não encontrado ou todos readonly.");
     }
 
-    log("MEASUREMENT", `Campo: ${rowInfo.inputId} | Nº medição: ${rowInfo.measurementNumber || "?"}`);
+    log("MEASUREMENT", `Campo: ${rowInfo.inputId} | Nº medição: ${rowInfo.measurementNumber || "?"} | editáveis=${rowInfo.editableCount}`);
 
     // Preenche o campo — 2 casas decimais (formato $.2 do Sienge)
     await safeFillMoney2(page, frame, `input[id="${rowInfo.inputId}"]`, value);

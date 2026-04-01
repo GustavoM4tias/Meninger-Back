@@ -9,6 +9,7 @@ import { pollContractStatus, pollMeasurementStatus, pollTituloStatus, stepRegist
 const CRON_EXP = process.env.CONTRACT_APPROVAL_CRON || '*/20 * * * *';
 
 async function checkContractApprovals() {
+    if (process.env.PAYMENT_FLOW_ENABLED !== 'true') return; // desabilitado neste ambiente
     console.log('🔍 [ContractApproval] Verificando alçadas de aprovação...');
     const { Op } = db.Sequelize;
     const skipStatuses = { [Op.notIn]: ['cancelado', 'titulo_pago', 'aborted'] };

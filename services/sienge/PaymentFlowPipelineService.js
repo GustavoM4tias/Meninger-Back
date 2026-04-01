@@ -560,12 +560,70 @@ export async function stepCreateMeasurement(launchId, userId = null) {
 
     const credentials = await getUserSiengeCredentials(userId || launch.createdBy);
 
+    // ── Selecionar o item correto do contrato para a medição ──────────────────
+    // A API retorna os itens na mesma ordem exibida no grid do Playwright.
+    // Itens com saldo > 0 = editáveis no grid; itens com saldo = 0 = readonly.
+    // Estratégia: 1º match exato de saldo; 2º menor saldo suficiente; 3º primeiro com saldo.
+    let targetRowIndex = 1;
+    try {
+        const targetValue = Number(launch.unitPrice) || 0;
+        const buildingId  = erpId || launch.enterpriseId;
+        const { items }   = await SiengeContractService.validateItems(
+            launch.siengeDocumentId,
+            launch.siengeContractNumber,
+            buildingId,
+            1,           // buildingUnitId COMERCIAL
+            targetValue,
+        );
+
+        if (items.length > 0) {
+            // Salva items brutos para auditoria
+            await patch(launch, {
+                siengeItemsRaw: items,
+            });
+
+            // Filtra apenas itens com saldo positivo (serão os editáveis no grid)
+            const withBalance = items
+                .map((item, i) => ({ ...item, _pos: i }))
+                .filter(it => (it._balanceEstimate || 0) > 0.005);
+
+            if (withBalance.length > 0) {
+                // Prioridade 1: saldo exatamente igual ao valor alvo (tolerância 1 centavo)
+                const exactMatch = withBalance.find(
+                    it => Math.abs((it._balanceEstimate || 0) - targetValue) < 0.01,
+                );
+                // Prioridade 2: saldo ≥ valor alvo — escolhe o de menor saldo suficiente
+                const sufficient = withBalance
+                    .filter(it => (it._balanceEstimate || 0) >= targetValue - 0.005)
+                    .sort((a, b) => (a._balanceEstimate || 0) - (b._balanceEstimate || 0));
+                const chosen = exactMatch || sufficient[0] || withBalance[0];
+
+                // posição 1-based dentro dos itens com saldo (= índice entre editáveis)
+                targetRowIndex = withBalance.findIndex(it => it._pos === chosen._pos) + 1;
+
+                await patch(launch, {
+                    siengeItemBalanceOk:        (chosen._balanceEstimate || 0) >= targetValue - 0.005,
+                    siengeItemBalanceAvailable: chosen._balanceEstimate || 0,
+                });
+
+                console.log(
+                    `🎯 [Pipeline] #${launchId}: item escolhido pos=${chosen._pos + 1}` +
+                    ` | saldo=${(chosen._balanceEstimate || 0).toFixed(2)}` +
+                    ` | targetRowIndex=${targetRowIndex}`,
+                );
+            }
+        }
+    } catch (err) {
+        console.warn(`⚠️ [Pipeline] #${launchId}: seleção de item falhou, usando 1º editável. ${err.message}`);
+    }
+
     const playwrightPayload = {
         documentType: launch.siengeDocumentId,
         contractNumber: String(launch.siengeContractNumber),
         obraCod: String(erpId || launch.enterpriseId || ''),
         dataVencimento,
         value: String(launch.unitPrice || ''),
+        targetRowIndex,
         credentials,
     };
 

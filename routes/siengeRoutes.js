@@ -64,6 +64,20 @@ router.delete("/awards/:id", authenticate, deleteAward);
 router.post("/awards/delete", authenticate, deleteAwards);
 router.post("/awards/register-sales", authenticate, registerSales);
 
+// ── Guard: Payment Flow desabilitado neste ambiente ──────────────────────────
+router.use('/payment-flow', (req, res, next) => {
+    if (process.env.PAYMENT_FLOW_ENABLED !== 'true') {
+        return res.status(503).json({ error: 'Payment Flow desabilitado neste ambiente (PAYMENT_FLOW_ENABLED=false).' });
+    }
+    next();
+});
+router.use('/launch-types', (req, res, next) => {
+    if (process.env.PAYMENT_FLOW_ENABLED !== 'true') {
+        return res.status(503).json({ error: 'Payment Flow desabilitado neste ambiente (PAYMENT_FLOW_ENABLED=false).' });
+    }
+    next();
+});
+
 // ── Tipos de Lançamento (dinâmicos, tabela launch_type_configs) ───────────────
 router.get('/launch-types', authenticate, listLaunchTypes);
 router.post('/launch-types', authenticate, createLaunchType);
