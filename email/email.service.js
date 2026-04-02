@@ -20,12 +20,11 @@ if (!EMAIL_HOST || !EMAIL_USER || !EMAIL_PASS || !EMAIL_FROM) {
 const transporter = nodemailer.createTransport({
     host: EMAIL_HOST,
     port: EMAIL_PORT,
-    secure: EMAIL_SECURE, // 465 true, 587 false
+    secure: EMAIL_SECURE, // 465 true, 587 false (STARTTLS)
     auth: { user: EMAIL_USER, pass: EMAIL_PASS },
-    requireTLS: !EMAIL_SECURE,
     tls: {
-        minVersion: 'TLSv1.2',
-        rejectUnauthorized: process.env.EMAIL_TLS_REJECT_UNAUTHORIZED !== 'false', // 👈 aceita self-signed
+        // rejectUnauthorized=false aceita certificados self-signed
+        rejectUnauthorized: process.env.EMAIL_TLS_REJECT_UNAUTHORIZED !== 'false',
     },
 });
 
