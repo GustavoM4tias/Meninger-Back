@@ -26,7 +26,39 @@ function neutralResetResponse(res) {
 
 function isStrongPassword(password) {
   const p = String(password || '');
-  return /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(p);
+  return (
+    p.length >= 8 &&
+    /[A-Z]/.test(p) &&
+    /[a-z]/.test(p) &&
+    /[0-9]/.test(p) &&
+    /[!@#$%^&*()_\-+=[\]{};:,.?/\\|~`"'<>]/.test(p)
+  );
+}
+
+function generateSecurePassword() {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghjkmnpqrstuvwxyz';
+  const digits = '23456789';
+  const special = '!@#$%*_-+=';
+  const all = upper + lower + digits + special;
+
+  const password = [
+    upper[Math.floor(Math.random() * upper.length)],
+    lower[Math.floor(Math.random() * lower.length)],
+    digits[Math.floor(Math.random() * digits.length)],
+    special[Math.floor(Math.random() * special.length)],
+  ];
+
+  for (let i = 4; i < 12; i++) {
+    password.push(all[Math.floor(Math.random() * all.length)]);
+  }
+
+  for (let i = password.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [password[i], password[j]] = [password[j], password[i]];
+  }
+
+  return password.join('');
 }
 
 export const registerUser = async (req, res) => {
@@ -140,8 +172,8 @@ export const changePassword = async (req, res) => {
       return responseHandler.error(res, 'Usuário não encontrado');
     }
 
-    if (user.auth_provider !== 'INTERNAL') {
-      return responseHandler.error(res, 'Alteração de senha não disponível para este tipo de conta');
+    if (!user.password) {
+      return responseHandler.error(res, 'Este usuário não possui senha local — use o login Microsoft');
     }
 
     const passwordMatch = await bcrypt.compare(currentPassword, user.password);
@@ -615,6 +647,40 @@ export const saveSiengeCredentials = async (req, res) => {
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
+};
+
+// ── Reset de senha pelo admin ─────────────────────────────────────────────────
+
+/**
+ * POST /api/auth/users/:id/reset-password  (admin only)
+ * Gera uma senha aleatória segura e substitui a senha atual do usuário.
+ * Retorna a senha gerada para que o admin possa repassá-la.
+ */
+export const adminResetUserPassword = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return responseHandler.error(res, 'ID inválido');
+
+    const user = await User.findByPk(id);
+    if (!user) return responseHandler.error(res, 'Usuário não encontrado');
+
+    const newPassword = generateSecurePassword();
+
+    user.password = newPassword;
+    user.reset_password_code = null;
+    user.reset_password_expires_at = null;
+    user.reset_password_attempts = 0;
+    user.reset_password_last_sent_at = null;
+    await user.save();
+
+    return responseHandler.success(res, {
+      password: newPassword,
+      message: 'Senha resetada com sucesso.',
+    });
+  } catch (error) {
+    console.error('[adminResetUserPassword] erro:', error);
+    return responseHandler.error(res, 'Erro ao resetar senha');
+  }
 };
 
 export const getUserById = async (req, res) => {
