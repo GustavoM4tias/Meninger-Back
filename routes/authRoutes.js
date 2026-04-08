@@ -14,6 +14,7 @@ import {
   getUserById,
   getSiengeCredentials,
   saveSiengeCredentials,
+  adminResetUserPassword,
 } from '../controllers/authController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import { authorizeByRole } from '../middlewares/permissionMiddleware.js';
@@ -37,6 +38,7 @@ router.put('/user/sienge-credentials', authenticate, saveSiengeCredentials);
 router.get('/user/:id', authenticate, authorizeByRole(['admin']), getUserById);
 router.get('/users', authenticate, authorizeByRole(['admin']), getAllUsers);
 router.put('/users', authenticate, authorizeByRole(['admin']), updateUser);
+router.post('/users/:id/reset-password', authenticate, authorizeByRole(['admin']), adminResetUserPassword);
 router.post('/face/enroll', authenticate, enrollFace);
 router.post('/face/identify', identifyFace);
 
