@@ -22,6 +22,7 @@ import academyRoutes from './routes/academyRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import bucketUploadRoutes from './routes/bucketUploadRoutes.js';
 import permissionRoutes from './routes/permissionRoutes.js';
+import signatureRoutes from './routes/signatureRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -71,6 +72,7 @@ app.use('/api/academy', academyRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/bucket-upload', bucketUploadRoutes);
 app.use('/api/permissions', permissionRoutes);
+app.use('/api/signatures', signatureRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -108,6 +110,7 @@ async function bootServer() {
     ['Lead', db.Lead],                                    // motivo_cancelamento + submotivo_cancelamento
     ['BucketUploadHistory', db.BucketUploadHistory],
     ['UserPermission', db.UserPermission],
+    ['Signature', db.Signature],
   ]) {
     try {
       await model.sync({ alter: true });

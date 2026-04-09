@@ -52,15 +52,16 @@ function sanitize(value) {
 }
 
 function sheetToCSV(sheet) {
+    const SEP = ';';
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
     return rows
         .map(row =>
             row.map(cell => {
                 const val = sanitize(cell);
-                return val.includes(',') || val.includes('\n') || val.includes('"')
+                return val.includes(SEP) || val.includes('\n') || val.includes('"')
                     ? `"${val.replace(/"/g, '""')}"`
                     : val;
-            }).join(',')
+            }).join(SEP)
         )
         .join('\n');
 }

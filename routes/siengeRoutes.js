@@ -64,16 +64,16 @@ router.delete("/awards/:id", authenticate, deleteAward);
 router.post("/awards/delete", authenticate, deleteAwards);
 router.post("/awards/register-sales", authenticate, registerSales);
 
-// ── Guard: Payment Flow desabilitado neste ambiente ──────────────────────────
+// ── Guard: Fluxo de pagamento desabilitado neste ambiente ──────────────────────────
 router.use('/payment-flow', (req, res, next) => {
     if (process.env.PAYMENT_FLOW_ENABLED !== 'true') {
-        return res.status(503).json({ error: 'Payment Flow desabilitado neste ambiente (PAYMENT_FLOW_ENABLED=false).' });
+        return res.status(503).json({ error: 'Fluxo de pagamento desabilitado neste ambiente (PAYMENT_FLOW_ENABLED=false).' });
     }
     next();
 });
 router.use('/launch-types', (req, res, next) => {
     if (process.env.PAYMENT_FLOW_ENABLED !== 'true') {
-        return res.status(503).json({ error: 'Payment Flow desabilitado neste ambiente (PAYMENT_FLOW_ENABLED=false).' });
+        return res.status(503).json({ error: 'Fluxo de pagamento desabilitado neste ambiente (PAYMENT_FLOW_ENABLED=false).' });
     }
     next();
 });

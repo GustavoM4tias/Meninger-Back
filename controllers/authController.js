@@ -488,33 +488,37 @@ export const getUserInfo = async (req, res) => {
 };
 
 export const updateMe = async (req, res) => {
-  const { username, email, position, city, status, birth_date, face_enabled, phone } = req.body;
-  if (!username || !email || !position || !city || status === undefined || !birth_date || face_enabled === undefined) {
+  const { username, email, position, status, birth_date, face_enabled, phone } = req.body;
+  const isAdmin = req.user.role === 'admin';
+
+  // Campos base obrigatórios para todos
+  if (!username || !email || status === undefined || !birth_date || face_enabled === undefined) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
+  }
+  // Admin deve sempre informar cargo
+  if (isAdmin && !position) {
+    return responseHandler.error(res, 'Cargo é obrigatório');
   }
 
   try {
-    const [positionRecord, cityRecord] = await Promise.all([
-      Position.findOne({ where: { name: position, active: true } }),
-      UserCity.findOne({ where: { name: city, active: true } }),
-    ]);
+    const updatePayload = {
+      username,
+      email,
+      status,
+      birth_date,
+      face_enabled,
+      phone: phone ?? null,
+      // city nunca é alterada via Minha Conta — apenas pelo admin no painel de Usuários
+    };
 
-    if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
-    if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
+    // Cargo: somente admin pode alterar via Minha Conta
+    if (isAdmin && position) {
+      const positionRecord = await Position.findOne({ where: { name: position, active: true } });
+      if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
+      updatePayload.position = positionRecord.name;
+    }
 
-    const [affectedRows] = await User.update(
-      {
-        username,
-        email,
-        position: positionRecord.name,
-        city: cityRecord.name,
-        status,
-        birth_date,
-        face_enabled,
-        phone: phone ?? null,
-      },
-      { where: { id: req.user.id } }
-    );
+    const [affectedRows] = await User.update(updatePayload, { where: { id: req.user.id } });
 
     if (affectedRows === 0) {
       return responseHandler.error(res, 'Usuário não encontrado');

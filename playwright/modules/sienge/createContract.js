@@ -128,7 +128,7 @@ async function waitGeneratedCode(frame, timeout = 30000) {
 export async function createInitialContract(page, params = {}) {
     const {
         documento = "PCEF",
-        objeto = "CONTRATO AUTOMÁTICO PAYMENT FLOW",
+        objeto = "CONTRATO AUTOMÁTICO MENIN OFFICE",
         empresa = "97",
         fornecedor = "",
         tipoContrato = "1",

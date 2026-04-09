@@ -12,6 +12,7 @@ router.get('/', ctrl.listProjections);
 router.post('/', ctrl.createProjection);
 router.post('/clone', ctrl.cloneProjection);
 router.get('/enterprise-picker', ctrl.listEnterprisesForPicker);
+router.get('/report', ctrl.getProjectionReport);
 
 // rotas que usam :id com regex numérica
 router.get('/:id(\\d+)', ctrl.getProjectionDetail);
