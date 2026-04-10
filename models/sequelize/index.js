@@ -74,7 +74,8 @@ import InPersonMeetingDefine from './inPersonMeeting.js';
 import BucketUploadHistoryDefine from './tools/bucketUploadHistory.js';
 import UserPermissionDefine from './userPermission.js';
 import SignatureDefine from './signature.js';
-
+import SignatureDocumentDefine from './signatureDocument.js';
+import SignatureDocumentSignerDefine from './signatureDocumentSigner.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -157,6 +158,8 @@ db.InPersonMeeting   = InPersonMeetingDefine(sequelize, DataTypes);
 db.BucketUploadHistory = BucketUploadHistoryDefine(sequelize, DataTypes);
 db.UserPermission = UserPermissionDefine(sequelize, DataTypes);
 db.Signature = SignatureDefine(sequelize, DataTypes);
+db.SignatureDocument       = SignatureDocumentDefine(sequelize, DataTypes);
+db.SignatureDocumentSigner = SignatureDocumentSignerDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

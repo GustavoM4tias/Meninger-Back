@@ -3,10 +3,16 @@ import crypto from 'crypto';
 
 export default (sequelize, DataTypes) => {
   const Signature = sequelize.define('Signature', {
-    // ── Quem assinou ─────────────────────────────────────────────────────────
+    // ── Quem deve assinar ─────────────────────────────────────────────────────
     user_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
+      references: { model: 'users', key: 'id' },
+    },
+    // Quem solicitou a assinatura (null = o próprio usuário)
+    requested_by: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
       references: { model: 'users', key: 'id' },
     },
 
@@ -39,20 +45,24 @@ export default (sequelize, DataTypes) => {
 
     // ── Controle de fluxo ────────────────────────────────────────────────────
     status: {
-      type: DataTypes.ENUM('PENDING', 'SIGNED', 'REJECTED', 'EXPIRED'),
+      type: DataTypes.ENUM('REQUESTED', 'PENDING', 'SIGNED', 'REJECTED', 'EXPIRED', 'CANCELLED'),
       allowNull: false,
       defaultValue: 'PENDING',
     },
-    // Token de uso único que conecta a sessão de assinatura
+    // Motivo de recusa (preenchido em REJECTED) ou de cancelamento (CANCELLED)
+    reason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    // Token de uso único que conecta a sessão de assinatura (gerado ao iniciar)
     signature_token: {
       type: DataTypes.STRING(128),
-      allowNull: false,
+      allowNull: true,
       unique: true,
-      defaultValue: () => crypto.randomBytes(48).toString('hex'),
     },
     token_expires_at: {
       type: DataTypes.DATE,
-      allowNull: false,
+      allowNull: true,
     },
     signed_at: {
       type: DataTypes.DATE,
@@ -80,7 +90,6 @@ export default (sequelize, DataTypes) => {
       defaultValue: false,
     },
     face_distance: {
-      // Distância euclidiana obtida na verificação (menor = mais próximo)
       type: DataTypes.FLOAT,
       allowNull: true,
     },
@@ -89,7 +98,6 @@ export default (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: false,
     },
-    // Número de tentativas de verificação inválidas (bloqueia após limite)
     failed_attempts: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -97,7 +105,6 @@ export default (sequelize, DataTypes) => {
     },
 
     // ── Extensibilidade ───────────────────────────────────────────────────────
-    // Qualquer dado extra do módulo que originou a assinatura
     metadata: {
       type: DataTypes.JSONB,
       allowNull: true,
@@ -113,6 +120,10 @@ export default (sequelize, DataTypes) => {
     Signature.belongsTo(models.User, {
       as: 'signer',
       foreignKey: 'user_id',
+    });
+    Signature.belongsTo(models.User, {
+      as: 'requester',
+      foreignKey: 'requested_by',
     });
   };
 
