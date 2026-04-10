@@ -1,9 +1,16 @@
-// controllers/signatureController.js
 import responseHandler from '../utils/responseHandler.js';
 import {
   initiateSignature,
+  initiateFromRequest,
   verifyAndSign,
+  requestSignature,
+  cancelSignature,
+  rejectRequest,
+  deleteSignatureRecord,
   listSignatures,
+  listSentRequests,
+  listPendingRequests,
+  getPendingCount,
   getSignatureById,
   validateByCode,
 } from '../services/signatureService.js';
@@ -17,34 +24,40 @@ function getClientIp(req) {
   );
 }
 
-/**
- * POST /api/signatures/initiate
- * Inicia uma sessão de assinatura para o usuário autenticado.
- *
- * Body: { document_type?, document_ref?, document_url?, document_hash?, document_name, metadata? }
- */
 export const initiate = async (req, res) => {
   try {
     const result = await initiateSignature(req.user.id, req.body);
     return responseHandler.success(res, result);
   } catch (err) {
-    if (err.status === 400 || err.status === 403) {
+    if (err.status) {
       return res.status(err.status).json({
         success: false,
         error: err.message,
         code: err.code || null,
       });
     }
+
     return responseHandler.error(res, err);
   }
 };
 
-/**
- * POST /api/signatures/sign
- * Verifica senha + facial e finaliza a assinatura.
- *
- * Body: { signature_token, password, face_embedding }
- */
+export const initiateRequest = async (req, res) => {
+  try {
+    const result = await initiateFromRequest(req.user.id, Number(req.params.id));
+    return responseHandler.success(res, result);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({
+        success: false,
+        error: err.message,
+        code: err.code || null,
+      });
+    }
+
+    return responseHandler.error(res, err);
+  }
+};
+
 export const sign = async (req, res) => {
   try {
     const result = await verifyAndSign(req.user.id, {
@@ -52,10 +65,10 @@ export const sign = async (req, res) => {
       ip_address: getClientIp(req),
       user_agent: req.headers['user-agent'] || null,
     });
+
     return responseHandler.success(res, result);
   } catch (err) {
-    const statusCode = err.status || 500;
-    return res.status(statusCode).json({
+    return res.status(err.status || 500).json({
       success: false,
       error: err.message,
       code: err.code || null,
@@ -64,53 +77,142 @@ export const sign = async (req, res) => {
   }
 };
 
-/**
- * GET /api/signatures
- * Lista assinaturas do usuário autenticado.
- *
- * Query: page?, limit?, status?, document_type?
- */
+export const request = async (req, res) => {
+  try {
+    const result = await requestSignature(req.user.id, req.body);
+    return responseHandler.success(res, result);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({
+        success: false,
+        error: err.message,
+        code: err.code || null,
+      });
+    }
+
+    return responseHandler.error(res, err);
+  }
+};
+
 export const list = async (req, res) => {
   try {
-    const { page, limit, status, document_type } = req.query;
+    const { page, limit, status, document_type, q } = req.query;
+
     const result = await listSignatures(req.user.id, {
       page: Number(page) || 1,
-      limit: Math.min(Number(limit) || 20, 100),
+      limit: Math.min(Number(limit) || 10, 100),
       status,
       document_type,
+      q,
     });
+
     return responseHandler.success(res, result);
   } catch (err) {
     return responseHandler.error(res, err);
   }
 };
 
-/**
- * GET /api/signatures/:id
- * Retorna uma assinatura específica.
- * Admin pode ver qualquer assinatura; usuário comum só a sua.
- */
+export const sent = async (req, res) => {
+  try {
+    const { page, limit, status, q } = req.query;
+
+    const result = await listSentRequests(req.user.id, {
+      page: Number(page) || 1,
+      limit: Math.min(Number(limit) || 10, 100),
+      status,
+      q,
+    });
+
+    return responseHandler.success(res, result);
+  } catch (err) {
+    return responseHandler.error(res, err);
+  }
+};
+
+export const pending = async (req, res) => {
+  try {
+    const { page, limit, q } = req.query;
+
+    const result = await listPendingRequests(req.user.id, {
+      page: Number(page) || 1,
+      limit: Math.min(Number(limit) || 10, 100),
+      q,
+    });
+
+    return responseHandler.success(res, result);
+  } catch (err) {
+    return responseHandler.error(res, err);
+  }
+};
+
+export const pendingCount = async (req, res) => {
+  try {
+    const count = await getPendingCount(req.user.id);
+    return responseHandler.success(res, { count });
+  } catch (err) {
+    return responseHandler.error(res, err);
+  }
+};
+
 export const getById = async (req, res) => {
   try {
     const isAdmin = req.user.role === 'admin';
-    const signature = await getSignatureById(
-      Number(req.params.id),
-      req.user.id,
-      isAdmin
-    );
+    const signature = await getSignatureById(Number(req.params.id), req.user.id, isAdmin);
     return responseHandler.success(res, signature);
   } catch (err) {
     if (err.status === 404) {
       return res.status(404).json({ success: false, error: err.message });
     }
+
     return responseHandler.error(res, err);
   }
 };
 
-/**
- * GET /api/signatures/validate/:code
- * Endpoint público — valida autenticidade de um documento assinado pelo código.
- */
+export const cancel = async (req, res) => {
+  try {
+    const result = await cancelSignature(req.user.id, Number(req.params.id), {
+      password: req.body.password,
+      face_embedding: req.body.face_embedding,
+      reason: req.body.reason || null,
+    });
+
+    return responseHandler.success(res, result);
+  } catch (err) {
+    return res.status(err.status || 500).json({
+      success: false,
+      error: err.message,
+      code: err.code || null,
+      ...(err.face_distance !== undefined ? { face_distance: err.face_distance } : {}),
+    });
+  }
+};
+
+export const reject = async (req, res) => {
+  try {
+    const result = await rejectRequest(req.user.id, Number(req.params.id), req.body.reason || null);
+    return responseHandler.success(res, result);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ success: false, error: err.message });
+    }
+
+    return responseHandler.error(res, err);
+  }
+};
+
+export const deleteRecord = async (req, res) => {
+  try {
+    const result = await deleteSignatureRecord(req.user.id, Number(req.params.id));
+    return responseHandler.success(res, result);
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ success: false, error: err.message });
+    }
+
+    return responseHandler.error(res, err);
+  }
+};
+
 export const validate = async (req, res) => {
   try {
     const signature = await validateByCode(req.params.code);
@@ -119,6 +221,7 @@ export const validate = async (req, res) => {
     if (err.status === 404 || err.status === 400) {
       return res.status(err.status).json({ success: false, error: err.message });
     }
+
     return responseHandler.error(res, err);
   }
 };

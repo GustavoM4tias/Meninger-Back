@@ -10,6 +10,8 @@ const CONTEXTS = {
     PAYMENT_FLOW_NF: 'payment_flow_nf',           // Nota Fiscal principal
     PAYMENT_FLOW_BOLETO: 'payment_flow_boleto',   // Boleto vinculado
     PAYMENT_FLOW_EXTRA: 'payment_flow_extra',     // Anexos extras (vários)
+    // ── Assinatura Digital ─────────────────────────────────────────────────────
+    SIGNATURE_DOC: 'signature_doc',               // Documentos para assinar
 };
 
 function sanitizeFileName(name = '') {
@@ -91,6 +93,18 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
             return {
                 bucket: STORAGE_BUCKET,
                 path: `office/payment-flow/${referenceId || 'draft'}/extras/${timestamp}-${originalName}`,
+                isPublic: true,
+            };
+
+        // ── Assinatura Digital ─────────────────────────────────────────────────
+        case CONTEXTS.SIGNATURE_DOC:
+            if (!userId) throw new Error('Usuário não autenticado');
+            if (file.mimetype !== 'application/pdf') {
+                throw new Error('Documento para assinatura aceita apenas PDF');
+            }
+            return {
+                bucket: STORAGE_BUCKET,
+                path: `office/signatures/${userId}/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 
