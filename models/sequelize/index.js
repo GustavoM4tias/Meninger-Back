@@ -48,6 +48,7 @@ import CvEnterprisePlanDefine from './cv/enterprisePlan.js';
 import CvWorkflowGroupDefine from './cv/workflowGroup.js';
 
 import landSyncEnterpriseDefine from './landSyncEnterprise.js';
+import hiddenDashboardEnterpriseDefine from './hiddenDashboardEnterprise.js';
 
 import SiengeAwardDefine from './sienge/award.js';
 import SiengeAwardLinkDefine from './sienge/awardLink.js';
@@ -76,6 +77,15 @@ import UserPermissionDefine from './userPermission.js';
 import SignatureDefine from './signature.js';
 import SignatureDocumentDefine from './signatureDocument.js';
 import SignatureDocumentSignerDefine from './signatureDocumentSigner.js';
+
+// CV extras
+import CvEnterprisePriceTableDefine from './cv/enterprisePriceTable.js';
+import CvCorrespondentDefine from './cv/cvCorrespondent.js';
+
+// Fichas Comerciais
+import EnterpriseConditionDefine from './comercial/enterpriseCondition.js';
+import EnterpriseConditionModuleDefine from './comercial/enterpriseConditionModule.js';
+import EnterpriseConditionCampaignDefine from './comercial/enterpriseConditionCampaign.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -132,6 +142,7 @@ db.CvEnterprisePlan = CvEnterprisePlanDefine(sequelize, DataTypes);
 db.CvWorkflowGroup = CvWorkflowGroupDefine(sequelize, DataTypes);
 
 db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
+db.HiddenDashboardEnterprise = hiddenDashboardEnterpriseDefine(sequelize, DataTypes);
 
 db.Award = SiengeAwardDefine(sequelize, DataTypes);
 db.AwardLink = SiengeAwardLinkDefine(sequelize, DataTypes);
@@ -160,6 +171,15 @@ db.UserPermission = UserPermissionDefine(sequelize, DataTypes);
 db.Signature = SignatureDefine(sequelize, DataTypes);
 db.SignatureDocument       = SignatureDocumentDefine(sequelize, DataTypes);
 db.SignatureDocumentSigner = SignatureDocumentSignerDefine(sequelize, DataTypes);
+
+// CV extras
+db.CvEnterprisePriceTable = CvEnterprisePriceTableDefine(sequelize, DataTypes);
+db.CvCorrespondent        = CvCorrespondentDefine(sequelize, DataTypes);
+
+// Fichas Comerciais
+db.EnterpriseCondition         = EnterpriseConditionDefine(sequelize, DataTypes);
+db.EnterpriseConditionModule   = EnterpriseConditionModuleDefine(sequelize, DataTypes);
+db.EnterpriseConditionCampaign = EnterpriseConditionCampaignDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

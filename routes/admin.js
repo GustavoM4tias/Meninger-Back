@@ -41,6 +41,12 @@ import {
   removeLandSyncEnterprise
 } from '../controllers/landSyncController.js';
 
+import {
+  listHiddenEnterprises,
+  addHiddenEnterprise,
+  removeHiddenEnterprise
+} from '../controllers/hiddenDashboardController.js';
+
 import LandDataController from '../controllers/external/landDataController.js';
 const landDataController = new LandDataController();
 
@@ -97,5 +103,10 @@ router.post('/land-sync-enterprises', authMiddleware, requireAdmin, addLandSyncE
 router.delete('/land-sync-enterprises/:id', authMiddleware, requireAdmin, removeLandSyncEnterprise);
  
 router.post( '/land-sync-obstit/run', authMiddleware, requireAdmin, landDataController.run );
+
+// Hidden Dashboard Enterprises (admin only)
+router.get('/hidden-enterprises', authMiddleware, requireAdmin, listHiddenEnterprises);
+router.post('/hidden-enterprises', authMiddleware, requireAdmin, addHiddenEnterprise);
+router.delete('/hidden-enterprises/:id', authMiddleware, requireAdmin, removeHiddenEnterprise);
 
 export default router;
