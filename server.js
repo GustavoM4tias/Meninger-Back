@@ -24,6 +24,7 @@ import bucketUploadRoutes from './routes/bucketUploadRoutes.js';
 import permissionRoutes from './routes/permissionRoutes.js';
 import signatureRoutes from './routes/signatureRoutes.js';
 import signatureDocumentRoutes from './routes/signatureDocumentRoutes.js';
+import conditionsRoutes from './routes/conditionsRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -37,6 +38,7 @@ import creditorPollingScheduler from './scheduler/creditorPollingScheduler.js';
 import contractApprovalScheduler from './scheduler/contractApprovalScheduler.js';
 import leadCancelReasonScheduler from './scheduler/leadCancelReasonScheduler.js';
 import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.js';
+import cvExtrasScheduler from './scheduler/cvExtrasScheduler.js';
 
 const app = express();
 
@@ -75,6 +77,7 @@ app.use('/api/bucket-upload', bucketUploadRoutes);
 app.use('/api/permissions', permissionRoutes);
 app.use('/api/signatures', signatureRoutes);
 app.use('/api/signature-documents', signatureDocumentRoutes);
+app.use('/api/conditions', conditionsRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -115,6 +118,11 @@ async function bootServer() {
     ['Signature', db.Signature],
     ['SignatureDocument', db.SignatureDocument],
     ['SignatureDocumentSigner', db.SignatureDocumentSigner],
+    ['CvEnterprisePriceTable', db.CvEnterprisePriceTable],
+    ['CvCorrespondent', db.CvCorrespondent],
+    ['EnterpriseCondition', db.EnterpriseCondition],
+    ['EnterpriseConditionModule', db.EnterpriseConditionModule],
+    ['EnterpriseConditionCampaign', db.EnterpriseConditionCampaign],
   ]) {
     try {
       await model.sync({ alter: true });
@@ -137,6 +145,7 @@ async function bootServer() {
   contractApprovalScheduler.start();
   supabaseKeepAliveScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
+  if (process.env.ENABLE_CV_EXTRAS_SCHEDULE !== 'false') cvExtrasScheduler.start(); // ativo por padrão
 
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta: ${PORT}`);

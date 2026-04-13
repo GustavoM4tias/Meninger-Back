@@ -47,6 +47,7 @@ reservas_enriquecidas AS (
     /* ids que a reserva pode ter */
     NULLIF((b.unidade_json->>'idempreendimento_int'), '')::int AS idemp_int_from_reserva,
     NULLIF((b.unidade_json->>'idempreendimento_cv'), '')::int  AS idemp_cv_from_reserva,
+    NULLIF((b.unidade_json->>'idbloco'), '')::int AS idbloco_cv_from_reserva,
 
     /* nomes */
     COALESCE(NULLIF(trim(both from (b.unidade_json->>'empreendimento')), ''), NULLIF(trim(both from b.empreendimento), '')) AS empreendimento_nome,
@@ -55,11 +56,15 @@ reservas_enriquecidas AS (
 ),
 
 /*
-  Resolve cidade (e também o ERP ID) SEM depender de idempreendimento_int na reserva,
-  usando:
-  1) match por erp_id (quando existe)
-  2) match por crm_id (quando existe)
-  3) match por enterprise_name (fallback)
+  Resolve cidade (e também o ERP ID) tentando todas as estratégias em paralelo,
+  com ordem de prioridade explícita:
+  1) erp_id = idempreendimento_int  (CV interno == Sienge ERP — caso de integração direta)
+  2) crm_id = idempreendimento_int  (CV interno == CRM ID da tabela enterprise_cities)
+  3) crm_id = idempreendimento_cv   (campo CRM explícito da reserva)
+  4) match por nome exato normalizado (fallback)
+
+  Antes as condições 2-4 ficavam bloqueadas pelos IS NULL guards, impedindo
+  que módulos/fases fossem resolvidos quando idempreendimento_int estava preenchido.
 */
 reservas_com_cidade AS (
   SELECT
@@ -71,27 +76,40 @@ reservas_com_cidade AS (
   LEFT JOIN LATERAL (
     SELECT
       COALESCE(ec.city_override, ec.default_city) AS city_resolved,
-      NULLIF(ec.erp_id, '')::int                 AS erp_id_int
+      NULLIF(ec.erp_id, '')::int                  AS erp_id_int
     FROM enterprise_cities ec
+    /* Look up block ERP code for highest-priority matching */
+    LEFT JOIN LATERAL (
+      SELECT ceb.idbloco_int
+      FROM cv_enterprise_blocks ceb
+      WHERE ceb.idbloco = re.idbloco_cv_from_reserva
+      LIMIT 1
+    ) blk ON TRUE
     WHERE
-      (
-        re.idemp_int_from_reserva IS NOT NULL
-        AND ec.erp_id = re.idemp_int_from_reserva::text
-      )
+      /* 0) Block's ERP code (most precise for fase/módulo) */
+      (blk.idbloco_int IS NOT NULL AND ec.erp_id = regexp_replace(blk.idbloco_int, '[^0-9].*', ''))
+      /* 1) idempreendimento_int é o próprio Sienge ERP ID */
+      OR (re.idemp_int_from_reserva IS NOT NULL AND ec.erp_id = re.idemp_int_from_reserva::text)
+      /* 2) idempreendimento_int é o CRM ID do CV */
+      OR (re.idemp_int_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_int_from_reserva)
+      /* 3) campo idempreendimento_cv é o CRM ID do CV */
+      OR (re.idemp_cv_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_cv_from_reserva)
+      /* 4) fallback por nome exato normalizado */
       OR (
-        re.idemp_int_from_reserva IS NULL
-        AND re.idemp_cv_from_reserva IS NOT NULL
-        AND ec.crm_id = re.idemp_cv_from_reserva
-      )
-      OR (
-        re.idemp_int_from_reserva IS NULL
-        AND re.idemp_cv_from_reserva IS NULL
-        AND re.empreendimento_nome IS NOT NULL
+        re.empreendimento_nome IS NOT NULL
         AND re.empreendimento_nome <> ''
         AND unaccent(upper(regexp_replace(COALESCE(ec.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
-            unaccent(upper(regexp_replace(re.empreendimento_nome,        '[^A-Z0-9]+',' ','g')))
+            unaccent(upper(regexp_replace(re.empreendimento_nome,         '[^A-Z0-9]+',' ','g')))
       )
-    ORDER BY ec.updated_at DESC
+    ORDER BY
+      CASE
+        WHEN blk.idbloco_int IS NOT NULL AND ec.erp_id = regexp_replace(blk.idbloco_int, '[^0-9].*', '') THEN 1
+        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.erp_id = re.idemp_int_from_reserva::text THEN 2
+        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_int_from_reserva       THEN 3
+        WHEN re.idemp_cv_from_reserva  IS NOT NULL AND ec.crm_id = re.idemp_cv_from_reserva        THEN 4
+        ELSE 5
+      END,
+      ec.updated_at DESC
     LIMIT 1
   ) ec_city ON TRUE
 ),
@@ -136,34 +154,54 @@ reservas_filtradas AS (
       FROM jsonb_to_recordset(c.units) AS u("id" int, "main" boolean, "name" text, "participationPercentage" numeric)
     ) cu ON true
     WHERE
-      c.enterprise_id = COALESCE(rs.idemp_int_from_reserva, rs.idemp_erp_resolvido)
+      c.enterprise_id = COALESCE(rs.idemp_erp_resolvido, rs.idemp_int_from_reserva)
       AND c.situation = 'Emitido'
       AND cu.unit_name = rs.unidade_nome
       AND c.financial_institution_date IS NOT NULL
   )
 ),
 
+/*
+  Resolve company_id/company_name a partir dos contratos reais já faturados,
+  usando o enterprise_id resolvido (ERP) ou o interno do CV como fallback.
+  Isso permite que o frontend associe projeções à empresa correta.
+*/
+reservas_com_empresa AS (
+  SELECT
+    rf.*,
+    comp.company_id  AS empresa_id,
+    comp.company_name AS empresa_nome
+  FROM reservas_filtradas rf
+  LEFT JOIN LATERAL (
+    SELECT c.company_id, c.company_name
+    FROM contracts c
+    WHERE c.company_id IS NOT NULL
+      AND c.enterprise_id = COALESCE(rf.idemp_erp_resolvido, rf.idemp_int_from_reserva)
+    LIMIT 1
+  ) comp ON TRUE
+),
+
 last_status AS (
   SELECT
-    rf.idreserva,
+    rce.idreserva,
     MAX(
       GREATEST(
         NULLIF((s->>'data_status_repasse'), '')::timestamptz,
         NULLIF((s->>'captured_at'), '')::timestamptz
       )
     ) AS last_status_at
-  FROM reservas_filtradas rf
-  LEFT JOIN LATERAL jsonb_array_elements(COALESCE(rf.status, '[]'::jsonb)) s ON true
-  GROUP BY rf.idreserva
+  FROM reservas_com_empresa rce
+  LEFT JOIN LATERAL jsonb_array_elements(COALESCE(rce.status, '[]'::jsonb)) s ON true
+  GROUP BY rce.idreserva
 )
 
-SELECT rf.*, ls.last_status_at
-FROM reservas_filtradas rf
+SELECT rce.*, ls.last_status_at
+FROM reservas_com_empresa rce
 LEFT JOIN last_status ls USING (idreserva)
 ORDER BY
   ls.last_status_at DESC NULLS LAST,
-  rf.data_reserva DESC NULLS LAST,
-  rf.idreserva DESC;
+  rce.data_reserva DESC NULLS LAST,
+  rce.idreserva DESC;
 `
 
   const replacements = {
