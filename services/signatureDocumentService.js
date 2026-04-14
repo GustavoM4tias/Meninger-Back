@@ -7,13 +7,13 @@ import { stampMultiSignedPdf } from '../utils/signaturePdfStamp.js';
 const { SignatureDocument, SignatureDocumentSigner, User } = db;
 const { Op } = db.Sequelize;
 
-const SESSION_TTL_MIN      = 10;
-const MAX_FAILED_ATTEMPTS  = 3;
-const USER_ATTRS           = ['id', 'username', 'email', 'position', 'face_enabled'];
+const SESSION_TTL_MIN = 10;
+const MAX_FAILED_ATTEMPTS = 3;
+const USER_ATTRS = ['id', 'username', 'email', 'position', 'face_enabled'];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function genToken()            { return crypto.randomBytes(48).toString('hex'); }
+function genToken() { return crypto.randomBytes(48).toString('hex'); }
 function genVerificationCode() {
   const h = crypto.randomBytes(4).toString('hex').toUpperCase();
   return `${h.slice(0, 4)}-${h.slice(4)}`;
@@ -43,7 +43,7 @@ async function verifyMFA(userId, { password, face_embedding }) {
   if (!user || !user.status) throw Object.assign(new Error('Usuário inválido.'), { status: 401 });
 
   const passwordOk = await bcrypt.compare(String(password), user.password);
-  const incoming   = normalizeEmbedding(face_embedding);
+  const incoming = normalizeEmbedding(face_embedding);
   if (!Array.isArray(incoming) || incoming.length !== 128)
     throw Object.assign(new Error('Embedding facial inválido.'), { status: 400 });
 
@@ -87,26 +87,26 @@ export async function createDocument(creatorId, payload) {
 
   // Cria documento pai
   const doc = await SignatureDocument.create({
-    created_by:            creatorId,
+    created_by: creatorId,
     document_name,
-    document_type:         document_type || 'PDF',
-    original_document_url: document_url  || null,
-    document_hash:         document_hash || null,
-    status:                'PENDING',
+    document_type: document_type || 'PDF',
+    original_document_url: document_url || null,
+    document_hash: document_hash || null,
+    status: 'PENDING',
     required_signers_count: uniqueIds.length,
-    signed_signers_count:   0,
-    metadata:               metadata || {},
+    signed_signers_count: 0,
+    metadata: metadata || {},
   });
 
   // Cria filhos
   await SignatureDocumentSigner.bulkCreate(
     uniqueIds.map((uid, idx) => ({
-      document_id:  doc.id,
-      user_id:      uid,
+      document_id: doc.id,
+      user_id: uid,
       requested_by: creatorId,
-      sign_order:   idx + 1,
-      is_required:  true,
-      status:       'REQUESTED',
+      sign_order: idx + 1,
+      is_required: true,
+      status: 'REQUESTED',
     }))
   );
 
@@ -120,7 +120,7 @@ export async function createDocument(creatorId, payload) {
  */
 export async function initiateSignerSession(userId, signerId) {
   const user = await User.findByPk(userId, { attributes: ['id', 'status', 'face_enabled'] });
-  if (!user?.status)    throw Object.assign(new Error('Usuário inválido.'), { status: 401 });
+  if (!user?.status) throw Object.assign(new Error('Usuário inválido.'), { status: 401 });
   if (!user.face_enabled) throw Object.assign(new Error('Facial não cadastrado.'), { status: 403, code: 'FACE_NOT_ENROLLED' });
 
   const signer = await SignatureDocumentSigner.findOne({
@@ -132,7 +132,7 @@ export async function initiateSignerSession(userId, signerId) {
     throw Object.assign(new Error('Este documento não está mais disponível para assinatura.'), { status: 409 });
 
   const expiresAt = new Date(Date.now() + SESSION_TTL_MIN * 60 * 1000);
-  const token     = genToken();
+  const token = genToken();
   await signer.update({ status: 'PENDING', signature_token: token, token_expires_at: expiresAt, failed_attempts: 0 });
 
   return { signer_id: signer.id, signer_token: token, expires_at: expiresAt, document_name: signer.document?.document_name };
@@ -162,14 +162,14 @@ export async function verifyAndSignSigner(userId, { signer_token, password, face
 
   if (!passwordOk || !faceOk) {
     const newAttempts = signer.failed_attempts + 1;
-    const willBlock   = newAttempts >= MAX_FAILED_ATTEMPTS;
+    const willBlock = newAttempts >= MAX_FAILED_ATTEMPTS;
     await signer.update({ failed_attempts: newAttempts, ...(willBlock ? { status: 'REJECTED' } : {}) });
     if (!passwordOk)
       throw Object.assign(new Error('Senha incorreta.'), { status: 401, code: 'WRONG_PASSWORD' });
     throw Object.assign(new Error('Reconhecimento facial falhou.'), { status: 401, code: 'FACE_MISMATCH', face_distance: faceDistance });
   }
 
-  const now              = new Date();
+  const now = new Date();
   const verificationCode = genVerificationCode();
 
   await signer.update({
@@ -180,58 +180,84 @@ export async function verifyAndSignSigner(userId, { signer_token, password, face
   });
 
   // ── Atualiza contador e status do documento pai ───────────────────────────
-  const doc         = signer.document;
-  const newSigned   = (doc.signed_signers_count || 0) + 1;
+  const doc = signer.document;
+  const newSigned = (doc.signed_signers_count || 0) + 1;
   const isFullySigned = newSigned >= doc.required_signers_count;
-  const newDocStatus  = isFullySigned ? 'SIGNED' : 'PARTIALLY_SIGNED';
-  const finalCode     = isFullySigned ? genVerificationCode() : null;
+  const newDocStatus = isFullySigned ? 'SIGNED' : 'PARTIALLY_SIGNED';
+  const finalCode = isFullySigned ? genVerificationCode() : null;
 
   await doc.update({
     signed_signers_count: newSigned,
-    status:               newDocStatus,
+    status: newDocStatus,
     ...(isFullySigned ? { verification_code: finalCode, signed_at_final: now } : {}),
   });
 
   // ── Gera PDF final quando todos assinaram ─────────────────────────────────
   let finalDocumentUrl = null;
+
+  console.log('[SIGNATURE] doc.id=', doc.id);
+  console.log('[SIGNATURE] signed_signers_count(before)=', doc.signed_signers_count);
+  console.log('[SIGNATURE] newSigned=', newSigned);
+  console.log('[SIGNATURE] required_signers_count=', doc.required_signers_count);
+  console.log('[SIGNATURE] isFullySigned=', isFullySigned);
+  console.log('[SIGNATURE] original_document_url=', doc.original_document_url);
+
   if (isFullySigned && doc.original_document_url) {
-    // Busca todos os assinantes para o certificado
-    const allSigners = await SignatureDocumentSigner.findAll({
-      where: { document_id: doc.id, status: 'SIGNED' },
-      include: [{ association: 'signer', attributes: ['username'] }],
-      order: [['signed_at', 'ASC']],
-    });
+    try {
+      const allSigners = await SignatureDocumentSigner.findAll({
+        where: { document_id: doc.id, status: 'SIGNED' },
+        include: [{ association: 'signer', attributes: ['username'] }],
+        order: [['signed_at', 'ASC']],
+      });
 
-    finalDocumentUrl = await stampMultiSignedPdf({
-      documentUrl:       doc.original_document_url,
-      documentName:      doc.document_name,
-      documentHash:      doc.document_hash,
-      verificationCode:  finalCode,
-      signedAtFinal:     now,
-      creatorId:         doc.created_by,
-      documentId:        doc.id,
-      signers: allSigners.map(s => ({
-        name:              s.signer?.username ?? 'Desconhecido',
-        signedAt:          s.signed_at,
-        verificationCode:  s.verification_code,
-      })),
-    });
+      console.log('[SIGNATURE] allSigners.length=', allSigners.length);
+      console.log('[SIGNATURE] calling stampMultiSignedPdf...');
 
-    if (finalDocumentUrl) await doc.update({ final_document_url: finalDocumentUrl });
+      finalDocumentUrl = await stampMultiSignedPdf({
+        documentUrl: doc.original_document_url,
+        documentName: doc.document_name,
+        documentHash: doc.document_hash,
+        verificationCode: finalCode,
+        signedAtFinal: now,
+        creatorId: doc.created_by,
+        documentId: doc.id,
+        signers: allSigners.map(s => ({
+          name: s.signer?.username ?? 'Desconhecido',
+          signedAt: s.signed_at,
+          verificationCode: s.verification_code,
+        })),
+      });
+
+      console.log('[SIGNATURE] stamp result=', finalDocumentUrl);
+
+      if (finalDocumentUrl) {
+        await doc.update({ final_document_url: finalDocumentUrl });
+        console.log('[SIGNATURE] final_document_url saved');
+      } else {
+        console.warn('[SIGNATURE] stamp returned empty value');
+      }
+    } catch (error) {
+      console.error('[SIGNATURE] stamp failed:', error);
+    }
+  } else {
+    console.warn('[SIGNATURE] stamp block skipped', {
+      isFullySigned,
+      original_document_url: doc.original_document_url,
+    });
   }
 
   return {
-    signer_id:              signer.id,
-    signed_at:              now,
-    verification_code:      verificationCode,      // código individual
-    document_id:            doc.id,
-    document_name:          doc.document_name,
-    document_status:        newDocStatus,
-    signed_signers_count:   newSigned,
+    signer_id: signer.id,
+    signed_at: now,
+    verification_code: verificationCode,      // código individual
+    document_id: doc.id,
+    document_name: doc.document_name,
+    document_status: newDocStatus,
+    signed_signers_count: newSigned,
     required_signers_count: doc.required_signers_count,
-    is_fully_signed:        isFullySigned,
+    is_fully_signed: isFullySigned,
     final_verification_code: finalCode,
-    final_document_url:     finalDocumentUrl,
+    final_document_url: finalDocumentUrl,
   };
 }
 
@@ -310,9 +336,9 @@ export async function deleteDocument(userId, documentId) {
 
 const SIGNER_INCLUDE = [{
   association: 'signers',
-  attributes:  { exclude: ['signature_token', 'face_distance'] },
+  attributes: { exclude: ['signature_token', 'face_distance'] },
   include: [
-    { association: 'signer',    attributes: USER_ATTRS },
+    { association: 'signer', attributes: USER_ATTRS },
     { association: 'requester', attributes: ['id', 'username'] },
   ],
 }];
@@ -325,9 +351,9 @@ export async function listMyDocuments(userId, { page = 1, limit = 20, status } =
   if (status) where.status = status;
   const { count, rows } = await SignatureDocument.findAndCountAll({
     where,
-    order:   [['created_at', 'DESC']],
+    order: [['created_at', 'DESC']],
     limit,
-    offset:  (page - 1) * limit,
+    offset: (page - 1) * limit,
     include: [...CREATOR_INCLUDE, ...SIGNER_INCLUDE],
   });
   return { total: count, page, limit, items: rows };
@@ -339,15 +365,14 @@ export async function listMySigningItems(userId, { page = 1, limit = 20, status 
   if (status) where.status = status;
   const { count, rows } = await SignatureDocumentSigner.findAndCountAll({
     where,
-    order:   [['created_at', 'DESC']],
+    order: [['created_at', 'DESC']],
     limit,
-    offset:  (page - 1) * limit,
+    offset: (page - 1) * limit,
     attributes: { exclude: ['signature_token', 'face_distance'] },
     include: [
       {
-        association: 'document',
-        attributes:  { exclude: ['final_document_url'] },
-        include:     CREATOR_INCLUDE,
+        association: 'document', 
+        include: CREATOR_INCLUDE,
       },
       { association: 'requester', attributes: ['id', 'username'] },
     ],
@@ -366,7 +391,7 @@ export async function getDocumentById(id, userId, isCreator = false) {
   if (!isCreator) {
     // acesso permitido se é criador OU assinante
     const isSigner = await SignatureDocumentSigner.count({ where: { document_id: id, user_id: userId } });
-    const isOwner  = await SignatureDocument.count({ where: { id, created_by: userId } });
+    const isOwner = await SignatureDocument.count({ where: { id, created_by: userId } });
     if (!isSigner && !isOwner) throw Object.assign(new Error('Documento não encontrado.'), { status: 404 });
   }
   const doc = await SignatureDocument.findOne({
