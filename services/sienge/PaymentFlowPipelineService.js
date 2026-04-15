@@ -395,6 +395,27 @@ export async function stepCreateContract(launchId, userId = null) {
         return { success: false, error: msg };
     }
 
+    // ADIÇÃO: busca departamentoId configurado no banco; fallback seguro
+    let departmentId = '24';
+    try {
+        const typeConfig = await db.LaunchTypeConfig.findOne({
+            where: { name: launch.launchType, active: true },
+            attributes: ['departamentoId'],
+        });
+        if (typeConfig?.departamentoId) {
+            departmentId = String(typeConfig.departamentoId);
+        }
+    } catch (_) {
+        // mantém fallback
+    }
+
+    // ADIÇÃO: usa a data real de vencimento do boleto, com fallback
+    const dataVencimento = fmtDate(
+        launch.boletoDueDate ||
+        launch.contractEndDate ||
+        ''
+    );
+
     // Busca credenciais do usuário (descriptografadas)
     const credentials = await getUserSiengeCredentials(userId || launch.createdBy);
 
@@ -417,6 +438,11 @@ export async function stepCreateContract(launchId, userId = null) {
         percentualAlocacao: String(launch.allocationPercentage || '100'),
         precoMO: String(launch.unitPrice || ''),
 
+        // ADIÇÃO: previsão financeira
+        departmentId,
+        dataVencimento,
+        percentualParcela: '100',
+
         // credenciais Sienge do usuário
         credentials,
     };
@@ -427,7 +453,7 @@ export async function stepCreateContract(launchId, userId = null) {
         await patch(launch, {
             pipelineStage: 'contract_created',
             siengeContractStatus: 'created',
-            siengeContractCreatedByAutomation: true,   // flag permanente — nunca sobrescrito
+            siengeContractCreatedByAutomation: true,
             siengeDocumentId: result.documentId || documentType,
             siengeContractNumber: result.contractNumber || null,
             siengeContractApproval: 'PENDING',
@@ -567,8 +593,8 @@ export async function stepCreateMeasurement(launchId, userId = null) {
     let targetRowIndex = 1;
     try {
         const targetValue = Number(launch.unitPrice) || 0;
-        const buildingId  = erpId || launch.enterpriseId;
-        const { items }   = await SiengeContractService.validateItems(
+        const buildingId = erpId || launch.enterpriseId;
+        const { items } = await SiengeContractService.validateItems(
             launch.siengeDocumentId,
             launch.siengeContractNumber,
             buildingId,
@@ -602,7 +628,7 @@ export async function stepCreateMeasurement(launchId, userId = null) {
                 targetRowIndex = withBalance.findIndex(it => it._pos === chosen._pos) + 1;
 
                 await patch(launch, {
-                    siengeItemBalanceOk:        (chosen._balanceEstimate || 0) >= targetValue - 0.005,
+                    siengeItemBalanceOk: (chosen._balanceEstimate || 0) >= targetValue - 0.005,
                     siengeItemBalanceAvailable: chosen._balanceEstimate || 0,
                 });
 
@@ -788,11 +814,15 @@ export async function pollTituloStatus(launchId) {
     const bill = await SiengeBillsService.getBill(launch.siengeTituloNumber);
     if (!bill) return null;
 
-    const isPaid = ['Q', 'QU', 'P', 'PG'].includes(String(bill.status || '').toUpperCase());
+    // Fonte primária: situação das parcelas via GET /bills/{id}/installments
+    const installments = await SiengeBillsService.getInstallments(launch.siengeTituloNumber);
+    const isPaid = installments.length > 0
+        && installments.every(i => i.situation === 'Totalmente paga');
 
     await launch.update({ siengeTituloStatus: bill.status || null });
 
-    console.log(`🔍 [Pipeline] #${launchId}: título #${launch.siengeTituloNumber} | status=${bill.status} | pago=${isPaid}`);
+    const situacoes = installments.map(i => i.situation).join(', ') || bill.status || '?';
+    console.log(`🔍 [Pipeline] #${launchId}: título #${launch.siengeTituloNumber} | parcelas=[${situacoes}] | pago=${isPaid}`);
 
     if (isPaid && launch.pipelineStage === 'awaiting_titulo_authorization') {
         await launch.update({ pipelineStage: 'titulo_pago', status: 'titulo_pago' });

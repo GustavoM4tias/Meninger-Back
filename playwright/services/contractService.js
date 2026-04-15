@@ -2,12 +2,13 @@
 import { siengeLogin } from "../modules/sienge/login.js";
 import { createInitialContract } from "../modules/sienge/createContract.js";
 import { itemsContract } from "../modules/sienge/itemsContract.js";
+import { financialForecastContract } from "../modules/sienge/financialForecastContract.js";
 import { deleteContract } from "../modules/sienge/deleteContract.js";
 import { log, success } from "../core/logger.js";
 import { dismissCommonPopups } from "../core/popups.js";
 
-const MAX_STEP1_RETRIES = 2;   // tentativas para a Etapa 1 (criação do contrato)
-const MAX_FULL_RETRIES  = 2;   // tentativas completas após falha na Etapa 2 (itens)
+const MAX_STEP1_RETRIES = 2;
+const MAX_FULL_RETRIES = 2;
 
 function registerGlobalDialogHandler(page) {
     page.on("dialog", async (dialog) => {
@@ -24,7 +25,7 @@ async function waitForPageReady(page) {
 }
 
 /**
- * Modo interativo (CLI) — mantido para uso manual via node ./index.js
+ * Modo interativo (CLI)
  */
 export async function processInitialContract() {
     log("SERVICE", "Iniciando fluxo total do contrato (modo interativo)...");
@@ -37,6 +38,10 @@ export async function processInitialContract() {
         const contractInfo = await createInitialContract(page);
         log("SERVICE", "Iniciando Etapa 2: Cadastro de Itens...");
         await itemsContract(page);
+
+        log("SERVICE", "Iniciando Etapa 3: Previsões Financeiras...");
+        await financialForecastContract(page);
+
         success("SERVICE", "Todas as etapas finalizadas.");
         return contractInfo;
     } catch (error) {
@@ -47,23 +52,27 @@ export async function processInitialContract() {
 
 /**
  * Modo automático — chamado pelo PaymentFlowPipelineService.
- * Recebe todos os parâmetros sem input do usuário.
  *
  * @param {object} params
- * @param {string} params.documento          - Tipo do documento (ex: PCEF)
- * @param {string} params.objeto             - Descrição/objeto do contrato
- * @param {string} params.empresa            - Código da empresa no Sienge
- * @param {string} params.fornecedor         - ID do credor no Sienge
- * @param {string} params.tipoContrato       - Tipo de contrato (padrão: "1")
- * @param {string} params.dataInicio         - dd/MM/yyyy
- * @param {string} params.dataTermino        - dd/MM/yyyy
- * @param {string} params.obraCod            - Código da obra (buildingId)
- * @param {string} params.unidade            - Unidade construtiva (padrão: "1")
- * @param {string|number} params.itemOrcamento   - Índice 1-based do item do orçamento
- * @param {string|number} params.itemOrcamentoCode   - Índice 1-based do item do orçamento
- * @param {string|number} params.contaFinanceira - Índice 1-based da conta financeira
- * @param {string} params.percentualAlocacao - Percentual (padrão: "100")
- * @param {string} params.precoMO            - Preço unitário mão de obra
+ * @param {string} params.documento
+ * @param {string} params.objeto
+ * @param {string} params.empresa
+ * @param {string} params.fornecedor
+ * @param {string} params.tipoContrato
+ * @param {string} params.dataInicio
+ * @param {string} params.dataTermino
+ * @param {string} params.obraCod
+ * @param {string} params.unidade
+ * @param {string|number} params.itemOrcamento
+ * @param {string|number} params.itemOrcamentoCode
+ * @param {string|number} params.contaFinanceira
+ * @param {string} params.percentualAlocacao
+ * @param {string} params.precoMO
+ * @param {string|number} params.departmentId
+ * @param {string|number} params.departamento
+ * @param {string} params.dataVencimento
+ * @param {string} params.dataVencimentoBase
+ * @param {string|number} params.percentualParcela
  * @returns {{ documentId: string, contractNumber: string }}
  */
 export async function runPlaywrightContract(params = {}) {
@@ -75,6 +84,8 @@ export async function runPlaywrightContract(params = {}) {
         itemOrcamento: params.itemOrcamento,
         itemOrcamentoCode: params.itemOrcamentoCode,
         contaFinanceira: params.contaFinanceira,
+        departmentId: params.departmentId ?? params.departamento ?? null,
+        dataVencimento: params.dataVencimento ?? params.dataVencimentoBase ?? null,
     })}`);
 
     const credentials = params.credentials || {};
@@ -93,16 +104,10 @@ export async function runPlaywrightContract(params = {}) {
     }
 }
 
-/**
- * Executa as duas etapas com lógica de retry:
- *  - Etapa 1 (criação do contrato): tenta até MAX_STEP1_RETRIES vezes
- *  - Etapa 2 (itens): em caso de falha, exclui o contrato e recomeça do zero
- *    até MAX_FULL_RETRIES tentativas completas
- */
 async function _runWithRetry(page, params, attempt = 1) {
-    // ── Etapa 1: Criação do contrato ─────────────────────────────────────────
     let contractInfo = null;
     let step1LastErr;
+
     for (let t = 1; t <= MAX_STEP1_RETRIES; t++) {
         try {
             contractInfo = await createInitialContract(page, {
@@ -114,6 +119,7 @@ async function _runWithRetry(page, params, attempt = 1) {
                 dataInicio: params.dataInicio,
                 dataTermino: params.dataTermino,
             });
+
             log("SERVICE", `Etapa 1 concluída (tentativa ${t}): ${contractInfo.documentId}/${contractInfo.contractNumber}`);
             step1LastErr = null;
             break;
@@ -126,9 +132,9 @@ async function _runWithRetry(page, params, attempt = 1) {
             }
         }
     }
+
     if (!contractInfo) throw step1LastErr;
 
-    // ── Etapa 2: Itens do contrato ───────────────────────────────────────────
     try {
         await itemsContract(page, {
             obraCod: params.obraCod,
@@ -139,16 +145,23 @@ async function _runWithRetry(page, params, attempt = 1) {
             percentualAlocacao: params.percentualAlocacao,
             precoMO: params.precoMO,
         });
+
+        await financialForecastContract(page, {
+            obraCod: params.obraCod,
+            departmentId: params.departmentId ?? params.departamento,
+            dataVencimento: params.dataVencimento ?? params.dataVencimentoBase,
+            percentualParcela: params.percentualParcela ?? "100",
+        });
+
         success("SERVICE", `Fluxo automático concluído (tentativa ${attempt}).`);
         return contractInfo;
-    } catch (itemsErr) {
-        log("SERVICE", `Etapa 2 falhou (tentativa ${attempt}/${MAX_FULL_RETRIES}): ${itemsErr.message}`);
+    } catch (flowErr) {
+        log("SERVICE", `Etapa 2/3 falhou (tentativa ${attempt}/${MAX_FULL_RETRIES}): ${flowErr.message}`);
 
         if (attempt >= MAX_FULL_RETRIES) {
-            throw new Error(`Etapa 2 falhou após ${MAX_FULL_RETRIES} tentativas: ${itemsErr.message}`);
+            throw new Error(`Fluxo falhou após ${MAX_FULL_RETRIES} tentativas: ${flowErr.message}`);
         }
 
-        // Exclui o contrato recém-criado para poder tentar novamente
         log("SERVICE", `Excluindo contrato ${contractInfo.documentId}/${contractInfo.contractNumber} para retentar...`);
         await deleteContract(page, {
             documentType: contractInfo.documentId,
