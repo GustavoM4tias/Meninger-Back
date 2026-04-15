@@ -195,8 +195,8 @@ export class SiengeContractService {
                 found = await fetchAllPages({ companyId: Number(companyId) });
             }
 
-            // Tentativa 3: sem filtros de empresa/obra — busca global
-            if (!found.length) {
+            // Tentativa 3: sem filtros de empresa/obra — busca global (só quando companyId desconhecido)
+            if (!found.length && !companyId) {
                 found = await fetchAllPages({});
             }
 

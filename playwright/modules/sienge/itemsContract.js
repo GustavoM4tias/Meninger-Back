@@ -318,15 +318,13 @@ export async function itemsContract(page, params = {}) {
             .catch(() => false);
         if (!stillEditing) break;
         log("ITEMS", `Formulário ainda em edição (tentativa ${saveAttempt + 1}), salvando...`);
-        await safeClick(page, frame, '#botaoSubmit').catch(() => {});
+        await safeClick(page, frame, '#botaoSubmit').catch(() => { });
         await waitForPageSettled(page);
         await closeBlockingPopups(page);
         frame = await getMainFrame(page);
     }
 
     // ── Abre a planilha com retry ─────────────────────────────────────────────
-    // Se o alerta "É necessário salvar" disparar e bloquear o popup,
-    // o handler global o aceita e tentamos novamente já em modo salvo.
     log("ITEMS", "Abrindo planilha...");
     let context = null;
     for (let planAttempt = 0; planAttempt < 3; planAttempt++) {
@@ -338,11 +336,12 @@ export async function itemsContract(page, params = {}) {
         const opened = await getContextAfterPlanilhaOpen(page, async () => {
             await safeClick(page, frame, 'tr#linhaRow_0 img#botaoEditarPlanilha_0');
         });
-        // Verifica se a planilha abriu corretamente (botão Orçamento visível)
+
         const isPlanilha = await opened
             .locator('input[value="Orçamento"]')
             .count()
             .catch(() => 0);
+
         if (isPlanilha > 0) {
             context = opened;
             break;
@@ -432,15 +431,10 @@ export async function itemsContract(page, params = {}) {
     log("ITEMS", "Abrindo edição do item criado...");
     await safeClick(page, frame, 'img[id="row[0].editar_0"]');
 
-    // --- NOVO BLOCO: Preenchimento da Quantidade ---
     log("ITEMS", "Preenchendo Quantidade: 1");
-    // Usamos \\. para escapar o ponto do ID no seletor CSS
     await safeFill(page, frame, '#entity\\.qtContratada', "1");
-    // O campo possui eventos onblur/onchange complexos no Sienge, 
-    // então o Tab ajuda a disparar os gatilhos de cálculo (atualizaTotalizadoresGrid)
     await frame.locator('#entity\\.qtContratada').press("Tab");
     await waitUiStability(page);
-    // ----------------------------------------------
 
     const formattedPrecoMO = await safeFillMoneyField(
         page,
@@ -455,7 +449,24 @@ export async function itemsContract(page, params = {}) {
     await safeClick(page, frame, "#botaoSubmit");
     await waitForPageSettled(page);
     await closeBlockingPopups(page);
+
+    // ── ADIÇÃO NECESSÁRIA: reidratar o contexto do contrato ──────────────────
+    frame = await getMainFrame(page);
+
+    log("ITEMS", "Voltando em Itens do Contrato...");
+    await safeClick(page, frame, 'a:has-text("Itens do Contrato")');
+    await waitForPageSettled(page);
+    await closeBlockingPopups(page);
+
+    frame = await getMainFrame(page);
+
+    log("ITEMS", "Voltando em Obras e Unidades Construtivas...");
+    await safeClick(page, frame, 'a:has-text("Obras e Unidades Construtivas")');
+    await waitForPageSettled(page);
+    await closeBlockingPopups(page);
+
     await getMainFrame(page);
+    // ──────────────────────────────────────────────────────────────────────────
 
     success("ITEMS", "Fluxo concluído com sucesso.");
 }

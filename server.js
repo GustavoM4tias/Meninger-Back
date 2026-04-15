@@ -107,22 +107,7 @@ db.sequelize.sync({ alter: false })
 async function bootServer() {
   // Garante que tabelas críticas tenham todas as colunas atualizadas
   for (const [name, model] of [
-    ['User', db.User],                                    // microsoft_id + outros campos novos
-    ['PaymentLaunch', db.PaymentLaunch],
-    ['LaunchTypeConfig', db.LaunchTypeConfig],            // departamento_id + novos campos
-    ['SiengeBill', db.SiengeBill],
-    ['SiengeBillInstallment', db.SiengeBillInstallment],
-    ['Lead', db.Lead],                                    // motivo_cancelamento + submotivo_cancelamento
-    ['BucketUploadHistory', db.BucketUploadHistory],
-    ['UserPermission', db.UserPermission],
-    ['Signature', db.Signature],
-    ['SignatureDocument', db.SignatureDocument],
-    ['SignatureDocumentSigner', db.SignatureDocumentSigner],
-    ['CvEnterprisePriceTable', db.CvEnterprisePriceTable],
-    ['CvCorrespondent', db.CvCorrespondent],
-    ['EnterpriseCondition', db.EnterpriseCondition],
-    ['EnterpriseConditionModule', db.EnterpriseConditionModule],
-    ['EnterpriseConditionCampaign', db.EnterpriseConditionCampaign],
+    ['User', db.User],                                    // microsoft_id + outros campos novos  
   ]) {
     try {
       await model.sync({ alter: true });
