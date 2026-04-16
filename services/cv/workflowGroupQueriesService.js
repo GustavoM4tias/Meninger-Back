@@ -137,6 +137,31 @@ reservas_segmentadas AS (
 ),
 
 /*
+  Pré-materializa os pares (enterprise_id, unit_name) dos contratos Emitidos
+  apenas para os empreendimentos presentes nas projeções filtradas.
+  Isso evita fazer a expansão JSONB por linha dentro do NOT EXISTS,
+  reduzindo o custo de O(projeções × contratos × json) para uma única passagem.
+*/
+contracts_units_flat AS (
+  SELECT DISTINCT
+    c.enterprise_id,
+    trim(both from u.name) AS unit_name
+  FROM contracts c
+  CROSS JOIN LATERAL jsonb_to_recordset(c.units) AS u(
+    "id" int, "main" boolean, "name" text, "participationPercentage" numeric
+  )
+  WHERE c.situation = 'Emitido'
+    AND c.financial_institution_date IS NOT NULL
+    AND c.enterprise_id IN (
+      SELECT COALESCE(rs2.idemp_erp_resolvido, rs2.idemp_int_from_reserva)
+      FROM reservas_segmentadas rs2
+      WHERE COALESCE(rs2.idemp_erp_resolvido, rs2.idemp_int_from_reserva) IS NOT NULL
+    )
+    AND trim(both from u.name) IS NOT NULL
+    AND trim(both from u.name) <> ''
+),
+
+/*
   Excluir SOMENTE se:
     - enterprise_id (do contract) coincide com o ERP id resolvido do empreendimento da reserva
     - unidade coincide
@@ -148,16 +173,9 @@ reservas_filtradas AS (
   FROM reservas_segmentadas rs
   WHERE NOT EXISTS (
     SELECT 1
-    FROM contracts c
-    JOIN LATERAL (
-      SELECT trim(both from u.name) AS unit_name
-      FROM jsonb_to_recordset(c.units) AS u("id" int, "main" boolean, "name" text, "participationPercentage" numeric)
-    ) cu ON true
-    WHERE
-      c.enterprise_id = COALESCE(rs.idemp_erp_resolvido, rs.idemp_int_from_reserva)
-      AND c.situation = 'Emitido'
+    FROM contracts_units_flat cu
+    WHERE cu.enterprise_id = COALESCE(rs.idemp_erp_resolvido, rs.idemp_int_from_reserva)
       AND cu.unit_name = rs.unidade_nome
-      AND c.financial_institution_date IS NOT NULL
   )
 ),
 

@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { getContracts, listEnterprises, clearCache, getDistratos } from '../controllers/sienge/contractSalesController.js';
+import { getContracts, listEnterprises, listCompanies, clearCache, getDistratos } from '../controllers/sienge/contractSalesController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import bulkDataController from '../controllers/sienge/bulkDataController.js';
 import BillsController from '../controllers/sienge/billsController.js';
@@ -38,6 +38,7 @@ const upload = multer({
 // GET /api/contracts?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&situation=Emitido|Autorizado|Cancelado&enterpriseName=texto
 router.get('/contracts', authenticate, getContracts);
 router.get('/contracts/enterprises', authenticate, listEnterprises);
+router.get('/contracts/companies', authenticate, listCompanies);
 router.post('/contracts/cache/clear', authenticate, clearCache);
 
 // Distratos (rescisões) — filtro por cancellation_date, inclui campos de cancelamento

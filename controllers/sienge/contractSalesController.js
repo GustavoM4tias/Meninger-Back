@@ -18,7 +18,9 @@ export async function getContracts(req, res) {
       enterpriseName,
       view = 'dashboard',
       enterpriseId,
-      enterpriseIds
+      enterpriseIds,
+      companyId,
+      companyIds
     } = req.query
 
     const isDetail = String(view).toLowerCase() === 'detail'
@@ -69,6 +71,18 @@ export async function getContracts(req, res) {
       ? ` AND sc.enterprise_id IN (:enterpriseIds)`
       : ''
 
+    // ── Company filter ─────────────────────────────────────────────────────
+    const companyIdNum = companyId != null && companyId !== '' ? Number(companyId) : null
+    const companyIdSafe = Number.isFinite(companyIdNum) && companyIdNum > 0 ? companyIdNum : null
+
+    const companyIdsArr = typeof companyIds === 'string'
+      ? companyIds.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0)
+      : []
+    const hasCompanyIds = companyIdsArr.length > 0
+
+    const whereCompanyIdClause = companyIdSafe ? ` AND sc.company_id = :companyId` : ''
+    const whereCompanyIdsClause = hasCompanyIds ? ` AND sc.company_id IN (:companyIds)` : ''
+
     const isAdmin = req.user?.role === 'admin'
     const userCityRaw = isAdmin ? null : (req.user?.city || null)
 
@@ -84,6 +98,8 @@ WITH base AS (
     ${whereNameClause}
     ${whereEnterpriseIdClause}
     ${whereEnterpriseIdsClause}
+    ${whereCompanyIdClause}
+    ${whereCompanyIdsClause}
 ),
 
 pivots AS (
@@ -401,6 +417,14 @@ ORDER BY p.financial_institution_date, p.contract_id;
       replacements.enterpriseIds = enterpriseIdsArr
     }
 
+    if (companyIdSafe) {
+      replacements.companyId = companyIdSafe
+    }
+
+    if (hasCompanyIds) {
+      replacements.companyIds = companyIdsArr
+    }
+
     nameList.forEach((val, i) => {
       replacements[`name${i}`] = val
     })
@@ -494,6 +518,66 @@ export async function clearCache(req, res) {
   _enterprisesCache = null
   _enterprisesCacheTs = 0
   return res.json({ message: 'Caches limpos.' })
+}
+
+/**
+ * GET /api/sienge/contracts/companies
+ * Lista empresas (company_id + company_name) distintas dos contratos.
+ * Admin vê todas; não-admin vê apenas as da sua cidade.
+ */
+export async function listCompanies(req, res) {
+  try {
+    const isAdmin = req.user?.role === 'admin'
+    const userCity = isAdmin ? null : (req.user?.city || '')
+
+    if (!isAdmin && !userCity.trim()) {
+      return res.status(403).json({ error: 'Cidade do usuário não configurada.' })
+    }
+
+    const sqlAdmin = `
+      SELECT DISTINCT
+        sc.company_id  AS id,
+        sc.company_name AS name
+      FROM contracts sc
+      WHERE sc.company_id IS NOT NULL
+        AND sc.company_name IS NOT NULL
+      ORDER BY sc.company_name;
+    `
+
+    const sqlNonAdmin = `
+      SELECT DISTINCT
+        sc.company_id  AS id,
+        sc.company_name AS name
+      FROM contracts sc
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved
+        FROM enterprise_cities ec
+        WHERE ec.erp_id IS NOT NULL
+          AND ec.erp_id = sc.enterprise_id::text
+        ORDER BY ec.updated_at DESC
+        LIMIT 1
+      ) ec_erp ON TRUE
+      WHERE sc.company_id IS NOT NULL
+        AND sc.company_name IS NOT NULL
+        AND ec_erp.city_resolved IS NOT NULL
+        AND unaccent(upper(regexp_replace(ec_erp.city_resolved, '[^A-Z0-9]+',' ','g'))) =
+            unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
+      ORDER BY sc.company_name;
+    `
+
+    const rows = await db.sequelize.query(
+      isAdmin ? sqlAdmin : sqlNonAdmin,
+      {
+        replacements: isAdmin ? {} : { userCity },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    )
+
+    return res.json({ count: rows.length, results: rows.map((r) => ({ id: r.id, name: r.name })) })
+  } catch (err) {
+    console.error('[listCompanies]', err)
+    return res.status(500).json({ error: 'Erro ao listar empresas.' })
+  }
 }
 
 /**

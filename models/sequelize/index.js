@@ -49,6 +49,7 @@ import CvWorkflowGroupDefine from './cv/workflowGroup.js';
 
 import landSyncEnterpriseDefine from './landSyncEnterprise.js';
 import hiddenDashboardEnterpriseDefine from './hiddenDashboardEnterprise.js';
+import stageCommissionRuleDefine from './stageCommissionRule.js';
 
 import SiengeAwardDefine from './sienge/award.js';
 import SiengeAwardLinkDefine from './sienge/awardLink.js';
@@ -143,6 +144,7 @@ db.CvWorkflowGroup = CvWorkflowGroupDefine(sequelize, DataTypes);
 
 db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
 db.HiddenDashboardEnterprise = hiddenDashboardEnterpriseDefine(sequelize, DataTypes);
+db.StageCommissionRule = stageCommissionRuleDefine(sequelize, DataTypes);
 
 db.Award = SiengeAwardDefine(sequelize, DataTypes);
 db.AwardLink = SiengeAwardLinkDefine(sequelize, DataTypes);

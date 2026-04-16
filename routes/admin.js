@@ -47,6 +47,12 @@ import {
   removeHiddenEnterprise
 } from '../controllers/hiddenDashboardController.js';
 
+import {
+  listStageCommissionRules,
+  addStageCommissionRule,
+  removeStageCommissionRule
+} from '../controllers/stageCommissionRuleController.js';
+
 import LandDataController from '../controllers/external/landDataController.js';
 const landDataController = new LandDataController();
 
@@ -108,5 +114,10 @@ router.post( '/land-sync-obstit/run', authMiddleware, requireAdmin, landDataCont
 router.get('/hidden-enterprises', authMiddleware, requireAdmin, listHiddenEnterprises);
 router.post('/hidden-enterprises', authMiddleware, requireAdmin, addHiddenEnterprise);
 router.delete('/hidden-enterprises/:id', authMiddleware, requireAdmin, removeHiddenEnterprise);
+
+// Stage Commission Rules — GET: todos autenticados; POST/DELETE: admin only
+router.get('/stage-commission-rules', authMiddleware, listStageCommissionRules);
+router.post('/stage-commission-rules', authMiddleware, requireAdmin, addStageCommissionRule);
+router.delete('/stage-commission-rules/:id', authMiddleware, requireAdmin, removeStageCommissionRule);
 
 export default router;
