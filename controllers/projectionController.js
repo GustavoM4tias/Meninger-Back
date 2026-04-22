@@ -1674,6 +1674,30 @@ export async function getProjectionReport(req, res) {
       (b.summary.realized_vgv) - (a.summary.realized_vgv)
     );
 
+    // ── Enriquece cada empreendimento com company_id via enterprise_cities ────
+    // Uma única query para os erp_ids desta projeção — sem scan full-table.
+    {
+      const erpIds = enterprises.map(e => e.erp_id).filter(id => id != null && id !== '')
+      if (erpIds.length > 0) {
+        const rows = await db.sequelize.query(
+          `SELECT erp_id,
+                  (raw_payload->>'idCompany')::int AS company_id,
+                  (SELECT sc.company_name FROM contracts sc
+                   WHERE sc.company_id = (raw_payload->>'idCompany')::int LIMIT 1) AS company_name
+           FROM enterprise_cities
+           WHERE source = 'erp'
+             AND erp_id IN (:erpIds)`,
+          { replacements: { erpIds }, type: db.Sequelize.QueryTypes.SELECT }
+        )
+        const cidMap = new Map(rows.map(r => [String(r.erp_id), { company_id: r.company_id ?? null, company_name: r.company_name ?? null }]))
+        for (const ent of enterprises) {
+          const info = ent.erp_id != null ? cidMap.get(String(ent.erp_id)) : null
+          ent.company_id   = info?.company_id   ?? null
+          ent.company_name = info?.company_name ?? null
+        }
+      }
+    }
+
     // ── Summary global ────────────────────────────────────────────────────────
     const totalProjectedVgv    = enterprises.reduce((s, e) => s + e.summary.projected_vgv,      0);
     const totalRealizedVgvNet  = enterprises.reduce((s, e) => s + e.summary.realized_vgv_net,   0);

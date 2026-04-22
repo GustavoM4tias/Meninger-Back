@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import db from '../models/sequelize/index.js';
 import { stampMultiSignedPdf } from '../utils/signaturePdfStamp.js';
 
-const { SignatureDocument, SignatureDocumentSigner, User } = db;
+const { SignatureDocument, SignatureDocumentSigner, User, EnterpriseCondition } = db;
 const { Op } = db.Sequelize;
 
 const SESSION_TTL_MIN = 10;
@@ -261,6 +261,47 @@ export async function verifyAndSignSigner(userId, { signer_token, password, face
   };
 }
 
+// ── Helper: reverte EnterpriseCondition vinculada a um documento cancelado ────
+
+/**
+ * Reverte EnterpriseCondition vinculada a um documento cancelado/rejeitado.
+ * @param {number} documentId
+ * @param {string} reason
+ * @param {{ userId: number, username: string }|null} rejecterInfo — quem rejeitou (null = sistema)
+ */
+async function revertLinkedCondition(documentId, reason, rejecterInfo = null) {
+    if (!EnterpriseCondition) return;
+    try {
+        const condition = await EnterpriseCondition.findOne({
+            where: { signature_document_id: documentId, status: 'pending_approval' },
+            attributes: ['id', 'approval_history'],
+        });
+        if (!condition) return;
+
+        const isReject = Boolean(rejecterInfo);
+        const newHistory = [
+            ...(condition.approval_history || []),
+            {
+                action: isReject ? 'approval_rejected' : 'approval_cancelled',
+                user_id:  rejecterInfo?.userId   ?? null,
+                username: rejecterInfo?.username  ?? 'Sistema',
+                at: new Date().toISOString(),
+                note: reason || `Documento de assinatura #${documentId} foi ${isReject ? 'recusado' : 'cancelado'}`,
+            },
+        ];
+
+        await condition.update({
+            status: 'draft',
+            signature_document_id: null,
+            approval_history: newHistory,
+        });
+
+        console.log(`[Signature] Ficha #${condition.id} revertida para rascunho — doc #${documentId} ${isReject ? 'rejeitado por ' + rejecterInfo.username : 'cancelado'}`);
+    } catch (err) {
+        console.error('[Signature] Erro ao reverter EnterpriseCondition:', err.message);
+    }
+}
+
 // ── 4. CANCELAR ASSINATURA PRÓPRIA (MFA) ─────────────────────────────────────
 
 /**
@@ -293,6 +334,12 @@ export async function cancelSignerMFA(userId, signerId, { password, face_embeddi
   // Cancela o documento
   await signer.document.update({ status: 'CANCELLED', cancel_reason: cancelReason });
 
+  // Reverte imediatamente qualquer EnterpriseCondition vinculada, registrando quem cancelou
+  await revertLinkedCondition(signer.document_id, cancelReason, {
+    userId,
+    username: user?.username || `Usuário #${userId}`,
+  });
+
   return { document_id: signer.document_id, cancelled_at: new Date() };
 }
 
@@ -300,12 +347,19 @@ export async function cancelSignerMFA(userId, signerId, { password, face_embeddi
 
 export async function rejectSigner(userId, signerId, reason) {
   const signer = await SignatureDocumentSigner.findOne({
-    where: { id: signerId, user_id: userId, status: 'REQUESTED' },
+    where: { id: signerId, user_id: userId, status: { [Op.in]: ['REQUESTED', 'PENDING'] } },
     include: [{ association: 'document' }],
   });
-  if (!signer) throw Object.assign(new Error('Solicitação não encontrada.'), { status: 404 });
+  if (!signer) throw Object.assign(new Error('Solicitação não encontrada ou já processada.'), { status: 404 });
 
   const rejectReason = reason || 'Recusado pelo assinante.';
+
+  // Busca info do assinante para registrar no histórico
+  const rejecterUser = await User.findByPk(userId, { attributes: ['id', 'username'] });
+  const rejecterInfo = {
+    userId,
+    username: rejecterUser?.username || `Usuário #${userId}`,
+  };
 
   // Cancela todos os outros assinantes pendentes (modo rígido)
   await SignatureDocumentSigner.update(
@@ -315,6 +369,13 @@ export async function rejectSigner(userId, signerId, reason) {
 
   await signer.update({ status: 'REJECTED', reason: rejectReason });
   await signer.document.update({ status: 'CANCELLED', cancel_reason: `Recusado por um assinante: ${rejectReason}` });
+
+  // Reverte imediatamente qualquer EnterpriseCondition vinculada, registrando quem rejeitou
+  await revertLinkedCondition(
+    signer.document_id,
+    `Recusado por ${rejecterInfo.username}: ${rejectReason}`,
+    rejecterInfo
+  );
 
   return { document_id: signer.document_id };
 }
