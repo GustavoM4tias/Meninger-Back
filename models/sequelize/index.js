@@ -87,6 +87,11 @@ import CvCorrespondentDefine from './cv/cvCorrespondent.js';
 import EnterpriseConditionDefine from './comercial/enterpriseCondition.js';
 import EnterpriseConditionModuleDefine from './comercial/enterpriseConditionModule.js';
 import EnterpriseConditionCampaignDefine from './comercial/enterpriseConditionCampaign.js';
+import ComercialSettingsDefine from './comercial/comercialSettings.js';
+
+// Boleto Caixa
+import BoletoSettingsDefine from './boleto/boletoSettings.js';
+import BoletoHistoryDefine from './boleto/boletoHistory.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -182,6 +187,11 @@ db.CvCorrespondent        = CvCorrespondentDefine(sequelize, DataTypes);
 db.EnterpriseCondition         = EnterpriseConditionDefine(sequelize, DataTypes);
 db.EnterpriseConditionModule   = EnterpriseConditionModuleDefine(sequelize, DataTypes);
 db.EnterpriseConditionCampaign = EnterpriseConditionCampaignDefine(sequelize, DataTypes);
+db.ComercialSettings           = ComercialSettingsDefine(sequelize, DataTypes);
+
+// Boleto Caixa
+db.BoletoSettings = BoletoSettingsDefine(sequelize, DataTypes);
+db.BoletoHistory  = BoletoHistoryDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

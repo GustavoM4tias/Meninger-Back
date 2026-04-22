@@ -454,7 +454,9 @@ export async function listEnterprises(req, res) {
       const sqlAdmin = `
         SELECT DISTINCT ON (sc.enterprise_id)
           sc.enterprise_id AS id,
-          sc.enterprise_name AS name
+          sc.enterprise_name AS name,
+          sc.company_id,
+          sc.company_name
         FROM contracts sc
         ORDER BY
           sc.enterprise_id,
@@ -466,7 +468,7 @@ export async function listEnterprises(req, res) {
         type: db.Sequelize.QueryTypes.SELECT
       })
 
-      const results = rows.map((r) => ({ id: r.id, name: r.name }))
+      const results = rows.map((r) => ({ id: r.id, name: r.name, company_id: r.company_id ?? null, company_name: r.company_name ?? null }))
       _enterprisesCache = results
       _enterprisesCacheTs = Date.now()
 
@@ -482,7 +484,9 @@ export async function listEnterprises(req, res) {
     const sqlNonAdmin = `
       SELECT DISTINCT ON (sc.enterprise_id)
         sc.enterprise_id AS id,
-        sc.enterprise_name AS name
+        sc.enterprise_name AS name,
+        sc.company_id,
+        sc.company_name
       FROM contracts sc
       LEFT JOIN LATERAL (
         SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved

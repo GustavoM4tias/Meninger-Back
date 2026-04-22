@@ -25,6 +25,7 @@ import permissionRoutes from './routes/permissionRoutes.js';
 import signatureRoutes from './routes/signatureRoutes.js';
 import signatureDocumentRoutes from './routes/signatureDocumentRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
+import boletoRoutes from './routes/boletoRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -39,6 +40,8 @@ import contractApprovalScheduler from './scheduler/contractApprovalScheduler.js'
 import leadCancelReasonScheduler from './scheduler/leadCancelReasonScheduler.js';
 import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.js';
 import cvExtrasScheduler from './scheduler/cvExtrasScheduler.js';
+import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateScheduler.js';
+import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 
 const app = express();
 
@@ -78,6 +81,7 @@ app.use('/api/permissions', permissionRoutes);
 app.use('/api/signatures', signatureRoutes);
 app.use('/api/signature-documents', signatureDocumentRoutes);
 app.use('/api/conditions', conditionsRoutes);
+app.use('/api/boleto-caixa', boletoRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -107,7 +111,13 @@ db.sequelize.sync({ alter: false })
 async function bootServer() {
   // Garante que tabelas críticas tenham todas as colunas atualizadas
   for (const [name, model] of [
-    ['User', db.User],                                    // microsoft_id + outros campos novos  
+    ['User', db.User],                                    // microsoft_id + outros campos novos
+    ['EnterpriseCondition', db.EnterpriseCondition],      // novos campos de aprovação
+    ['ComercialSettings', db.ComercialSettings],          // tabela nova
+    ['BoletoSettings', db.BoletoSettings],               // boleto caixa
+    ['BoletoHistory', db.BoletoHistory],                 // boleto caixa history
+    ['EnterpriseConditionModule', db.EnterpriseConditionModule],     // novos campos por módulo
+    ['EnterpriseConditionCampaign', db.EnterpriseConditionCampaign], // module_id FK
   ]) {
     try {
       await model.sync({ alter: true });
@@ -131,6 +141,8 @@ async function bootServer() {
   supabaseKeepAliveScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
   if (process.env.ENABLE_CV_EXTRAS_SCHEDULE !== 'false') cvExtrasScheduler.start(); // ativo por padrão
+  conditionAutoGenerateScheduler.start(); // auto-geração de fichas + polling de assinaturas
+  boletoCleanupScheduler.start();         // remove boletos expirados do Supabase
 
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta: ${PORT}`);

@@ -104,7 +104,7 @@ router.get('/price-tables/debug/:idempreendimento', authenticate, async (req, re
         try {
             const result = await apiCv.get(
                 `/v1/cadastros/empreendimentos/${eid}/tabelasdepreco/detalhada`,
-                { params: { resetar: 'S', tabelasemjson: true, aprovado: 'S' } }
+                { params: { resetar: 'S', tabelasemjson: true } }
             );
             cvStatus = result.status;
             cvData   = result.data;

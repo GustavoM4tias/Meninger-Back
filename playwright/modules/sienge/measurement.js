@@ -76,6 +76,18 @@ async function closeBlockingPopups(page) {
         await page.waitForTimeout(400);
     }
 
+    // ── MUI Snackbar (flutua sobre a página e intercepta cliques) ─────────
+    const snackbarCloseBtn = page.locator('button[data-testid="snackbar-button-close"]');
+    const snackbarCount = await snackbarCloseBtn.count().catch(() => 0);
+    for (let i = 0; i < snackbarCount; i++) {
+        const btn = snackbarCloseBtn.nth(i);
+        if (await btn.isVisible({ timeout: 300 }).catch(() => false)) {
+            log("POPUP", "Fechando MUI Snackbar...");
+            await btn.click({ force: true, timeout: 1000 }).catch(() => {});
+            await page.waitForTimeout(300);
+        }
+    }
+
     // ── Overlays jQuery / Beamer ───────────────────────────────────────────
     const overlays = [
         ".beamerAnnouncementPopupContainer.beamerAnnouncementPopupActive",
@@ -298,12 +310,66 @@ export async function createMeasurement(page, params = {}) {
     log("MEASUREMENT", "Clicando em Salvar Medição...");
     const salvarMedicaoBtn = modalDialog.locator('button:has-text("Salvar Medição")');
     await salvarMedicaoBtn.waitFor({ state: "visible", timeout: 15000 });
-    await salvarMedicaoBtn.click();
 
-    // Aguarda modal fechar e página navegar para a medição
-    await modalDialog.waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
-    await waitForPageSettled(page);
-    await closeBlockingPopups(page);
+    // Registra handler para alert nativo que pode surgir após o redirect
+    let dialogDismissed = false;
+    const dialogHandlerModal = async (dialog) => {
+        log("MEASUREMENT", `Alert pós-Salvar Medição (${dialog.type()}): "${dialog.message()}" — aceitando...`);
+        await dialog.accept().catch(() => {});
+        dialogDismissed = true;
+    };
+    page.on('dialog', dialogHandlerModal);
+
+    try {
+        await salvarMedicaoBtn.click();
+        // Aguarda modal fechar e página navegar para a medição
+        await modalDialog.waitFor({ state: "hidden", timeout: 30000 }).catch(() => {});
+        await waitForPageSettled(page);
+        await closeBlockingPopups(page);
+        if (dialogDismissed) {
+            await waitForPageSettled(page);
+            await closeBlockingPopups(page);
+        }
+    } finally {
+        page.off('dialog', dialogHandlerModal);
+    }
+
+    // ── FASE 3e: Desativar "Nova tela" se o Sienge abriu a nova UI ───────────
+    // Após "Salvar Medição", o Sienge pode redirecionar para a nova UI (React/MUI)
+    // que não possui o iframe legado. O switch "Nova tela" precisa ser desativado
+    // AQUI, antes de qualquer tentativa de acessar o iframe.
+    try {
+        const novaTelaSwitchLabel = page.locator('label:has-text("Nova tela")');
+        const switchVisible = await novaTelaSwitchLabel.isVisible({ timeout: 6000 }).catch(() => false);
+        if (switchVisible) {
+            const isChecked = await novaTelaSwitchLabel
+                .locator('input[type="checkbox"]')
+                .isChecked()
+                .catch(() => false);
+            if (isChecked) {
+                log("MEASUREMENT", "Nova UI detectada — fechando snackbars e desativando switch 'Nova tela'...");
+
+                // Fecha qualquer Snackbar visível que possa interceptar o clique
+                const snackbarBtns = page.locator('button[data-testid="snackbar-button-close"]');
+                const snackCount = await snackbarBtns.count().catch(() => 0);
+                for (let i = 0; i < snackCount; i++) {
+                    const btn = snackbarBtns.nth(i);
+                    if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
+                        log("MEASUREMENT", `Fechando Snackbar ${i + 1}/${snackCount}...`);
+                        await btn.click({ force: true, timeout: 1000 }).catch(() => {});
+                        await page.waitForTimeout(400);
+                    }
+                }
+
+                await novaTelaSwitchLabel.click({ force: true });
+                await waitForPageSettled(page);
+                await closeBlockingPopups(page);
+                log("MEASUREMENT", "Switch 'Nova tela' desativado — prosseguindo no layout legado.");
+            }
+        }
+    } catch (err) {
+        log("MEASUREMENT", `Aviso ao desativar 'Nova tela': ${err.message}`);
+    }
 
     // ── FASE 4: Acessar Itens da medição ─────────────────────────────────────
     log("MEASUREMENT", "Acessando Itens da medição...");

@@ -6,10 +6,20 @@ export default (sequelize, DataTypes) => {
         idempreendimento: { type: DataTypes.INTEGER, allowNull: false },
         reference_month: { type: DataTypes.DATEONLY, allowNull: false }, // '2026-04-01'
         status: {
-            type: DataTypes.ENUM('draft', 'published'),
+            type: DataTypes.ENUM('draft', 'pending_approval', 'approved'),
             defaultValue: 'draft',
             allowNull: false,
         },
+
+        // ── Fluxo de aprovação ────────────────────────────────────────────────
+        submitted_at:          { type: DataTypes.DATE, allowNull: true },
+        submitted_by:          { type: DataTypes.INTEGER, allowNull: true },   // user.id
+        approved_at:           { type: DataTypes.DATE, allowNull: true },
+        signature_document_id: { type: DataTypes.INTEGER, allowNull: true },   // FK SignatureDocument.id
+        unlocked_at:           { type: DataTypes.DATE, allowNull: true },
+        unlocked_by:           { type: DataTypes.INTEGER, allowNull: true },   // user.id
+        // Histórico completo de eventos: [{action, user_id, username, at, note}]
+        approval_history:      { type: DataTypes.JSONB, defaultValue: [] },
 
         // ── Prazo de entrega ─────────────────────────────────────────────────
         delivery_deadline_months: { type: DataTypes.INTEGER },          // 24, 36 etc.
@@ -61,6 +71,10 @@ export default (sequelize, DataTypes) => {
             allowNull: true,
         },
         contract_registered_by_user_id: { type: DataTypes.INTEGER, allowNull: true }, // office user when menin
+        // Contato externo quando contract_registration_by = 'outros'
+        outros_contact_name:  { type: DataTypes.STRING(200), allowNull: true },
+        outros_contact_email: { type: DataTypes.STRING(200), allowNull: true },
+        outros_contact_phone: { type: DataTypes.STRING(50),  allowNull: true },
         cca_company_id: { type: DataTypes.INTEGER, allowNull: true },    // legado
         cca_company_name: { type: DataTypes.STRING(200), allowNull: true }, // nome livre da empresa CCA
         cca_cost: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
