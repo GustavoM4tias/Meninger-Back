@@ -65,10 +65,13 @@ export async function createBoleto(page, dados) {
     const {
         idpessoa_cv, vencimento, valor,
         nome, documento, endereco, numero, complemento, bairro, cep, cidade, estado,
+        nossoNumero: nossoNumeroParam,  // calculado pelo BoletoGenerationService com sequência
     } = dados;
 
     const seuNumero   = String(idpessoa_cv);
-    const nossoNumero = '11000000' + String(idpessoa_cv);
+    // Usa o nosso número passado (já com sufixo de sequência, se houver)
+    // Fallback: calcula padrão sem sufixo (para chamadas diretas/testes)
+    const nossoNumero = nossoNumeroParam || ('11000000' + String(idpessoa_cv));
     const dtVencimento = toEcoDate(vencimento);
     // ECO Cobrança: campo valor é preenchido como centavos inteiros (sem vírgula/ponto).
     // O sistema aplica a máscara automaticamente ao sair do campo.

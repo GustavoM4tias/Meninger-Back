@@ -11,6 +11,7 @@ import { log, success, error } from '../core/logger.js';
  * @param {{ usuario: string, senha: string }} params.credentials - Credenciais ECO Cobrança
  * @param {string}        params.cnpj_empresa   - CNPJ da empresa emitente (do empreendimento)
  * @param {number|string} params.idpessoa_cv    - ID da pessoa no CV (n° cliente)
+ * @param {string}        params.nossoNumero   - Nosso número completo com sequência (calculado pelo BoletoGenerationService)
  * @param {string}        params.vencimento     - Data de vencimento ISO (YYYY-MM-DD)
  * @param {string|number} params.valor          - Valor da série RA
  * @param {string}        params.nome           - Nome do titular
