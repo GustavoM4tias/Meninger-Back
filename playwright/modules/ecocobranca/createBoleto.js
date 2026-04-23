@@ -126,6 +126,9 @@ export async function createBoleto(page, dados) {
     // ── Espécie: Duplicata Mercantil (02) ──────────────────────────────────────
     await page.selectOption('select[name="especie"]', '02');
 
+    // ── Aceite: Sem Aceite (2) ────────────────────────────────────────────────
+    await page.selectOption('select[name="aceite"]', '2');
+
     // ── Tipo de Pagamento: Não aceita valor divergente (3) ─────────────────────
     await page.selectOption('select[name="tipoPagamento"]', '3');
 
@@ -162,6 +165,9 @@ export async function createBoleto(page, dados) {
 
     // ── Município do Sacado ───────────────────────────────────────────────────
     await page.fill('input[name="municipioSacado"]', String(cidade || '').substring(0, 35));
+
+    // ── Mensagem da Ficha de Compensação ──────────────────────────────────────
+    await page.fill('input[name="msgb1"]', 'NÃO RECEBER APÓS O VENCIMENTO');
 
     log('ECO_BOLETO', 'Formulário preenchido. Submetendo...');
 
