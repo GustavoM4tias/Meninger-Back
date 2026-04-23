@@ -183,12 +183,26 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
             vencimento,
         });
 
-        // ── 6. Executa automação ECO Cobrança via Playwright ──────────────────
+        // ── 6. Calcula sequência do Nosso Número para evitar duplicata ───────────
+        // Conta boletos anteriores (qualquer status) para este idpessoa_cv
+        // 1º boleto → "11000000{id}", 2º → "11000000{id}1", 3º → "11000000{id}2" ...
+        const boletosAnteriores = await db.BoletoHistory.count({
+            where: {
+                idpessoa_cv: titular.idpessoa_cv,
+                id: { [db.Sequelize.Op.lt]: history.id }, // apenas registros anteriores a este
+            },
+        });
+        const sufixo = boletosAnteriores > 0 ? String(boletosAnteriores) : '';
+        const nossoNumeroCalculado = `11000000${titular.idpessoa_cv}${sufixo}`;
+        console.log(`[BOLETO] Nosso Número calculado: ${nossoNumeroCalculado} (seq: ${boletosAnteriores})`);
+
+        // ── 7. Executa automação ECO Cobrança via Playwright ──────────────────
         console.log(`[BOLETO] Iniciando Playwright ECO Cobrança...`);
         const { boletoBuffer, nossoNumero, seuNumero } = await runEcoCobrancaBoleto({
             credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
             cnpj_empresa: cnpjEmpresa,
             idpessoa_cv: titular.idpessoa_cv,
+            nossoNumero: nossoNumeroCalculado,
             vencimento,
             valor: serie.valor,
             nome: titular.nome,
