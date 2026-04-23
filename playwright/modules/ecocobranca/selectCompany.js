@@ -32,7 +32,7 @@ export async function selectCompany(page, cnpj) {
     }, cnpjPadded);
 
     if (radioValue === null) {
-        throw new Error(`Empresa com CNPJ ${cnpjPadded} não encontrada na lista do ECO Cobrança.`);
+        throw new Error(`Empresa com CNPJ ${cnpjPadded} não encontrada na lista do Ecbrança.`);
     }
 
     log('ECO_SELECT', `Empresa encontrada — radio value: ${radioValue}`);

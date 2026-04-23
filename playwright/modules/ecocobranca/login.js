@@ -5,16 +5,16 @@ import { log, success, error } from '../../core/logger.js';
 const ECO_URL = 'https://ecobranca.caixa.gov.br/ecobranca/index.jsp';
 
 /**
- * Realiza login no ECO Cobrança Caixa e retorna { browser, context, page }
+ * Realiza login no Ecobrança Caixa e retorna { browser, context, page }
  * já posicionado na página de seleção de empresa.
  *
  * @param {{ usuario: string, senha: string }} credentials
  */
 export async function ecoLogin(credentials = {}) {
     const { usuario, senha } = credentials;
-    if (!usuario || !senha) throw new Error('Credenciais ECO Cobrança não configuradas.');
+    if (!usuario || !senha) throw new Error('Credenciais Ecobrança não configuradas.');
 
-    log('ECO_LOGIN', 'Abrindo navegador e acessando ECO Cobrança...');
+    log('ECO_LOGIN', 'Abrindo navegador e acessando Ecobrança...');
     const { browser, context, page } = await createPage();
 
     page.on('dialog', async (dialog) => {
@@ -41,9 +41,9 @@ export async function ecoLogin(credentials = {}) {
     if (!hasCompanyList) {
         const bodyText = await page.textContent('body').catch(() => '');
         if (bodyText.toLowerCase().includes('senha') || bodyText.toLowerCase().includes('inválid')) {
-            throw new Error('Credenciais ECO Cobrança inválidas. Verifique usuário e senha nas configurações.');
+            throw new Error('Credenciais Ecobrança inválidas. Verifique usuário e senha nas configurações.');
         }
-        throw new Error('Login ECO Cobrança falhou — página inesperada após autenticação.');
+        throw new Error('Login Ecobrança falhou — página inesperada após autenticação.');
     }
 
     success('ECO_LOGIN', 'Login realizado com sucesso.');

@@ -14,7 +14,7 @@ const STATE_MAP = {
 };
 
 /**
- * Converte data ISO (YYYY-MM-DD) para formato DD/MM/AAAA exigido pelo ECO Cobrança.
+ * Converte data ISO (YYYY-MM-DD) para formato DD/MM/AAAA exigido pelo Ecobrança.
  */
 function toEcoDate(isoDate) {
     const [y, m, d] = String(isoDate).split('-');
@@ -41,7 +41,7 @@ function tipoPessoa(documento) {
 }
 
 /**
- * Preenche o formulário de inclusão de título no ECO Cobrança e retorna
+ * Preenche o formulário de inclusão de título no Ecobrança e retorna
  * o buffer do boleto PDF baixado.
  *
  * @param {import('playwright').Page} page
@@ -73,7 +73,7 @@ export async function createBoleto(page, dados) {
     // Fallback: calcula padrão sem sufixo (para chamadas diretas/testes)
     const nossoNumero = nossoNumeroParam || ('11000000' + String(idpessoa_cv));
     const dtVencimento = toEcoDate(vencimento);
-    // ECO Cobrança: campo valor é preenchido como centavos inteiros (sem vírgula/ponto).
+    // Ecobrança: campo valor é preenchido como centavos inteiros (sem vírgula/ponto).
     // O sistema aplica a máscara automaticamente ao sair do campo.
     // Ex: R$ 2.349,99 → enviar "234999"
     const valorCentavos = String(Math.round(parseFloat(valor) * 100));

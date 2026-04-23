@@ -5,10 +5,10 @@ import { createBoleto } from '../modules/ecocobranca/createBoleto.js';
 import { log, success, error } from '../core/logger.js';
 
 /**
- * Executa a geração de boleto no ECO Cobrança Caixa via Playwright.
+ * Executa a geração de boleto no Ecobrança Caixa via Playwright.
  *
  * @param {object} params
- * @param {{ usuario: string, senha: string }} params.credentials - Credenciais ECO Cobrança
+ * @param {{ usuario: string, senha: string }} params.credentials - Credenciais Ecobrança
  * @param {string}        params.cnpj_empresa   - CNPJ da empresa emitente (do empreendimento)
  * @param {number|string} params.idpessoa_cv    - ID da pessoa no CV (n° cliente)
  * @param {string}        params.nossoNumero   - Nosso número completo com sequência (calculado pelo BoletoGenerationService)
@@ -27,7 +27,7 @@ import { log, success, error } from '../core/logger.js';
  * @returns {Promise<{ success: true, boletoBuffer: Buffer }>}
  */
 export async function runEcoCobrancaBoleto(params = {}) {
-    log('ECO_SERVICE', 'Iniciando automação ECO Cobrança...');
+    log('ECO_SERVICE', 'Iniciando automação Ecobrança...');
 
     const { credentials, cnpj_empresa, ...dadosBoleto } = params;
 

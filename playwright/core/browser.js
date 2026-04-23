@@ -8,7 +8,7 @@ const HEADLESS = process.env.PLAYWRIGHT_HEADLESS !== 'false';
 /**
  * Cria uma página Playwright com configuração anti-detecção.
  *
- * Sites bancários (ex: ECO Cobrança Caixa) detectam headless via:
+ * Sites bancários (ex: Ecobrança Caixa) detectam headless via:
  *   - navigator.webdriver = true
  *   - User-Agent com "HeadlessChrome"
  *   - Ausência de plugins/canvas realistas

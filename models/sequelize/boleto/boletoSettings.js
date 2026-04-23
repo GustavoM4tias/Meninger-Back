@@ -4,16 +4,16 @@ export default (sequelize, DataTypes) => {
     const BoletoSettings = sequelize.define('BoletoSettings', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
 
-        // ── Credenciais ECO Cobrança ────────────────────────────────────────────
+        // ── Credenciais Ecobrança ────────────────────────────────────────────
         eco_usuario: {
             type: DataTypes.STRING,
             allowNull: true,
-            comment: 'CPF/usuário de acesso ao ECO Cobrança Caixa',
+            comment: 'CPF/usuário de acesso ao Ecobrança Caixa',
         },
         eco_senha: {
             type: DataTypes.STRING,
             allowNull: true,
-            comment: 'Senha de acesso ao ECO Cobrança Caixa (6 dígitos)',
+            comment: 'Senha de acesso ao Ecobrança Caixa (6 dígitos)',
         },
 
         // ── Configuração de séries ─────────────────────────────────────────────

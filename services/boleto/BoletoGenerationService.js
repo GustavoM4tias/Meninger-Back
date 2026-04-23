@@ -92,7 +92,7 @@ async function attachToCV(idreserva, buffer, settings) {
 
 /**
  * Processa um webhook recebido do CV: busca dados da reserva, emite boleto no
- * ECO Cobrança, anexa na reserva do CV e registra tudo no histórico interno.
+ * Ecobrança, anexa na reserva do CV e registra tudo no histórico interno.
  */
 export async function processBoletoWebhook({ idreserva, idtransacao }) {
     console.log(`[BOLETO] Iniciando processamento — reserva ${idreserva}`);
@@ -105,7 +105,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
     }
 
     if (!settings.eco_usuario || !settings.eco_senha) {
-        console.error('[BOLETO] Credenciais ECO Cobrança não configuradas.');
+        console.error('[BOLETO] Credenciais Ecobrança não configuradas.');
         return;
     }
 
@@ -234,8 +234,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         const nossoNumeroCalculado = `11000000${titular.idpessoa_cv}${sufixo}`;
         console.log(`[BOLETO] Nosso Número calculado: ${nossoNumeroCalculado} (seq: ${boletosAnteriores})`);
 
-        // ── 7. Executa automação ECO Cobrança via Playwright ──────────────────
-        console.log(`[BOLETO] Iniciando Playwright ECO Cobrança...`);
+        // ── 7. Executa automação Ecobrança via Playwright ──────────────────
+        console.log(`[BOLETO] Iniciando Playwright Ecobrança...`);
         const { boletoBuffer, nossoNumero, seuNumero } = await runEcoCobrancaBoleto({
             credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
             cnpj_empresa: cnpjEmpresa,
