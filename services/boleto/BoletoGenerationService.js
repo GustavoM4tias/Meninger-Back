@@ -124,23 +124,61 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
 
         const { titular, condicoes, unidade } = reservaData;
 
-        // ── 2. Localiza a série Recurso Próprio a Vista ───────────────────────
-        const idserieAlvo = settings.idserie_ra || 21;
-        const serie = (condicoes?.series || []).find(s => s.idserie === idserieAlvo);
-        if (!serie) {
+        // ── 2. Localiza séries de entrada configuradas ────────────────────────
+        // settings.idserie_ra é um array via getter do model: [21] ou [21, 22, 35]
+        const idseriesAlvo = Array.isArray(settings.idserie_ra) ? settings.idserie_ra : [21];
+        const seriesEncontradas = (condicoes?.series || []).filter(
+            s => idseriesAlvo.includes(Number(s.idserie))
+        );
+
+        if (seriesEncontradas.length === 0) {
             throw new Error(
-                `Série com idserie=${idserieAlvo} (Recurso Próprio a Vista) não encontrada nas condições da reserva.`
+                `Nenhuma série de entrada encontrada na reserva. IDs configurados: [${idseriesAlvo.join(', ')}].`
             );
         }
 
-        // ── 3. Valida vencimento ──────────────────────────────────────────────
+        // Regra: somente 1 parcela de entrada é permitida por reserva
+        if (seriesEncontradas.length > 1) {
+            const detalhe = seriesEncontradas
+                .map(s => `série ${s.idserie} — venc. ${formatDate(s.vencimento)} — ${formatCurrency(s.valor)}`)
+                .join('\n• ');
+            const msg = [
+                '❌ Boleto não emitido: múltiplas parcelas de entrada detectadas.',
+                '',
+                'A reserva possui mais de 1 parcela com ID de série de entrada configurado.',
+                'Somente 1 parcela de 1 série de entrada é permitida por reserva.',
+                '',
+                'Parcelas encontradas:',
+                `• ${detalhe}`,
+            ].join('\n');
+            await sendCvMessage(idreserva, msg);
+            let situacaoAlterada = false;
+            if (settings.situacao_erro_id) {
+                situacaoAlterada = await alterarSituacaoCv(idreserva, settings.situacao_erro_id);
+            }
+            await history.update({
+                status: 'error',
+                error_message: `Múltiplas parcelas de entrada detectadas (${seriesEncontradas.length}).`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                cv_mensagem_enviada: true,
+                cv_situacao_alterada: situacaoAlterada,
+            });
+            return;
+        }
+
+        const serie = seriesEncontradas[0];
+        console.log(`[BOLETO] Série encontrada: idserie=${serie.idserie}`);
+
+        // ── 3. Valida vencimento (deve ser >= hoje) ───────────────────────────
         const vencimento = serie.vencimento;
         const hoje = new Date();
         hoje.setHours(0, 0, 0, 0);
         const vencDate = new Date(vencimento + 'T00:00:00');
 
         if (vencDate < hoje) {
-            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} está no passado.`;
+            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} está no passado.\nSomente vencimentos a partir de hoje são aceitos.`;
             await sendCvMessage(idreserva, msg);
 
             let situacaoAlterada = false;

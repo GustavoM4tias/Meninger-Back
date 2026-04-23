@@ -16,11 +16,20 @@ export default (sequelize, DataTypes) => {
             comment: 'Senha de acesso ao ECO Cobrança Caixa (6 dígitos)',
         },
 
-        // ── Configuração de série ──────────────────────────────────────────────
+        // ── Configuração de séries ─────────────────────────────────────────────
+        // Armazena JSON array de IDs: [21] ou [21, 22, 35]
         idserie_ra: {
-            type: DataTypes.INTEGER,
-            defaultValue: 21,
-            comment: 'ID da série Recurso Próprio a Vista (idserie no CV)',
+            type: DataTypes.TEXT,
+            defaultValue: '[21]',
+            comment: 'IDs das séries de entrada aceitas (JSON array). Ex: [21] ou [21,22]',
+            get() {
+                const raw = this.getDataValue('idserie_ra');
+                try { return JSON.parse(raw || '[21]'); } catch { return [21]; }
+            },
+            set(val) {
+                const arr = Array.isArray(val) ? val : [val];
+                this.setDataValue('idserie_ra', JSON.stringify(arr.map(Number).filter(Boolean)));
+            },
         },
 
         // ── Configuração de anexo CV ───────────────────────────────────────────

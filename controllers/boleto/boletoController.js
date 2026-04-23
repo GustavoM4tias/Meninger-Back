@@ -70,6 +70,11 @@ export async function updateSettings(req, res) {
             'situacao_sucesso_id', 'situacao_erro_id',
             'active',
         ];
+        // Normaliza idserie_ra para array antes de salvar
+        if (req.body.idserie_ra !== undefined) {
+            const raw = req.body.idserie_ra;
+            req.body.idserie_ra = Array.isArray(raw) ? raw : [raw];
+        }
         const updates = {};
         for (const key of allowed) {
             if (req.body[key] !== undefined) updates[key] = req.body[key];
