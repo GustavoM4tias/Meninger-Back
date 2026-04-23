@@ -24,7 +24,7 @@ export default (sequelize, DataTypes) => {
         nosso_numero: {
             type: DataTypes.STRING,
             allowNull: true,
-            comment: 'Nosso número preenchido no ECO Cobrança',
+            comment: 'Nosso número preenchido no Ecobrança',
         },
         seu_numero: {
             type: DataTypes.STRING,
