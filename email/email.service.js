@@ -80,6 +80,11 @@ const META = {
         preview: () => 'Crie sua conta em poucos cliques',
         file: 'invite.user.hbs',
     },
+    'invite.microsoft.user': {
+        subject: () => `Você foi adicionado ao Menin Office`,
+        preview: (d) => `Olá ${d.name || ''}! Acesse com sua conta Microsoft.`,
+        file: 'invite.microsoft.user.hbs',
+    },
     'generic.notification': {
         subject: (d) => d.title || 'Notificação',
         preview: (d) => d.preview || '',

@@ -5,6 +5,7 @@ export const EmailType = {
     SUPPORT_OPENED: 'support.opened',
     SUPPORT_UPDATED: 'support.updated',
     INVITE_USER: 'invite.user',
+    MICROSOFT_USER_INVITE: 'invite.microsoft.user',
     GENERIC_NOTIFICATION: 'generic.notification',
     AUTH_ACADEMY_CODE: 'auth.academy.code',
     AUTH_PASSWORD_RESET: 'auth.password.reset',

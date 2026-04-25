@@ -26,6 +26,7 @@ import signatureRoutes from './routes/signatureRoutes.js';
 import signatureDocumentRoutes from './routes/signatureDocumentRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
+import mcmvRoutes from './routes/mcmvRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -82,6 +83,7 @@ app.use('/api/signatures', signatureRoutes);
 app.use('/api/signature-documents', signatureDocumentRoutes);
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
+app.use('/api/mcmv', mcmvRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -109,15 +111,15 @@ db.sequelize.sync({ alter: false })
   });
 
 async function bootServer() {
+
   // Garante que tabelas críticas tenham todas as colunas atualizadas
   for (const [name, model] of [
-    ['User', db.User],                                    // microsoft_id + outros campos novos
-    ['EnterpriseCondition', db.EnterpriseCondition],      // novos campos de aprovação
-    ['ComercialSettings', db.ComercialSettings],          // tabela nova
-    ['BoletoSettings', db.BoletoSettings],               // boleto caixa
-    ['BoletoHistory', db.BoletoHistory],                 // boleto caixa history
-    ['EnterpriseConditionModule', db.EnterpriseConditionModule],     // novos campos por módulo
-    ['EnterpriseConditionCampaign', db.EnterpriseConditionCampaign], // module_id FK
+    // ['User', db.User],
+    // ['EnterpriseCondition', db.EnterpriseCondition],
+    // ['EnterpriseConditionModule', db.EnterpriseConditionModule],
+    // ['EnterpriseConditionCampaign', db.EnterpriseConditionCampaign],
+    // ['McmvMunicipio', db.McmvMunicipio],
+    // ['McmvImportLog', db.McmvImportLog],
   ]) {
     try {
       await model.sync({ alter: true });

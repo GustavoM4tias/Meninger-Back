@@ -15,9 +15,9 @@ const {
 
 // ── Scopes por módulo ────────────────────────────────────────────────────────
 // Módulo 1 (Auth):      openid profile email User.Read offline_access
-// Módulo 2 (SharePoint): + Sites.Read.All Files.ReadWrite.All  (adicionados futuramente)
-// Módulo 3 (Teams):     + OnlineMeetings.ReadWrite              (adicionados futuramente)
-// Módulo 4 (Gravações): + Calendars.Read                        (adicionados futuramente)
+// Módulo 2 (SharePoint): + Sites.Read.All Files.ReadWrite.All
+// Módulo 3 (Teams):     + OnlineMeetings.ReadWrite
+// Módulo 4 (Gravações): + Calendars.Read
 const BASE_SCOPES = 'openid profile email User.Read offline_access Sites.ReadWrite.All Files.ReadWrite.All Calendars.ReadWrite OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All';
 
 // ── CSRF state store em memória ──────────────────────────────────────────────
@@ -148,8 +148,8 @@ class MicrosoftAuthService {
 
             await db.User.update(
                 {
-                    microsoft_access_token: refreshed.access_token,
-                    microsoft_refresh_token: refreshed.refresh_token || u.microsoft_refresh_token,
+                    microsoft_access_token:     refreshed.access_token,
+                    microsoft_refresh_token:    refreshed.refresh_token || u.microsoft_refresh_token,
                     microsoft_token_expires_at: newExpiresAt,
                 },
                 { where: { id: u.id } }
@@ -165,8 +165,8 @@ class MicrosoftAuthService {
             );
             await db.User.update(
                 {
-                    microsoft_access_token: null,
-                    microsoft_refresh_token: null,
+                    microsoft_access_token:     null,
+                    microsoft_refresh_token:    null,
                     microsoft_token_expires_at: null,
                 },
                 { where: { id: u.id } }
@@ -196,10 +196,17 @@ class MicrosoftAuthService {
             microsoft_token_expires_at: expiresAt,
         };
 
+        const displayName = msProfile.displayName?.trim() || null;
+
         // 1. Busca por microsoft_id (mais confiável após primeiro login)
         let user = await db.User.findOne({ where: { microsoft_id: msProfile.id } });
         if (user) {
-            await user.update(microsoftFields);
+            const updates = { ...microsoftFields };
+            // Corrige username gerado automaticamente (formato antigo: nome.sobrenome.-.empresa)
+            if (displayName && /^[a-z].*[.\-]/.test(user.username)) {
+                updates.username = displayName;
+            }
+            await user.update(updates);
             return { user, isNew: false };
         }
 
@@ -211,10 +218,9 @@ class MicrosoftAuthService {
         }
 
         // 3. Cria nova conta automaticamente
-        const baseUsername = (msProfile.displayName || email.split('@')[0])
-            .replace(/\s+/g, '.')
-            .toLowerCase()
-            .replace(/[^a-z0-9._-]/g, '');
+        const baseUsername = msProfile.displayName
+            ? msProfile.displayName.trim()
+            : email.split('@')[0];
 
         const username = await this._uniqueUsername(baseUsername || 'usuario');
 

@@ -75,6 +75,7 @@ import MeetingTranscriptDefine from './meetingTranscript.js';
 import InPersonMeetingDefine from './inPersonMeeting.js';
 import BucketUploadHistoryDefine from './tools/bucketUploadHistory.js';
 import UserPermissionDefine from './userPermission.js';
+import PermissionProfileDefine from './permissionProfile.js';
 import SignatureDefine from './signature.js';
 import SignatureDocumentDefine from './signatureDocument.js';
 import SignatureDocumentSignerDefine from './signatureDocumentSigner.js';
@@ -88,6 +89,8 @@ import EnterpriseConditionDefine from './comercial/enterpriseCondition.js';
 import EnterpriseConditionModuleDefine from './comercial/enterpriseConditionModule.js';
 import EnterpriseConditionCampaignDefine from './comercial/enterpriseConditionCampaign.js';
 import ComercialSettingsDefine from './comercial/comercialSettings.js';
+import McmvMunicipioDefine from './comercial/mcmvMunicipio.js';
+import McmvImportLogDefine from './comercial/mcmvImportLog.js';
 
 // Boleto Caixa
 import BoletoSettingsDefine from './boleto/boletoSettings.js';
@@ -175,6 +178,7 @@ db.MeetingTranscript = MeetingTranscriptDefine(sequelize, DataTypes);
 db.InPersonMeeting   = InPersonMeetingDefine(sequelize, DataTypes);
 db.BucketUploadHistory = BucketUploadHistoryDefine(sequelize, DataTypes);
 db.UserPermission = UserPermissionDefine(sequelize, DataTypes);
+db.PermissionProfile = PermissionProfileDefine(sequelize, DataTypes);
 db.Signature = SignatureDefine(sequelize, DataTypes);
 db.SignatureDocument       = SignatureDocumentDefine(sequelize, DataTypes);
 db.SignatureDocumentSigner = SignatureDocumentSignerDefine(sequelize, DataTypes);
@@ -188,6 +192,8 @@ db.EnterpriseCondition         = EnterpriseConditionDefine(sequelize, DataTypes)
 db.EnterpriseConditionModule   = EnterpriseConditionModuleDefine(sequelize, DataTypes);
 db.EnterpriseConditionCampaign = EnterpriseConditionCampaignDefine(sequelize, DataTypes);
 db.ComercialSettings           = ComercialSettingsDefine(sequelize, DataTypes);
+db.McmvMunicipio               = McmvMunicipioDefine(sequelize, DataTypes);
+db.McmvImportLog               = McmvImportLogDefine(sequelize, DataTypes);
 
 // Boleto Caixa
 db.BoletoSettings = BoletoSettingsDefine(sequelize, DataTypes);

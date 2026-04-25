@@ -4,8 +4,11 @@ import MicrosoftAuthController from '../controllers/microsoft/MicrosoftAuthContr
 import MicrosoftSharepointController from '../controllers/microsoft/MicrosoftSharepointController.js';
 import MicrosoftTeamsController from '../controllers/microsoft/MicrosoftTeamsController.js';
 import MicrosoftTranscriptController from '../controllers/microsoft/MicrosoftTranscriptController.js';
+import MicrosoftOrgUsersController from '../controllers/microsoft/MicrosoftOrgUsersController.js';
+import MicrosoftPlannerController from '../controllers/microsoft/MicrosoftPlannerController.js';
 import InPersonMeetingController from '../controllers/InPersonMeetingController.js';
 import authenticate from '../middlewares/authMiddleware.js';
+import requireAdmin from '../middlewares/requireAdmin.js';
 
 const router = express.Router();
 const authController = new MicrosoftAuthController();
@@ -20,6 +23,27 @@ router.get('/auth/callback', authController.callback);
 router.get('/auth/status', authenticate, authController.status);
 router.post('/auth/refresh', authenticate, authController.refresh);
 router.delete('/auth/unlink', authenticate, authController.unlink);
+
+// ── Gestão de Usuários da Org Microsoft (admin only) ─────────────────────────
+router.get('/org-users',        authenticate, requireAdmin, MicrosoftOrgUsersController.listOrgUsers);
+router.post('/org-users/import', authenticate, requireAdmin, MicrosoftOrgUsersController.importOrgUsers);
+
+// ── Planner ───────────────────────────────────────────────────────────────────
+const pc = MicrosoftPlannerController;
+router.get('/planner/groups',                               authenticate, pc.getGroups);
+router.get('/planner/groups/:groupId/plans',                authenticate, pc.getGroupPlans);
+router.get('/planner/plans/:planId/full',                   authenticate, pc.getPlanFull);
+router.post('/planner/plans',                               authenticate, pc.createPlan);
+router.patch('/planner/plans/:planId',                      authenticate, pc.updatePlan);
+router.delete('/planner/plans/:planId',                     authenticate, pc.deletePlan);
+router.post('/planner/buckets',                             authenticate, pc.createBucket);
+router.patch('/planner/buckets/:bucketId',                  authenticate, pc.updateBucket);
+router.delete('/planner/buckets/:bucketId',                 authenticate, pc.deleteBucket);
+router.post('/planner/tasks',                               authenticate, pc.createTask);
+router.patch('/planner/tasks/:taskId',                      authenticate, pc.updateTask);
+router.delete('/planner/tasks/:taskId',                     authenticate, pc.deleteTask);
+router.get('/planner/tasks/:taskId/details',                authenticate, pc.getTaskDetails);
+router.patch('/planner/tasks/:taskId/details',              authenticate, pc.updateTaskDetails);
 
 // ── SharePoint: Leitura ───────────────────────────────────────────────────────
 router.get('/sharepoint/sites', authenticate, sharepointController.sites);

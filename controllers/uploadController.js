@@ -12,6 +12,8 @@ const CONTEXTS = {
     PAYMENT_FLOW_EXTRA: 'payment_flow_extra',     // Anexos extras (vários)
     // ── Assinatura Digital ─────────────────────────────────────────────────────
     SIGNATURE_DOC: 'signature_doc',               // Documentos para assinar
+    // ── Suporte / Reporte ──────────────────────────────────────────────────────
+    SUPPORT_ATTACHMENT: 'support_attachment',     // Anexos de tickets de suporte
 };
 
 function sanitizeFileName(name = '') {
@@ -105,6 +107,17 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
             return {
                 bucket: STORAGE_BUCKET,
                 path: `office/signatures/${userId}/${timestamp}-${originalName}`,
+                isPublic: true,
+            };
+
+        // ── Suporte / Reporte ──────────────────────────────────────────────────
+        case CONTEXTS.SUPPORT_ATTACHMENT:
+            if (!['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.mimetype)) {
+                throw new Error('Anexo de suporte aceita PDF, PNG, JPG, WEBP ou GIF');
+            }
+            return {
+                bucket: STORAGE_BUCKET,
+                path: `office/support/${referenceId || 'temp'}/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 
