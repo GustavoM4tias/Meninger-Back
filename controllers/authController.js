@@ -334,22 +334,26 @@ const averageEmbedding = (arr) => {
 };
 
 export const enrollFace = async (req, res) => {
-  // body: { embeddings: number[][], threshold?: number }
-  const { embeddings, threshold } = req.body;
-  if (!Array.isArray(embeddings) || embeddings.length < 5) {
-    return res.status(400).json({ success: false, error: 'Coleta insuficiente' });
+  try {
+    const { embeddings, threshold } = req.body;
+    if (!Array.isArray(embeddings) || embeddings.length < 5) {
+      return res.status(400).json({ success: false, error: 'Coleta insuficiente' });
+    }
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
+
+    const mean = averageEmbedding(embeddings);
+    user.face_template = mean;
+    if (threshold) user.face_threshold = threshold;
+    user.face_enabled = true;
+    user.face_last_update = new Date();
+    await user.save();
+
+    return res.json({ success: true, data: { face_enabled: true } });
+  } catch (err) {
+    console.error('[enrollFace] erro:', err);
+    return res.status(500).json({ success: false, error: 'Erro interno ao salvar face' });
   }
-  const user = await User.findByPk(req.user.id);
-  if (!user) return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
-
-  const mean = averageEmbedding(embeddings);
-  user.face_template = mean;
-  if (threshold) user.face_threshold = threshold;
-  user.face_enabled = true;
-  user.face_last_update = new Date();
-  await user.save();
-
-  return res.json({ success: true, data: { face_enabled: true } });
 };
 
 export const identifyFace = async (req, res) => {
@@ -492,7 +496,7 @@ export const updateMe = async (req, res) => {
   const isAdmin = req.user.role === 'admin';
 
   // Campos base obrigatórios para todos
-  if (!username || !email || status === undefined || !birth_date || face_enabled === undefined) {
+  if (!username || !email || status == null || !birth_date || face_enabled == null) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
   // Admin deve sempre informar cargo
@@ -530,37 +534,85 @@ export const updateMe = async (req, res) => {
 };
 
 export const updateUser = async (req, res) => {
-  const { id, username, email, position, role, manager_id, city, status, birth_date, show_in_organogram, phone } = req.body;
+  const {
+    id,
+    username,
+    email,
+    position,
+    role,
+    manager_id,
+    city,
+    status,
+    birth_date,
+    show_in_organogram,
+    phone
+  } = req.body;
 
-  if (!id || !username || !email || !position || !city || status === undefined || !birth_date) {
-    return responseHandler.error(res, 'Todos os campos são obrigatórios');
+  if (!id) {
+    return responseHandler.error(res, 'ID do usuário é obrigatório');
+  }
+
+  if (req.user.role !== 'admin') {
+    return responseHandler.error(res, 'Apenas administradores podem editar usuários');
   }
 
   try {
-    const [positionRecord, cityRecord] = await Promise.all([
-      Position.findOne({ where: { name: position, active: true } }),
-      UserCity.findOne({ where: { name: city, active: true } }),
-    ]);
+    const payload = {};
 
-    if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
-    if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
+    if (username !== undefined) payload.username = username;
+    if (email !== undefined) payload.email = email;
+    if (manager_id !== undefined) payload.manager_id = manager_id || null;
+    if (status !== undefined) payload.status = status;
+    if (birth_date !== undefined) payload.birth_date = birth_date || null;
+    if (show_in_organogram !== undefined) payload.show_in_organogram = show_in_organogram;
+    if (phone !== undefined) payload.phone = phone || null;
+    if (role !== undefined) payload.role = role;
 
-    const payload = {
-      username,
-      email,
-      position: positionRecord.name,
-      manager_id,
-      city: cityRecord.name,
-      status,
-      birth_date,
-      show_in_organogram: show_in_organogram ?? false,
-      phone: phone ?? null,
-    };
-    if (role !== undefined) payload.role = role; // admin/user
+    if (position !== undefined) {
+      if (!position) {
+        payload.position = '';
+      } else {
+        const positionRecord = await Position.findOne({
+          where: { name: position, active: true }
+        });
+
+        if (!positionRecord) {
+          return responseHandler.error(res, 'Cargo inválido ou inativo');
+        }
+
+        payload.position = positionRecord.name;
+      }
+    }
+
+    if (city !== undefined) {
+      if (!city) {
+        payload.city = '';
+      } else {
+        const cityRecord = await UserCity.findOne({
+          where: { name: city, active: true }
+        });
+
+        if (!cityRecord) {
+          return responseHandler.error(res, 'Cidade inválida ou inativa');
+        }
+
+        payload.city = cityRecord.name;
+      }
+    }
+
+    if (Object.keys(payload).length === 0) {
+      return responseHandler.error(res, 'Nenhum campo informado para atualização');
+    }
 
     const [affectedRows] = await User.update(payload, { where: { id } });
-    if (affectedRows === 0) return responseHandler.error(res, 'Usuário não encontrado');
-    return responseHandler.success(res, { message: 'Informações atualizadas com sucesso' });
+
+    if (affectedRows === 0) {
+      return responseHandler.error(res, 'Usuário não encontrado');
+    }
+
+    return responseHandler.success(res, {
+      message: 'Informações atualizadas com sucesso'
+    });
   } catch (error) {
     return responseHandler.error(res, error);
   }
@@ -602,25 +654,25 @@ export const getAllUsers = async (req, res) => {
  * Retorna se o usuário tem credenciais Sienge configuradas e o email mascarado.
  */
 export const getSiengeCredentials = async (req, res) => {
-    try {
-        const user = await User.findByPk(req.user.id, {
-            attributes: ['id', 'sienge_email', 'sienge_password'],
-        });
-        if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+  try {
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['id', 'sienge_email', 'sienge_password'],
+    });
+    if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
 
-        const hasCredentials = !!(user.sienge_email && user.sienge_password);
-        let maskedEmail = null;
-        if (hasCredentials) {
-            const email = decrypt(user.sienge_email);
-            if (email) {
-                const [local, domain] = email.split('@');
-                maskedEmail = `${local.slice(0, 3)}***@${domain}`;
-            }
-        }
-        return res.json({ hasCredentials, maskedEmail });
-    } catch (err) {
-        return res.status(500).json({ error: err.message });
+    const hasCredentials = !!(user.sienge_email && user.sienge_password);
+    let maskedEmail = null;
+    if (hasCredentials) {
+      const email = decrypt(user.sienge_email);
+      if (email) {
+        const [local, domain] = email.split('@');
+        maskedEmail = `${local.slice(0, 3)}***@${domain}`;
+      }
     }
+    return res.json({ hasCredentials, maskedEmail });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 };
 
 /**
@@ -628,29 +680,29 @@ export const getSiengeCredentials = async (req, res) => {
  * Salva email e senha Sienge criptografados no perfil do usuário.
  */
 export const saveSiengeCredentials = async (req, res) => {
-    try {
-        const { email, password } = req.body;
-        if (!email?.trim() || !password?.trim()) {
-            return res.status(422).json({ error: 'Email e senha são obrigatórios.' });
-        }
-        const user = await User.findByPk(req.user.id);
-        if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
-
-        await user.update({
-            sienge_email: encrypt(email.trim()),
-            sienge_password: encrypt(password),
-        });
-
-        // Limpa o flag de credenciais inválidas em todos os lançamentos do usuário
-        await db.PaymentLaunch.update(
-            { siengeCredentialsInvalid: false },
-            { where: { createdBy: req.user.id, siengeCredentialsInvalid: true } }
-        );
-
-        return res.json({ success: true, message: 'Credenciais Sienge salvas com segurança.' });
-    } catch (err) {
-        return res.status(500).json({ error: err.message });
+  try {
+    const { email, password } = req.body;
+    if (!email?.trim() || !password?.trim()) {
+      return res.status(422).json({ error: 'Email e senha são obrigatórios.' });
     }
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+    await user.update({
+      sienge_email: encrypt(email.trim()),
+      sienge_password: encrypt(password),
+    });
+
+    // Limpa o flag de credenciais inválidas em todos os lançamentos do usuário
+    await db.PaymentLaunch.update(
+      { siengeCredentialsInvalid: false },
+      { where: { createdBy: req.user.id, siengeCredentialsInvalid: true } }
+    );
+
+    return res.json({ success: true, message: 'Credenciais Sienge salvas com segurança.' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 };
 
 // ── Reset de senha pelo admin ─────────────────────────────────────────────────

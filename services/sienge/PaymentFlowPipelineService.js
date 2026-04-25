@@ -824,7 +824,10 @@ export async function pollTituloStatus(launchId) {
     const situacoes = installments.map(i => i.situation).join(', ') || bill.status || '?';
     console.log(`🔍 [Pipeline] #${launchId}: título #${launch.siengeTituloNumber} | parcelas=[${situacoes}] | pago=${isPaid}`);
 
-    if (isPaid && launch.pipelineStage === 'awaiting_titulo_authorization') {
+    // Detecta pagamento mesmo quando o boleto falhou ao registrar (stage fica em 'titulo_created').
+    // O erro de registro (siengeTituloError) é preservado — notificação e reenvio continuam disponíveis.
+    const PAYABLE_STAGES = ['awaiting_titulo_authorization', 'titulo_created'];
+    if (isPaid && PAYABLE_STAGES.includes(launch.pipelineStage)) {
         await launch.update({ pipelineStage: 'titulo_pago', status: 'titulo_pago' });
         console.log(`✅ [Pipeline] #${launchId}: título pago → titulo_pago`);
     }
