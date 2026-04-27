@@ -62,19 +62,6 @@ export const TOOL_DECLARATIONS = [
       },
     },
   },
-  {
-    name: 'save_memory',
-    description: 'Salva uma preferência ou informação importante sobre o usuário para conversas futuras.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        key:      { type: 'STRING', description: 'Chave semântica. Ex: preferred_enterprise.' },
-        value:    { type: 'STRING', description: 'Valor a salvar.' },
-        category: { type: 'STRING', enum: ['preference', 'context', 'fact'] },
-      },
-      required: ['key', 'value'],
-    },
-  },
 ];
 
 export async function executeTool(name, args, user) {
@@ -82,7 +69,6 @@ export async function executeTool(name, args, user) {
     case 'navigate_to_page': return executeNavigate(args);
     case 'query_leads':      return executeQueryLeads(args, user);
     case 'query_events':     return executeQueryEvents(args, user);
-    case 'save_memory':      return executeSaveMemory(args, user);
     default:                 return { error: `Ferramenta desconhecida: ${name}` };
   }
 }

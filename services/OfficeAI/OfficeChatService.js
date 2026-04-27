@@ -3,7 +3,17 @@ import dotenv from 'dotenv';
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { buildSystemPrompt } from './systemPrompt.js';
-import { TOOL_DECLARATIONS, executeTool } from './MarketingTools.js';
+import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
+import { TOOL_DECLARATIONS as COMERCIAL_DECLARATIONS, executeTool as comercialExecuteTool } from './ComercialTools.js';
+
+const TOOL_DECLARATIONS = [...MARKETING_DECLARATIONS, ...COMERCIAL_DECLARATIONS];
+
+const _marketingNames = new Set(MARKETING_DECLARATIONS.map(t => t.name));
+async function executeTool(name, args, user) {
+  return _marketingNames.has(name)
+    ? marketingExecuteTool(name, args, user)
+    : comercialExecuteTool(name, args, user);
+}
 
 dotenv.config();
 
@@ -16,9 +26,12 @@ function getGeminiClient() {
   return new GoogleGenerativeAI(key);
 }
 
+function getModelList() {
+  return (process.env.GEMINI_MODELS || 'gemini-2.0-flash').split(',').map(m => m.trim()).filter(Boolean);
+}
+
 function getModel() {
-  const models = (process.env.GEMINI_MODELS || 'gemini-2.0-flash').split(',').map(m => m.trim()).filter(Boolean);
-  return models[0];
+  return getModelList()[0];
 }
 
 /**
@@ -83,10 +96,15 @@ async function buildHistory(sessionId) {
     limit: 40, // janela de contexto: últimas 40 mensagens
   });
 
-  return messages.map(m => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
+  return messages.map(m => {
+    let text = m.content;
+    // Mensagens de assistente com action são salvas como JSON {"text":"...","action":{...}}
+    // Gemini só deve ver o texto — nunca os arrays/objetos brutos da action
+    if (m.role === 'assistant' && m.response_type !== 'text') {
+      try { text = JSON.parse(m.content).text || ''; } catch { /* mantém original */ }
+    }
+    return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
+  });
 }
 
 /**
@@ -112,34 +130,48 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
   const fullUser = await db.User.findByPk(userId, {
     attributes: ['id', 'username', 'email', 'role', 'position', 'city'],
   });
-  const [memories, enterprises] = await Promise.all([
-    db.UserAIMemory.findAll({ where: { user_id: userId } }),
+  const [enterprises] = await Promise.all([
     loadAccessibleEnterprises(fullUser),
   ]);
 
   const session = await getOrCreateSession(userId, sessionId);
   await saveMessage(session.id, 'user', userMessage);
 
-  const systemPrompt = buildSystemPrompt(fullUser, memories, enterprises);
+  const systemPrompt = buildSystemPrompt(fullUser, [], enterprises);
   const history = await buildHistory(session.id);
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
   const historyWithoutLast = history.slice(0, -1);
-
-  const genAI = getGeminiClient();
-  const model = genAI.getGenerativeModel({
-    model: getModel(),
-    systemInstruction: systemPrompt,
-    tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
-  });
-
-  const chat = model.startChat({ history: historyWithoutLast });
 
   let fullAssistantText = '';
   let actionResult = null;
   let geminiModel = getModel();
 
+  // Tenta cada modelo da lista em ordem — fallback automático em caso de 503
+  let chat = null;
+  let streamResult = null;
+  const modelList = getModelList();
+  for (let i = 0; i < modelList.length; i++) {
+    try {
+      const genAI = getGeminiClient();
+      const mdl = genAI.getGenerativeModel({
+        model: modelList[i],
+        systemInstruction: systemPrompt,
+        tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+      });
+      chat = mdl.startChat({ history: historyWithoutLast });
+      streamResult = await chat.sendMessageStream(userMessage);
+      geminiModel = modelList[i];
+      break;
+    } catch (err) {
+      if (i < modelList.length - 1 && err.status === 503) {
+        console.warn(`[OfficeChatService] Modelo ${modelList[i]} indisponível (503), tentando ${modelList[i + 1]}...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+
   try {
-    const streamResult = await chat.sendMessageStream(userMessage);
 
     for await (const chunk of streamResult.stream) {
       const candidate = chunk.candidates?.[0];
@@ -162,9 +194,9 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
             sendSSE(res, { type: 'action', action: toolResult });
           }
 
-          // Envia o resultado de volta para o Gemini continuar o texto
+          // Envia o resultado de volta para o Gemini (sem arrays volumosos — evita JSON no texto)
           const followUp = await chat.sendMessageStream([
-            { functionResponse: { name, response: toolResult } },
+            { functionResponse: { name, response: summarizeForGemini(toolResult) } },
           ]);
 
           for await (const followChunk of followUp.stream) {
@@ -203,15 +235,60 @@ function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+/**
+ * Remove arrays volumosos do resultado da tool antes de enviar ao Gemini.
+ * Evita que o modelo reproduza o JSON bruto na resposta de texto.
+ */
+function summarizeForGemini(result) {
+  if (!result || typeof result !== 'object') return result;
+  if (result.error) return { error: result.error };
+
+  const { type, title, total, context } = result;
+  const summary = { type, title, context };
+
+  if (type === 'table') {
+    summary.total = total ?? result.rows?.length ?? 0;
+    summary.message = `Tabela gerada com ${summary.total} registros.`;
+  } else if (type === 'chart') {
+    summary.total = result.data?.length ?? 0;
+    summary.message = `Gráfico gerado com ${summary.total} categorias.`;
+    // Inclui labels compactos para o modelo poder mencionar
+    if (result.labels?.length <= 10) {
+      summary.labels = result.labels;
+      summary.data   = result.data;
+    }
+  } else if (type === 'navigate') {
+    summary.route   = result.route;
+    summary.filters = result.filters;
+    summary.message = result.message;
+  } else {
+    // detail ou outros — passa campos escalares, exclui arrays grandes
+    for (const [k, v] of Object.entries(result)) {
+      if (!Array.isArray(v)) summary[k] = v;
+    }
+  }
+
+  return summary;
+}
+
 async function loadAccessibleEnterprises(user) {
   const { QueryTypes } = await import('sequelize');
   const isAdmin = user.role === 'admin';
   const sql = isAdmin
-    ? `SELECT DISTINCT enterprise_name FROM enterprise_cities WHERE source = 'crm' AND enterprise_name IS NOT NULL ORDER BY enterprise_name`
-    : `SELECT DISTINCT enterprise_name FROM enterprise_cities WHERE source = 'crm' AND enterprise_name IS NOT NULL AND COALESCE(city_override, default_city) = :city ORDER BY enterprise_name`;
+    ? `SELECT ce.nome AS enterprise_name, COALESCE(ec.city_override, ec.default_city, ce.cidade) AS cidade
+       FROM cv_enterprises ce
+       LEFT JOIN enterprise_cities ec ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
+       WHERE ce.nome IS NOT NULL
+       ORDER BY ce.nome`
+    : `SELECT ce.nome AS enterprise_name, COALESCE(ec.city_override, ec.default_city, ce.cidade) AS cidade
+       FROM cv_enterprises ce
+       LEFT JOIN enterprise_cities ec ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
+       WHERE ce.nome IS NOT NULL
+         AND COALESCE(ec.city_override, ec.default_city, ce.cidade) ILIKE :city
+       ORDER BY ce.nome`;
   const rows = await db.sequelize.query(sql, {
-    replacements: isAdmin ? {} : { city: user.city },
+    replacements: isAdmin ? {} : { city: `%${user.city}%` },
     type: QueryTypes.SELECT,
   });
-  return rows.map(r => r.enterprise_name);
+  return rows.map(r => ({ name: r.enterprise_name, cidade: r.cidade || 'N/A' }));
 }
