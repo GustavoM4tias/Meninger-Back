@@ -59,7 +59,7 @@ export async function getLeads(req, res) {
       nome, email, telefone,
       imobiliaria, corretor,
       situacao_nome, midia_principal, origem,
-      empreendimento,
+      empreendimento, cidade,
       data_inicio, data_fim
     } = req.query;
 
@@ -113,10 +113,28 @@ export async function getLeads(req, res) {
       }
     }
 
-    // filtro por cidade do usuário (NÃO admin) — via join CRM direto no SQL
+    // filtro por cidade explícito (passado via URL)
+    if (cidade) {
+      replacements.filterCity = `%${cidade}%`;
+      whereClauses.push(`
+        EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(l.empreendimento) AS e_city
+          LEFT JOIN enterprise_cities ec
+            ON ec.source = 'crm'
+           AND ec.crm_id = COALESCE(
+                NULLIF(e_city->>'id','')::int,
+                NULLIF(e_city->>'idempreendimento','')::int,
+                NULLIF(e_city->>'id_empreendimento','')::int
+              )
+          WHERE COALESCE(ec.city_override, ec.default_city) ILIKE :filterCity
+        )`);
+    }
+
+    // filtro por cidade do usuário (NÃO admin, sem filtro explícito) — via join CRM
     const isAdmin = req.user.role === 'admin';
     const userCity = isAdmin ? null : (req.user.city || null);
-    if (!isAdmin && userCity) {
+    if (!isAdmin && userCity && !cidade) {
       replacements.userCity = userCity;
       whereClauses.push(`
         EXISTS (
