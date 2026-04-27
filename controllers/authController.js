@@ -318,12 +318,15 @@ export const resetPassword = async (req, res) => {
   }
 };
 
-// Util: média de embeddings (vários frames -> 1 vetor)
+// ── Face recognition utils ────────────────────────────────────────────────────
+
 const distanceEuclidean = (a, b) => {
   if (!a || !b || a.length !== b.length) return Number.POSITIVE_INFINITY;
-  let s = 0; for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d * d; }
+  let s = 0;
+  for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d * d; }
   return Math.sqrt(s);
 };
+
 const averageEmbedding = (arr) => {
   if (!arr?.length) return null;
   const len = arr[0].length;
@@ -333,23 +336,63 @@ const averageEmbedding = (arr) => {
   return out;
 };
 
+/**
+ * Remove outliers: descarta embeddings cuja distância à média ultrapassa
+ * (média das distâncias + 1.5 × desvio padrão). Garante que ao menos 60%
+ * dos frames originais são mantidos para evitar descartar demais.
+ */
+const filterOutliers = (embeddings) => {
+  if (embeddings.length < 6) return embeddings;
+  const mean = averageEmbedding(embeddings);
+  const dists = embeddings.map(e => distanceEuclidean(e, mean));
+  const avg = dists.reduce((a, b) => a + b, 0) / dists.length;
+  const std = Math.sqrt(dists.reduce((a, d) => a + (d - avg) ** 2, 0) / dists.length);
+  const cutoff = avg + 1.5 * std;
+  const filtered = embeddings.filter((_, i) => dists[i] <= cutoff);
+  // Se sobrar menos de 60% dos originais, retorna sem filtrar (evita descarte excessivo)
+  return filtered.length >= Math.ceil(embeddings.length * 0.6) ? filtered : embeddings;
+};
+
+/**
+ * Resolve o template armazenado num objeto padronizado { mean, embeddings }.
+ * Suporta o formato legado (array puro = só a média).
+ */
+const resolveTemplate = (raw) => {
+  if (!raw) return null;
+  let tpl = raw;
+  if (typeof tpl === 'string') {
+    try { tpl = JSON.parse(tpl); } catch { return null; }
+  }
+  if (Array.isArray(tpl)) return { mean: tpl, embeddings: [] };
+  if (tpl && Array.isArray(tpl.mean)) return tpl;
+  return null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const enrollFace = async (req, res) => {
   try {
     const { embeddings, threshold } = req.body;
     if (!Array.isArray(embeddings) || embeddings.length < 5) {
-      return res.status(400).json({ success: false, error: 'Coleta insuficiente' });
+      return res.status(400).json({ success: false, error: 'Coleta insuficiente (mínimo 5 frames)' });
     }
+
     const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
 
-    const mean = averageEmbedding(embeddings);
-    user.face_template = mean;
-    if (threshold) user.face_threshold = threshold;
+    // 1. Remove outliers antes de calcular a média
+    const clean = filterOutliers(embeddings);
+    const mean  = averageEmbedding(clean);
+
+    // 2. Salva media + todos os embeddings limpos → comparação mais robusta no identify
+    user.face_template = { mean, embeddings: clean };
+    user.face_threshold = threshold || parseFloat(process.env.FACE_THRESHOLD || '0.40');
     user.face_enabled = true;
     user.face_last_update = new Date();
     await user.save();
 
-    return res.json({ success: true, data: { face_enabled: true } });
+    console.log(`[enrollFace] user=${user.email} frames=${embeddings.length} kept=${clean.length}`);
+    return res.json({ success: true, data: { face_enabled: true, frames_kept: clean.length } });
   } catch (err) {
     console.error('[enrollFace] erro:', err);
     return res.status(500).json({ success: false, error: 'Erro interno ao salvar face' });
@@ -360,44 +403,23 @@ export const identifyFace = async (req, res) => {
   try {
     let { embedding } = req.body;
 
-    // 🔎 LOG de debug
-    const raw = req.body?.embedding;
-    console.log('[identifyFace] raw type:', typeof raw, 'isArray:', Array.isArray(raw), 'len:', raw?.length);
-
-    // 🔧 Normalizações comuns
+    // Normalizações para diferentes formatos que podem chegar do cliente
     if (embedding && !Array.isArray(embedding)) {
-      // Caso venha como Float32Array/TypedArray
       if (typeof embedding === 'object' && typeof embedding.length === 'number') {
         embedding = Array.from(embedding);
-      }
-      // Caso venha como { data: [...] }
-      else if (embedding && Array.isArray(embedding.data)) {
+      } else if (embedding && Array.isArray(embedding.data)) {
         embedding = embedding.data;
-      }
-      // Caso venha como string JSON
-      else if (typeof embedding === 'string') {
-        try {
-          const parsed = JSON.parse(embedding);
-          if (Array.isArray(parsed)) embedding = parsed;
-        } catch (_) { /* ignora */ }
+      } else if (typeof embedding === 'string') {
+        try { const p = JSON.parse(embedding); if (Array.isArray(p)) embedding = p; } catch (_) { /* ignora */ }
       }
     }
 
-    // 🔒 Validação final
-    if (!Array.isArray(embedding) || embedding.length !== 128 || embedding.some((x) => typeof x !== 'number')) {
-      console.log('[identifyFace] payload inválido após normalização:', {
-        type: typeof embedding,
-        isArray: Array.isArray(embedding),
-        len: embedding?.length
-      });
+    if (!Array.isArray(embedding) || embedding.length !== 128 || embedding.some(x => typeof x !== 'number')) {
       return res.status(400).json({ success: false, error: 'embedding inválido' });
     }
 
-    // Você pode limitar por status/cidade/etc. se quiser reduzir o conjunto:
     const users = await User.findAll({
-      where: {
-        face_enabled: true,
-      },
+      where: { face_enabled: true },
       attributes: ['id', 'email', 'username', 'position', 'role', 'city', 'face_template', 'face_threshold', 'status'],
     });
 
@@ -405,71 +427,82 @@ export const identifyFace = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Sem usuários com face habilitado' });
     }
 
-    let bestUser = null;
-    let bestDist = Number.POSITIVE_INFINITY;
+    // Threshold global (fallback se o usuário não tiver individual configurado)
+    const globalThreshold = parseFloat(process.env.FACE_THRESHOLD || '0.40');
+    // Margem mínima entre 1º e 2º candidatos — garante separação clara
+    const MIN_MARGIN = parseFloat(process.env.FACE_MIN_MARGIN || '0.10');
+
+    // Calcula distância mínima para cada usuário
+    const candidates = [];
 
     for (const u of users) {
-      if (!u.status) continue; // inativo → ignora
-      if (!u.face_template) continue;
+      if (!u.status || !u.face_template) continue;
 
-      // face_template pode estar salvo como array (JSON) ou string JSON
-      let tpl = u.face_template;
-      if (typeof tpl === 'string') {
-        try { tpl = JSON.parse(tpl); } catch { /* pode ser array puro ou string de array */ }
-      }
-      // Se salvou mean direto: tpl = [128 floats]
-      // Se salvou objeto: {mean:[...], embeddings:[...]}
-      let dists = [];
-      if (Array.isArray(tpl)) {
-        dists.push(distanceEuclidean(embedding, tpl));
-      } else if (tpl && Array.isArray(tpl.mean)) {
-        dists.push(distanceEuclidean(embedding, tpl.mean));
-        if (Array.isArray(tpl.embeddings)) {
-          for (const e of tpl.embeddings) dists.push(distanceEuclidean(embedding, e));
-        }
-      } else {
-        continue; // sem template válido
+      const tpl = resolveTemplate(u.face_template);
+      if (!tpl) continue;
+
+      const dists = [distanceEuclidean(embedding, tpl.mean)];
+      if (Array.isArray(tpl.embeddings)) {
+        for (const e of tpl.embeddings) dists.push(distanceEuclidean(embedding, e));
       }
 
       const minDist = Math.min(...dists);
-      if (minDist < bestDist) {
-        bestDist = minDist;
-        bestUser = u;
-      }
+      candidates.push({ user: u, dist: minDist });
     }
 
-    // limiar
-    const threshold = parseFloat(process.env.FACE_THRESHOLD || '0.60');
-    const passed = bestUser && bestDist <= threshold;
+    if (!candidates.length) {
+      return res.status(404).json({ success: false, error: 'Nenhum template válido encontrado' });
+    }
 
-    console.log(`[faceIdentify] best=${bestUser?.email} dist=${bestDist?.toFixed(4)} thr=${threshold} ok=${passed}`);
+    // Ordena pelo mais próximo
+    candidates.sort((a, b) => a.dist - b.dist);
+
+    const best   = candidates[0];
+    const second = candidates[1];
+
+    // Threshold individual do usuário (ou global)
+    const userThreshold = best.user.face_threshold > 0 ? best.user.face_threshold : globalThreshold;
+
+    // Critério 1: distância abaixo do limiar
+    const passesThreshold = best.dist <= userThreshold;
+
+    // Critério 2: margem mínima em relação ao segundo candidato (se existir)
+    const passesMargin = !second || (second.dist - best.dist) >= MIN_MARGIN;
+
+    const passed = passesThreshold && passesMargin;
+
+    console.log(
+      `[faceIdentify] best=${best.user.email} dist=${best.dist.toFixed(4)} thr=${userThreshold} ` +
+      `margin=${second ? (second.dist - best.dist).toFixed(4) : 'único'} ok=${passed}`
+    );
 
     if (!passed) {
       return res.status(401).json({
         success: false,
-        error: 'Não reconhecido',
-        data: { meta: { dist: bestDist, threshold } },
+        error: passesThreshold && !passesMargin
+          ? 'Reconhecimento ambíguo — tente novamente com melhor iluminação'
+          : 'Não reconhecido',
+        data: { meta: { dist: best.dist, threshold: userThreshold, margin: second ? second.dist - best.dist : null } },
       });
     }
 
-    // sucesso → gera o MESMO JWT do login por senha
     const token = jwt.sign({
-      id: bestUser.id,
-      position: bestUser.position,
-      city: bestUser.city,
-      role: bestUser.role
+      id: best.user.id,
+      position: best.user.position,
+      city: best.user.city,
+      role: best.user.role,
     }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
 
-    bestUser.last_login = new Date();
-    await bestUser.save();
+    best.user.last_login = new Date();
+    await best.user.save();
 
     return res.json({
       success: true,
       data: {
         token,
-        user: { id: bestUser.id, email: bestUser.email, username: bestUser.username },
-        meta: { dist: bestDist, threshold },
-      }
+        user: { id: best.user.id, email: best.user.email, username: best.user.username },
+        meta: { dist: best.dist, threshold: userThreshold },
+      },
     });
   } catch (err) {
     console.error('[identifyFace] erro:', err);

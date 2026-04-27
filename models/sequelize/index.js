@@ -96,6 +96,12 @@ import McmvImportLogDefine from './comercial/mcmvImportLog.js';
 import BoletoSettingsDefine from './boleto/boletoSettings.js';
 import BoletoHistoryDefine from './boleto/boletoHistory.js';
 
+// OfficeAI Chat
+import ChatSessionDefine from './chatSession.js';
+import ChatMessageDefine from './chatMessage.js';
+import UserAIMemoryDefine from './userAIMemory.js';
+import ChatFeedbackDefine from './chatFeedback.js';
+
 const env = process.env.NODE_ENV || 'development';
 
 const cfg = config[env];
@@ -198,6 +204,12 @@ db.McmvImportLog               = McmvImportLogDefine(sequelize, DataTypes);
 // Boleto Caixa
 db.BoletoSettings = BoletoSettingsDefine(sequelize, DataTypes);
 db.BoletoHistory  = BoletoHistoryDefine(sequelize, DataTypes);
+
+// OfficeAI Chat
+db.ChatSession  = ChatSessionDefine(sequelize, DataTypes);
+db.ChatMessage  = ChatMessageDefine(sequelize, DataTypes);
+db.UserAIMemory = UserAIMemoryDefine(sequelize, DataTypes);
+db.ChatFeedback = ChatFeedbackDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

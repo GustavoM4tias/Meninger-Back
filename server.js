@@ -27,6 +27,7 @@ import signatureDocumentRoutes from './routes/signatureDocumentRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
+import officeChatRoutes from './routes/officeChatRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -84,6 +85,7 @@ app.use('/api/signature-documents', signatureDocumentRoutes);
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/api/mcmv', mcmvRoutes);
+app.use('/api/office-chat', officeChatRoutes);
 
 const PORT = process.env.PORT || 5000;
 
