@@ -29,9 +29,10 @@ router.get('/:id(\\d+)', ctrl.getCondition);
 router.patch('/:id(\\d+)', ctrl.updateCondition);           // admin only, não-approved
 
 // ── Fluxo de aprovação ────────────────────────────────────────────────────────
-router.post('/:id(\\d+)/submit', ctrl.submitForApproval);   // draft → pending_approval (admin)
-router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);     // approved → draft (admin)
-router.post('/:id(\\d+)/publish', ctrl.publishCondition);   // legado → alias de /submit
+router.post('/:id(\\d+)/submit', ctrl.submitForApproval);         // draft → pending_approval (admin)
+router.post('/:id(\\d+)/cancel-approval', ctrl.cancelApproval);   // pending_approval → draft (admin)
+router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved → draft (admin)
+router.post('/:id(\\d+)/publish', ctrl.publishCondition);         // legado → alias de /submit
 
 // ── Módulos ───────────────────────────────────────────────────────────────────
 router.put('/:id(\\d+)/modules', ctrl.upsertModules);

@@ -1214,6 +1214,45 @@ export const updateSettings = async (req, res) => {
     }
 };
 
+// ─── cancelar autorização — pending_approval → draft (admin) ─────────────────
+
+export const cancelApproval = async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem cancelar a autorização.' });
+
+        const { id } = req.params;
+        const condition = await EnterpriseCondition.findByPk(id);
+        if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
+        if (condition.status !== 'pending_approval') {
+            return res.status(409).json({ error: 'Apenas fichas em autorização podem ter a autorização cancelada.' });
+        }
+
+        if (condition.signature_document_id) {
+            await SignatureDocument.update(
+                { status: 'CANCELLED', cancel_reason: req.body?.note || 'Cancelado pelo administrador.' },
+                { where: { id: condition.signature_document_id } }
+            ).catch(() => {});
+        }
+
+        await condition.update({
+            status: 'draft',
+            signature_document_id: null,
+            approval_history: addHistory(
+                condition.approval_history ?? [],
+                'approval_cancelled',
+                req,
+                req.body?.note || 'Autorização cancelada pelo administrador.'
+            ),
+            updated_by: req.user?.id,
+        });
+
+        return res.json({ ok: true, status: 'draft' });
+    } catch (e) {
+        console.error('[conditions] cancelApproval:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
 // ─── publicar (legado — mantido para compatibilidade, redireciona para submit) ─
 
 export const publishCondition = async (req, res) => {
