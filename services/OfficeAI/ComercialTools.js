@@ -85,7 +85,12 @@ async function executeQueryMcmv(args) {
     where: conditions.length === 1 ? conditions[0] : { [Op.and]: conditions },
     order: [['no_municipio', 'ASC']],
     limit: 20,
-    attributes: ['no_municipio', 'sg_uf', 'vr_faixa2', 'no_regiao', 'co_periodo'],
+    attributes: [
+      'no_municipio', 'sg_uf', 'co_ibge',
+      'vr_faixa2', 'vr_faixa3', 'vr_anterior',
+      'no_regiao', 'co_recorte', 'co_grupo_regional',
+      'denominacao_hierarquia', 'populacao', 'co_periodo',
+    ],
     raw: true,
   });
 
@@ -93,23 +98,37 @@ async function executeQueryMcmv(args) {
     return { error: `Nenhum município encontrado para "${cidade}"${uf ? ` / ${uf}` : ''}.` };
   }
 
+  // Enriquece com Faixa 4 (fixo) e renda por faixa
+  const enriched = rows.map(r => ({
+    ...r,
+    vr_faixa3:   r.vr_faixa3  ?? MCMV_FAIXA3,
+    vr_faixa4:   MCMV_FAIXA4,
+    renda_faixa2: 'Até R$ 4.700',
+    renda_faixa3: 'R$ 4.700 – R$ 8.000',
+    renda_faixa4: 'Até R$ 12.000',
+  }));
+
   return {
     type:    'table',
-    title:   `MCMV Faixa 2 — ${cidade}`,
+    title:   `MCMV — ${cidade || 'Municípios'}`,
     columns: [
-      { key: 'no_municipio', label: 'Município' },
-      { key: 'sg_uf',        label: 'UF' },
-      { key: 'vr_faixa2',   label: 'Teto Faixa 2', type: 'currency' },
-      { key: 'no_regiao',    label: 'Região' },
+      { key: 'no_municipio',          label: 'Município' },
+      { key: 'sg_uf',                 label: 'UF' },
+      { key: 'denominacao_hierarquia',label: 'Classificação' },
+      { key: 'no_regiao',             label: 'Região' },
+      { key: 'populacao',             label: 'População' },
+      { key: 'co_ibge',               label: 'IBGE' },
+      { key: 'vr_faixa2',             label: 'Teto Faixa 2',   type: 'currency' },
+      { key: 'vr_anterior',           label: 'Anterior Faixa 2', type: 'currency' },
+      { key: 'vr_faixa3',             label: 'Teto Faixa 3',   type: 'currency' },
+      { key: 'vr_faixa4',             label: 'Teto Faixa 4',   type: 'currency' },
     ],
-    rows,
-    total: rows.length,
+    rows:    enriched,
+    total:   enriched.length,
     context: {
       source:  'mcmv',
       cidade:  cidade || null,
       uf:      uf || null,
-      faixa3:  MCMV_FAIXA3,
-      faixa4:  MCMV_FAIXA4,
     },
   };
 }

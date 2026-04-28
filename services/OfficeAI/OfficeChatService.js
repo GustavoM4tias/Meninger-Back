@@ -184,6 +184,13 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
         }
 
         if (part.functionCall) {
+          // Descarta qualquer texto emitido antes da tool call (pode conter valores
+          // do treinamento do modelo, incorretos em relação ao banco de dados)
+          if (fullAssistantText) {
+            fullAssistantText = '';
+            sendSSE(res, { type: 'clear' });
+          }
+
           const { name, args } = part.functionCall;
           const toolResult = await executeTool(name, args, fullUser);
 
@@ -249,6 +256,10 @@ function summarizeForGemini(result) {
   if (type === 'table') {
     summary.total = total ?? result.rows?.length ?? 0;
     summary.message = `Tabela gerada com ${summary.total} registros.`;
+    // Para tabelas pequenas, inclui os dados para o modelo citar valores corretos
+    if (summary.total <= 5 && result.rows?.length) {
+      summary.rows = result.rows;
+    }
   } else if (type === 'chart') {
     summary.total = result.data?.length ?? 0;
     summary.message = `Gráfico gerado com ${summary.total} categorias.`;
