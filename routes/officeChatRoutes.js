@@ -9,9 +9,62 @@ import {
 
 const router = express.Router();
 
+// ── Rate limit por usuário ────────────────────────────────────────────────────
+// Janela curta (anti-spam) + janela longa (anti-abuso). Em memória — suficiente
+// para single-server. Para múltiplas instâncias, migrar para Redis.
+const RATE_LIMITS = {
+  short: { windowMs: 60 * 1000,        max: 15 },   // 15 msgs/min
+  long:  { windowMs: 60 * 60 * 1000,   max: 200 },  // 200 msgs/hora
+};
+const _rateBuckets = new Map(); // userId -> { short: [ts...], long: [ts...] }
+
+function pruneAndCount(arr, windowMs, now) {
+  while (arr.length && now - arr[0] > windowMs) arr.shift();
+  return arr.length;
+}
+
+function rateLimitChat(req, res, next) {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado.' });
+
+  const now = Date.now();
+  let bucket = _rateBuckets.get(userId);
+  if (!bucket) {
+    bucket = { short: [], long: [] };
+    _rateBuckets.set(userId, bucket);
+  }
+
+  const shortCount = pruneAndCount(bucket.short, RATE_LIMITS.short.windowMs, now);
+  const longCount  = pruneAndCount(bucket.long,  RATE_LIMITS.long.windowMs,  now);
+
+  if (shortCount >= RATE_LIMITS.short.max) {
+    res.set('Retry-After', '60');
+    return res.status(429).json({ error: 'Você enviou muitas mensagens em sequência. Aguarde um instante e tente novamente.' });
+  }
+  if (longCount >= RATE_LIMITS.long.max) {
+    res.set('Retry-After', '3600');
+    return res.status(429).json({ error: 'Limite horário de mensagens atingido. Tente novamente mais tarde.' });
+  }
+
+  bucket.short.push(now);
+  bucket.long.push(now);
+  next();
+}
+
+// Limpeza periódica do mapa para evitar crescimento indefinido
+setInterval(() => {
+  const now = Date.now();
+  const longest = RATE_LIMITS.long.windowMs;
+  for (const [uid, bucket] of _rateBuckets) {
+    pruneAndCount(bucket.short, RATE_LIMITS.short.windowMs, now);
+    pruneAndCount(bucket.long,  longest,                    now);
+    if (!bucket.short.length && !bucket.long.length) _rateBuckets.delete(uid);
+  }
+}, 10 * 60 * 1000).unref?.();
+
 // ── POST /api/office-chat/stream ──────────────────────────────────────────────
 // SSE: envia a mensagem e recebe a resposta em streaming
-router.post('/stream', authenticate, async (req, res) => {
+router.post('/stream', authenticate, rateLimitChat, async (req, res) => {
   const { message, session_id } = req.body;
 
   if (!message?.trim()) {
@@ -151,12 +204,12 @@ router.delete('/sessions/:id', authenticate, async (req, res) => {
 router.get('/usage', authenticate, async (req, res) => {
   try {
     const bytes = await getUserStorageUsage(req.user.id);
-    const limitBytes = 30 * 1024 * 1024;
+    const limitBytes = 20 * 1024 * 1024;
     res.json({
       used_bytes: bytes,
       limit_bytes: limitBytes,
       used_mb: (bytes / 1024 / 1024).toFixed(2),
-      limit_mb: 30,
+      limit_mb: 20,
       percent: Math.min(100, ((bytes / limitBytes) * 100).toFixed(1)),
     });
   } catch (err) {
@@ -192,6 +245,40 @@ router.delete('/memories/:key', authenticate, async (req, res) => {
   }
 });
 
+// Monta um snapshot do raciocínio do assistente para uma mensagem avaliada.
+// Inclui: pergunta original do usuário, texto puro da resposta, metadata
+// (modelo, pool, ferramenta + argumentos, resumo do resultado, latência).
+async function buildFeedbackContext(assistantMsg) {
+  // Última mensagem do usuário antes desta resposta (na mesma sessão)
+  const previousUserMsg = await db.ChatMessage.findOne({
+    where: {
+      session_id: assistantMsg.session_id,
+      role: 'user',
+      created_at: { [db.Sequelize.Op.lt]: assistantMsg.created_at },
+    },
+    order: [['created_at', 'DESC']],
+    attributes: ['content', 'created_at'],
+  });
+
+  // Extrai apenas o texto da resposta (a parte action é JSON e fica grande)
+  let assistantText = assistantMsg.content || '';
+  if (assistantMsg.response_type !== 'text') {
+    try { assistantText = JSON.parse(assistantMsg.content).text || ''; } catch { /* mantém */ }
+  }
+
+  const meta = assistantMsg.metadata || {};
+  return {
+    user_question:    previousUserMsg?.content || null,
+    asked_at:         previousUserMsg?.created_at || null,
+    assistant_text:   assistantText,
+    response_type:    assistantMsg.response_type,
+    model:            meta.model || null,
+    pool:             meta.pool || null,
+    latency_ms:       meta.latency_ms ?? null,
+    tool_calls:       Array.isArray(meta.tool_calls) ? meta.tool_calls : [],
+  };
+}
+
 // ── POST /api/office-chat/messages/:id/feedback ───────────────────────────────
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -214,6 +301,9 @@ router.post('/messages/:id/feedback', authenticate, async (req, res) => {
     });
     if (!session) return res.status(403).json({ error: 'Acesso negado.' });
 
+    // Snapshot do raciocínio: pergunta original + metadata da resposta (tool, args, modelo, latência)
+    const context = await buildFeedbackContext(msg);
+
     await db.ChatFeedback.upsert(
       {
         message_id: req.params.id,
@@ -221,6 +311,7 @@ router.post('/messages/:id/feedback', authenticate, async (req, res) => {
         user_id: req.user.id,
         rating,
         comment: comment?.trim() || null,
+        context,
       },
       { conflictFields: ['message_id', 'user_id'] },
     );
@@ -259,9 +350,16 @@ router.get('/feedback', authenticate, async (req, res) => {
     const enriched = await Promise.all(rows.map(async (fb) => {
       const [user, message] = await Promise.all([
         db.User.findByPk(fb.user_id, { attributes: ['id', 'username', 'email', 'city'] }),
-        db.ChatMessage.findByPk(fb.message_id, { attributes: ['id', 'content', 'response_type', 'session_id'] }),
+        db.ChatMessage.findByPk(fb.message_id, {
+          attributes: ['id', 'content', 'response_type', 'session_id', 'metadata', 'created_at'],
+        }),
       ]);
-      return { ...fb.toJSON(), user, message };
+      const json = fb.toJSON();
+      // Feedbacks antigos (anteriores ao snapshot) — reconstrói contexto a partir da msg, se ainda existir
+      if (!json.context && message) {
+        json.context = await buildFeedbackContext(message);
+      }
+      return { ...json, user, message };
     }));
 
     res.json({

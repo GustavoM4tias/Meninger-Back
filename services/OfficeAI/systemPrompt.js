@@ -5,14 +5,11 @@ dayjs.locale('pt-br');
 /**
  * Monta o system prompt do Eme com o contexto do usuário e restrições de acesso.
  * @param {object} user        - req.user + campos extras (city, position)
- * @param {Array}  memories    - registros UserAIMemory do usuário
  * @param {Array}  enterprises - nomes dos empreendimentos acessíveis ao usuário
  */
-export function buildSystemPrompt(user, memories = [], enterprises = []) {
+export function buildSystemPrompt(user, enterprises = []) {
   const now = dayjs().format('dddd, D [de] MMMM [de] YYYY [às] HH:mm');
   const isAdmin = user.role === 'admin';
-
-  const memoryBlock = '';
 
   const accessBlock = isAdmin
     ? `## Acesso a dados\nVocê tem acesso completo a todos os empreendimentos e cidades.`
@@ -38,7 +35,6 @@ ${now}
 - Cargo: ${user.position || 'não informado'}
 - Cidade: ${user.city || 'não informada'}
 - Perfil: ${isAdmin ? 'Administrador (acesso total)' : 'Usuário'}
-${memoryBlock}
 
 ${accessBlock}
 ${enterpriseBlock}

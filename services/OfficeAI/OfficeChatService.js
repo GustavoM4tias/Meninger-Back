@@ -6,32 +6,83 @@ import { buildSystemPrompt } from './systemPrompt.js';
 import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
 import { TOOL_DECLARATIONS as COMERCIAL_DECLARATIONS, executeTool as comercialExecuteTool } from './ComercialTools.js';
 
-const TOOL_DECLARATIONS = [...MARKETING_DECLARATIONS, ...COMERCIAL_DECLARATIONS];
+// Registry: nome → { declaration, executor }
+const TOOLS = new Map();
+function registerTools(declarations, executor) {
+  for (const d of declarations) TOOLS.set(d.name, { declaration: d, executor });
+}
+registerTools(MARKETING_DECLARATIONS, marketingExecuteTool);
+registerTools(COMERCIAL_DECLARATIONS, comercialExecuteTool);
 
-const _marketingNames = new Set(MARKETING_DECLARATIONS.map(t => t.name));
+const TOOL_DECLARATIONS = [...TOOLS.values()].map(t => t.declaration);
+
 async function executeTool(name, args, user) {
-  return _marketingNames.has(name)
-    ? marketingExecuteTool(name, args, user)
-    : comercialExecuteTool(name, args, user);
+  const tool = TOOLS.get(name);
+  if (!tool) return { error: `Ferramenta desconhecida: ${name}` };
+  return tool.executor(name, args, user);
 }
 
 dotenv.config();
 
 const STORAGE_LIMIT_BYTES = 20 * 1024 * 1024; // 20 MB
 
-// Seleciona o cliente Gemini com fallback de chaves
-function getGeminiClient() {
-  const keys = (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '').split(',').map(k => k.trim()).filter(Boolean);
-  const key = keys[Math.floor(Math.random() * keys.length)];
-  return new GoogleGenerativeAI(key);
+// ── Chaves Gemini com rotação por tentativa ──────────────────────────────────
+function getGeminiKeys() {
+  return (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
+    .split(',').map(k => k.trim()).filter(Boolean);
 }
 
-function getModelList() {
-  return (process.env.GEMINI_MODELS || 'gemini-2.0-flash').split(',').map(m => m.trim()).filter(Boolean);
+function getGeminiClient(keyIndex = null) {
+  const keys = getGeminiKeys();
+  if (!keys.length) throw new Error('GEMINI_API_KEY(S) não configurada(s).');
+  const idx = keyIndex == null ? Math.floor(Math.random() * keys.length) : keyIndex % keys.length;
+  return new GoogleGenerativeAI(keys[idx]);
 }
 
-function getModel() {
-  return getModelList()[0];
+// ── Listas de modelos: fast (padrão) e smart (escalonado para queries complexas) ──
+function parseList(env) {
+  return (env || '').split(',').map(m => m.trim()).filter(Boolean);
+}
+function getFastModels() {
+  const fast = parseList(process.env.GEMINI_FAST_MODELS);
+  if (fast.length) return fast;
+  return parseList(process.env.GEMINI_MODELS) || ['gemini-2.5-flash'];
+}
+function getSmartModels() {
+  const smart = parseList(process.env.GEMINI_SMART_MODELS);
+  if (smart.length) return smart;
+  // Default: pro com fallback para flash se pro indisponível
+  return ['gemini-2.5-pro', ...getFastModels()];
+}
+
+/**
+ * Heurística para escolher entre pool "fast" (flash) e "smart" (pro).
+ * Critério conservador: usa smart só quando há sinais claros de complexidade,
+ * para preservar coerência sem custo extra na maioria das interações.
+ */
+function selectModelPool(userMessage) {
+  const text = (userMessage || '').toLowerCase();
+
+  // Sinal 1: mensagem longa
+  if (text.length > 280) return 'smart';
+
+  // Sinal 2: múltiplas perguntas
+  const questionMarks = (text.match(/\?/g) || []).length;
+  if (questionMarks >= 2) return 'smart';
+
+  // Sinal 3: intenção de análise/comparação/raciocínio
+  const SMART_KEYWORDS = [
+    'compar', 'analis', 'analís', 'diferenç', 'estratég', ' versus ', ' vs ',
+    'por que ', 'porque ', 'recomend', 'sugir', 'sugest', 'previs', 'tendênc',
+    'qual o melhor', 'qual a melhor', 'mais eficient', 'oportunidade',
+    'avalia', 'explica em detalh', 'projet', 'cenário',
+  ];
+  if (SMART_KEYWORDS.some(kw => text.includes(kw))) return 'smart';
+
+  // Sinal 4: múltiplas restrições combinadas
+  if (/\b(e também|além disso|ao mesmo tempo)\b/.test(text)) return 'smart';
+
+  return 'fast';
 }
 
 /**
@@ -137,43 +188,73 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
   const session = await getOrCreateSession(userId, sessionId);
   await saveMessage(session.id, 'user', userMessage);
 
-  const systemPrompt = buildSystemPrompt(fullUser, [], enterprises);
+  const systemPrompt = buildSystemPrompt(fullUser, enterprises);
   const history = await buildHistory(session.id);
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
   const historyWithoutLast = history.slice(0, -1);
 
   let fullAssistantText = '';
   let actionResult = null;
-  let geminiModel = getModel();
+  const toolCalls = []; // [{ name, args, result_summary, error, ms }]
+  const startedAt = Date.now();
 
-  // Tenta cada modelo da lista em ordem — fallback automático em caso de 503
+  // Seleciona pool com base na complexidade da pergunta (fast por padrão, smart se necessário)
+  const pool = selectModelPool(userMessage);
+  const modelList = pool === 'smart' ? getSmartModels() : getFastModels();
+  let geminiModel = modelList[0];
+
+  // Tenta cada modelo + cada chave em ordem — fallback automático em 503/429/401/500.
+  // IMPORTANTE: o erro 503 do Gemini frequentemente surge no PRIMEIRO chunk (durante
+  // a iteração do stream), não na chamada `sendMessageStream`. Por isso puxamos o
+  // primeiro chunk dentro do loop de retry — só assim conseguimos cair no próximo modelo.
+  const keysCount = Math.max(getGeminiKeys().length, 1);
+  const RETRYABLE = new Set([401, 403, 429, 500, 503]);
   let chat = null;
-  let streamResult = null;
-  const modelList = getModelList();
-  for (let i = 0; i < modelList.length; i++) {
-    try {
-      const genAI = getGeminiClient();
-      const mdl = genAI.getGenerativeModel({
-        model: modelList[i],
-        systemInstruction: systemPrompt,
-        tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
-      });
-      chat = mdl.startChat({ history: historyWithoutLast });
-      streamResult = await chat.sendMessageStream(userMessage);
-      geminiModel = modelList[i];
-      break;
-    } catch (err) {
-      if (i < modelList.length - 1 && err.status === 503) {
-        console.warn(`[OfficeChatService] Modelo ${modelList[i]} indisponível (503), tentando ${modelList[i + 1]}...`);
-        continue;
+  let streamIterator = null;
+  let firstChunk = null;
+  outer: for (let i = 0; i < modelList.length; i++) {
+    for (let k = 0; k < keysCount; k++) {
+      try {
+        const genAI = getGeminiClient(k);
+        const mdl = genAI.getGenerativeModel({
+          model: modelList[i],
+          systemInstruction: systemPrompt,
+          tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+        });
+        chat = mdl.startChat({ history: historyWithoutLast });
+        const streamResult = await chat.sendMessageStream(userMessage);
+        streamIterator = streamResult.stream[Symbol.asyncIterator]();
+        // Consome o primeiro chunk dentro do retry para capturar 503 que vem assíncrono
+        const first = await streamIterator.next();
+        firstChunk = first.done ? null : first.value;
+        geminiModel = modelList[i];
+        break outer;
+      } catch (err) {
+        const status = err?.status || err?.response?.status;
+        const lastModel = i === modelList.length - 1;
+        const lastKey = k === keysCount - 1;
+        if (RETRYABLE.has(status) && !(lastModel && lastKey)) {
+          console.warn(`[OfficeChatService] Falha ${status} em ${modelList[i]} (key #${k}), tentando próximo...`);
+          continue;
+        }
+        throw err;
       }
-      throw err;
+    }
+  }
+
+  // Gera um async iterator que reemite o primeiro chunk + resto do stream
+  async function* mergedStream() {
+    if (firstChunk) yield firstChunk;
+    while (true) {
+      const r = await streamIterator.next();
+      if (r.done) break;
+      yield r.value;
     }
   }
 
   try {
 
-    for await (const chunk of streamResult.stream) {
+    for await (const chunk of mergedStream()) {
       const candidate = chunk.candidates?.[0];
       if (!candidate) continue;
 
@@ -192,27 +273,37 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
           }
 
           const { name, args } = part.functionCall;
+          const toolStart = Date.now();
           const toolResult = await executeTool(name, args, fullUser);
 
-          if (name === 'save_memory') {
-            // Memória salva silenciosamente, não envia para o frontend
-          } else {
-            actionResult = toolResult;
-            sendSSE(res, { type: 'action', action: toolResult });
-          }
+          toolCalls.push({
+            name,
+            args: args || {},
+            result_summary: summarizeForFeedback(toolResult),
+            error: toolResult?.error || null,
+            ms: Date.now() - toolStart,
+          });
 
-          // Envia o resultado de volta para o Gemini (sem arrays volumosos — evita JSON no texto)
-          const followUp = await chat.sendMessageStream([
-            { functionResponse: { name, response: summarizeForGemini(toolResult) } },
-          ]);
+          actionResult = toolResult;
+          sendSSE(res, { type: 'action', action: toolResult });
 
-          for await (const followChunk of followUp.stream) {
-            for (const followPart of followChunk.candidates?.[0]?.content?.parts || []) {
-              if (followPart.text) {
-                fullAssistantText += followPart.text;
-                sendSSE(res, { type: 'chunk', text: followPart.text });
+          // Envia o resultado de volta para o Gemini (sem arrays volumosos — evita JSON no texto).
+          // Falhas aqui (503, etc.) não devem matar a resposta: o usuário já recebeu a ação/dados.
+          try {
+            const followUp = await chat.sendMessageStream([
+              { functionResponse: { name, response: summarizeForGemini(toolResult) } },
+            ]);
+            for await (const followChunk of followUp.stream) {
+              for (const followPart of followChunk.candidates?.[0]?.content?.parts || []) {
+                if (followPart.text) {
+                  fullAssistantText += followPart.text;
+                  sendSSE(res, { type: 'chunk', text: followPart.text });
+                }
               }
             }
+          } catch (followErr) {
+            console.warn('[OfficeChatService] Falha no follow-up após tool call:', followErr?.status || followErr?.message);
+            // Mantém a actionResult — o frontend já exibe os dados sem texto final.
           }
         }
       }
@@ -232,7 +323,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
 
   const savedMsg = await saveMessage(session.id, 'assistant', contentToSave, responseType, {
     model: geminiModel,
+    pool,
     hasAction: !!actionResult,
+    tool_calls: toolCalls,
+    latency_ms: Date.now() - startedAt,
   });
 
   sendSSE(res, { type: 'done', sessionId: session.id, msgId: savedMsg.id });
@@ -240,6 +334,38 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
 
 function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
+ * Resumo do resultado da tool para auditoria/feedback (não vai para o Gemini).
+ * Preserva os filtros aplicados, totais e amostra dos dados — útil para
+ * reconstruir o raciocínio do assistente no painel de Insights.
+ */
+function summarizeForFeedback(result) {
+  if (!result || typeof result !== 'object') return null;
+  if (result.error) return { error: result.error };
+
+  const { type, title, total, context } = result;
+  const out = { type, title, context: context || null };
+
+  if (type === 'table') {
+    out.total = total ?? result.rows?.length ?? 0;
+    if (result.columns) out.columns = result.columns.map(c => c.label || c.key);
+    if (result.rows?.length) out.sample_rows = result.rows.slice(0, 3);
+  } else if (type === 'chart') {
+    out.total = result.data?.length ?? 0;
+    out.labels = result.labels;
+    out.data = result.data;
+  } else if (type === 'navigate') {
+    out.route = result.route;
+    out.filters = result.filters;
+    out.message = result.message;
+  } else if (type === 'detail') {
+    out.focus = result.focus;
+    out.id = result.id;
+    out.nome = result.nome;
+  }
+  return out;
 }
 
 /**

@@ -459,10 +459,3 @@ async function executeEventsGrouped(groupBy, where, replacements, context) {
   };
 }
 
-async function executeSaveMemory(args, user) {
-  await db.UserAIMemory.upsert(
-    { user_id: user.id, key: args.key, value: args.value, category: args.category || 'preference' },
-    { conflictFields: ['user_id', 'key'] },
-  );
-  return { saved: true, key: args.key };
-}

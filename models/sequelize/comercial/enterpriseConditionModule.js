@@ -65,6 +65,19 @@ export default (sequelize, DataTypes) => {
         digital_cert_provider: { type: DataTypes.STRING },
         digital_cert_contact: { type: DataTypes.STRING },
         notes: { type: DataTypes.TEXT },
+
+        // ── Documentação ──────────────────────────────────────────────────────
+        cef_package_paid_by:         { type: DataTypes.STRING(20),     allowNull: true }, // 'client' | 'menin'
+        cef_package_avg_value:       { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+        itbi_exempt:                 { type: DataTypes.BOOLEAN,        allowNull: true, defaultValue: false },
+        itbi_avg_value:              { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+        itbi_exemption_doc_url:      { type: DataTypes.TEXT,           allowNull: true },
+        cartorio_prenotacao_value:   { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+        cartorio_registration_value: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+        cartorio_paid_by:            { type: DataTypes.STRING(20),     allowNull: true }, // 'client' | 'menin'
+
+        // ── Snapshot de unidades (congelado ao enviar para autorização) ────────
+        unit_snapshot: { type: DataTypes.JSONB, defaultValue: null },
     }, {
         tableName: 'enterprise_condition_modules',
         underscored: true,

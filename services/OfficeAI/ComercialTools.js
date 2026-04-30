@@ -2,8 +2,8 @@ import db from '../../models/sequelize/index.js';
 import { QueryTypes, Op, where, fn, col } from 'sequelize';
 import fetch from 'node-fetch';
 
-const MCMV_FAIXA3 = 350000;
-const MCMV_FAIXA4 = 500000;
+const MCMV_FAIXA3 = 400000;
+const MCMV_FAIXA4 = 600000;
 
 export const TOOL_DECLARATIONS = [
   {
@@ -113,15 +113,10 @@ async function executeQueryMcmv(args) {
     title:   `MCMV — ${cidade || 'Municípios'}`,
     columns: [
       { key: 'no_municipio',          label: 'Município' },
-      { key: 'sg_uf',                 label: 'UF' },
-      { key: 'denominacao_hierarquia',label: 'Classificação' },
+      { key: 'sg_uf',                 label: 'UF' }, 
       { key: 'no_regiao',             label: 'Região' },
-      { key: 'populacao',             label: 'População' },
-      { key: 'co_ibge',               label: 'IBGE' },
-      { key: 'vr_faixa2',             label: 'Teto Faixa 2',   type: 'currency' },
-      { key: 'vr_anterior',           label: 'Anterior Faixa 2', type: 'currency' },
-      { key: 'vr_faixa3',             label: 'Teto Faixa 3',   type: 'currency' },
-      { key: 'vr_faixa4',             label: 'Teto Faixa 4',   type: 'currency' },
+      { key: 'populacao',             label: 'População' }, 
+      { key: 'vr_faixa2',             label: 'Teto Faixa 2',   type: 'currency' }, 
     ],
     rows:    enriched,
     total:   enriched.length,
