@@ -6,6 +6,9 @@ export default (sequelize, DataTypes) => {
     user_id: { type: DataTypes.INTEGER, allowNull: false },
     rating: { type: DataTypes.ENUM('up', 'down'), allowNull: false },
     comment: { type: DataTypes.TEXT, allowNull: true },
+    // Snapshot do raciocínio do assistente no momento do feedback:
+    // pergunta do usuário, modelo/pool, tool chamada + args, resumo do resultado, latência.
+    context: { type: DataTypes.JSONB, allowNull: true, defaultValue: null },
   }, {
     tableName: 'chat_feedback',
     underscored: true,

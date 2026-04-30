@@ -78,12 +78,12 @@ function validateModuleRules(mod) {
 
     // Valores monetários não negativos
     const moneyFields = {
-        max_entry_value:      'Valor máx. entrada',
+        max_entry_value: 'Valor máx. entrada',
         rp_installment_value: 'Parcela RP',
         act_installment_value: 'Parcela ACT',
         min_installment_value: 'Parcela mínima',
-        appraisal_value:      'Valor de avaliação',
-        appraisal_ceiling:    'Teto da cidade',
+        appraisal_value: 'Valor de avaliação',
+        appraisal_ceiling: 'Teto da cidade',
     };
     for (const [field, label] of Object.entries(moneyFields)) {
         if (mod[field] != null && Number(mod[field]) < 0) {
@@ -614,12 +614,16 @@ export const unlockCondition = async (req, res) => {
             return res.status(409).json({ error: 'Apenas fichas aprovadas podem ser desbloqueadas.' });
         }
 
-        // Cancela o SignatureDocument anterior, se existir
-        if (condition.signature_document_id && SignatureDocument) {
+        // Cancela o SignatureDocument anterior e seus assinantes pendentes
+        if (condition.signature_document_id) {
             await SignatureDocument.update(
-                { status: 'CANCELLED' },
+                { status: 'CANCELLED', cancel_reason: 'Ficha desbloqueada pelo administrador.' },
                 { where: { id: condition.signature_document_id } }
-            ).catch(() => {});
+            ).catch(() => { });
+            await SignatureDocumentSigner.update(
+                { status: 'CANCELLED', reason: 'Ficha desbloqueada pelo administrador.' },
+                { where: { document_id: condition.signature_document_id, status: ['REQUESTED', 'PENDING'] } }
+            ).catch(() => { });
         }
 
         const { note } = req.body;
@@ -653,8 +657,10 @@ export const upsertModules = async (req, res) => {
 
         const condition = await EnterpriseCondition.findByPk(id);
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
-        if (condition.status === 'approved') {
-            return res.status(409).json({ error: 'Ficha aprovada está bloqueada.' });
+        // Bloqueia apenas quando em autorização; fichas aprovadas podem ser editadas
+        // (o frontend exibe aviso e faz unlock+save em sequência)
+        if (condition.status === 'pending_approval') {
+            return res.status(409).json({ error: 'Ficha em autorização está bloqueada. Cancele a autorização primeiro.' });
         }
 
         // Validação de regras de negócio em todos os módulos
@@ -684,7 +690,11 @@ export const upsertModules = async (req, res) => {
 
                 if (moduleFields.id) {
                     // Busca instância real — instance.update() é mais confiável que Model.update() estático
-                    const existing = await EnterpriseConditionModule.findByPk(moduleFields.id, { transaction: t });
+                    // SELECT FOR UPDATE: serializa transações concorrentes na mesma linha (resolve race em save-silent)
+                    const existing = await EnterpriseConditionModule.findByPk(moduleFields.id, {
+                        transaction: t,
+                        lock: t.LOCK.UPDATE,
+                    });
                     if (!existing || String(existing.condition_id) !== String(id)) {
                         throw new Error(`Módulo #${moduleFields.id} não encontrado ou não pertence a esta ficha.`);
                     }
@@ -693,9 +703,13 @@ export const upsertModules = async (req, res) => {
                     const safeFields = { ...moduleFields };
                     ['id', 'condition_id', 'createdAt', 'updatedAt', 'created_at', 'updated_at'].forEach(k => delete safeFields[k]);
 
-                    // Proteção explícita de idetapa: nunca sobrescrever valor existente com null
-                    if ((safeFields.idetapa == null) && existing.idetapa != null) {
-                        safeFields.idetapa = existing.idetapa;
+                    // Proteção explícita de idetapa: nunca sobrescrever valor não-nulo com null (evita race condition em save-silent)
+                    // O SELECT FOR UPDATE acima garante que existing.idetapa reflete o estado committed mais recente
+                    if (safeFields.idetapa === '' || safeFields.idetapa === 0) {
+                        safeFields.idetapa = null;
+                    }
+                    if ((safeFields.idetapa === null || safeFields.idetapa === undefined) && existing.idetapa != null) {
+                        delete safeFields.idetapa;
                     }
 
                     await existing.update(safeFields, { transaction: t });
@@ -853,7 +867,8 @@ export const copyModuleFromSource = async (req, res) => {
         const PRICE_FIELDS = ['price_table_ids', 'manual_price_tables', 'price_premise_note'];
         // Campos operacionais
         const OPERATIONAL_FIELDS = [
-            'manager_user_id', 'delivery_deadline_months', 'delivery_deadline_note',
+            'manager_user_id', 'manager_mode', 'manager_name', 'manager_email', 'manager_phone',
+            'delivery_deadline_months', 'delivery_deadline_note',
             'commission_pct', 'commission_source', 'contract_registration_by',
             'contract_registered_by_user_id', 'outros_contact_name', 'outros_contact_email',
             'outros_contact_phone', 'cca_company_name', 'cca_cost', 'cca_charges_company',
@@ -1036,7 +1051,7 @@ export const upsertCampaigns = async (req, res) => {
                     module_id: module_id ? Number(module_id) : (rest.module_id ?? null),
                     sort_order: rest.sort_order ?? i,
                 }))
-              )
+            )
             : [];
 
         return res.json({ ok: true, campaigns: created });
@@ -1102,10 +1117,10 @@ export const getPriceTablesForEnterprise = async (req, res) => {
                 ...json,
                 vigente,
                 unidades,
-                unit_count:  unidades.length,
-                price_avg:   prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : null,
-                price_min:   prices.length ? Math.min(...prices) : null,
-                price_max:   prices.length ? Math.max(...prices) : null,
+                unit_count: unidades.length,
+                price_avg: prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : null,
+                price_min: prices.length ? Math.min(...prices) : null,
+                price_max: prices.length ? Math.max(...prices) : null,
                 price_total: prices.length ? prices.reduce((a, b) => a + b, 0) : null,
                 raw: undefined,
             };
@@ -1228,10 +1243,16 @@ export const cancelApproval = async (req, res) => {
         }
 
         if (condition.signature_document_id) {
+            // Cancela o documento
             await SignatureDocument.update(
                 { status: 'CANCELLED', cancel_reason: req.body?.note || 'Cancelado pelo administrador.' },
                 { where: { id: condition.signature_document_id } }
-            ).catch(() => {});
+            ).catch(() => { });
+            // Cancela todos os assinantes pendentes vinculados ao documento
+            await SignatureDocumentSigner.update(
+                { status: 'CANCELLED', reason: 'Autorização cancelada pelo administrador.' },
+                { where: { document_id: condition.signature_document_id, status: ['REQUESTED', 'PENDING'] } }
+            ).catch(() => { });
         }
 
         await condition.update({
