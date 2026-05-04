@@ -83,6 +83,9 @@ import SignatureDocumentSignerDefine from './signatureDocumentSigner.js';
 // CV extras
 import CvEnterprisePriceTableDefine from './cv/enterprisePriceTable.js';
 import CvCorrespondentDefine from './cv/cvCorrespondent.js';
+import CvPrecadastroDefine from './cv/cvPrecadastro.js';
+import CvSyncStateDefine from './cv/cvSyncState.js';
+import CvReservaIdDeadDefine from './cv/cvReservaIdDead.js';
 
 // Fichas Comerciais
 import EnterpriseConditionDefine from './comercial/enterpriseCondition.js';
@@ -192,6 +195,9 @@ db.SignatureDocumentSigner = SignatureDocumentSignerDefine(sequelize, DataTypes)
 // CV extras
 db.CvEnterprisePriceTable = CvEnterprisePriceTableDefine(sequelize, DataTypes);
 db.CvCorrespondent        = CvCorrespondentDefine(sequelize, DataTypes);
+db.CvPrecadastro          = CvPrecadastroDefine(sequelize, DataTypes);
+db.CvSyncState            = CvSyncStateDefine(sequelize, DataTypes);
+db.CvReservaIdDead        = CvReservaIdDeadDefine(sequelize, DataTypes);
 
 // Fichas Comerciais
 db.EnterpriseCondition         = EnterpriseConditionDefine(sequelize, DataTypes);

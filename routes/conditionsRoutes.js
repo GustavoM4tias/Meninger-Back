@@ -31,7 +31,8 @@ router.patch('/:id(\\d+)', ctrl.updateCondition);           // admin only, não-
 // ── Fluxo de aprovação ────────────────────────────────────────────────────────
 router.post('/:id(\\d+)/submit', ctrl.submitForApproval);         // draft → pending_approval (admin)
 router.post('/:id(\\d+)/cancel-approval', ctrl.cancelApproval);   // pending_approval → draft (admin)
-router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved → draft (admin)
+router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved/closed → draft (admin)
+router.post('/:id(\\d+)/close', ctrl.closeCondition);             // any → closed (admin, dupla validação)
 router.post('/:id(\\d+)/publish', ctrl.publishCondition);         // legado → alias de /submit
 
 // ── Módulos ───────────────────────────────────────────────────────────────────

@@ -52,6 +52,7 @@ export default (sequelize, DataTypes) => {
         delivery_deadline_note: { type: DataTypes.TEXT },
         commission_pct: { type: DataTypes.DECIMAL(6, 4) },
         commission_source: { type: DataTypes.STRING(10), defaultValue: 'cv' },
+        commission_note: { type: DataTypes.TEXT },
         contract_registration_by: { type: DataTypes.STRING(20), allowNull: true }, // 'cca' | 'menin' | 'outros'
         contract_registered_by_user_id: { type: DataTypes.INTEGER, allowNull: true },
         outros_contact_name: { type: DataTypes.STRING(200), allowNull: true },
@@ -64,6 +65,9 @@ export default (sequelize, DataTypes) => {
         has_digital_cert: { type: DataTypes.BOOLEAN, defaultValue: false },
         digital_cert_provider: { type: DataTypes.STRING },
         digital_cert_contact: { type: DataTypes.STRING },
+        digital_cert_has_cost: { type: DataTypes.BOOLEAN, defaultValue: false },
+        digital_cert_cost: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+        enterprise_files_url: { type: DataTypes.TEXT, allowNull: true }, // arquivos do empreendimento — gera QR Code
         notes: { type: DataTypes.TEXT },
 
         // ── Documentação ──────────────────────────────────────────────────────
@@ -90,7 +94,15 @@ export default (sequelize, DataTypes) => {
 
     EnterpriseConditionModule.associate = (db) => {
         EnterpriseConditionModule.belongsTo(db.EnterpriseCondition, { foreignKey: 'condition_id' });
-        EnterpriseConditionModule.belongsTo(db.CvEnterpriseStage, { foreignKey: 'idetapa', as: 'stage' });
+        // ⚠️ idetapa é uma REFERÊNCIA SOFT para cv_enterprise_stages (tabela espelho do CV CRM).
+        // Sem `constraints: false`, sync({alter:true}) recria a FK ON DELETE SET NULL e o
+        // CvEnterpriseStage.destroy() do EnterpriseSyncService zera idetapa em cascata.
+        // Ver migration 20260502000001-drop-idetapa-fk-from-condition-modules.cjs
+        EnterpriseConditionModule.belongsTo(db.CvEnterpriseStage, {
+            foreignKey: 'idetapa',
+            as: 'stage',
+            constraints: false,
+        });
         EnterpriseConditionModule.hasMany(db.EnterpriseConditionCampaign, { foreignKey: 'module_id', as: 'campaigns', onDelete: 'SET NULL' });
     };
 

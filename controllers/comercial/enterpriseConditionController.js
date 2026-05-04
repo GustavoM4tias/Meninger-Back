@@ -191,13 +191,36 @@ async function getPriceDistribution(idempreendimento, idetapa = null) {
 // ─── listagem ─────────────────────────────────────────────────────────────────
 // Admin vê todos os status. Usuário comum vê apenas fichas 'approved'.
 
+// Helper: idempreendimentos visíveis ao usuário comum (filtro por cidade via enterprise_cities).
+// Admin vê tudo. Comum vê apenas onde COALESCE(city_override, default_city) === req.user.city
+async function getVisibleEnterpriseIdsForUser(req) {
+    if (isAdmin(req)) return null; // null = sem restrição
+    const userCity = req.user?.city;
+    if (!userCity) return []; // sem cidade definida → não vê nada
+
+    const rows = await db.sequelize.query(
+        `SELECT crm_id FROM enterprise_cities
+          WHERE source = 'crm' AND COALESCE(city_override, default_city) = :city`,
+        { replacements: { city: userCity }, type: db.Sequelize.QueryTypes.SELECT }
+    );
+    return rows.map(r => Number(r.crm_id)).filter(Boolean);
+}
+
 export const listConditions = async (req, res) => {
     try {
         const { idempreendimento } = req.query;
+        const { Op } = db.Sequelize;
 
         const where = {};
         if (idempreendimento) where.idempreendimento = Number(idempreendimento);
-        if (!isAdmin(req)) where.status = 'approved';
+
+        if (!isAdmin(req)) {
+            // Usuário comum: apenas approved + closed, e somente empreendimentos da sua cidade
+            where.status = { [Op.in]: ['approved', 'closed'] };
+            const visibleIds = await getVisibleEnterpriseIdsForUser(req);
+            if (!visibleIds || !visibleIds.length) return res.json([]);
+            where.idempreendimento = visibleIds;
+        }
 
         const conditions = await EnterpriseCondition.findAll({
             where,
@@ -244,8 +267,15 @@ export const getCondition = async (req, res) => {
         });
 
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
-        if (!isAdmin(req) && condition.status !== 'approved') {
-            return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
+        if (!isAdmin(req)) {
+            // Comum: vê apenas approved + closed, e só de empreendimentos da sua cidade
+            if (!['approved', 'closed'].includes(condition.status)) {
+                return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
+            }
+            const visibleIds = await getVisibleEnterpriseIdsForUser(req);
+            if (!visibleIds || !visibleIds.includes(Number(condition.idempreendimento))) {
+                return res.status(403).json({ error: 'Você não tem acesso a este empreendimento.' });
+            }
         }
 
         let priceTables = [];
@@ -257,10 +287,11 @@ export const getCondition = async (req, res) => {
         }
 
         // Histórico de fichas do mesmo empreendimento (para navegação)
+        const { Op } = db.Sequelize;
         const history = await EnterpriseCondition.findAll({
             where: {
                 idempreendimento: condition.idempreendimento,
-                ...(isAdmin(req) ? {} : { status: 'approved' }),
+                ...(isAdmin(req) ? {} : { status: { [Op.in]: ['approved', 'closed'] } }),
             },
             attributes: ['id', 'reference_month', 'status'],
             order: [['reference_month', 'DESC']],
@@ -378,28 +409,34 @@ export const createCondition = async (req, res) => {
         if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem criar fichas.' });
 
         const userId = req.user?.id;
-        const { idempreendimento, reference_month, selectedStageIds, ...rest } = req.body;
+        const { idempreendimento, reference_month, selectedStageIds, display_name, ...rest } = req.body;
 
-        if (!idempreendimento || !reference_month) {
-            return res.status(400).json({ error: 'idempreendimento e reference_month são obrigatórios.' });
+        if (!reference_month) {
+            return res.status(400).json({ error: 'reference_month é obrigatório.' });
+        }
+
+        const isAvulso = !idempreendimento;
+        if (isAvulso && !(display_name && String(display_name).trim())) {
+            return res.status(400).json({ error: 'Para fichas avulsas (sem empreendimento), display_name é obrigatório.' });
         }
 
         const month = toMonth(reference_month);
-        const normalizedStageIds = Array.isArray(selectedStageIds) && selectedStageIds.length
+        const normalizedStageIds = !isAvulso && Array.isArray(selectedStageIds) && selectedStageIds.length
             ? selectedStageIds.map(Number)
             : [];
 
-        // Busca etapas selecionadas (vazio = apenas módulo avulso, sem etapas CV)
+        // Busca etapas selecionadas (só vincula CV se houver empreendimento)
         let stages = [];
-        if (normalizedStageIds.length) {
+        if (!isAvulso && normalizedStageIds.length) {
             stages = await CvEnterpriseStage.findAll({
                 where: { idempreendimento, idetapa: normalizedStageIds },
                 order: [['idetapa', 'ASC']],
             });
         }
 
-        // Verifica se já existe ficha para o mês solicitado
-        const existingCond = await EnterpriseCondition.findOne({
+        // Avulso: SEMPRE cria ficha nova (não há colisão lógica — múltiplas avulsas por mês são permitidas).
+        // Com empreendimento: respeita a constraint unique (idempreendimento, reference_month).
+        const existingCond = isAvulso ? null : await EnterpriseCondition.findOne({
             where: { idempreendimento, reference_month: month },
             include: [{ model: EnterpriseConditionModule, as: 'modules', attributes: ['idetapa', 'sort_order'] }],
         });
@@ -435,31 +472,51 @@ export const createCondition = async (req, res) => {
             }
             condition = existingCond;
         } else {
-            // Cria ficha nova com os módulos selecionados
+            // Cria ficha nova com os módulos selecionados (ou nenhum, se avulso)
+            const histNote = isAvulso ? 'Ficha avulsa criada' : null;
             condition = await sequelize.transaction(async (t) => {
                 const cond = await EnterpriseCondition.create({
-                    idempreendimento,
+                    idempreendimento: isAvulso ? null : idempreendimento,
+                    display_name: isAvulso ? String(display_name).trim() : null,
                     reference_month: month,
                     ...rest,
                     status: 'draft',
-                    approval_history: [{ action: 'created', user_id: userId, username: req.user?.username, at: new Date().toISOString() }],
+                    approval_history: [{
+                        action: 'created',
+                        user_id: userId,
+                        username: req.user?.username,
+                        at: new Date().toISOString(),
+                        note: histNote,
+                    }],
                     created_by: userId,
                     updated_by: userId,
                 }, { transaction: t });
 
-                for (let i = 0; i < stages.length; i++) {
-                    const stage = stages[i];
-                    const totalUnits = await getUnitCountForStage(stage.idetapa);
+                // Avulso: cria 1 módulo placeholder com o display_name
+                if (isAvulso) {
                     await EnterpriseConditionModule.create({
                         condition_id: cond.id,
-                        idetapa: stage.idetapa,
-                        module_name: stage.nome,
-                        sort_order: i,
-                        total_units: totalUnits,
-                        min_demand: Math.ceil(totalUnits * 0.2),
+                        idetapa: null,
+                        module_name: String(display_name).trim(),
+                        sort_order: 0,
                         price_table_ids: [],
                         manual_price_tables: [],
                     }, { transaction: t });
+                } else {
+                    for (let i = 0; i < stages.length; i++) {
+                        const stage = stages[i];
+                        const totalUnits = await getUnitCountForStage(stage.idetapa);
+                        await EnterpriseConditionModule.create({
+                            condition_id: cond.id,
+                            idetapa: stage.idetapa,
+                            module_name: stage.nome,
+                            sort_order: i,
+                            total_units: totalUnits,
+                            min_demand: Math.ceil(totalUnits * 0.2),
+                            price_table_ids: [],
+                            manual_price_tables: [],
+                        }, { transaction: t });
+                    }
                 }
 
                 return cond;
@@ -504,6 +561,9 @@ export const updateCondition = async (req, res) => {
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
         if (condition.status === 'approved') {
             return res.status(409).json({ error: 'Ficha aprovada está bloqueada. Desbloqueie antes de editar.' });
+        }
+        if (condition.status === 'closed') {
+            return res.status(409).json({ error: 'Ficha encerrada não pode ser editada. Reabra antes de salvar.' });
         }
 
         const { modules, campaigns, ...fields } = req.body;
@@ -610,8 +670,9 @@ export const unlockCondition = async (req, res) => {
         const { id } = req.params;
         const condition = await EnterpriseCondition.findByPk(id);
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
-        if (condition.status !== 'approved') {
-            return res.status(409).json({ error: 'Apenas fichas aprovadas podem ser desbloqueadas.' });
+        // 'approved' → draft (desbloqueio para edição) ou 'closed' → draft (reabrir empreendimento)
+        if (!['approved', 'closed'].includes(condition.status)) {
+            return res.status(409).json({ error: 'Apenas fichas aprovadas ou encerradas podem ser desbloqueadas.' });
         }
 
         // Cancela o SignatureDocument anterior e seus assinantes pendentes
@@ -646,6 +707,73 @@ export const unlockCondition = async (req, res) => {
     }
 };
 
+// ─── encerrar — qualquer status → closed (admin, com dupla confirmação) ─────
+
+export const closeCondition = async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem encerrar fichas.' });
+
+        const { id } = req.params;
+        const { note, confirmation } = req.body || {};
+
+        // Dupla validação: precisa de confirmation === 'ENCERRAR' (digitado pelo usuário no modal)
+        if (confirmation !== 'ENCERRAR') {
+            return res.status(400).json({ error: 'Confirmação obrigatória — digite "ENCERRAR" para prosseguir.' });
+        }
+
+        const condition = await EnterpriseCondition.findByPk(id);
+        if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
+        if (condition.status === 'closed') {
+            return res.status(409).json({ error: 'Ficha já está encerrada.' });
+        }
+        if (condition.status === 'pending_approval') {
+            return res.status(409).json({ error: 'Cancele a autorização antes de encerrar.' });
+        }
+
+        // Só pode encerrar a ficha MAIS RECENTE do empreendimento — encerrar
+        // significa "empreendimento finalizado, não evolui mais", então
+        // não faz sentido encerrar um mês com fichas posteriores existentes.
+        // (Avulsos: cada ficha é independente, não há "mais recente" a comparar.)
+        if (condition.idempreendimento != null) {
+            const newest = await EnterpriseCondition.findOne({
+                where: { idempreendimento: condition.idempreendimento },
+                attributes: ['id', 'reference_month'],
+                order: [['reference_month', 'DESC']],
+            });
+            if (newest && Number(newest.id) !== Number(condition.id)) {
+                return res.status(409).json({
+                    error: 'Apenas a ficha mais recente do empreendimento pode ser encerrada. Existem fichas posteriores a este mês.',
+                });
+            }
+        }
+
+        // Se houver SignatureDocument pendente, cancela
+        if (condition.signature_document_id) {
+            await SignatureDocument.update(
+                { status: 'CANCELLED', cancel_reason: 'Ficha encerrada — empreendimento finalizado.' },
+                { where: { id: condition.signature_document_id } }
+            ).catch(() => {});
+            await SignatureDocumentSigner.update(
+                { status: 'CANCELLED', reason: 'Ficha encerrada — empreendimento finalizado.' },
+                { where: { document_id: condition.signature_document_id, status: ['REQUESTED', 'PENDING'] } }
+            ).catch(() => {});
+        }
+
+        const newHistory = addHistory(condition.approval_history, 'closed', req, note || null);
+
+        await condition.update({
+            status: 'closed',
+            approval_history: newHistory,
+            updated_by: req.user?.id,
+        });
+
+        return res.json({ ok: true, status: 'closed' });
+    } catch (e) {
+        console.error('[conditions] closeCondition:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
 // ─── módulos ─────────────────────────────────────────────────────────────────
 
 export const upsertModules = async (req, res) => {
@@ -657,10 +785,13 @@ export const upsertModules = async (req, res) => {
 
         const condition = await EnterpriseCondition.findByPk(id);
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
-        // Bloqueia apenas quando em autorização; fichas aprovadas podem ser editadas
-        // (o frontend exibe aviso e faz unlock+save em sequência)
+        // Bloqueia apenas quando em autorização ou encerrada;
+        // aprovadas podem ser editadas (frontend faz unlock+save em sequência)
         if (condition.status === 'pending_approval') {
             return res.status(409).json({ error: 'Ficha em autorização está bloqueada. Cancele a autorização primeiro.' });
+        }
+        if (condition.status === 'closed') {
+            return res.status(409).json({ error: 'Ficha encerrada não pode ser editada. Reabra antes de salvar.' });
         }
 
         // Validação de regras de negócio em todos os módulos
@@ -778,6 +909,12 @@ export const deleteModule = async (req, res) => {
         if (condition.status === 'approved') {
             return res.status(409).json({ error: 'Ficha aprovada está bloqueada.' });
         }
+        if (condition.status === 'closed') {
+            return res.status(409).json({ error: 'Ficha encerrada está bloqueada. Reabra antes de modificar módulos.' });
+        }
+        if (condition.status === 'pending_approval') {
+            return res.status(409).json({ error: 'Ficha em autorização está bloqueada.' });
+        }
 
         const mod = await EnterpriseConditionModule.findOne({ where: { id: moduleId, condition_id: id } });
         if (!mod) return res.status(404).json({ error: 'Módulo não encontrado.' });
@@ -802,13 +939,26 @@ export const copyModule = async (req, res) => {
 
         const { id, moduleId, sourceId } = req.params;
 
+        // Bloqueia se a ficha destino está em estado imutável
+        const targetCondition = await EnterpriseCondition.findByPk(id);
+        if (!targetCondition) return res.status(404).json({ error: 'Ficha não encontrada.' });
+        if (['closed', 'pending_approval'].includes(targetCondition.status)) {
+            return res.status(409).json({
+                error: targetCondition.status === 'closed'
+                    ? 'Ficha encerrada está bloqueada. Reabra antes de copiar módulos.'
+                    : 'Ficha em autorização está bloqueada. Cancele a autorização primeiro.',
+            });
+        }
+
         const source = await EnterpriseConditionModule.findOne({ where: { id: sourceId, condition_id: id } });
         if (!source) return res.status(404).json({ error: 'Módulo de origem não encontrado.' });
 
         const target = await EnterpriseConditionModule.findOne({ where: { id: moduleId, condition_id: id } });
         if (!target) return res.status(404).json({ error: 'Módulo destino não encontrado.' });
 
-        const { id: _id, condition_id: _cid, idetapa, module_name, sort_order, ...copyFields } = source.toJSON();
+        // Não copia tabelas do CV (price_table_ids) — autoSelectVigentes do frontend escolhe vigentes
+        // do mês/contexto correto. Tabelas manuais (manual_price_tables) SÃO copiadas.
+        const { id: _id, condition_id: _cid, idetapa, module_name, sort_order, price_table_ids, unit_snapshot, ...copyFields } = source.toJSON();
         await target.update(copyFields);
 
         return res.json({ ok: true });
@@ -833,6 +983,12 @@ export const copyModuleFromSource = async (req, res) => {
         if (targetCondition.status === 'approved') {
             return res.status(409).json({ error: 'Ficha aprovada está bloqueada.' });
         }
+        if (targetCondition.status === 'closed') {
+            return res.status(409).json({ error: 'Ficha encerrada está bloqueada. Reabra antes de copiar.' });
+        }
+        if (targetCondition.status === 'pending_approval') {
+            return res.status(409).json({ error: 'Ficha em autorização está bloqueada. Cancele a autorização primeiro.' });
+        }
 
         // Verifica módulo destino
         const targetModule = await EnterpriseConditionModule.findOne({ where: { id: moduleId, condition_id: id } });
@@ -856,41 +1012,62 @@ export const copyModuleFromSource = async (req, res) => {
         const wantAll = !fields || !Array.isArray(fields) || fields.length === 0;
         const want = (section) => wantAll || fields.includes(section);
 
-        // Campos de negociação
+        // Cross-empreendimento: idempreendimentos diferentes? Tabelas do CV não migram.
+        const sameEnterprise = sourceCondition.idempreendimento != null
+            && Number(sourceCondition.idempreendimento) === Number(targetCondition.idempreendimento);
+
+        // ── Dados / Produto (aba Dados): números, MCMV, comissão (+nota), prazo
+        const DATA_FIELDS = [
+            'total_units', 'min_demand', 'min_demand_note',
+            'appraisal_faixas', 'appraisal_value', 'appraisal_ceiling',
+            'appraisal_note', 'appraisal_file_url',
+            'commission_pct', 'commission_source', 'commission_note',
+            'delivery_deadline_months', 'delivery_deadline_note',
+        ];
+        // ── Negociação: parcelas, regras, subsídio
         const NEGOTIATION_FIELDS = [
             'max_entry_value', 'rp_installment_value', 'act_installment_value', 'min_installment_value',
             'max_installments', 'rp_rule', 'installment_until_habite_se', 'installment_post_habite_se',
             'has_state_subsidy', 'state_subsidy_note', 'state_subsidy_state', 'state_subsidy_program',
             'state_subsidy_custom_state', 'state_subsidy_rules', 'state_subsidy_conditions',
         ];
-        // Campos de preços
-        const PRICE_FIELDS = ['price_table_ids', 'manual_price_tables', 'price_premise_note'];
-        // Campos operacionais
+        // ── Preços: tabelas (CV só copia se mesmo empreendimento) e manuais
+        const PRICE_FIELDS_CV = ['price_table_ids'];
+        const PRICE_FIELDS_MANUAL = ['manual_price_tables', 'price_premise_note'];
+        // ── Documentação: CEF, ITBI, Cartório (aba Documentação — Maio/2026)
+        const DOCS_FIELDS = [
+            'cef_package_paid_by', 'cef_package_avg_value',
+            'itbi_exempt', 'itbi_avg_value', 'itbi_exemption_doc_url',
+            'cartorio_prenotacao_value', 'cartorio_registration_value', 'cartorio_paid_by',
+        ];
+        // ── Operacional: gestor, registro, CCA, certificação digital (+custo), arquivos, notes
         const OPERATIONAL_FIELDS = [
             'manager_user_id', 'manager_mode', 'manager_name', 'manager_email', 'manager_phone',
-            'delivery_deadline_months', 'delivery_deadline_note',
-            'commission_pct', 'commission_source', 'contract_registration_by',
-            'contract_registered_by_user_id', 'outros_contact_name', 'outros_contact_email',
-            'outros_contact_phone', 'cca_company_name', 'cca_cost', 'cca_charges_company',
-            'correspondent_id', 'has_digital_cert', 'digital_cert_provider', 'digital_cert_contact',
+            'contract_registration_by', 'contract_registered_by_user_id',
+            'outros_contact_name', 'outros_contact_email', 'outros_contact_phone',
+            'cca_company_name', 'cca_cost', 'cca_charges_company',
+            'correspondent_id',
+            'has_digital_cert', 'digital_cert_provider', 'digital_cert_contact',
+            'digital_cert_has_cost', 'digital_cert_cost',
+            'enterprise_files_url',
             'notes',
         ];
 
-        if (want('negotiation')) {
-            for (const f of NEGOTIATION_FIELDS) {
+        const copyFields = (list) => {
+            for (const f of list) {
                 if (src[f] !== undefined) updatePayload[f] = src[f];
             }
-        }
+        };
+
+        if (want('data'))        copyFields(DATA_FIELDS);
+        if (want('negotiation')) copyFields(NEGOTIATION_FIELDS);
         if (want('prices')) {
-            for (const f of PRICE_FIELDS) {
-                if (src[f] !== undefined) updatePayload[f] = src[f];
-            }
+            copyFields(PRICE_FIELDS_MANUAL);
+            // Tabelas do CV só fazem sentido entre fichas do MESMO empreendimento
+            if (sameEnterprise) copyFields(PRICE_FIELDS_CV);
         }
-        if (want('operational')) {
-            for (const f of OPERATIONAL_FIELDS) {
-                if (src[f] !== undefined) updatePayload[f] = src[f];
-            }
-        }
+        if (want('docs'))        copyFields(DOCS_FIELDS);
+        if (want('operational')) copyFields(OPERATIONAL_FIELDS);
 
         if (Object.keys(updatePayload).length) {
             await targetModule.update(updatePayload);

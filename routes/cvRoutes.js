@@ -11,6 +11,9 @@ import { fetchBanners } from '../controllers/cv/banner.js'
 import bulkDataController from '../services/bulkData/cv/bulkDataController.js';
 import RepassesSyncController from '../controllers/cv/repassesSyncController.js';
 import ReservasSyncController from '../controllers/cv/reservasSyncController.js';
+import PrecadastrosSyncController from '../controllers/cv/precadastrosSyncController.js';
+import { listPrecadastros, getPrecadastro } from '../controllers/cv/precadastros.js';
+import { listReservasReport, getReservaReport } from '../controllers/cv/reservasReport.js';
 
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb, fetchBuildingUnitsSummaryFromDb } from '../controllers/cv/empreendimentosDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
@@ -28,6 +31,7 @@ const cvLeads = new bulkDataController();
 const cvRepasses = new RepassesSyncController();
 const cvReservas = new ReservasSyncController();
 const cvEnterprises = new EnterprisesSyncController();
+const cvPrecadastros = new PrecadastrosSyncController();
 
 router.get('/repasses', authenticate, fetchRepasses);
 router.get('/repasse-workflow', authenticate, fetchRepasseWorkflow);
@@ -56,9 +60,22 @@ router.post('/repasses/sync/delta', authenticate, cvRepasses.deltaSync.bind(cvRe
 // NOVO: Reservas (backup + histórico por status de repasse)
 router.post('/reservas/sync/full', authenticate, cvReservas.fullSync.bind(cvReservas));
 router.post('/reservas/sync/delta', authenticate, cvReservas.deltaSync.bind(cvReservas));
+// VARREDURA ID-A-ID (manual): pega reservas que a listagem global oculta
+// (Cancelada/Vencida/Distrato). Aceita body { fromId, toId, skipDead }.
+router.post('/reservas/sync/full-sweep', authenticate, cvReservas.fullSweep.bind(cvReservas));
 
 router.post('/empreendimentos/sync/full', authenticate, cvEnterprises.fullSync.bind(cvEnterprises));
 router.post('/empreendimentos/sync/delta', authenticate, cvEnterprises.deltaSync.bind(cvEnterprises));
+
+// NOVO: Pré-cadastros (backup completo: listar + documentos + mensagens)
+router.post('/precadastros/sync/full', authenticate, cvPrecadastros.fullSync.bind(cvPrecadastros));
+router.post('/precadastros/sync/delta', authenticate, cvPrecadastros.deltaSync.bind(cvPrecadastros));
+router.get('/precadastros', authenticate, listPrecadastros);
+router.get('/precadastros/:id', authenticate, getPrecadastro);
+
+// Reservas — relatório (lê do banco, não confundir com `GET /reservas` que é read-through na API CV)
+router.get('/reservas/report', authenticate, listReservasReport);
+router.get('/reservas/report/:id', authenticate, getReservaReport);
 
 router.get('/empreendimentos', authenticate, fetchBuildingsFromDb);
 router.get('/empreendimento/:id', authenticate, fetchBuildingByIdFromDb);

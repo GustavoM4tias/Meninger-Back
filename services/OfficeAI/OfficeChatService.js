@@ -82,6 +82,24 @@ function selectModelPool(userMessage) {
   // Sinal 4: múltiplas restrições combinadas
   if (/\b(e também|além disso|ao mesmo tempo)\b/.test(text)) return 'smart';
 
+  // Sinal 5: referências a dados anteriores ("dessas", "esses", "as 14", "do anterior")
+  // — perguntas contextuais exigem mais raciocínio para não alucinar baseado em
+  //   memória/histórico (flash tende a inventar; pro respeita melhor a regra de
+  //   chamar a tool de novo).
+  const CONTEXTUAL_REFS = [
+    /\bdess[ae]s?\b/, /\bdest[ae]s?\b/, /\bnest[ae]s?\b/, /\bness[ae]s?\b/,
+    /\bo total\b/, /\ba lista\b/, /\bos dados\b/,
+    /\b(as|os) anteriores?\b/, /\bdo anterior\b/, /\bdescritos?\b/,
+    /\bpor (empreendimento|cca|empresa|banco|origem|imobili|corretor|m[eê]s|dia|cidade|bucket|funil|etapa)/,
+    /\bdistribuí?d[ao]s?\b/, /\bquant[ao]s? por\b/, /\bquais clientes\b/,
+    /\bdivis[aã]o\b/, /\bbreakdown\b/, /\bdivid[ai]?d[ao]s?\b/,
+    // Referências indiretas a registros mostrados antes — exigem bridge inteligente
+    /\b(?:por|pelo|pela)\s+(?:el[ae]s?|cliente|nome|documento|cpf|reserva|pasta)\b/,
+    /\b(?:busque|procure|encontre|abra)\s+(?:pelo|pela|por|o|a|os|as)\s/,
+    /\b(?:essa|esse|essas|esses)\s+(?:reserva|pasta|cliente|lead|empreendimento)\b/,
+  ];
+  if (CONTEXTUAL_REFS.some(re => re.test(text))) return 'smart';
+
   return 'fast';
 }
 
@@ -139,23 +157,85 @@ export async function saveMessage(sessionId, role, content, responseType = 'text
 
 /**
  * Monta o histórico de mensagens no formato Gemini (contents array).
+ * Histórico é mantido LIMPO — apenas .text das mensagens. Os IDs/filtros para
+ * bridge entre módulos vão na systemInstruction (via getLastBridgeContext)
+ * para o modelo não replicar o bloco em respostas seguintes.
  */
 async function buildHistory(sessionId) {
   const messages = await db.ChatMessage.findAll({
     where: { session_id: sessionId },
     order: [['created_at', 'ASC']],
-    limit: 40, // janela de contexto: últimas 40 mensagens
+    limit: 40,
   });
 
   return messages.map(m => {
     let text = m.content;
-    // Mensagens de assistente com action são salvas como JSON {"text":"...","action":{...}}
-    // Gemini só deve ver o texto — nunca os arrays/objetos brutos da action
     if (m.role === 'assistant' && m.response_type !== 'text') {
-      try { text = JSON.parse(m.content).text || ''; } catch { /* mantém original */ }
+      try { text = JSON.parse(m.content).text || ''; } catch { /* mantém */ }
     }
     return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
   });
+}
+
+/**
+ * Busca a última mensagem do assistente que carrega CONTEXTO DE DADOS útil
+ * para bridge entre módulos. Pula respostas tipo `navigate`, `error` e quaisquer
+ * outras que não tenham IDs/filtros aproveitáveis. Garante que após o usuário
+ * pedir "abra o relatório", o contexto da consulta de DADOS anterior continue
+ * disponível para a próxima pergunta.
+ */
+async function getLastBridgeContext(sessionId) {
+  const candidates = await db.ChatMessage.findAll({
+    where: {
+      session_id: sessionId,
+      role: 'assistant',
+      response_type: {
+        [db.Sequelize.Op.notIn]: ['text', 'navigate', 'error'],
+      },
+    },
+    order: [['created_at', 'DESC']],
+    limit: 5,
+  });
+
+  let action = null;
+  for (const msg of candidates) {
+    try {
+      const parsed = JSON.parse(msg.content);
+      const a = parsed.action;
+      const ctx = a?.context;
+      if (!ctx) continue;
+      // Aceita só se tem IDs ou source identificável — descarta contextos vazios
+      const hasIds = ['idleads', 'idprecadastros', 'idreservas', 'documentos']
+        .some(k => Array.isArray(ctx[k]) && ctx[k].length);
+      const hasFilters = ctx.source && (ctx.data_inicio || hasIds);
+      if (hasIds || hasFilters) { action = a; break; }
+    } catch { /* skip */ }
+  }
+  if (!action || !action.context) return '';
+  const c = action.context;
+
+  const bits = [];
+  if (c.source)                 bits.push(`source=${c.source}`);
+  if (c.data_inicio || c.data_fim) bits.push(`periodo=${c.data_inicio || '?'}..${c.data_fim || '?'}`);
+  if (c.bucket)                 bits.push(`bucket=${c.bucket}`);
+  if (c.empreendimento)         bits.push(`empreendimento=${c.empreendimento}`);
+  if (c.empresa_correspondente) bits.push(`cca=${c.empresa_correspondente}`);
+  if (c.situacao_nome)          bits.push(`situacao=${c.situacao_nome}`);
+  if (c.with_lead)              bits.push('with_lead=true');
+  if (c.excluir_painel)         bits.push('excluir_painel=true');
+  if (c.only_active)            bits.push('only_active=true');
+  if (c.format)                 bits.push(`format=${c.format}`);
+
+  const arrayKeys = ['idleads', 'idprecadastros', 'idreservas', 'idrepasses', 'documentos'];
+  for (const key of arrayKeys) {
+    if (Array.isArray(c[key]) && c[key].length) {
+      const slice = c[key].slice(0, 100);
+      bits.push(`${key}=${slice.join(',')}${c[key].length > 100 ? `,...(+${c[key].length - 100})` : ''}`);
+    }
+  }
+
+  if (!bits.length) return '';
+  return bits.join(' | ');
 }
 
 /**
@@ -188,15 +268,35 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
   const session = await getOrCreateSession(userId, sessionId);
   await saveMessage(session.id, 'user', userMessage);
 
-  const systemPrompt = buildSystemPrompt(fullUser, enterprises);
+  let systemPrompt = buildSystemPrompt(fullUser, enterprises);
+  // Anexa contexto de bridge (IDs/filtros da última consulta) ao SYSTEM
+  // instruction — não ao histórico — para evitar que o modelo replique o bloco.
+  const lastBridge = await getLastBridgeContext(session.id);
+  if (lastBridge) {
+    systemPrompt += `\n\n## CONTEXTO TÉCNICO INTERNO (não reproduza em respostas)\n` +
+      `IDs e filtros da última consulta — disponíveis para bridge entre módulos:\n` +
+      `${lastBridge}\n\n` +
+      `**REGRA RÍGIDA:** este bloco é APENAS para você consultar. NUNCA escreva, copie ou cite ` +
+      `os IDs ou filtros acima na sua resposta de texto. Use-os apenas como argumento de tool calls.`;
+  }
   const history = await buildHistory(session.id);
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
   const historyWithoutLast = history.slice(0, -1);
 
   let fullAssistantText = '';
   let actionResult = null;
-  const toolCalls = []; // [{ name, args, result_summary, error, ms }]
+  const toolCalls = [];
   const startedAt = Date.now();
+  const bridgeFilter = makeBridgeFilter();
+
+  // Helper: filtra chunk antes de emitir + acumula só o que sai limpo
+  const emitTextChunk = (raw) => {
+    const safe = bridgeFilter.push(raw);
+    if (safe) {
+      fullAssistantText += safe;
+      sendSSE(res, { type: 'chunk', text: safe });
+    }
+  };
 
   // Seleciona pool com base na complexidade da pergunta (fast por padrão, smart se necessário)
   const pool = selectModelPool(userMessage);
@@ -260,14 +360,13 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
 
       for (const part of candidate.content?.parts || []) {
         if (part.text) {
-          fullAssistantText += part.text;
-          sendSSE(res, { type: 'chunk', text: part.text });
+          emitTextChunk(part.text);
         }
 
         if (part.functionCall) {
           // Descarta qualquer texto emitido antes da tool call (pode conter valores
           // do treinamento do modelo, incorretos em relação ao banco de dados)
-          if (fullAssistantText) {
+          if (fullAssistantText || bridgeFilter.flush()) {
             fullAssistantText = '';
             sendSSE(res, { type: 'clear' });
           }
@@ -295,10 +394,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
             ]);
             for await (const followChunk of followUp.stream) {
               for (const followPart of followChunk.candidates?.[0]?.content?.parts || []) {
-                if (followPart.text) {
-                  fullAssistantText += followPart.text;
-                  sendSSE(res, { type: 'chunk', text: followPart.text });
-                }
+                if (followPart.text) emitTextChunk(followPart.text);
               }
             }
           } catch (followErr) {
@@ -313,6 +409,22 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
     sendSSE(res, { type: 'error', message: 'Desculpe, ocorreu um erro ao processar sua mensagem.' });
     sendSSE(res, { type: 'done', sessionId: session.id });
     return;
+  }
+
+  // Flush final do filtro — emite qualquer texto retido (sem bridges) ao usuário
+  const tail = bridgeFilter.flush();
+  if (tail) {
+    fullAssistantText += tail;
+    sendSSE(res, { type: 'chunk', text: tail });
+  }
+
+  // Pós-filtro: remove pseudo-tool-calls (ex: "call:query_X{...}" ou "query_X({...})")
+  // que o modelo às vezes escreve em texto ao invés de invocar via function calling API.
+  // Isso é defensivo — o modelo está proibido pelo prompt, mas pode escapar.
+  const cleanedFinal = stripPseudoToolCalls(fullAssistantText);
+  if (cleanedFinal !== fullAssistantText) {
+    sendSSE(res, { type: 'replace', text: cleanedFinal });
+    fullAssistantText = cleanedFinal;
   }
 
   // Salva resposta final do assistente
@@ -334,6 +446,140 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
 
 function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
+ * Remove pseudo-tool-call syntax que o modelo às vezes escreve em texto:
+ *   - "call:query_xxx{...}" / "call: query_xxx(...)"
+ *   - "query_xxx({...})" / "query_xxx(...)" em linha solta
+ *   - "tool_code\n...\n"
+ * Tool calls reais são feitas via function calling API; texto com essa syntax
+ * é vazamento — confunde o usuário e pode conter IDs.
+ */
+function stripPseudoToolCalls(text) {
+  if (!text) return text;
+  let out = text;
+  // call:func{...} ou call: func(...) — qualquer linha contendo isso
+  out = out.replace(/\bcall\s*:\s*\w+\s*[{(][^}\n)]*[)}]/gi, '');
+  // query_xxx({ ... }) ou query_xxx(...) ou similar como linha-comando standalone
+  out = out.replace(/(^|\n)\s*(query_|navigate_|get_)\w+\s*\(\s*\{[^}]*\}\s*\)\s*(?=\n|$)/g, '$1');
+  out = out.replace(/(^|\n)\s*(query_|navigate_|get_)\w+\s*\(\s*[^)\n]*\)\s*(?=\n|$)/g, '$1');
+  // "tool_code:" ou "function_call:" prefixos suspeitos
+  out = out.replace(/\b(tool_code|function_call|tool_invocation)\s*[:=].*$/gmi, '');
+  // Limpa múltiplas linhas em branco consecutivas
+  out = out.replace(/\n{3,}/g, '\n\n').trim();
+  return out;
+}
+
+/**
+ * Filtro de stream defensivo. Remove do output:
+ *   1. Blocos [__bridge__: ...] ou [bridge: ...] (contexto técnico interno)
+ *   2. Blocos de código markdown ```...``` (modelo despejando JSON/arrays)
+ *   3. Dumps de arrays/objetos que parecem listagem de dados (json/array)
+ * Lida corretamente com blocos cruzando fronteiras de chunk.
+ */
+function makeBridgeFilter() {
+  let buf = '';
+  // states: 'normal' | 'bridge' | 'fence' (```...```) | 'jsonArr' ([...])
+  let state = 'normal';
+  const BRIDGE_START = /^\[(?:__bridge__|bridge)\b/i;
+  // Detecta abertura de array JSON com objetos: "[" seguido de "{" (com whitespace)
+  const JSON_ARR_START = /^\[\s*\{/;
+
+  return {
+    push(text) {
+      buf += text;
+      let out = '';
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (state === 'normal') {
+          // Procura próximo gatilho: [, ```, ou nada
+          const fenceIdx  = buf.indexOf('```');
+          const bracketIdx = buf.indexOf('[');
+          const candidates = [fenceIdx, bracketIdx].filter(i => i >= 0);
+          if (!candidates.length) { out += buf; buf = ''; break; }
+          const idx = Math.min(...candidates);
+          out += buf.slice(0, idx);
+          buf = buf.slice(idx);
+
+          if (buf.startsWith('```')) { state = 'fence'; continue; }
+          // É um '['. Pode ser bridge, json array, ou texto comum.
+          // Precisa esperar mais chars para classificar.
+          if (buf.length < 12) {
+            // Sem context suficiente. Preserva no buffer.
+            // Se claramente não é nem bridge nem json-array de objetos, libera.
+            const probe = buf.toLowerCase();
+            const couldBeBridge =
+              '[__bridge__:'.startsWith(probe) || '[bridge:'.startsWith(probe);
+            const couldBeJsonArr = /^\[\s*\{?$/.test(buf); // [ ou [{
+            if (!couldBeBridge && !couldBeJsonArr) {
+              // Libera o '[' isolado e continua processando
+              out += buf[0];
+              buf = buf.slice(1);
+              continue;
+            }
+            return out;
+          }
+          // Classifica
+          if (BRIDGE_START.test(buf))      { state = 'bridge';  continue; }
+          if (JSON_ARR_START.test(buf))    { state = 'jsonArr'; continue; }
+          // É um '[' comum em texto — libera
+          out += buf[0];
+          buf = buf.slice(1);
+          continue;
+        }
+        if (state === 'bridge') {
+          const close = buf.indexOf(']');
+          if (close < 0) return out;
+          buf = buf.slice(close + 1);
+          state = 'normal';
+          continue;
+        }
+        if (state === 'fence') {
+          // Procura fechamento ``` após o de abertura (3 chars)
+          const close = buf.indexOf('```', 3);
+          if (close < 0) return out;
+          buf = buf.slice(close + 3);
+          state = 'normal';
+          continue;
+        }
+        if (state === 'jsonArr') {
+          // Procura fechamento ] balanceando [/]
+          let depth = 0;
+          let inStr = false;
+          let escape = false;
+          let endIdx = -1;
+          for (let i = 0; i < buf.length; i++) {
+            const ch = buf[i];
+            if (escape) { escape = false; continue; }
+            if (ch === '\\') { escape = true; continue; }
+            if (ch === '"')  { inStr = !inStr; continue; }
+            if (inStr) continue;
+            if (ch === '[') depth++;
+            else if (ch === ']') {
+              depth--;
+              if (depth === 0) { endIdx = i; break; }
+            }
+          }
+          if (endIdx < 0) return out;
+          buf = buf.slice(endIdx + 1);
+          state = 'normal';
+          continue;
+        }
+      }
+      return out;
+    },
+    flush() {
+      const remaining = buf;
+      buf = '';
+      // Se sobrou bloco aberto suspeito, descarta
+      const inSuspect = state !== 'normal';
+      state = 'normal';
+      if (inSuspect) return '';
+      // No estado normal, pode ter resíduo de '[' — libera
+      return remaining;
+    },
+  };
 }
 
 /**
@@ -381,14 +627,20 @@ function summarizeForGemini(result) {
 
   if (type === 'table') {
     summary.total = total ?? result.rows?.length ?? 0;
-    summary.message = `Tabela gerada com ${summary.total} registros.`;
+    summary.message =
+      `A tabela com ${summary.total} registros já está RENDERIZADA visualmente na UI do chat. ` +
+      `Sua resposta de texto deve ter NO MÁXIMO 1 frase curta de introdução/comentário. ` +
+      `NÃO liste, escreva, copie, dump, cite ou reproduza os dados (linhas, nomes, CPFs, valores, JSON, listas). ` +
+      `NÃO invente dados — se você não tem um valor específico, diga "veja na tabela" e pare.`;
     // Para tabelas pequenas, inclui os dados para o modelo citar valores corretos
     if (summary.total <= 5 && result.rows?.length) {
       summary.rows = result.rows;
     }
   } else if (type === 'chart') {
     summary.total = result.data?.length ?? 0;
-    summary.message = `Gráfico gerado com ${summary.total} categorias.`;
+    summary.message =
+      `O gráfico com ${summary.total} categorias já está RENDERIZADO visualmente na UI. ` +
+      `Faça apenas 1-2 frases de comentário (insight, destaque). NÃO liste todos os valores nem reproduza os dados em texto.`;
     // Inclui labels compactos para o modelo poder mencionar
     if (result.labels?.length <= 10) {
       summary.labels = result.labels;

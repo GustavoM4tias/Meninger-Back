@@ -3,10 +3,13 @@ export default (sequelize, DataTypes) => {
     const EnterpriseCondition = sequelize.define('EnterpriseCondition', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
 
-        idempreendimento: { type: DataTypes.INTEGER, allowNull: false },
+        // Quando null = ficha avulsa (sem vínculo com empreendimento do CV).
+        // Nesse caso, display_name identifica a ficha.
+        idempreendimento: { type: DataTypes.INTEGER, allowNull: true },
+        display_name: { type: DataTypes.STRING(200), allowNull: true }, // usado quando idempreendimento é null
         reference_month: { type: DataTypes.DATEONLY, allowNull: false }, // '2026-04-01'
         status: {
-            type: DataTypes.ENUM('draft', 'pending_approval', 'approved'),
+            type: DataTypes.ENUM('draft', 'pending_approval', 'approved', 'closed'),
             defaultValue: 'draft',
             allowNull: false,
         },

@@ -6,6 +6,7 @@ import CorrespondentSyncService from '../services/bulkData/cv/CorrespondentSyncS
 // Padrão: uma vez por dia às 6h (tabelas de preço mudam pouco)
 // Pode ser sobrescrito com CV_EXTRAS_CRON_EXPRESSION
 const CRON = process.env.CV_EXTRAS_CRON_EXPRESSION || '0 6 * * *';
+const TZ = 'America/Sao_Paulo';
 
 export default {
     start() {
@@ -33,8 +34,8 @@ export default {
             }
 
             console.log(`[CV Extras] Sync concluído (${new Date().toISOString()})`);
-        });
+        }, { timezone: TZ });
 
-        console.log(`✅ CV Extras (tabelas/imobiliárias/correspondentes) agendado: ${CRON}`);
+        console.log(`✅ CV Extras (tabelas/imobiliárias/correspondentes) agendado: ${CRON} (${TZ})`);
     }
 };

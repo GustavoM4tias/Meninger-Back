@@ -32,6 +32,10 @@ export const TOOL_DECLARATIONS = [
         situacao:        { type: 'STRING',  description: 'Situação do lead. Ex: Ativo, Descartado, Vendido.' },
         incluir_painel:  { type: 'BOOLEAN', description: 'Se true, inclui leads com origem "Painel Corretor/Gestor/Imobiliária". Por padrão são EXCLUÍDOS.' },
         cidade:          { type: 'STRING',  description: 'Filtro por cidade do empreendimento. Use quando o usuário mencionar uma cidade (ex: "Sarandi", "Marília"). Não confundir com empreendimento.' },
+        documento:       { type: 'STRING',  description: 'CPF/documento do cliente. Aceita CSV (múltiplos CPFs separados por vírgula). Útil para fazer bridge a partir de pré-cadastros/reservas — pegue os CPFs e passe aqui.' },
+        idleads:         { type: 'STRING',  description: 'IDs específicos de leads a buscar. CSV de inteiros. Usado quando se tem os idleads de um contexto anterior (pré-cadastros, reservas, etc.).' },
+        idprecadastros:  { type: 'STRING',  description: 'IDs de pré-cadastros (CSV). Filtra leads que estão associados a esses pré-cadastros.' },
+        idreservas:      { type: 'STRING',  description: 'IDs de reservas (CSV). Filtra leads que estão associados a essas reservas.' },
         group_by: {
           type: 'STRING',
           enum: ['situacao', 'midia', 'empreendimento', 'corretor', 'imobiliaria', 'motivo_cancelamento', 'dia', 'mes'],
@@ -79,15 +83,21 @@ function executeNavigate(args) {
 
 async function executeQueryLeads(args, user) {
   const isAdmin = user.role === 'admin';
-  const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
-  const end   = args.data_fim   || dayjs().format('YYYY-MM-DD');
   const limit = Math.min(args.limit || 50, 200);
 
-  const whereClauses = [`l.data_cad BETWEEN :start AND :end`];
-  const replacements = {
-    start: `${start} 00:00:00`,
-    end:   `${end} 23:59:59`,
-  };
+  // Quando há filtro por ID/CPF, a janela de data é dispensada — IDs são exatos
+  // e o lead pode ter sido cadastrado antes do período do contexto anterior.
+  const hasIdFilter = !!(args.idleads || args.documento || args.idprecadastros || args.idreservas);
+  const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
+  const end   = args.data_fim   || dayjs().format('YYYY-MM-DD');
+
+  const whereClauses = [];
+  const replacements = {};
+  if (!hasIdFilter) {
+    whereClauses.push(`l.data_cad BETWEEN :start AND :end`);
+    replacements.start = `${start} 00:00:00`;
+    replacements.end   = `${end} 23:59:59`;
+  }
 
   // ── Exclusão de Painel (padrão: excluir) ─────────���────────────────────────
   if (!args.incluir_painel) {
@@ -134,6 +144,56 @@ async function executeQueryLeads(args, user) {
     replacements.corretor = `%${args.corretor}%`;
   }
 
+  // ── Filtros para bridge a partir de pré-cadastros ──────────────────────────
+  if (args.documento) {
+    // Normaliza para dígitos-only em ambos os lados — robusto a formatos com/sem pontuação
+    const docs = String(args.documento)
+      .split(',')
+      .map(s => s.replace(/\D/g, ''))
+      .filter(Boolean);
+    if (docs.length) {
+      whereClauses.push(`REGEXP_REPLACE(COALESCE(l.documento, ''), '[^0-9]', '', 'g') IN (:docs_arr)`);
+      replacements.docs_arr = docs;
+    }
+  }
+  if (args.idleads) {
+    const ids = String(args.idleads).split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n));
+    if (ids.length) {
+      whereClauses.push(`l.idlead IN (:idleads_arr)`);
+      replacements.idleads_arr = ids;
+    }
+  }
+  // Bridge inverso: leads associados a pré-cadastros específicos
+  if (args.idprecadastros) {
+    const ids = String(args.idprecadastros).split(',').map(s => parseInt(s.trim(), 10)).filter(Number.isFinite);
+    if (ids.length) {
+      whereClauses.push(`
+        EXISTS (
+          SELECT 1 FROM cv_precadastros p_b
+          JOIN jsonb_array_elements(COALESCE(p_b.leads_associados, '[]'::jsonb)) AS la_p ON true
+          WHERE p_b.idprecadastro IN (:idprecad_bridge)
+            AND NULLIF(la_p->>'idlead', '')::int = l.idlead
+        )
+      `);
+      replacements.idprecad_bridge = ids;
+    }
+  }
+  // Bridge inverso: leads associados a reservas específicas
+  if (args.idreservas) {
+    const ids = String(args.idreservas).split(',').map(s => parseInt(s.trim(), 10)).filter(Number.isFinite);
+    if (ids.length) {
+      whereClauses.push(`
+        EXISTS (
+          SELECT 1 FROM reservas r_b
+          JOIN jsonb_array_elements(COALESCE(r_b.leads_associados, '[]'::jsonb)) AS la_r ON true
+          WHERE r_b.idreserva IN (:idreserv_bridge)
+            AND NULLIF(la_r->>'idlead', '')::int = l.idlead
+        )
+      `);
+      replacements.idreserv_bridge = ids;
+    }
+  }
+
   // ── Filtro de cidade explícito (passado pela IA) ───────────────────────────
   if (args.cidade) {
     replacements.filterCity = `%${args.cidade}%`;
@@ -168,13 +228,13 @@ async function executeQueryLeads(args, user) {
     )`);
   }
 
-  const where = whereClauses.join(' AND ');
+  const where = whereClauses.length ? whereClauses.join(' AND ') : '1=1';
 
   // Contexto para botões de ação no frontend
   const context = {
     source:         'leads',
-    data_inicio:    start,
-    data_fim:       end,
+    data_inicio:    hasIdFilter ? null : start,
+    data_fim:       hasIdFilter ? null : end,
     empreendimento: args.empreendimento || null,
     imobiliaria:    args.imobiliaria    || null,
     corretor:       args.corretor       || null,
@@ -191,7 +251,7 @@ async function executeQueryLeads(args, user) {
 
   const sql = `
     SELECT
-      l.idlead, l.nome,
+      l.idlead, l.nome, l.documento,
       l.situacao_nome,
       l.midia_principal, l.origem,
       l.data_cad, l.score,
@@ -202,7 +262,7 @@ async function executeQueryLeads(args, user) {
     FROM leads l
     LEFT JOIN LATERAL (SELECT jsonb_array_elements(l.empreendimento)) AS emp(e) ON true
     WHERE ${where}
-    GROUP BY l.idlead, l.nome, l.situacao_nome, l.midia_principal, l.origem,
+    GROUP BY l.idlead, l.nome, l.documento, l.situacao_nome, l.midia_principal, l.origem,
              l.data_cad, l.score, l.motivo_cancelamento, l.imobiliaria, l.corretor
     ORDER BY l.data_cad DESC
     LIMIT :limit
@@ -232,13 +292,26 @@ async function executeQueryLeads(args, user) {
     columns.push({ key: 'corretor_nome', label: 'Corretor' });
   }
 
+  // Bridge entre módulos: exporta IDs e CPFs para reuso por query_precadastros etc.
+  const idleads    = rows.map(r => r.idlead).filter(Boolean);
+  const documentos = [...new Set(rows.map(r => r.documento).filter(Boolean))];
+
+  const title = hasIdFilter
+    ? `Leads (${rows.length} ${rows.length === 1 ? 'registro' : 'registros'})`
+    : `Leads — ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')}`;
+
   return {
     type:    'table',
-    title:   `Leads — ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')}`,
+    title,
     columns,
     rows,
     total:   rows.length,
-    context: { ...context, has_cancelled: hasDescartado },
+    context: {
+      ...context,
+      has_cancelled: hasDescartado,
+      idleads,
+      documentos,
+    },
   };
 }
 
