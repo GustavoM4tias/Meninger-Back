@@ -3,7 +3,7 @@ import { Op, where, fn, col } from 'sequelize';
 import XLSX from 'xlsx';
 import db from '../../models/sequelize/index.js';
 
-const FAIXA4 = 500000;
+const FAIXA4 = 600000;
 
 const ATTRS = [
     'co_ibge', 'no_municipio', 'sg_uf',
