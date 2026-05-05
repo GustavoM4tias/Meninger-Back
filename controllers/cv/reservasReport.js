@@ -120,6 +120,19 @@ export const listReservasReport = async (req, res) => {
             }
         }
 
+        // ── Filtro por cidade do usuário (mesma lógica do Faturamento) ───────
+        // Admin vê tudo; user vê apenas reservas cujo empreendimento (via
+        // enterprise_cities) está na sua cidade. A reserva pode trazer o
+        // identificador como idempreendimento_int (Sienge ERP), idempreendimento_cv
+        // (CRM CV) ou apenas o nome — tentamos os três.
+        const isAdmin   = req.user?.role === 'admin';
+        const userCity  = isAdmin ? null : (req.user?.city || '');
+        if (!isAdmin && !String(userCity || '').trim()) {
+            return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+        }
+        replacements.isAdmin  = isAdmin;
+        replacements.userCity = userCity;
+
         const sql = `
           SELECT
             r.idreserva,
@@ -151,7 +164,41 @@ export const listReservasReport = async (req, res) => {
                 WHERE l3.origem IS NOT NULL
             ), ARRAY[]::text[]) AS lead_origens
           FROM reservas r
+          LEFT JOIN LATERAL (
+            SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved
+            FROM enterprise_cities ec
+            WHERE (
+              -- 1) idempreendimento_int = Sienge ERP id
+              (NULLIF(r.unidade_json->>'idempreendimento_int','') IS NOT NULL
+                AND ec.erp_id = r.unidade_json->>'idempreendimento_int')
+              -- 2) idempreendimento_int = CRM id (integração direta)
+              OR (NULLIF(r.unidade_json->>'idempreendimento_int','') IS NOT NULL
+                AND ec.crm_id = NULLIF(r.unidade_json->>'idempreendimento_int','')::int)
+              -- 3) idempreendimento_cv = CRM id explícito
+              OR (NULLIF(r.unidade_json->>'idempreendimento_cv','') IS NOT NULL
+                AND ec.crm_id = NULLIF(r.unidade_json->>'idempreendimento_cv','')::int)
+              -- 4) fallback por nome do empreendimento
+              OR (
+                COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''))
+                  IS NOT NULL
+                AND unaccent(upper(regexp_replace(COALESCE(ec.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
+                    unaccent(upper(regexp_replace(
+                      COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
+                      '[^A-Z0-9]+',' ','g')))
+              )
+            )
+            ORDER BY (ec.source = 'crm') DESC, ec.updated_at DESC
+            LIMIT 1
+          ) ec_emp ON TRUE
           WHERE ${whereClauses.join(' AND ')}
+            AND (
+              :isAdmin = TRUE
+              OR (
+                ec_emp.city_resolved IS NOT NULL
+                AND unaccent(upper(regexp_replace(ec_emp.city_resolved, '[^A-Z0-9]+',' ','g'))) =
+                    unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g')))
+              )
+            )
           ORDER BY r.data_reserva DESC
         `;
 
@@ -180,6 +227,44 @@ export const getReservaReport = async (req, res) => {
         if (!id) return res.status(400).json({ error: 'idreserva inválido' });
         const row = await Reserva.findByPk(id);
         if (!row) return res.status(404).json({ error: 'Reserva não encontrada' });
+
+        // ── Visibilidade: não-admin só vê se o empreendimento da reserva
+        //    está na sua cidade. Resolve via enterprise_cities (CRM/ERP/nome).
+        const isAdmin  = req.user?.role === 'admin';
+        const userCity = isAdmin ? null : (req.user?.city || '');
+        if (!isAdmin) {
+            if (!String(userCity || '').trim()) {
+                return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+            }
+            const [check] = await db.sequelize.query(`
+                SELECT 1
+                FROM enterprise_cities ec
+                WHERE (
+                  (NULLIF(:erpId,'') IS NOT NULL AND ec.erp_id = :erpId)
+                  OR (NULLIF(:erpInt,'')::int IS NOT NULL AND ec.crm_id = NULLIF(:erpInt,'')::int)
+                  OR (NULLIF(:cvId,'')::int IS NOT NULL AND ec.crm_id = NULLIF(:cvId,'')::int)
+                  OR (
+                    NULLIF(:nomeEmp,'') IS NOT NULL
+                    AND unaccent(upper(regexp_replace(COALESCE(ec.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
+                        unaccent(upper(regexp_replace(:nomeEmp, '[^A-Z0-9]+',' ','g')))
+                  )
+                )
+                AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+                    unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+                LIMIT 1
+            `, {
+                replacements: {
+                    erpId:   row.unidade_json?.idempreendimento_int || null,
+                    erpInt:  row.unidade_json?.idempreendimento_int || null,
+                    cvId:    row.unidade_json?.idempreendimento_cv  || null,
+                    nomeEmp: (row.unidade_json?.empreendimento || row.empreendimento || '').trim() || null,
+                    userCity,
+                },
+                type: db.Sequelize.QueryTypes.SELECT,
+            });
+            if (!check) return res.status(403).json({ error: 'Reserva fora da sua cidade.' });
+        }
+
         return res.json(row);
     } catch (e) {
         console.error('Erro getReservaReport:', e);

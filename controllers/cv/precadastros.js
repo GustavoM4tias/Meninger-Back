@@ -118,6 +118,17 @@ export const listPrecadastros = async (req, res) => {
         // (filtro de empresa-construtora removido — agora "Empresa" no front mapeia
         //  para empresa_correspondente, que já é tratado em addIlikeCsv acima)
 
+        // ── Filtro por cidade do usuário (mesma lógica do Faturamento) ───────
+        // Admin vê tudo; user vê apenas pré-cadastros cujo empreendimento (via
+        // enterprise_cities) está na sua cidade.
+        const isAdmin   = req.user?.role === 'admin';
+        const userCity  = isAdmin ? null : (req.user?.city || '');
+        if (!isAdmin && !String(userCity || '').trim()) {
+            return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+        }
+        replacements.isAdmin  = isAdmin;
+        replacements.userCity = userCity;
+
         const sql = `
           SELECT
             p.idprecadastro,
@@ -154,7 +165,29 @@ export const listPrecadastros = async (req, res) => {
                 WHERE l3.origem IS NOT NULL
             ), ARRAY[]::text[]) AS lead_origens
           FROM cv_precadastros p
+          LEFT JOIN LATERAL (
+            SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved
+            FROM enterprise_cities ec
+            WHERE (
+              (ec.source = 'crm' AND ec.crm_id = p.idempreendimento)
+              OR (
+                ec.erp_id IS NOT NULL
+                AND p.empreendimento IS NOT NULL
+                AND ec.erp_id = NULLIF(p.empreendimento->>'idempreendimento_int','')
+              )
+            )
+            ORDER BY (ec.source = 'crm') DESC, ec.updated_at DESC
+            LIMIT 1
+          ) ec_emp ON TRUE
           WHERE ${whereClauses.join(' AND ')}
+            AND (
+              :isAdmin = TRUE
+              OR (
+                ec_emp.city_resolved IS NOT NULL
+                AND unaccent(upper(regexp_replace(ec_emp.city_resolved, '[^A-Z0-9]+',' ','g'))) =
+                    unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g')))
+              )
+            )
           ORDER BY p.data_cad DESC
         `;
 
@@ -184,6 +217,35 @@ export const getPrecadastro = async (req, res) => {
 
         const row = await CvPrecadastro.findByPk(id);
         if (!row) return res.status(404).json({ error: 'Pré-cadastro não encontrado' });
+
+        // ── Visibilidade: não-admin só pode ver se o empreendimento da pasta
+        //    está na sua cidade (mesma regra do listing). Match normalizado.
+        const isAdmin  = req.user?.role === 'admin';
+        const userCity = isAdmin ? null : (req.user?.city || '');
+        if (!isAdmin) {
+            if (!String(userCity || '').trim()) {
+                return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+            }
+            const [check] = await db.sequelize.query(`
+                SELECT 1
+                FROM enterprise_cities ec
+                WHERE (
+                  (ec.source = 'crm' AND ec.crm_id = :idemp)
+                  OR (ec.erp_id IS NOT NULL AND ec.erp_id = :erpId)
+                )
+                AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+                    unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+                LIMIT 1
+            `, {
+                replacements: {
+                    idemp: row.idempreendimento,
+                    erpId: row.empreendimento?.idempreendimento_int || null,
+                    userCity,
+                },
+                type: db.Sequelize.QueryTypes.SELECT,
+            });
+            if (!check) return res.status(403).json({ error: 'Pré-cadastro fora da sua cidade.' });
+        }
 
         return res.json(row);
     } catch (e) {

@@ -31,7 +31,7 @@ export const TOOL_DECLARATIONS = [
         origem:          { type: 'STRING',  description: 'Origem do lead. Ex: Busca Compartilhada, Busca Orgânica. Origens "Painel" são excluídas por padrão.' },
         situacao:        { type: 'STRING',  description: 'Situação do lead. Ex: Ativo, Descartado, Vendido.' },
         incluir_painel:  { type: 'BOOLEAN', description: 'Se true, inclui leads com origem "Painel Corretor/Gestor/Imobiliária". Por padrão são EXCLUÍDOS.' },
-        cidade:          { type: 'STRING',  description: 'Filtro por cidade do empreendimento. Use quando o usuário mencionar uma cidade (ex: "Sarandi", "Marília"). Não confundir com empreendimento.' },
+        cidade:          { type: 'STRING',  description: 'Filtro por cidade do empreendimento (apenas admin). Para não-admin, a cidade do perfil é aplicada automaticamente — não é possível ver leads de outras cidades.' },
         documento:       { type: 'STRING',  description: 'CPF/documento do cliente. Aceita CSV (múltiplos CPFs separados por vírgula). Útil para fazer bridge a partir de pré-cadastros/reservas — pegue os CPFs e passe aqui.' },
         idleads:         { type: 'STRING',  description: 'IDs específicos de leads a buscar. CSV de inteiros. Usado quando se tem os idleads de um contexto anterior (pré-cadastros, reservas, etc.).' },
         idprecadastros:  { type: 'STRING',  description: 'IDs de pré-cadastros (CSV). Filtra leads que estão associados a esses pré-cadastros.' },
@@ -56,7 +56,7 @@ export const TOOL_DECLARATIONS = [
         titulo:         { type: 'STRING', description: 'Filtro por título do evento.' },
         tag:            { type: 'STRING', description: 'Filtro por tag. Ex: Lançamento, Meeting.' },
         empreendimento: { type: 'STRING', description: 'Filtro por nome do empreendimento relacionado.' },
-        cidade:         { type: 'STRING', description: 'Filtro por cidade onde o evento ocorre.' },
+        cidade:         { type: 'STRING', description: 'Filtro por cidade do evento (apenas admin pode usar). Para não-admin, a cidade do perfil do usuário é aplicada automaticamente — não é possível ver eventos de outras cidades.' },
         organizador:    { type: 'STRING', description: 'Filtro por nome do organizador responsável.' },
         group_by: {
           type: 'STRING',
@@ -84,6 +84,15 @@ function executeNavigate(args) {
 async function executeQueryLeads(args, user) {
   const isAdmin = user.role === 'admin';
   const limit = Math.min(args.limit || 50, 200);
+
+  // ── Visibilidade trancada (não-admin não pode bypass via args.cidade) ──
+  if (!isAdmin && !user.city?.trim()) {
+    return {
+      type: 'table', title: 'Leads', columns: [], rows: [], total: 0,
+      context: { source: 'leads', error: 'Cidade do usuário ausente — sem visibilidade.' },
+    };
+  }
+  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
 
   // Quando há filtro por ID/CPF, a janela de data é dispensada — IDs são exatos
   // e o lead pode ter sido cadastrado antes do período do contexto anterior.
@@ -194,9 +203,9 @@ async function executeQueryLeads(args, user) {
     }
   }
 
-  // ── Filtro de cidade explícito (passado pela IA) ───────────────────────────
-  if (args.cidade) {
-    replacements.filterCity = `%${args.cidade}%`;
+  // ── Filtro de cidade trancado (effectiveCity já reflete user.city para não-admin) ──
+  if (effectiveCity) {
+    replacements.userCity = effectiveCity;
     whereClauses.push(`EXISTS (
       SELECT 1
       FROM jsonb_array_elements(l.empreendimento) AS e_city
@@ -207,24 +216,8 @@ async function executeQueryLeads(args, user) {
              NULLIF(e_city->>'idempreendimento','')::int,
              NULLIF(e_city->>'id_empreendimento','')::int
            )
-      WHERE COALESCE(ec.city_override, ec.default_city) ILIKE :filterCity
-    )`);
-  }
-
-  // ── Filtro de cidade automático (não-admin sem filtro cidade explícito) ────
-  if (!isAdmin && user.city && !args.cidade) {
-    replacements.userCity = user.city;
-    whereClauses.push(`EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(l.empreendimento) AS e_city
-      LEFT JOIN enterprise_cities ec
-        ON ec.source = 'crm'
-       AND ec.crm_id = COALESCE(
-             NULLIF(e_city->>'id','')::int,
-             NULLIF(e_city->>'idempreendimento','')::int,
-             NULLIF(e_city->>'id_empreendimento','')::int
-           )
-      WHERE COALESCE(ec.city_override, ec.default_city) = :userCity
+      WHERE unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+            unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
     )`);
   }
 
@@ -240,9 +233,10 @@ async function executeQueryLeads(args, user) {
     corretor:       args.corretor       || null,
     midia:          args.midia          || null,
     situacao:       args.situacao       || null,
-    cidade:         args.cidade         || null,
+    cidade:         effectiveCity,
     group_by:       args.group_by       || null,
     incluir_painel: args.incluir_painel || false,
+    visibility:     isAdmin ? 'admin-full' : 'city-restricted',
   };
 
   if (args.group_by) {
@@ -365,8 +359,26 @@ async function executeLeadsGrouped(groupBy, where, replacements, context) {
 }
 
 async function executeQueryEvents(args, user) {
+  const isAdmin = user.role === 'admin';
   const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
   const end   = args.data_fim   || dayjs().endOf('month').format('YYYY-MM-DD');
+
+  // ── Visibilidade — espelha eventController.getEvents + padrão Faturamento ──
+  // Não-admin sem cidade no perfil: bloqueia (idêntico ao dashboard).
+  if (!isAdmin && !user.city?.trim()) {
+    return {
+      type: 'table',
+      title: 'Eventos',
+      columns: [],
+      rows: [],
+      total: 0,
+      context: { source: 'events', error: 'Cidade do usuário ausente — sem visibilidade.' },
+    };
+  }
+
+  // Cidade efetiva: admin pode filtrar livre; não-admin é trancado na própria cidade
+  // (args.cidade é ignorada para não-admin, prevenindo bypass via prompt).
+  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
 
   const context = {
     source:         'events',
@@ -375,9 +387,10 @@ async function executeQueryEvents(args, user) {
     titulo:         args.titulo         || null,
     tag:            args.tag            || null,
     empreendimento: args.empreendimento || null,
-    cidade:         args.cidade         || null,
+    cidade:         effectiveCity,
     organizador:    args.organizador    || null,
     group_by:       args.group_by       || null,
+    visibility:     isAdmin ? 'admin-full' : 'city-restricted',
   };
 
   const whereClauses = [`ev.event_date BETWEEN :start AND :end`];
@@ -398,9 +411,14 @@ async function executeQueryEvents(args, user) {
     whereClauses.push(`ev.enterprise_name ILIKE :emp`);
     replacements.emp = `%${args.empreendimento}%`;
   }
-  if (args.cidade) {
-    whereClauses.push(`ev.address->>'city' ILIKE :cidade`);
-    replacements.cidade = `%${args.cidade}%`;
+  // Match de cidade normalizado (unaccent + collapse de pontuação/espaços).
+  // Padrão idêntico ao Faturamento — tolera "São Paulo" / "SAO PAULO" / "sao-paulo".
+  if (effectiveCity) {
+    whereClauses.push(`
+      unaccent(upper(regexp_replace(COALESCE(ev.address->>'city', ''), '[^A-Z0-9]+', ' ', 'g'))) =
+      unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+    `);
+    replacements.userCity = effectiveCity;
   }
   if (args.organizador) {
     whereClauses.push(`ev.organizers::text ILIKE :org`);

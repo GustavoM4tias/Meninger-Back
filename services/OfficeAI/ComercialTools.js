@@ -59,7 +59,7 @@ export const TOOL_DECLARATIONS = [
       type: 'OBJECT',
       properties: {
         nome:               { type: 'STRING', description: 'Filtro por nome do empreendimento.' },
-        cidade:             { type: 'STRING', description: 'Filtro por cidade do empreendimento.' },
+        cidade:             { type: 'STRING', description: 'Filtro por cidade do empreendimento (apenas admin). Não-admin é trancado na própria cidade automaticamente.' },
         uf:                 { type: 'STRING', description: 'Filtro por estado (sigla UF). Ex: "PR", "SP".' },
         situacao_comercial: { type: 'STRING', description: 'Situação comercial. Ex: "Em Vendas", "Lançamento", "Encerrado".' },
         situacao_obra:      { type: 'STRING', description: 'Situação de obra. Ex: "Em Obras", "Entregue", "Em Projeto".' },
@@ -101,7 +101,7 @@ export const TOOL_DECLARATIONS = [
         idprecadastros:{ type: 'STRING',  description: 'IDs específicos de pré-cadastros (CSV de inteiros). Use quando vier de outro módulo que já tem os IDs em contexto.' },
         idreservas:    { type: 'STRING',  description: 'IDs específicos de reservas (CSV). Filtra pré-cadastros que originaram essas reservas (via campo idprecadastro da reserva).' },
         nome:          { type: 'STRING',  description: 'Nome do cliente (busca parcial).' },
-        cidade:        { type: 'STRING',  description: 'Cidade do empreendimento associado. Não-admin filtra automaticamente pela própria cidade.' },
+        cidade:        { type: 'STRING',  description: 'Cidade do empreendimento (apenas admin). Não-admin é trancado na própria cidade automaticamente — não é possível ver pré-cadastros de outras cidades.' },
         intencao_compra:{type: 'STRING',  description: 'Intenção de compra (texto literal do CV).' },
         group_by: {
           type: 'STRING',
@@ -147,7 +147,7 @@ export const TOOL_DECLARATIONS = [
         empresa_correspondente: { type: 'STRING', description: 'Nome da CCA/empresa correspondente associada à reserva. CSV aceito.' },
         documento:      { type: 'STRING', description: 'CPF/CNPJ do titular. CSV aceito (busca exata por dígitos normalizados ou parcial).' },
         nome:           { type: 'STRING', description: 'Nome do titular (busca parcial).' },
-        cidade:         { type: 'STRING', description: 'Cidade do empreendimento. Não-admin filtra automaticamente pela própria cidade.' },
+        cidade:         { type: 'STRING', description: 'Cidade do empreendimento (apenas admin). Não-admin é trancado na própria cidade automaticamente — não é possível ver reservas de outras cidades.' },
         only_active:    { type: 'BOOLEAN', description: 'Apenas reservas em curso (não vendidas e não distratadas/canceladas).' },
         only_vendida:   { type: 'BOOLEAN', description: 'Apenas reservas com flag vendida="S" (ETAPA CRM, não venda concretizada).' },
         with_lead:      { type: 'BOOLEAN', description: 'Apenas reservas com pelo menos 1 lead associado.' },
@@ -270,6 +270,16 @@ async function executeQueryMcmv(args) {
 
 async function executeQueryEnterprises(args, user) {
   const isAdmin = user.role === 'admin';
+
+  // ── Visibilidade trancada (não-admin não pode bypass via args.cidade) ──
+  if (!isAdmin && !user.city?.trim()) {
+    return {
+      type: 'table', title: 'Empreendimentos', columns: [], rows: [], total: 0,
+      context: { source: 'enterprises', error: 'Cidade do usuário ausente — sem visibilidade.' },
+    };
+  }
+  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
+
   const whereClauses = ['1=1'];
   const replacements = {};
 
@@ -298,16 +308,19 @@ async function executeQueryEnterprises(args, user) {
     replacements.uf = `%${args.uf}%`;
   }
 
-  // Filtro de cidade: explícito tem prioridade; não-admin usa cidade do perfil como fallback
-  const targetCity = args.cidade || (!isAdmin ? user.city : null);
-  if (targetCity) {
-    whereClauses.push(`COALESCE(ec.city_override, ec.default_city, ce.cidade) ILIKE :city`);
-    replacements.city = `%${targetCity}%`;
+  // Cidade trancada — não-admin nunca pode usar args.cidade pra outra cidade
+  if (effectiveCity) {
+    whereClauses.push(`
+      unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ce.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+      unaccent(upper(regexp_replace(:city, '[^A-Z0-9]+', ' ', 'g')))
+    `);
+    replacements.city = effectiveCity;
   }
 
   const context = {
     source:             'enterprises',
-    cidade:             args.cidade || null,
+    cidade:             effectiveCity,
+    visibility:         isAdmin ? 'admin-full' : 'city-restricted',
     uf:                 args.uf || null,
     situacao_comercial: args.situacao_comercial || null,
     situacao_obra:      args.situacao_obra || null,
@@ -545,6 +558,16 @@ function addIlikeCsv(whereClauses, replacements, paramName, column, rawVal) {
 async function executeQueryPrecadastros(args, user) {
   const isAdmin = user.role === 'admin';
 
+  // ── Visibilidade trancada (não-admin não pode bypass via args.cidade) ──
+  if (!isAdmin && !user.city?.trim()) {
+    return {
+      type: 'precadastros_summary', source: 'precadastros',
+      title: 'Pré-cadastros', total: 0,
+      context: { source: 'precadastros', error: 'Cidade do usuário ausente — sem visibilidade.' },
+    };
+  }
+  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
+
   // Filtros por ID/CPF dispensam janela de data — o registro pode estar fora do período padrão
   const hasIdFilter = !!(args.idleads || args.idprecadastros || args.idreservas || args.documento);
   const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
@@ -655,15 +678,15 @@ async function executeQueryPrecadastros(args, user) {
     }
   }
 
-  // Filtro de cidade — explícito tem prioridade; não-admin usa cidade do perfil
-  const targetCity = args.cidade || (!isAdmin ? user.city : null);
-  if (targetCity) {
-    replacements.targetCity = `%${targetCity}%`;
+  // Cidade trancada — effectiveCity já reflete a regra (não-admin = user.city, ignora args.cidade)
+  if (effectiveCity) {
+    replacements.targetCity = effectiveCity;
     whereClauses.push(`
       EXISTS (
         SELECT 1 FROM enterprise_cities ec
         WHERE ec.source = 'crm' AND ec.crm_id = p.idempreendimento
-          AND COALESCE(ec.city_override, ec.default_city) ILIKE :targetCity
+          AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+              unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g')))
       )
     `);
   }
@@ -686,10 +709,11 @@ async function executeQueryPrecadastros(args, user) {
     excluir_painel:         !!args.excluir_painel,
     only_active:            !!args.only_active,
     with_lead:              !!args.with_lead,
-    cidade:                 args.cidade                 || null,
+    cidade:                 effectiveCity,
     group_by:               args.group_by               || null,
     metric:                 args.metric                 || (args.group_by ? 'count' : null),
     format:                 args.format                 || (args.group_by ? 'chart' : 'summary'),
+    visibility:             isAdmin ? 'admin-full' : 'city-restricted',
   };
 
   // Listagem individual (nome, CPF, etc.) tem prioridade — pedido explícito de dados
@@ -973,6 +997,16 @@ async function executePrecadList(args, whereSql, replacements, context, start, e
 async function executeQueryReservas(args, user) {
   const isAdmin = user.role === 'admin';
 
+  // ── Visibilidade trancada (não-admin não pode bypass via args.cidade) ──
+  if (!isAdmin && !user.city?.trim()) {
+    return {
+      type: 'reservas_summary', source: 'reservas',
+      title: 'Reservas', total: 0,
+      context: { source: 'reservas', error: 'Cidade do usuário ausente — sem visibilidade.' },
+    };
+  }
+  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
+
   // Filtros por ID/CPF dispensam janela de data — registro pode estar fora do período padrão
   const hasIdFilter = !!(args.idreservas || args.idprecadastros || args.idleads || args.documento);
   const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
@@ -1086,17 +1120,17 @@ async function executeQueryReservas(args, user) {
     }
   }
 
-  // Filtro de cidade — explícito tem prioridade; não-admin usa cidade do perfil
-  const targetCity = args.cidade || (!isAdmin ? user.city : null);
-  if (targetCity) {
-    replacements.targetCity = `%${targetCity}%`;
+  // Cidade trancada — effectiveCity já reflete user.city para não-admin (sem bypass)
+  if (effectiveCity) {
+    replacements.targetCity = effectiveCity;
     whereClauses.push(`
       EXISTS (
         SELECT 1 FROM cv_enterprises ce_r
         LEFT JOIN enterprise_cities ec_r
           ON ec_r.source = 'crm' AND ec_r.crm_id = ce_r.idempreendimento
         WHERE ce_r.nome ILIKE r.empreendimento
-          AND COALESCE(ec_r.city_override, ec_r.default_city, ce_r.cidade) ILIKE :targetCity
+          AND unaccent(upper(regexp_replace(COALESCE(ec_r.city_override, ec_r.default_city, ce_r.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+              unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g')))
       )
     `);
   }
@@ -1123,7 +1157,8 @@ async function executeQueryReservas(args, user) {
     with_lead:              !!args.with_lead,
     excluir_painel:         !!args.excluir_painel,
     lead_origem:            args.lead_origem            || null,
-    cidade:                 args.cidade                 || null,
+    cidade:                 effectiveCity,
+    visibility:             isAdmin ? 'admin-full' : 'city-restricted',
     group_by:               args.group_by               || null,
     metric:                 args.metric                 || (args.group_by ? 'count' : null),
     format:                 args.format                 || (args.group_by ? 'chart' : 'summary'),
