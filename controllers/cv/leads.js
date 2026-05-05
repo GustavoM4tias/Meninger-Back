@@ -113,29 +113,17 @@ export async function getLeads(req, res) {
       }
     }
 
-    // filtro por cidade explícito (passado via URL)
-    if (cidade) {
-      replacements.filterCity = `%${cidade}%`;
-      whereClauses.push(`
-        EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(l.empreendimento) AS e_city
-          LEFT JOIN enterprise_cities ec
-            ON ec.source = 'crm'
-           AND ec.crm_id = COALESCE(
-                NULLIF(e_city->>'id','')::int,
-                NULLIF(e_city->>'idempreendimento','')::int,
-                NULLIF(e_city->>'id_empreendimento','')::int
-              )
-          WHERE COALESCE(ec.city_override, ec.default_city) ILIKE :filterCity
-        )`);
-    }
-
-    // filtro por cidade do usuário (NÃO admin, sem filtro explícito) — via join CRM
+    // ── Visibilidade trancada (não-admin não pode bypass via ?cidade) ──
+    // Mesma lógica de Faturamento: admin pode filtrar livre; não-admin é
+    // sempre trancado na própria cidade do perfil.
     const isAdmin = req.user.role === 'admin';
-    const userCity = isAdmin ? null : (req.user.city || null);
-    if (!isAdmin && userCity && !cidade) {
-      replacements.userCity = userCity;
+    if (!isAdmin && !req.user.city?.trim()) {
+      return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+    }
+    const effectiveCity = isAdmin ? (cidade || null) : req.user.city;
+
+    if (effectiveCity) {
+      replacements.userCity = effectiveCity;
       whereClauses.push(`
         EXISTS (
           SELECT 1
@@ -147,9 +135,11 @@ export async function getLeads(req, res) {
                 NULLIF(e_city->>'idempreendimento','')::int,
                 NULLIF(e_city->>'id_empreendimento','')::int
               )
-          WHERE COALESCE(ec.city_override, ec.default_city) = :userCity
+          WHERE unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+                unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
         )`);
     }
+    const userCity = effectiveCity; // mantém a variável usada no log abaixo
 
     // LATERAL para (1) nomes agregados e (2) cidades resolvidas SOMENTE via CRM (sem ERP/fallback)
     const sql = `

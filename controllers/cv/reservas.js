@@ -1,6 +1,25 @@
 // controllers/cv/reservas.js
 import { getEmpreendimentos } from '../../services/cv/empreendimentoService.js';
 import apiCv from '../../lib/apiCv.js';
+import db from '../../models/sequelize/index.js';
+
+/**
+ * Lista de IDs de empreendimentos visíveis ao usuário, baseado em enterprise_cities.
+ * Admin: null (sem restrição).
+ * Não-admin: array de crm_ids da cidade do perfil; vazio se nada acessível.
+ */
+async function getVisibleEnterpriseIds(req) {
+    if (req.user?.role === 'admin') return null;
+    const userCity = req.user?.city || '';
+    if (!userCity.trim()) return [];
+    const rows = await db.sequelize.query(`
+        SELECT crm_id FROM enterprise_cities
+        WHERE source = 'crm' AND crm_id IS NOT NULL
+          AND unaccent(upper(regexp_replace(COALESCE(city_override, default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+              unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+    `, { replacements: { userCity }, type: db.Sequelize.QueryTypes.SELECT });
+    return rows.map(r => Number(r.crm_id)).filter(Boolean);
+}
 
 // Cache simples em memória (1h)
 let reservaCache = {
@@ -13,6 +32,19 @@ export const fetchReservas = async (req, res) => {
     let responseWasSent = false;
 
     try {
+        if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+
+        // ── Visibilidade: trança IDs visíveis ao usuário (Faturamento pattern) ──
+        const isAdmin = req.user.role === 'admin';
+        const visibleIds = await getVisibleEnterpriseIds(req);
+        if (!isAdmin && (!visibleIds || visibleIds.length === 0)) {
+            return res.status(200).json({
+                total: 0, registrosPorPagina: 0, totalRegistros: 0,
+                filtros: req.query, empreendimentos: [], reservas: [],
+                _visibility: { restricted: true, message: 'Sem empreendimentos acessíveis na sua cidade.' },
+            });
+        }
+
         const { idempreendimento, a_partir_de, ate, faturar = 'false' } = req.query;
 
         let dataInicio = a_partir_de;
@@ -26,6 +58,24 @@ export const fetchReservas = async (req, res) => {
 
         const registrosPorPagina = 500;
         let empreendimentosList = idempreendimento ? idempreendimento.split(',').filter(id => id.trim()) : [];
+
+        // Trancar para não-admin: se passou IDs, intersecção com visíveis;
+        // se não passou nada, força a lista de IDs visíveis (evita varrer tudo).
+        if (!isAdmin) {
+            const visibleSet = new Set(visibleIds.map(String));
+            if (empreendimentosList.length > 0) {
+                empreendimentosList = empreendimentosList.filter(id => visibleSet.has(String(id).trim()));
+                if (empreendimentosList.length === 0) {
+                    return res.status(200).json({
+                        total: 0, registrosPorPagina, totalRegistros: 0,
+                        filtros: req.query, empreendimentos: [], reservas: [],
+                        _visibility: { restricted: true, message: 'IDs solicitados estão fora da sua cidade.' },
+                    });
+                }
+            } else {
+                empreendimentosList = visibleIds.map(String);
+            }
+        }
 
         const construirURL = (pag, idEmpreendimento = null, useFaturar = true) => {
             let url = `/cvio/reserva?registros_por_pagina=${registrosPorPagina}&pagina=${pag}`;
@@ -145,8 +195,36 @@ export const fetchReservas = async (req, res) => {
 
 export const fetchReservaPagamentos = async (req, res) => {
     try {
+        if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
         const { idreserva } = req.query;
         if (!idreserva) return res.status(400).json({ error: 'ID da reserva é obrigatório' });
+
+        // ── Visibilidade: não-admin só vê pagamentos de reservas da sua cidade ──
+        const isAdmin = req.user.role === 'admin';
+        if (!isAdmin) {
+            const userCity = req.user.city || '';
+            if (!userCity.trim()) {
+                return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+            }
+            const [reservaCheck] = await db.sequelize.query(`
+                SELECT 1
+                FROM reservas r
+                JOIN enterprise_cities ec ON (
+                  (NULLIF(r.unidade_json->>'idempreendimento_int','')::int IS NOT NULL
+                   AND ec.crm_id = NULLIF(r.unidade_json->>'idempreendimento_int','')::int)
+                  OR (NULLIF(r.unidade_json->>'idempreendimento_cv','')::int IS NOT NULL
+                   AND ec.crm_id = NULLIF(r.unidade_json->>'idempreendimento_cv','')::int)
+                )
+                WHERE r.idreserva = :idreserva
+                  AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+                      unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+                LIMIT 1
+            `, {
+                replacements: { idreserva: parseInt(idreserva, 10) || 0, userCity },
+                type: db.Sequelize.QueryTypes.SELECT,
+            });
+            if (!reservaCheck) return res.status(403).json({ error: 'Reserva fora da sua cidade.' });
+        }
 
         const url = `/v1/cv/reserva-condicao-pagamentos?idreserva=${idreserva}`;
         const { data } = await apiCv.get(url);

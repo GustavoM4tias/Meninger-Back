@@ -5,6 +5,7 @@ const {
   CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
   CvEnterpriseMaterial, CvEnterprisePlan
 } = db;
+const { Op } = db.Sequelize;
 
 // cache simples opcional (30s)
 const cache = new Map();
@@ -47,18 +48,52 @@ export const fetchBuildingsFromDb = async (req, res) => {
       "raw"
     ];
 
-    // ----- FILTRO DIRETO NO BANCO (cidade) -----
+    // ----- FILTRO POR CIDADE (mesma lógica do Faturamento) -----
+    // Resolve a lista de idempreendimentos permitidos para a cidade do usuário
+    // a partir de enterprise_cities (city_override > default_city). Como
+    // cv_enterprises pode ter empreendimentos sem entrada em enterprise_cities,
+    // adicionamos um fallback direto pela coluna cv_enterprises.cidade.
     const where = {};
     if (!isAdmin) {
-      const clean = norm(userCity);
-      if (!clean.trim()) {
+      if (!String(userCity).trim()) {
         return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
       }
-      where.cidade = db.Sequelize.where(
-        db.Sequelize.fn("lower", db.Sequelize.col("cidade")),
-        "LIKE",
-        `%${clean}%`
+
+      const allowedRows = await db.sequelize.query(
+        `
+          SELECT DISTINCT idempreendimento
+          FROM (
+            SELECT ec.crm_id AS idempreendimento
+            FROM enterprise_cities ec
+            WHERE ec.crm_id IS NOT NULL
+              AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+',' ','g'))) =
+                  unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
+
+            UNION
+
+            SELECT ce.idempreendimento
+            FROM cv_enterprises ce
+            WHERE ce.cidade IS NOT NULL
+              AND unaccent(upper(regexp_replace(ce.cidade, '[^A-Z0-9]+',' ','g'))) =
+                  unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
+          ) AS allowed
+          WHERE idempreendimento IS NOT NULL
+        `,
+        { replacements: { userCity }, type: db.Sequelize.QueryTypes.SELECT }
       );
+
+      const allowedIds = allowedRows
+        .map(r => Number(r.idempreendimento))
+        .filter(Number.isFinite);
+
+      if (!allowedIds.length) {
+        // Nada permitido para esta cidade: devolve lista vazia (e cacheia).
+        cache.set(key, { ts: now, data: [] });
+        res.set('X-Cache', 'MISS');
+        return res.json([]);
+      }
+
+      where.idempreendimento = { [Op.in]: allowedIds };
     }
 
     // ----- BUSCA SQL -----
@@ -125,11 +160,21 @@ export const fetchBuildingsFromDb = async (req, res) => {
 };
 
 export const fetchBuildingByIdFromDb = async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Usuário não autenticado.' });
+  }
   const { id } = req.params;
   if (!id) return res.status(400).json({ error: "O parâmetro 'id' é obrigatório." });
 
-  // cache opcional
-  const key = `ent:${id}`;
+  // ── Visibilidade: não-admin só vê empreendimentos da própria cidade ──
+  const isAdmin  = req.user.role === 'admin';
+  const userCity = isAdmin ? null : (req.user.city || '');
+  if (!isAdmin && !String(userCity || '').trim()) {
+    return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+  }
+
+  // cache scoped por usuário/admin para não vazar entre cidades
+  const key = `ent:${id}:${isAdmin ? 'admin' : norm(userCity)}`;
   const now = Date.now();
   const memo = cache.get(key);
   if (memo && now - memo.ts < TTL) {
@@ -144,6 +189,22 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
     // 1) busca o enterprise "seco"
     const ent = await CvEnterprise.findByPk(id);
     if (!ent) return res.status(404).json({ error: 'Empreendimento não encontrado.' });
+
+    // 1.1) Não-admin: confirma que o empreendimento está na sua cidade
+    if (!isAdmin) {
+      const [check] = await db.sequelize.query(`
+        SELECT 1
+        FROM enterprise_cities ec
+        WHERE ec.source = 'crm' AND ec.crm_id = :id
+          AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+              unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+        LIMIT 1
+      `, {
+        replacements: { id, userCity },
+        type: db.Sequelize.QueryTypes.SELECT,
+      });
+      if (!check) return res.status(403).json({ error: 'Empreendimento fora da sua cidade.' });
+    }
 
     // 2) busca filhos em paralelo (SEM include)
     const [
