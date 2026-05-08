@@ -1370,13 +1370,32 @@ export async function getProjectionReport(req, res) {
       nameList = req.query.enterpriseName.split(',').map(n => n.trim()).filter(Boolean);
     }
 
+    // Filtro por empresa (idêntico ao Faturamento — CSV ou array)
+    const parseIdCsv = (v) => {
+      if (Array.isArray(v)) {
+        return v.map((x) => Number(String(x).trim())).filter((n) => Number.isFinite(n) && n > 0);
+      }
+      if (typeof v === 'string' && v.trim().length) {
+        return v.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+      }
+      return [];
+    };
+    const companyIdsList = parseIdCsv(req.query.companyIds ?? req.query.companyId);
+    const enterpriseIdsList = parseIdCsv(req.query.enterpriseIds ?? req.query.enterpriseId);
+
     // ── Projeção alvo ─────────────────────────────────────────────────────────
+    // O relatório opera SEMPRE sobre uma projeção ativa. Se o cliente passa um
+    // projection_id, valida-se que aquela é ativa; senão usa-se a única ativa
+    // disponível (o sistema garante "no máximo 1 ativa" em create/clone/update).
     let projection;
     if (req.query.projection_id) {
       projection = await SalesProjection.findByPk(Number(req.query.projection_id), {
         attributes: ['id', 'name', 'is_active', 'is_locked'],
       });
       if (!projection) return res.status(404).json({ error: 'Projeção não encontrada.' });
+      if (!projection.is_active) {
+        return res.status(400).json({ error: 'Projeção informada não está ativa.' });
+      }
     } else {
       projection = await SalesProjection.findOne({
         where: { is_active: true },
@@ -1698,12 +1717,32 @@ export async function getProjectionReport(req, res) {
       }
     }
 
+    // ── Filtros de empresa / empreendimento ─────────────────────────────────
+    // Aplicados após o enrichment de company_id, antes do summary global, para
+    // que os agregados reflitam exatamente o recorte exibido no relatório.
+    let filteredEnterprises = enterprises
+    if (companyIdsList.length > 0) {
+      const companySet = new Set(companyIdsList)
+      filteredEnterprises = filteredEnterprises.filter((e) => {
+        const cid = e.company_id != null ? Number(e.company_id) : null
+        // Mesmo comportamento do client antigo: se empresa não foi resolvida, mantém.
+        return cid == null || companySet.has(cid)
+      })
+    }
+    if (enterpriseIdsList.length > 0) {
+      const entSet = new Set(enterpriseIdsList.map(String))
+      filteredEnterprises = filteredEnterprises.filter((e) => {
+        const eid = e.erp_id != null ? String(e.erp_id) : null
+        return eid != null && entSet.has(eid)
+      })
+    }
+
     // ── Summary global ────────────────────────────────────────────────────────
-    const totalProjectedVgv    = enterprises.reduce((s, e) => s + e.summary.projected_vgv,      0);
-    const totalRealizedVgvNet  = enterprises.reduce((s, e) => s + e.summary.realized_vgv_net,   0);
-    const totalRealizedVgvGross = enterprises.reduce((s, e) => s + e.summary.realized_vgv_gross, 0);
-    const totalProjectedUnits  = enterprises.reduce((s, e) => s + e.summary.projected_units,    0);
-    const totalRealizedUnits   = enterprises.reduce((s, e) => s + e.summary.realized_units,     0);
+    const totalProjectedVgv    = filteredEnterprises.reduce((s, e) => s + e.summary.projected_vgv,      0);
+    const totalRealizedVgvNet  = filteredEnterprises.reduce((s, e) => s + e.summary.realized_vgv_net,   0);
+    const totalRealizedVgvGross = filteredEnterprises.reduce((s, e) => s + e.summary.realized_vgv_gross, 0);
+    const totalProjectedUnits  = filteredEnterprises.reduce((s, e) => s + e.summary.projected_units,    0);
+    const totalRealizedUnits   = filteredEnterprises.reduce((s, e) => s + e.summary.realized_units,     0);
     const achievement_pct      = totalProjectedVgv > 0
       ? parseFloat(((totalRealizedVgvNet / totalProjectedVgv) * 100).toFixed(2))
       : 0;
@@ -1717,12 +1756,12 @@ export async function getProjectionReport(req, res) {
       // compat
       realized_vgv:          totalRealizedVgvNet,
       achievement_pct,
-      enterprises_total:     enterprises.length,
-      enterprises_ahead:     enterprises.filter(e => e.summary.status === 'ahead').length,
-      enterprises_on_track:  enterprises.filter(e => e.summary.status === 'on_track').length,
-      enterprises_behind:    enterprises.filter(e => e.summary.status === 'behind').length,
-      enterprises_at_risk:   enterprises.filter(e => e.summary.status === 'at_risk').length,
-      enterprises_no_sales:  enterprises.filter(e => ['no_sales','no_projection'].includes(e.summary.status)).length,
+      enterprises_total:     filteredEnterprises.length,
+      enterprises_ahead:     filteredEnterprises.filter(e => e.summary.status === 'ahead').length,
+      enterprises_on_track:  filteredEnterprises.filter(e => e.summary.status === 'on_track').length,
+      enterprises_behind:    filteredEnterprises.filter(e => e.summary.status === 'behind').length,
+      enterprises_at_risk:   filteredEnterprises.filter(e => e.summary.status === 'at_risk').length,
+      enterprises_no_sales:  filteredEnterprises.filter(e => ['no_sales','no_projection'].includes(e.summary.status)).length,
     };
 
     return res.json({
@@ -1738,7 +1777,7 @@ export async function getProjectionReport(req, res) {
       days_in_current_month: daysInCurrentMonth,
       time_elapsed_pct:      timeElapsedPct,
       summary,
-      enterprises,
+      enterprises:           filteredEnterprises,
     });
 
   } catch (e) {

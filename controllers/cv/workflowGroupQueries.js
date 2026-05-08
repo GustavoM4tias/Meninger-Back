@@ -1,6 +1,21 @@
 // controllers/cv/workflowGroupQueries.js
 import { getGroupProjections } from '../../services/cv/workflowGroupQueriesService.js';
- 
+
+function parseIdCsv(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => Number(String(v).trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  }
+  if (typeof value === 'string' && value.trim().length) {
+    return value
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  }
+  return [];
+}
+
 export async function fetchGroupProjections(req, res) {
   try {
     const idgroup = parseInt(req.params.id, 10);
@@ -15,10 +30,15 @@ export async function fetchGroupProjections(req, res) {
       return res.status(403).json({ error: 'Cidade do usuário não configurada.' });
     }
 
+    const companyIds = parseIdCsv(req.query.companyIds ?? req.query.companyId);
+    const enterpriseIds = parseIdCsv(req.query.enterpriseIds ?? req.query.enterpriseId);
+
     const data = await getGroupProjections({
       idgroup,
       isAdmin,
-      userCity: userCityRaw
+      userCity: userCityRaw,
+      companyIds,
+      enterpriseIds
     });
 
     return res.json(data);

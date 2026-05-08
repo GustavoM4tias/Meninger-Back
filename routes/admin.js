@@ -53,6 +53,13 @@ import {
   removeStageCommissionRule
 } from '../controllers/stageCommissionRuleController.js';
 
+import {
+  listTrSatellites,
+  addTrSatellite,
+  updateTrSatellite,
+  removeTrSatellite
+} from '../controllers/trSatelliteController.js';
+
 import LandDataController from '../controllers/external/landDataController.js';
 const landDataController = new LandDataController();
 
@@ -119,5 +126,11 @@ router.delete('/hidden-enterprises/:id', authMiddleware, requireAdmin, removeHid
 router.get('/stage-commission-rules', authMiddleware, listStageCommissionRules);
 router.post('/stage-commission-rules', authMiddleware, requireAdmin, addStageCommissionRule);
 router.delete('/stage-commission-rules/:id', authMiddleware, requireAdmin, removeStageCommissionRule);
+
+// TR Satellite Enterprises — GET: todos autenticados; mutações: admin only
+router.get('/tr-satellite-enterprises', authMiddleware, listTrSatellites);
+router.post('/tr-satellite-enterprises', authMiddleware, requireAdmin, addTrSatellite);
+router.put('/tr-satellite-enterprises/:id', authMiddleware, requireAdmin, updateTrSatellite);
+router.delete('/tr-satellite-enterprises/:id', authMiddleware, requireAdmin, removeTrSatellite);
 
 export default router;

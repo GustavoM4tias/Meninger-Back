@@ -23,6 +23,12 @@ import {
     createLaunchType,
     updateLaunchType,
 } from '../controllers/sienge/launchTypeController.js';
+import {
+    listBackups,
+    getBackup,
+    triggerBackup,
+    triggerImportOnly,
+} from '../controllers/sienge/backupController.js';
 
 
 const router = express.Router();
@@ -83,6 +89,12 @@ router.use('/launch-types', (req, res, next) => {
 router.get('/launch-types', authenticate, listLaunchTypes);
 router.post('/launch-types', authenticate, createLaunchType);
 router.patch('/launch-types/:id', authenticate, updateLaunchType);
+
+// ── Backup do banco Sienge (cron + log + bucket Oracle Cloud) ─────────────────
+router.get('/backups', authenticate, listBackups);
+router.get('/backups/:id', authenticate, getBackup);
+router.post('/backups/trigger', authenticate, triggerBackup);
+router.post('/backups/trigger-import', authenticate, triggerImportOnly);
 
 // ── Empreendimentos (enterprise_cities) ───────────────────────────────────────
 router.get('/payment-flow/enterprises', authenticate, listFlowEnterprises);   // ?q=termo

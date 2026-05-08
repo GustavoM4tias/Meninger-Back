@@ -50,12 +50,14 @@ import CvWorkflowGroupDefine from './cv/workflowGroup.js';
 import landSyncEnterpriseDefine from './landSyncEnterprise.js';
 import hiddenDashboardEnterpriseDefine from './hiddenDashboardEnterprise.js';
 import stageCommissionRuleDefine from './stageCommissionRule.js';
+import trSatelliteEnterpriseDefine from './trSatelliteEnterprise.js';
 
 import SiengeAwardDefine from './sienge/award.js';
 import SiengeAwardLinkDefine from './sienge/awardLink.js';
 import SiengeAwardLogDefine from './sienge/awardLog.js';
 import PaymentLaunchDefine from './sienge/paymentLaunch.js';
 import LaunchTypeConfigDefine from './sienge/launchTypeConfig.js';
+import SiengeBackupLogDefine from './sienge/backupLog.js';
 
 import AcademyArticleDefine from './academy/article.js';
 import AcademyTopicDefine from './academy/topic.js';
@@ -104,6 +106,15 @@ import ChatSessionDefine from './chatSession.js';
 import ChatMessageDefine from './chatMessage.js';
 import UserAIMemoryDefine from './userAIMemory.js';
 import ChatFeedbackDefine from './chatFeedback.js';
+
+// Notificações
+import NotificationDefine from './notification.js';
+import NotificationPreferenceDefine from './notificationPreference.js';
+
+// WhatsApp Business
+import WhatsappConfigDefine from './whatsapp/whatsappConfig.js';
+import WhatsappTemplateDefine from './whatsapp/whatsappTemplate.js';
+import WhatsappMessageDefine from './whatsapp/whatsappMessage.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -162,12 +173,14 @@ db.CvWorkflowGroup = CvWorkflowGroupDefine(sequelize, DataTypes);
 db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
 db.HiddenDashboardEnterprise = hiddenDashboardEnterpriseDefine(sequelize, DataTypes);
 db.StageCommissionRule = stageCommissionRuleDefine(sequelize, DataTypes);
+db.TrSatelliteEnterprise = trSatelliteEnterpriseDefine(sequelize, DataTypes);
 
 db.Award = SiengeAwardDefine(sequelize, DataTypes);
 db.AwardLink = SiengeAwardLinkDefine(sequelize, DataTypes);
 db.AwardLog = SiengeAwardLogDefine(sequelize, DataTypes);
 db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);
 db.LaunchTypeConfig = LaunchTypeConfigDefine(sequelize, DataTypes);
+db.SiengeBackupLog = SiengeBackupLogDefine(sequelize, DataTypes);
 
 db.AcademyArticle = AcademyArticleDefine(sequelize, DataTypes);
 db.AcademyTopic = AcademyTopicDefine(sequelize, DataTypes);
@@ -216,6 +229,15 @@ db.ChatSession  = ChatSessionDefine(sequelize, DataTypes);
 db.ChatMessage  = ChatMessageDefine(sequelize, DataTypes);
 db.UserAIMemory = UserAIMemoryDefine(sequelize, DataTypes);
 db.ChatFeedback = ChatFeedbackDefine(sequelize, DataTypes);
+
+// Notificações
+db.Notification           = NotificationDefine(sequelize, DataTypes);
+db.NotificationPreference = NotificationPreferenceDefine(sequelize, DataTypes);
+
+// WhatsApp Business
+db.WhatsappConfig   = WhatsappConfigDefine(sequelize, DataTypes);
+db.WhatsappTemplate = WhatsappTemplateDefine(sequelize, DataTypes);
+db.WhatsappMessage  = WhatsappMessageDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

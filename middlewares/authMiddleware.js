@@ -14,19 +14,23 @@ const authenticate = async (req, res, next) => {
 
     // ✅ carrega usuário do banco
     const user = await db.User.findByPk(decoded.id, {
-      attributes: ['id', 'role', 'position', 'auth_provider', 'status', 'username', 'email', 'microsoft_id'],
+      attributes: ['id', 'role', 'position', 'city', 'auth_provider', 'status', 'username', 'email', 'microsoft_id'],
     });
 
     if (!user || user.status === false) {
       return res.status(401).json({ success: false, error: 'Usuário inválido/inativo.' });
     }
 
-    // ✅ req.user passa a ser confiável para guards
+    // ✅ req.user passa a ser confiável para guards.
+    // Campos de autorização (role, city, position) vêm SEMPRE do banco — JWT
+    // pode estar desatualizado (ex.: admin mudou a cidade do usuário) ou
+    // incompleto (ex.: SSO Microsoft historicamente não setava city).
     req.user = {
       ...decoded,
       id: user.id,
       role: user.role,
       position: user.position,
+      city: user.city || null,
       auth_provider: user.auth_provider,
       name: user.username,
       username: user.username,

@@ -28,6 +28,9 @@ import conditionsRoutes from './routes/conditionsRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
+import whatsappRoutes from './routes/whatsappRoutes.js';
+import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -46,6 +49,8 @@ import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.j
 import cvExtrasScheduler from './scheduler/cvExtrasScheduler.js';
 import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateScheduler.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
+import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
+import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 
 const app = express();
 
@@ -62,6 +67,11 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// ⚠️ Webhook do WhatsApp precisa do raw body para validar HMAC.
+// Por isso é montado ANTES do express.json() global.
+app.use('/api/whatsapp/webhook', whatsappWebhookRoutes);
+
 app.use(express.json());
 
 app.use('/api/admin', admin);
@@ -88,6 +98,8 @@ app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -124,6 +136,13 @@ async function bootServer() {
     // ['EnterpriseConditionCampaign', db.EnterpriseConditionCampaign],
     // ['McmvMunicipio', db.McmvMunicipio],
     // ['McmvImportLog', db.McmvImportLog],
+    // ['SiengeBackupLog', db.SiengeBackupLog],
+    ['Notification', db.Notification],
+    ['NotificationPreference', db.NotificationPreference],
+    ['User', db.User],
+    ['WhatsappConfig', db.WhatsappConfig],
+    ['WhatsappTemplate', db.WhatsappTemplate],
+    ['WhatsappMessage', db.WhatsappMessage],
   ]) {
     try {
       await model.sync({ alter: true });
@@ -151,6 +170,8 @@ async function bootServer() {
   if (process.env.ENABLE_CV_EXTRAS_SCHEDULE !== 'false') cvExtrasScheduler.start(); // ativo por padrão
   conditionAutoGenerateScheduler.start(); // auto-geração de fichas + polling de assinaturas
   boletoCleanupScheduler.start();         // remove boletos expirados do Supabase
+  if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
+  eventReminderScheduler.start();         // lembretes de evento (D-1) via NotificationService
 
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta: ${PORT}`);

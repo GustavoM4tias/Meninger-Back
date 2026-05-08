@@ -1,7 +1,13 @@
 // services/cv/workflowGroupQueriesService.js
 import db from '../../models/sequelize/index.js'
 
-export async function getGroupProjections({ idgroup, isAdmin, userCity }) {
+export async function getGroupProjections({
+  idgroup,
+  isAdmin,
+  userCity,
+  companyIds = [],
+  enterpriseIds = []
+}) {
   const group = await db.CvWorkflowGroup.findByPk(idgroup)
   if (!group) throw new Error('Grupo não encontrado')
 
@@ -14,11 +20,29 @@ export async function getGroupProjections({ idgroup, isAdmin, userCity }) {
     ? group.segmentos.filter((s) => typeof s === 'string' && s.trim().length)
     : []
 
+  // Sanitiza filtros opcionais
+  const companyIdsSafe = Array.isArray(companyIds)
+    ? [...new Set(companyIds.map(Number).filter((n) => Number.isFinite(n) && n > 0))]
+    : []
+  const enterpriseIdsSafe = Array.isArray(enterpriseIds)
+    ? [...new Set(enterpriseIds.map(Number).filter((n) => Number.isFinite(n) && n > 0))]
+    : []
+
+  const hasCompanyIds = companyIdsSafe.length > 0
+  const hasEnterpriseIds = enterpriseIdsSafe.length > 0
+
   if (!situacoes.length) {
     return {
       count: 0,
       results: [],
-      meta: { tipo, segmentos, situacoes, city: isAdmin ? null : userCity }
+      meta: {
+        tipo,
+        segmentos,
+        situacoes,
+        city: isAdmin ? null : userCity,
+        companyIds: companyIdsSafe,
+        enterpriseIds: enterpriseIdsSafe
+      }
     }
   }
 
@@ -134,6 +158,10 @@ reservas_segmentadas AS (
             unaccent(upper(regexp_replace(:userCity,      '[^A-Z0-9]+',' ','g')))
       `
     }
+  ${hasEnterpriseIds
+      ? `AND COALESCE(rcc.idemp_erp_resolvido, rcc.idemp_int_from_reserva) IN (:enterpriseIds)`
+      : ``
+    }
 ),
 
 /*
@@ -197,6 +225,10 @@ reservas_com_empresa AS (
       AND c.enterprise_id = COALESCE(rf.idemp_erp_resolvido, rf.idemp_int_from_reserva)
     LIMIT 1
   ) comp ON TRUE
+  ${hasCompanyIds
+      ? `WHERE comp.company_id IS NULL OR comp.company_id IN (:companyIds)`
+      : ``
+    }
 ),
 
 last_status AS (
@@ -228,6 +260,8 @@ ORDER BY
 
   if (segmentos.length) replacements.segments = segmentos
   if (!isAdmin) replacements.userCity = userCity
+  if (hasCompanyIds) replacements.companyIds = companyIdsSafe
+  if (hasEnterpriseIds) replacements.enterpriseIds = enterpriseIdsSafe
 
   const results = await db.sequelize.query(sql, {
     replacements,
@@ -237,6 +271,13 @@ ORDER BY
   return {
     count: results.length,
     results,
-    meta: { tipo, segmentos, situacoes, city: isAdmin ? null : userCity }
+    meta: {
+      tipo,
+      segmentos,
+      situacoes,
+      city: isAdmin ? null : userCity,
+      companyIds: companyIdsSafe,
+      enterpriseIds: enterpriseIdsSafe
+    }
   }
 }

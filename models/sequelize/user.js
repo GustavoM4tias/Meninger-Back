@@ -69,6 +69,11 @@ export default (sequelize, DataTypes) => {
 
     show_in_organogram: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     phone: { type: DataTypes.STRING(20), allowNull: true },
+
+    // ── WhatsApp Business ─────────────────────────────────────────────────────
+    whatsapp_phone:                { type: DataTypes.STRING(20),  allowNull: true }, // E.164 ex: +5511999999999
+    whatsapp_consent_at:           { type: DataTypes.DATE,        allowNull: true },
+    whatsapp_consent_revoked_at:   { type: DataTypes.DATE,        allowNull: true },
   }, {
     tableName: 'users',
     underscored: true,
