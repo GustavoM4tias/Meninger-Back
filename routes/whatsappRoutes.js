@@ -13,7 +13,7 @@ import {
     discover, applyDiscovered,
 } from '../controllers/whatsapp/whatsappConfigController.js';
 import {
-    listTemplates, getTemplate,
+    listTemplates, getTemplate, createTemplate, deleteTemplate,
 } from '../controllers/whatsapp/whatsappTemplateController.js';
 import {
     listMessages, stats,
@@ -35,7 +35,9 @@ router.post('/config/apply-discovered',     authenticate, requireAdmin, applyDis
 
 // ── Templates (admin) ───────────────────────────────────────────────────
 router.get('/templates',          authenticate, requireAdmin, listTemplates);
+router.post('/templates',         authenticate, requireAdmin, createTemplate);
 router.get('/templates/:id',      authenticate, requireAdmin, getTemplate);
+router.delete('/templates/:name', authenticate, requireAdmin, deleteTemplate);
 
 // ── Mensagens / log (admin) ─────────────────────────────────────────────
 router.get('/messages',           authenticate, requireAdmin, listMessages);
