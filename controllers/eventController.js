@@ -1,8 +1,8 @@
 // api/controllers/eventController.js
 import db from '../models/sequelize/index.js';
 import responseHandler from '../utils/responseHandler.js';
-import { sendEmail } from '../email/email.service.js';
-import { EmailType } from '../email/types.js';
+import NotificationService from '../services/notification/NotificationService.js';
+import { NotificationType } from '../services/notification/notificationTypes.js';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import tz from 'dayjs/plugin/timezone.js';
@@ -11,14 +11,14 @@ dayjs.extend(utc); dayjs.extend(tz);
 
 const TZ = process.env.TIMEZONE || 'America/Sao_Paulo';
 const fmt = (iso) => (iso ? dayjs.utc(iso).tz(TZ).format('dddd, D [de] MMMM [de] YYYY • HH:mm') : '');
- 
-const { Event, User } = db;
+
+const { Event } = db;
 
 export const addEvent = async (req, res) => {
     const {
         title, description, eventDate, tags = [], images = [],
         address = {}, created_by, notification = false,
-        organizers = [], notify_to = { users: [], positions: [], emails: [] }, 
+        organizers = [], notify_to = { users: [], positions: [], emails: [] },
     } = req.body;
 
     try {
@@ -38,35 +38,31 @@ export const addEvent = async (req, res) => {
 
         if (!notification) return;
 
-        // 1) resolve destinatários
-        const set = new Set([...(notify_to.emails || [])]);
-
-        if (notify_to.users?.length) {
-            (await User.findAll({ where: { id: notify_to.users }, attributes: ['email'] }))
-                .forEach(u => u?.email && set.add(u.email));
-        }
-        if (notify_to.positions?.length) {
-            (await User.findAll({ where: { position: { [Op.in]: notify_to.positions } }, attributes: ['email'] }))
-                .forEach(u => u?.email && set.add(u.email));
-        }
-
-        const recipients = [...set].filter(Boolean);
-        if (!recipients.length) return;
-
-        // 2) monta dados do template
-        const data = {
-            title,
-            description,
-            eventDateISO: eventDate,
-            eventDateFormatted: fmt(eventDate),
-            tags,
-            images,
-            address,
-            organizers, 
-        };
-
-        // 3) dispara
-        await sendEmail(EmailType.EVENT_CREATED, recipients, data);
+        // dispara via serviço unificado: persiste in-app + envia e-mail conforme prefs
+        NotificationService.notify({
+            type: NotificationType.EVENT_CREATED,
+            recipients: notify_to,
+            title: `Novo evento: ${title}`,
+            body: description,
+            data: {
+                eventId: created.id,
+                image: Array.isArray(images) ? images[0] : null,
+                eventDateISO: eventDate,
+                eventDateFormatted: fmt(eventDate),
+            },
+            link: `/events?search=${encodeURIComponent(title)}`,
+            importance: 7,
+            emailData: {
+                title,
+                description,
+                eventDateISO: eventDate,
+                eventDateFormatted: fmt(eventDate),
+                tags,
+                images,
+                address,
+                organizers,
+            },
+        }).catch(err => console.error('[event/notify]', err));
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Erro ao criar evento' });

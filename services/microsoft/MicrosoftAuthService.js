@@ -256,8 +256,18 @@ class MicrosoftAuthService {
     // ── JWT da plataforma ─────────────────────────────────────────────────────
 
     generatePlatformToken(user) {
+        // Mantém paridade com o login normal (authController.login). O
+        // authMiddleware já busca city/role/position do banco, então o JWT
+        // serve como fallback e telemetria, não como fonte de autorização.
         return jwt.sign(
-            { id: user.id, role: user.role, email: user.email },
+            {
+                id: user.id,
+                role: user.role,
+                email: user.email,
+                position: user.position ?? null,
+                city: user.city ?? null,
+                auth_provider: user.auth_provider ?? 'microsoft',
+            },
             jwtConfig.secret,
             { expiresIn: jwtConfig.expiresIn }
         );

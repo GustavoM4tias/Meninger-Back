@@ -1,11 +1,29 @@
 // controllers/supportController.js
 import db from '../models/sequelize/index.js';
 import crypto from 'crypto';
-import { sendEmail } from '../email/email.service.js';
-import { EmailType } from '../email/types.js';
-import { fn, col } from 'sequelize';
+import NotificationService from '../services/notification/NotificationService.js';
+import { NotificationType } from '../services/notification/notificationTypes.js';
+import { fn, col, Op } from 'sequelize';
 
 const { SupportTicket, SupportMessage, User } = db;
+
+// E-mails do time de suporte (separados por vírgula no .env)
+const supportTeamEmails = () =>
+    String(process.env.SUPPORT_EMAIL || '')
+        .split(',')
+        .map(e => e.trim())
+        .filter(Boolean);
+
+// IDs dos usuários internos (para receber também via sino)
+async function supportTeamUserIds() {
+    const emails = supportTeamEmails();
+    if (!emails.length) return [];
+    const rows = await User.findAll({
+        where: { email: { [Op.in]: emails }, status: true },
+        attributes: ['id'],
+    });
+    return rows.map(r => r.id);
+}
 
 const genProtocol = () => {
   const ts = Date.now().toString().slice(-6);
@@ -67,25 +85,43 @@ export const createTicket = async (req, res) => {
     // responde http
     res.status(201).json({ message: 'Ticket aberto', protocol, ticketId: ticket.id });
 
-    // e-mails (assíncrono)
-    const mailData = {
+    // notificações (assíncrono)
+    const link = `/support/${ticket.id}`;
+    const baseEmailData = {
       ticketId: `#${protocol}`,
       priority: priorityLabel(priority),
       summary: title,
       latestUpdate: 'Ticket criado',
-      // viewUrl: `${process.env.APP_URL}/support/${ticket.id}`,
     };
 
-    // solicitante
-    email && sendEmail(EmailType.SUPPORT_OPENED, email, mailData)
-      .catch(err => console.error('[email] suporte/opened solicitante', err));
+    // 1) solicitante (quem abriu)
+    NotificationService.notify({
+      type: NotificationType.SUPPORT_OPENED,
+      recipients: {
+        users: requester?.id ? [requester.id] : [],
+        emails: !requester?.id && email ? [email] : [],
+      },
+      title: `Chamado #${protocol} aberto`,
+      body: title,
+      data: { ticketId: ticket.id, protocol, priority },
+      link,
+      importance: 6,
+      emailData: baseEmailData,
+    }).catch(err => console.error('[support/notify solicitante]', err));
 
-    // equipe
-    const SUPPORT_TEAM = process.env.SUPPORT_EMAIL;
-    SUPPORT_TEAM && sendEmail(EmailType.SUPPORT_OPENED, SUPPORT_TEAM, {
-      ...mailData,
-      summary: `${title} — por ${userName} (${email})`,
-    }).catch(err => console.error('[email] suporte/opened equipe', err));
+    // 2) equipe de suporte (todos os e-mails listados em SUPPORT_EMAIL)
+    const teamUserIds = await supportTeamUserIds();
+    const teamEmails = supportTeamEmails();
+    NotificationService.notify({
+      type: NotificationType.SUPPORT_OPENED,
+      recipients: { users: teamUserIds, emails: teamEmails },
+      title: `Novo chamado #${protocol}`,
+      body: `${title} — por ${userName} (${email})`,
+      data: { ticketId: ticket.id, protocol, priority, requester: { name: userName, email } },
+      link,
+      importance: 8,
+      emailData: { ...baseEmailData, summary: `${title} — por ${userName} (${email})` },
+    }).catch(err => console.error('[support/notify equipe]', err));
 
   } catch (err) {
     console.error(err);
@@ -156,16 +192,30 @@ export const addMessage = async (req, res) => {
 
     res.status(201).json({ message: 'Mensagem adicionada', messageId: msg.id });
 
-    // email para solicitante + equipe
-    const recipients = [ticket.requester?.email, process.env.SUPPORT_EMAIL].filter(Boolean);
+    // notifica solicitante + equipe
+    const teamUserIds = await supportTeamUserIds();
+    const teamEmails = supportTeamEmails();
+    const link = `/support/${ticket.id}`;
+    const preview = body.slice(0, 140) + (body.length > 140 ? '…' : '');
     const mailData = {
       ticketId: `#${ticket.protocol}`,
-      latestUpdate: body.slice(0, 140) + (body.length > 140 ? '…' : ''),
+      latestUpdate: preview,
       summary: ticket.title,
     };
 
-    recipients.length && sendEmail(EmailType.SUPPORT_UPDATED, recipients, mailData)
-      .catch(err => console.error('[email] suporte/updated', err));
+    NotificationService.notify({
+      type: NotificationType.SUPPORT_UPDATED,
+      recipients: {
+        users: [ticket.requester_id, ...teamUserIds].filter(Boolean),
+        emails: teamEmails,
+      },
+      title: `Chamado #${ticket.protocol} atualizado`,
+      body: preview,
+      data: { ticketId: ticket.id, protocol: ticket.protocol },
+      link,
+      importance: 6,
+      emailData: mailData,
+    }).catch(err => console.error('[support/notify updated]', err));
 
   } catch (err) {
     console.error(err);
@@ -189,11 +239,27 @@ export const updateStatus = async (req, res) => {
 
     res.json({ message: 'Status atualizado', status });
 
-    const recipients = [ticket.requester?.email, process.env.SUPPORT_EMAIL].filter(Boolean);
-    recipients.length && sendEmail(EmailType.SUPPORT_UPDATED, recipients, {
-      ticketId: `#${ticket.protocol}`,
-      latestUpdate: `Status alterado para "${status}".`,
-    }).catch(err => console.error('[email] suporte/status', err));
+    const teamUserIds = await supportTeamUserIds();
+    const teamEmails = supportTeamEmails();
+    const link = `/support/${ticket.id}`;
+
+    NotificationService.notify({
+      type: NotificationType.SUPPORT_UPDATED,
+      recipients: {
+        users: [ticket.requester_id, ...teamUserIds].filter(Boolean),
+        emails: teamEmails,
+      },
+      title: `Chamado #${ticket.protocol} — ${status}`,
+      body: `Status alterado para "${status}".`,
+      data: { ticketId: ticket.id, protocol: ticket.protocol, status },
+      link,
+      importance: 6,
+      emailData: {
+        ticketId: `#${ticket.protocol}`,
+        latestUpdate: `Status alterado para "${status}".`,
+        summary: ticket.title,
+      },
+    }).catch(err => console.error('[support/notify status]', err));
 
   } catch (err) {
     console.error(err);
