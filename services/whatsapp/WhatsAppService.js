@@ -178,6 +178,102 @@ async function healthCheck() {
 }
 
 /**
+ * Cria um novo template no lado da Meta (entra em IN_REVIEW e depois APPROVED/REJECTED).
+ *
+ * @param {object} params
+ * @param {string} params.name        - slug do template (lowercase, snake_case): 'event_reminder_v1'
+ * @param {string} params.category    - 'UTILITY' | 'MARKETING' | 'AUTHENTICATION'
+ * @param {string} [params.language='pt_BR']
+ * @param {string} params.body        - texto com {{1}}, {{2}}, ...
+ * @param {string[]} [params.examples=[]]  - valores de exemplo para CADA variável (mesma ordem)
+ * @param {string} [params.headerText]     - cabeçalho TEXT opcional
+ * @param {string} [params.footerText]     - rodapé opcional (max 60 chars)
+ * @returns {Promise<{ id: string, status: string, category: string }>}
+ */
+async function createTemplate({ name, category, language = 'pt_BR', body, examples = [], headerText, footerText }) {
+    if (!name) throw new CloudApiError('name é obrigatório', { code: 'NO_NAME' });
+    if (!category) throw new CloudApiError('category é obrigatório', { code: 'NO_CATEGORY' });
+    if (!body) throw new CloudApiError('body é obrigatório', { code: 'NO_BODY' });
+
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: true });
+    if (!cfg?.access_token) throw new CloudApiError('Sem access_token configurado.', { code: 'NO_TOKEN' });
+    if (!cfg.waba_id) throw new CloudApiError('Sem waba_id configurado.', { code: 'NO_WABA' });
+
+    const components = [];
+
+    if (headerText) {
+        components.push({ type: 'HEADER', format: 'TEXT', text: headerText });
+    }
+
+    const bodyComp = { type: 'BODY', text: body };
+    // Se houver variáveis no body, a Meta exige examples
+    const varCount = (body.match(/\{\{\s*\d+\s*\}\}/g) || []).length;
+    if (varCount > 0) {
+        if (!Array.isArray(examples) || examples.length < varCount) {
+            throw new CloudApiError(
+                `Template tem ${varCount} variável(is) no corpo, mas foram passados ${examples.length} exemplo(s).`,
+                { code: 'EXAMPLES_MISMATCH' }
+            );
+        }
+        bodyComp.example = { body_text: [examples.slice(0, varCount).map(String)] };
+    }
+    components.push(bodyComp);
+
+    if (footerText) {
+        components.push({ type: 'FOOTER', text: footerText });
+    }
+
+    const url = `${GRAPH_BASE}/${cfg.api_version}/${cfg.waba_id}/message_templates`;
+
+    try {
+        const { data } = await axios.post(url, {
+            name: String(name).toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+            category: String(category).toUpperCase(),
+            language,
+            components,
+        }, {
+            headers: {
+                Authorization: `Bearer ${cfg.access_token}`,
+                'Content-Type': 'application/json',
+            },
+            timeout: 20000,
+        });
+        return data;
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            apiErr?.error_user_msg || apiErr?.message || err.message || 'Falha ao criar template',
+            { status: err.response?.status, code: apiErr?.code, details: err.response?.data }
+        );
+    }
+}
+
+/**
+ * Remove um template na Meta (por nome — apaga todas as versões em todos os idiomas).
+ */
+async function deleteTemplate({ name }) {
+    if (!name) throw new CloudApiError('name é obrigatório', { code: 'NO_NAME' });
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: true });
+    if (!cfg?.access_token || !cfg?.waba_id) {
+        throw new CloudApiError('Config incompleta.', { code: 'BAD_CONFIG' });
+    }
+    const url = `${GRAPH_BASE}/${cfg.api_version}/${cfg.waba_id}/message_templates`;
+    try {
+        const { data } = await axios.delete(url, {
+            params: { name, access_token: cfg.access_token },
+            timeout: 15000,
+        });
+        return data;
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            apiErr?.message || err.message,
+            { status: err.response?.status, code: apiErr?.code, details: err.response?.data }
+        );
+    }
+}
+
+/**
  * Descobre a árvore de Business → WABAs → Phone Numbers a partir de um access_token
  * (System User token recomendado). Usado pelo Setup Wizard pra preencher tudo
  * automaticamente em vez de obrigar o admin a copiar 5 IDs do Meta Business.
@@ -268,6 +364,8 @@ export default {
     sendTemplate,
     sendText,
     fetchTemplates,
+    createTemplate,
+    deleteTemplate,
     healthCheck,
     discoverFromToken,
     normalizePhone,
