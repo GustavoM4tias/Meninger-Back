@@ -116,6 +116,11 @@ import WhatsappConfigDefine from './whatsapp/whatsappConfig.js';
 import WhatsappTemplateDefine from './whatsapp/whatsappTemplate.js';
 import WhatsappMessageDefine from './whatsapp/whatsappMessage.js';
 
+// Alertas (gerenciados via Eme AI)
+import AlertRuleDefine         from './alerts/alertRule.js';
+import AlertTriggerLogDefine   from './alerts/alertTriggerLog.js';
+import AlertPendingReplyDefine from './alerts/alertPendingReply.js';
+
 const env = process.env.NODE_ENV || 'development';
 
 const cfg = config[env];
@@ -238,6 +243,11 @@ db.NotificationPreference = NotificationPreferenceDefine(sequelize, DataTypes);
 db.WhatsappConfig   = WhatsappConfigDefine(sequelize, DataTypes);
 db.WhatsappTemplate = WhatsappTemplateDefine(sequelize, DataTypes);
 db.WhatsappMessage  = WhatsappMessageDefine(sequelize, DataTypes);
+
+// Alertas
+db.AlertRule         = AlertRuleDefine(sequelize, DataTypes);
+db.AlertTriggerLog   = AlertTriggerLogDefine(sequelize, DataTypes);
+db.AlertPendingReply = AlertPendingReplyDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

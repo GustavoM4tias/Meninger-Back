@@ -50,7 +50,7 @@ export const addEvent = async (req, res) => {
                 eventDateISO: eventDate,
                 eventDateFormatted: fmt(eventDate),
             },
-            link: `/events?search=${encodeURIComponent(title)}`,
+            link: `/marketing/Events?search=${encodeURIComponent(title)}`,
             importance: 7,
             emailData: {
                 title,
@@ -158,6 +158,20 @@ export const deleteEvent = async (req, res) => {
     try {
         const deleted = await Event.destroy({ where: { id } });
         if (!deleted) return responseHandler.error(res, 'Evento não encontrado');
+
+        // Cascade: remove notificações in-app relacionadas a esse evento
+        // (data->>'eventId' guarda o id em formato texto no Postgres)
+        try {
+            await db.Notification.destroy({
+                where: db.Sequelize.where(
+                    db.Sequelize.literal(`data->>'eventId'`),
+                    String(id)
+                ),
+            });
+        } catch (e) {
+            console.warn('[eventDelete] falha ao limpar notificações do evento', id, e?.message);
+        }
+
         responseHandler.success(res, 'Evento excluído com sucesso');
     } catch (error) {
         responseHandler.error(res, error.message);

@@ -31,6 +31,7 @@ import officeChatRoutes from './routes/officeChatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
+import alertRoutes from './routes/alertRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -51,6 +52,7 @@ import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateSch
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
+import AlertEngine from './services/alerts/AlertEngine.js';
 
 const app = express();
 
@@ -100,6 +102,7 @@ app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/alerts', alertRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -130,19 +133,20 @@ async function bootServer() {
 
   // Garante que tabelas críticas tenham todas as colunas atualizadas
   for (const [name, model] of [
-    // ['User', db.User],
+    ['User', db.User],                       // adicionar daily_alert_limit
+    ['AlertTriggerLog', db.AlertTriggerLog], // adicionar enum suppressed_daily_limit
+    ['AlertPendingReply', db.AlertPendingReply], // novo enum (awaiting_reply) + meta_message_id
     // ['EnterpriseCondition', db.EnterpriseCondition],
     // ['EnterpriseConditionModule', db.EnterpriseConditionModule],
     // ['EnterpriseConditionCampaign', db.EnterpriseConditionCampaign],
     // ['McmvMunicipio', db.McmvMunicipio],
     // ['McmvImportLog', db.McmvImportLog],
     // ['SiengeBackupLog', db.SiengeBackupLog],
-    ['Notification', db.Notification],
-    ['NotificationPreference', db.NotificationPreference],
-    ['User', db.User],
-    ['WhatsappConfig', db.WhatsappConfig],
-    ['WhatsappTemplate', db.WhatsappTemplate],
-    ['WhatsappMessage', db.WhatsappMessage],
+    // ['Notification', db.Notification],
+    // ['NotificationPreference', db.NotificationPreference],
+    // ['WhatsappConfig', db.WhatsappConfig],
+    // ['WhatsappTemplate', db.WhatsappTemplate],
+    // ['WhatsappMessage', db.WhatsappMessage],
   ]) {
     try {
       await model.sync({ alter: true });
@@ -172,6 +176,7 @@ async function bootServer() {
   boletoCleanupScheduler.start();         // remove boletos expirados do Supabase
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
   eventReminderScheduler.start();         // lembretes de evento (D-1) via NotificationService
+  await AlertEngine.boot();               // registra crons das alert_rules salvas
 
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta: ${PORT}`);

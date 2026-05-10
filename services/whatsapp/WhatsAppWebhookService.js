@@ -3,18 +3,20 @@
 // Processa eventos recebidos no webhook da Cloud API:
 //  - statuses: sent, delivered, read, failed (atualiza WhatsappMessage por meta_message_id)
 //  - messages: mensagens recebidas (registra como direction='in' — base para atendimento)
-//  - palavras-chave de opt-out ("PARAR", "SAIR", "STOP") -> revoga consentimento
 //
 // Também valida o payload via X-Hub-Signature-256 quando o app_secret está configurado.
+//
+// Política de opt-out: o cancelamento é feito SOMENTE pelo painel /settings/Account
+// (não há atalho por palavra-chave no WhatsApp). Mensagens recebidas são apenas
+// registradas em whatsapp_messages para o futuro fluxo de atendimento.
 
 import crypto from 'crypto';
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import WhatsAppConfigService from './WhatsAppConfigService.js';
+import AlertReplyHandler from '../alerts/AlertReplyHandler.js';
 
 const { WhatsappMessage, User } = db;
-
-const OPT_OUT_KEYWORDS = ['parar', 'sair', 'stop', 'cancelar', 'descadastrar'];
 
 // ─── Verificação de assinatura ────────────────────────────────────────────────
 
@@ -101,16 +103,6 @@ async function handleIncomingMessage(m, fromPhone) {
         default: body = m[type]?.caption || null;
     }
 
-    // Opt-out automático por palavra-chave
-    const lower = (body || '').trim().toLowerCase();
-    if (OPT_OUT_KEYWORDS.includes(lower)) {
-        await User.update(
-            { whatsapp_consent_revoked_at: new Date() },
-            { where: { whatsapp_phone: { [Op.like]: `%${fromPhone.slice(-9)}` } } }
-        );
-        console.log('[whatsapp/webhook] opt-out automático para', fromPhone);
-    }
-
     // Tenta amarrar a um user pelo telefone (últimos 9 dígitos = celular sem DDI)
     let userId = null;
     if (fromPhone) {
@@ -134,6 +126,17 @@ async function handleIncomingMessage(m, fromPhone) {
         raw_payload: m,
         sent_at: m.timestamp ? new Date(Number(m.timestamp) * 1000) : new Date(),
     });
+
+    // Encaminha pra fluxo de alertas APENAS se for resposta a uma mensagem específica
+    // (recurso "Responder" do WhatsApp → context.id presente no payload).
+    // Mensagens soltas no número do sistema não disparam relatório.
+    const contextId = m?.context?.id || null;
+    console.log(`[whatsapp/webhook] inbound type=${type} from=${fromPhone} body="${body}" contextId=${contextId || 'NONE'}`);
+    try {
+        await AlertReplyHandler.handleInbound({ fromPhone, body, contextId });
+    } catch (err) {
+        console.error('[whatsapp/webhook] AlertReplyHandler erro:', err?.message || err);
+    }
 }
 
 /**

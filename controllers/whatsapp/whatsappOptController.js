@@ -35,17 +35,22 @@ const toE164 = (s) => `+${WhatsAppService.normalizePhone(s)}`;
 /**
  * GET /api/whatsapp/opt
  * Estado do opt-in do usuário logado.
+ *
+ * Também devolve `account_phone` (o `phone` cadastrado no perfil) — usado pra
+ * sugerir o número quando o usuário ainda não fez opt-in mas já tem telefone
+ * no cadastro.
  */
 export const getOptStatus = async (req, res) => {
     try {
         const u = await User.findByPk(req.user.id, {
-            attributes: ['whatsapp_phone', 'whatsapp_consent_at', 'whatsapp_consent_revoked_at'],
+            attributes: ['phone', 'whatsapp_phone', 'whatsapp_consent_at', 'whatsapp_consent_revoked_at'],
         });
         const consented = !!u?.whatsapp_consent_at &&
             (!u?.whatsapp_consent_revoked_at ||
                 new Date(u.whatsapp_consent_at) > new Date(u.whatsapp_consent_revoked_at));
         return res.json({
             phone: u?.whatsapp_phone || null,
+            account_phone: u?.phone || null,
             consented,
             consent_at: u?.whatsapp_consent_at || null,
             revoked_at: u?.whatsapp_consent_revoked_at || null,

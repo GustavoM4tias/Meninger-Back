@@ -5,6 +5,7 @@ import db from '../../models/sequelize/index.js';
 import { buildSystemPrompt } from './systemPrompt.js';
 import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
 import { TOOL_DECLARATIONS as COMERCIAL_DECLARATIONS, executeTool as comercialExecuteTool } from './ComercialTools.js';
+import { TOOL_DECLARATIONS as ALERT_DECLARATIONS,     executeTool as alertExecuteTool }     from './AlertTools.js';
 
 // Registry: nome → { declaration, executor }
 const TOOLS = new Map();
@@ -13,6 +14,7 @@ function registerTools(declarations, executor) {
 }
 registerTools(MARKETING_DECLARATIONS, marketingExecuteTool);
 registerTools(COMERCIAL_DECLARATIONS, comercialExecuteTool);
+registerTools(ALERT_DECLARATIONS,     alertExecuteTool);
 
 const TOOL_DECLARATIONS = [...TOOLS.values()].map(t => t.declaration);
 
@@ -21,6 +23,9 @@ async function executeTool(name, args, user) {
   if (!tool) return { error: `Ferramenta desconhecida: ${name}` };
   return tool.executor(name, args, user);
 }
+
+// Exports para reuso fora do chat (ex: AlertReportService re-executa as mesmas tools)
+export { executeTool, TOOLS, TOOL_DECLARATIONS };
 
 dotenv.config();
 
@@ -170,8 +175,18 @@ async function buildHistory(sessionId) {
 
   return messages.map(m => {
     let text = m.content;
-    if (m.role === 'assistant' && m.response_type !== 'text') {
-      try { text = JSON.parse(m.content).text || ''; } catch { /* mantém */ }
+    if (m.role === 'assistant' && m.content) {
+      // Tenta parsear se for estruturado OU se parecer JSON {text, action} salvo
+      // antes do fix do response_type (defensivo).
+      const looksJson = typeof m.content === 'string' && m.content.trimStart().startsWith('{');
+      if (m.response_type !== 'text' || looksJson) {
+        try {
+          const parsed = JSON.parse(m.content);
+          if (parsed && (parsed.text !== undefined || parsed.action !== undefined)) {
+            text = parsed.text || '';
+          }
+        } catch { /* mantém content original */ }
+      }
     }
     return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
   });
@@ -427,8 +442,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
     fullAssistantText = cleanedFinal;
   }
 
-  // Salva resposta final do assistente
-  const responseType = actionResult?.type || 'text';
+  // Salva resposta final do assistente.
+  // Quando há actionResult, SEMPRE salva como JSON {text, action} e usa um
+  // response_type ≠ 'text' (assim parseMessage no front desserializa o JSON).
+  // Tools que não definem `type` próprio caem em 'action' genérico.
+  const responseType = actionResult ? (actionResult.type || 'action') : 'text';
   const contentToSave = actionResult
     ? JSON.stringify({ text: fullAssistantText, action: actionResult })
     : fullAssistantText;

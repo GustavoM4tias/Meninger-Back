@@ -188,9 +188,12 @@ async function healthCheck() {
  * @param {string[]} [params.examples=[]]  - valores de exemplo para CADA variável (mesma ordem)
  * @param {string} [params.headerText]     - cabeçalho TEXT opcional
  * @param {string} [params.footerText]     - rodapé opcional (max 60 chars)
+ * @param {Array<{text:string}>} [params.buttons=[]] - até 3 botões Quick Reply.
+ *        Quando user toca, a Meta envia inbound com `button.text` = texto do botão.
+ *        Exemplo: [{ text: 'SIM' }, { text: 'NÃO' }]
  * @returns {Promise<{ id: string, status: string, category: string }>}
  */
-async function createTemplate({ name, category, language = 'pt_BR', body, examples = [], headerText, footerText }) {
+async function createTemplate({ name, category, language = 'pt_BR', body, examples = [], headerText, footerText, buttons = [] }) {
     if (!name) throw new CloudApiError('name é obrigatório', { code: 'NO_NAME' });
     if (!category) throw new CloudApiError('category é obrigatório', { code: 'NO_CATEGORY' });
     if (!body) throw new CloudApiError('body é obrigatório', { code: 'NO_BODY' });
@@ -221,6 +224,19 @@ async function createTemplate({ name, category, language = 'pt_BR', body, exampl
 
     if (footerText) {
         components.push({ type: 'FOOTER', text: footerText });
+    }
+
+    // Quick Reply buttons (até 3). Quando user toca, inbound chega com:
+    //   - type: 'button', button: { text: 'SIM', payload: 'SIM' }
+    //   - context.id = wamid da mensagem template — perfeito pra amarrar ao alerta
+    if (Array.isArray(buttons) && buttons.length) {
+        const valid = buttons.filter(b => b?.text).slice(0, 3);
+        if (valid.length) {
+            components.push({
+                type: 'BUTTONS',
+                buttons: valid.map(b => ({ type: 'QUICK_REPLY', text: String(b.text).slice(0, 25) })),
+            });
+        }
     }
 
     const url = `${GRAPH_BASE}/${cfg.api_version}/${cfg.waba_id}/message_templates`;

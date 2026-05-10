@@ -11,7 +11,7 @@
 //     title: `Novo evento: ${event.title}`,
 //     body:  event.description,
 //     data:  { eventId: event.id, image: event.images?.[0] },
-//     link:  `/events?search=${encodeURIComponent(event.title)}`,
+//     link:  `/marketing/Events?search=${encodeURIComponent(event.title)}`,
 //     importance: 7,
 //     emailData:    { ... payload pro template Handlebars ... },   // opcional
 //     whatsappData: { userName, title, eventDateFormatted, ... },  // opcional (default = data + emailData)
@@ -208,6 +208,7 @@ async function notify({
     emailData = null,
     whatsappData = null,
     expiresAt = null,
+    bypassPrefs = false,    // se true, ignora preferências/defaults do user — usa channels diretamente
 } = {}) {
     if (!type) throw new Error('NotificationService.notify: "type" é obrigatório.');
     if (!title) throw new Error('NotificationService.notify: "title" é obrigatório.');
@@ -259,7 +260,8 @@ async function notify({
             }
 
             // 3) whatsapp (envia individual — template + variáveis por user)
-            if (pref.whatsapp && whatsappSpec && userHasActiveConsent(u)) {
+            const hasConsent = userHasActiveConsent(u);
+            if (pref.whatsapp && whatsappSpec && hasConsent) {
                 const ctx = { ...wppContext, userName: u.username || '', email: u.email || '' };
                 try {
                     const msg = await dispatchWhatsApp({
@@ -275,6 +277,23 @@ async function notify({
                     if (msg) whatsappQueued++;
                 } catch (err) {
                     console.error(`[notify] whatsapp falhou para user ${u.id}:`, err?.message || err);
+                }
+            } else {
+                // Log de diagnóstico — só quando o catálogo TEM template mas algo bloqueou
+                if (whatsappSpec) {
+                    const reasons = [];
+                    if (!pref.whatsapp) reasons.push('preferência whatsapp OFF');
+                    if (!hasConsent) {
+                        if (!u.whatsapp_phone) reasons.push('sem whatsapp_phone');
+                        else if (!u.whatsapp_consent_at) reasons.push('sem whatsapp_consent_at (opt-in)');
+                        else if (u.whatsapp_consent_revoked_at &&
+                            new Date(u.whatsapp_consent_revoked_at) > new Date(u.whatsapp_consent_at)) {
+                            reasons.push('opt-in revogado');
+                        }
+                    }
+                    console.log(
+                        `[notify ${type}] whatsapp pulado para user ${u.id} (${u.username}): ${reasons.join(', ')}`
+                    );
                 }
             }
         }

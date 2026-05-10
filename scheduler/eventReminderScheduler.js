@@ -50,7 +50,7 @@ async function runReminders() {
                     eventDateISO: ev.event_date,
                     eventDateFormatted: fmt(ev.event_date),
                 },
-                link: `/events?search=${encodeURIComponent(ev.title)}`,
+                link: `/marketing/Events?search=${encodeURIComponent(ev.title)}`,
                 importance: 8,
                 emailData: {
                     title: ev.title,
