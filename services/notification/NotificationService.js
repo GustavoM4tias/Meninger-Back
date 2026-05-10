@@ -230,10 +230,18 @@ async function notify({
 
     if (internalUsers.length) {
         const userIds = internalUsers.map(u => u.id);
-        const prefMap = await loadPrefsForUsers(userIds, type);
+        const prefMap = bypassPrefs ? new Map() : await loadPrefsForUsers(userIds, type);
 
         for (const u of internalUsers) {
-            const pref = effectivePref(prefMap.get(u.id), defaults, channels);
+            // Quando bypassPrefs=true, usa os channels diretamente — sem AND com prefs/defaults.
+            // Útil pra alertas onde o user já escolheu os canais ao criar a regra.
+            const pref = bypassPrefs
+                ? {
+                    inapp:    !!channels.inapp,
+                    email:    !!channels.email,
+                    whatsapp: !!channels.whatsapp,
+                }
+                : effectivePref(prefMap.get(u.id), defaults, channels);
 
             // 1) in-app (cria a row)
             let createdNotif = null;

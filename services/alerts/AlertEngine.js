@@ -29,6 +29,7 @@ import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
 import AlertReportService from './AlertReportService.js';
+import { toolToRoute } from './toolToRoute.js';
 
 const { AlertRule, AlertTriggerLog, AlertPendingReply, User, WhatsappMessage } = db;
 
@@ -113,7 +114,7 @@ async function fire(ruleId, { force = false } = {}) {
     }
 
     // 1) Executa a tool
-    const { preview, report, raw } = await AlertReportService.execute(rule, owner);
+    const { preview, report, raw, resolvedToolCall } = await AlertReportService.execute(rule, owner);
 
     // 2) Renderiza title/preview
     const ctx = {
@@ -128,22 +129,31 @@ async function fire(ruleId, { force = false } = {}) {
 
     const channels = rule.channels || { inapp: true, email: false, whatsapp: true };
 
+    // Link: tenta gerar uma rota com filtros baseado na tool. Click no sino
+    // abre direto o relatório no contexto da consulta.
+    const link = toolToRoute(resolvedToolCall) || `/settings/alerts`;
+
     // 3) In-app + e-mail via NotificationService (recipients = só o owner)
+    // bypassPrefs=true: respeita os channels que o user escolheu na CRIAÇÃO do alerta,
+    // sem cair no AND com prefs/defaults do tipo (que pra GENERIC são email=false).
     const notifyResult = await NotificationService.notify({
         type: NotificationType.GENERIC,    // tipo agnóstico — cada alerta é único
         recipients: { users: [owner.id] },
         title,
         body: previewText,
-        data: { alert_rule_id: rule.id, source: 'alert' },
+        data: { alert_rule_id: rule.id, source: 'alert', tool: resolvedToolCall?.tool },
+        link,
         importance: 6,
         channels: {
             inapp: !!channels.inapp,
             email: !!channels.email,
             whatsapp: false,                // WhatsApp tratado separado abaixo (fluxo 2 msgs)
         },
+        bypassPrefs: true,
         emailData: {
             title,
             body: report,                   // no e-mail mandamos o relatório completo direto
+            preview: previewText,
         },
     }).catch(err => {
         console.error('[AlertEngine] notify falhou:', err?.message || err);

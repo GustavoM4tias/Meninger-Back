@@ -160,6 +160,8 @@ async function execute(rule, user) {
             preview: buildPreview(raw, rule.name),
             report:  buildReport(raw, rule.name),
             raw,
+            // tool_call com placeholders já resolvidos — usado pra montar links
+            resolvedToolCall: { tool: name, args: resolvedArgs },
         };
     } catch (err) {
         console.error(`[AlertReportService] tool ${name} falhou:`, err);
@@ -167,6 +169,7 @@ async function execute(rule, user) {
             preview: 'Erro ao gerar relatório',
             report:  `❌ Erro ao executar "${name}": ${err.message}`,
             raw:     { error: err.message },
+            resolvedToolCall: { tool: name, args: resolvedArgs },
         };
     }
 }
