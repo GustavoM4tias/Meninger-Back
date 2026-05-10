@@ -39,12 +39,13 @@ export const getTemplate = async (req, res) => {
  */
 export const createTemplate = async (req, res) => {
     try {
-        const { name, category, language, body, examples, headerText, footerText } = req.body || {};
+        const { name, category, language, body, examples, headerText, footerText, buttons } = req.body || {};
         const meta = await WhatsAppService.createTemplate({
             name, category, language: language || 'pt_BR', body,
             examples: examples || [],
             headerText: headerText || undefined,
             footerText: footerText || undefined,
+            buttons: Array.isArray(buttons) ? buttons : [],
         });
         // sincroniza tudo após criar (forma simples de atualizar a lista local)
         await WhatsAppTemplateService.syncFromMeta().catch(() => null);

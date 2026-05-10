@@ -74,6 +74,11 @@ export default (sequelize, DataTypes) => {
     whatsapp_phone:                { type: DataTypes.STRING(20),  allowNull: true }, // E.164 ex: +5511999999999
     whatsapp_consent_at:           { type: DataTypes.DATE,        allowNull: true },
     whatsapp_consent_revoked_at:   { type: DataTypes.DATE,        allowNull: true },
+
+    // Limite diário de disparos de alerta (configurável pelo admin por usuário).
+    // Conta TODOS os disparos do user no dia, somando todas as suas regras.
+    // Disparos acima do limite são suprimidos (status='suppressed_daily_limit').
+    daily_alert_limit: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 5 },
   }, {
     tableName: 'users',
     underscored: true,

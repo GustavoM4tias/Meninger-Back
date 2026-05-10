@@ -578,7 +578,8 @@ export const updateUser = async (req, res) => {
     status,
     birth_date,
     show_in_organogram,
-    phone
+    phone,
+    daily_alert_limit,
   } = req.body;
 
   if (!id) {
@@ -600,6 +601,10 @@ export const updateUser = async (req, res) => {
     if (show_in_organogram !== undefined) payload.show_in_organogram = show_in_organogram;
     if (phone !== undefined) payload.phone = phone || null;
     if (role !== undefined) payload.role = role;
+    if (daily_alert_limit !== undefined) {
+      const n = Number(daily_alert_limit);
+      payload.daily_alert_limit = Number.isFinite(n) && n >= 0 ? Math.min(n, 200) : 5;
+    }
 
     if (position !== undefined) {
       if (!position) {
@@ -654,7 +659,7 @@ export const updateUser = async (req, res) => {
 export const getAllUsers = async (req, res) => {
   try {
     const users = await User.findAll({
-      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update', 'microsoft_id', 'sienge_email', 'show_in_organogram', 'auth_provider', 'phone'],
+      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update', 'microsoft_id', 'sienge_email', 'show_in_organogram', 'auth_provider', 'phone', 'daily_alert_limit'],
       include: [
         {
           model: User,
