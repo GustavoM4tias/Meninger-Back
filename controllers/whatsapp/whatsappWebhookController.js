@@ -11,13 +11,17 @@ import WhatsAppWebhookService from '../../services/whatsapp/WhatsAppWebhookServi
 
 /** GET — handshake */
 export const verify = async (req, res) => {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+    console.log(`[whatsapp/webhook] GET hit mode=${mode} token=${token ? '(presente)' : '(vazio)'} challenge=${challenge || '-'}`);
     try {
-        const mode = req.query['hub.mode'];
-        const token = req.query['hub.verify_token'];
-        const challenge = req.query['hub.challenge'];
-
         const ok = await WhatsAppWebhookService.verifyHandshake({ mode, token, challenge });
-        if (ok) return res.status(200).send(ok);
+        if (ok) {
+            console.log('[whatsapp/webhook] handshake OK');
+            return res.status(200).send(ok);
+        }
+        console.warn('[whatsapp/webhook] handshake REJEITADO — verify_token não bate ou mode não é subscribe');
         return res.status(403).send('forbidden');
     } catch (err) {
         console.error('[whatsapp/webhook/verify]', err);
