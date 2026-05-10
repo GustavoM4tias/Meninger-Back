@@ -77,6 +77,30 @@ function safeRender(template, ctx) {
     }
 }
 
+// Converte markdown WhatsApp básico → HTML pra ficar legível no email.
+//   *texto* → <strong>texto</strong>
+//   _texto_ → <em>texto</em>
+//   ~texto~ → <del>texto</del>
+//   \n      → <br>
+// Escapa HTML antes pra evitar injection.
+function whatsappToHtml(text) {
+    if (!text) return '';
+    let s = String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    // Negrito *texto* (não captura ** nem espaços nas pontas)
+    s = s.replace(/(^|[\s(])\*([^\s*][^*\n]*?[^\s*]|[^\s*])\*(?=[\s).,!?;:]|$)/g, '$1<strong>$2</strong>');
+    // Itálico _texto_
+    s = s.replace(/(^|[\s(])_([^\s_][^_\n]*?[^\s_]|[^\s_])_(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>');
+    // Strike ~texto~
+    s = s.replace(/(^|[\s(])~([^\s~][^~\n]*?[^\s~]|[^\s~])~(?=[\s).,!?;:]|$)/g, '$1<del>$2</del>');
+    // Quebras de linha
+    s = s.replace(/\n/g, '<br>');
+    return s;
+}
+
 // ─── Disparo individual ──────────────────────────────────────────────────────
 
 async function fire(ruleId, { force = false } = {}) {
@@ -152,8 +176,9 @@ async function fire(ruleId, { force = false } = {}) {
         bypassPrefs: true,
         emailData: {
             title,
-            body: report,                   // no e-mail mandamos o relatório completo direto
             preview: previewText,
+            body: report,                       // texto plano (fallback)
+            bodyHtml: whatsappToHtml(report),   // formatado pro email
         },
     }).catch(err => {
         console.error('[AlertEngine] notify falhou:', err?.message || err);
