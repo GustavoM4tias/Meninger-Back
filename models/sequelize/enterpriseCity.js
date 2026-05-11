@@ -24,12 +24,10 @@ export default (sequelize, DataTypes) => {
         raw_payload: { type: DataTypes.JSONB, defaultValue: {} },
 
         first_seen_at: { type: DataTypes.DATE },
-        last_seen_at: { type: DataTypes.DATE },
-
-        // ── Monitoramento de auto-sync de bills ──────────────────────
-        auto_sync_last_run_at: { type: DataTypes.DATE },
-        auto_sync_last_status: { type: DataTypes.STRING(20) },   // 'success' | 'error' | 'running'
-        auto_sync_last_summary: { type: DataTypes.JSONB },
+        last_seen_at: { type: DataTypes.DATE }
+        // NOTA: status do auto-sync de bills NÃO é armazenado aqui — é derivado
+        // do último registro em bills_sync_logs por enterprise_city_id. enterprise_cities
+        // tem coluna ENUM (source) que bloqueia adições de coluna via sync({ alter: true }).
     }, {
         tableName: 'enterprise_cities',
         underscored: true,

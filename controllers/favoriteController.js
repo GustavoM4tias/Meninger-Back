@@ -2,15 +2,37 @@ import db from '../models/sequelize/index.js';
 const { Favorite } = db;
 
 // Adicionar favorito
+//
+// Idempotente: usa findOrCreate. Passa created_at explícito porque o model tem
+// timestamps: false e o DEFAULT NOW() pode não ter sido criado na tabela em ambientes antigos.
 export const addFavorite = async (req, res) => {
     const { router, section } = req.body;
     const userId = req.user.id;
+
+    if (!router || !section) {
+        return res.status(400).json({ message: 'router e section são obrigatórios.' });
+    }
+
     try {
-        await Favorite.create({ user_id: userId, router, section });
-        return res.status(201).json({ message: 'Favorito adicionado com sucesso!' });
+        const [fav, created] = await Favorite.findOrCreate({
+            where: { user_id: userId, router, section },
+            defaults: {
+                user_id: userId,
+                router,
+                section,
+                created_at: new Date(),
+            },
+        });
+        return res.status(created ? 201 : 200).json({
+            message: created ? 'Favorito adicionado.' : 'Favorito já existia.',
+            favorite: fav,
+        });
     } catch (error) {
-        console.error(error);
-        return res.status(500).json({ message: 'Erro ao adicionar favorito.' });
+        console.error('[Favorite.add] erro:', error);
+        return res.status(500).json({
+            message: 'Erro ao adicionar favorito.',
+            detail: error?.message,
+        });
     }
 };
 

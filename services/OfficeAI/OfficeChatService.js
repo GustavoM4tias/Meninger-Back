@@ -232,6 +232,7 @@ async function getLastBridgeContext(sessionId) {
   const bits = [];
   if (c.source)                 bits.push(`source=${c.source}`);
   if (c.data_inicio || c.data_fim) bits.push(`periodo=${c.data_inicio || '?'}..${c.data_fim || '?'}`);
+  if (c.cidade)                 bits.push(`cidade=${c.cidade}`);
   if (c.bucket)                 bits.push(`bucket=${c.bucket}`);
   if (c.empreendimento)         bits.push(`empreendimento=${c.empreendimento}`);
   if (c.empresa_correspondente) bits.push(`cca=${c.empresa_correspondente}`);

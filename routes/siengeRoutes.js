@@ -32,6 +32,7 @@ import {
     listAutoSyncStatus,
     runAutoSyncNow,
     listSyncLog,
+    setRecurring,
 } from '../controllers/sienge/billsAutoSyncController.js';
 
 
@@ -68,6 +69,7 @@ router.get('/bills/sync-enterprise/status/:costCenterId', authenticate, ctrl.get
 // Auto-sync diário de bills (monitoramento + disparo manual)
 router.get('/bills/auto-sync', authenticate, listAutoSyncStatus);
 router.post('/bills/auto-sync/run-now', authenticate, runAutoSyncNow);
+router.post('/bills/auto-sync/recurring', authenticate, setRecurring);
 router.get('/bills/sync-log', authenticate, listSyncLog);
 
 router.post("/awards/nfse", authenticate, upload.single("file"), uploadNfseAward);
