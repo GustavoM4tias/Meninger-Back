@@ -33,18 +33,6 @@ export default class expenseController {
           .json({ error: 'costCenterId, month e amount são obrigatórios' });
       }
 
-      // ✅ LOG 1: entrada do controller (antes do service)
-      console.log('[ExpenseController.add] body', {
-        costCenterId,
-        month,
-        billId,
-        amount,
-        installmentNumber,
-        installmentsNumber,
-        departmentName,
-        departmentCategoryId,
-      });
-
       const exp = await this.service.addExpense({
         costCenterId,
         costCenterName,
@@ -60,16 +48,6 @@ export default class expenseController {
         // ✅ repassa pro service gravar no Expense
         installmentNumber,
         installmentsNumber,
-      });
-
-      // ✅ LOG 2: retorno do service (após create)
-      console.log('[ExpenseController.add] created', {
-        id: exp?.id,
-        billId: exp?.bill_id,
-        competence_month: exp?.competence_month,
-        installment_number: exp?.installment_number,
-        installments_number: exp?.installments_number,
-        amount: exp?.amount,
       });
 
       res.json(exp);
@@ -127,23 +105,21 @@ export default class expenseController {
     }
   };
 
-  // PUT /api/expenses/:id 
+  // PUT /api/expenses/:id
+  // Atenção: 'amount' é deliberadamente ignorado — o valor da parcela vem do Sienge e não pode ser alterado manualmente.
   update = async (req, res) => {
     try {
       const { id } = req.params;
       const {
-        amount,
         description,
         departmentId,
         departmentName,
-        // 👇 NOVO
         departmentCategoryId,
         departmentCategoryName,
       } = req.body;
 
       const exp = await this.service.updateExpense({
         id: Number(id),
-        amount,
         description,
         departmentId,
         departmentName,

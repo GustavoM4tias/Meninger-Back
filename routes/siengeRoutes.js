@@ -27,8 +27,12 @@ import {
     listBackups,
     getBackup,
     triggerBackup,
-    triggerImportOnly,
 } from '../controllers/sienge/backupController.js';
+import {
+    listAutoSyncStatus,
+    runAutoSyncNow,
+    listSyncLog,
+} from '../controllers/sienge/billsAutoSyncController.js';
 
 
 const router = express.Router();
@@ -61,6 +65,11 @@ router.get('/bills', authenticate, ctrl.list);
 router.post('/bills/sync-enterprise', authenticate, ctrl.startEnterpriseSync);
 router.get('/bills/sync-enterprise/status/:costCenterId', authenticate, ctrl.getEnterpriseSyncStatus);
 
+// Auto-sync diário de bills (monitoramento + disparo manual)
+router.get('/bills/auto-sync', authenticate, listAutoSyncStatus);
+router.post('/bills/auto-sync/run-now', authenticate, runAutoSyncNow);
+router.get('/bills/sync-log', authenticate, listSyncLog);
+
 router.post("/awards/nfse", authenticate, upload.single("file"), uploadNfseAward);
 router.post("/awards/nfse/bulk", authenticate, upload.single("file"), bulkAttachNfse);
 router.post("/awards/nfse/clear", authenticate, clearNfseFromAwards);
@@ -90,11 +99,10 @@ router.get('/launch-types', authenticate, listLaunchTypes);
 router.post('/launch-types', authenticate, createLaunchType);
 router.patch('/launch-types/:id', authenticate, updateLaunchType);
 
-// ── Backup do banco Sienge (cron + log + bucket Oracle Cloud) ─────────────────
+// ── Backup do banco Sienge (cron + log + pg_restore no Postgres Railway) ──────
 router.get('/backups', authenticate, listBackups);
 router.get('/backups/:id', authenticate, getBackup);
 router.post('/backups/trigger', authenticate, triggerBackup);
-router.post('/backups/trigger-import', authenticate, triggerImportOnly);
 
 // ── Empreendimentos (enterprise_cities) ───────────────────────────────────────
 router.get('/payment-flow/enterprises', authenticate, listFlowEnterprises);   // ?q=termo

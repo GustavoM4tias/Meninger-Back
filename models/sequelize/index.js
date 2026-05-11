@@ -58,6 +58,7 @@ import SiengeAwardLogDefine from './sienge/awardLog.js';
 import PaymentLaunchDefine from './sienge/paymentLaunch.js';
 import LaunchTypeConfigDefine from './sienge/launchTypeConfig.js';
 import SiengeBackupLogDefine from './sienge/backupLog.js';
+import BillsSyncLogDefine from './sienge/billsSyncLog.js';
 
 import AcademyArticleDefine from './academy/article.js';
 import AcademyTopicDefine from './academy/topic.js';
@@ -186,6 +187,7 @@ db.AwardLog = SiengeAwardLogDefine(sequelize, DataTypes);
 db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);
 db.LaunchTypeConfig = LaunchTypeConfigDefine(sequelize, DataTypes);
 db.SiengeBackupLog = SiengeBackupLogDefine(sequelize, DataTypes);
+db.BillsSyncLog    = BillsSyncLogDefine(sequelize, DataTypes);
 
 db.AcademyArticle = AcademyArticleDefine(sequelize, DataTypes);
 db.AcademyTopic = AcademyTopicDefine(sequelize, DataTypes);

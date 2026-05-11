@@ -24,7 +24,12 @@ export default (sequelize, DataTypes) => {
         raw_payload: { type: DataTypes.JSONB, defaultValue: {} },
 
         first_seen_at: { type: DataTypes.DATE },
-        last_seen_at: { type: DataTypes.DATE }
+        last_seen_at: { type: DataTypes.DATE },
+
+        // ── Monitoramento de auto-sync de bills ──────────────────────
+        auto_sync_last_run_at: { type: DataTypes.DATE },
+        auto_sync_last_status: { type: DataTypes.STRING(20) },   // 'success' | 'error' | 'running'
+        auto_sync_last_summary: { type: DataTypes.JSONB },
     }, {
         tableName: 'enterprise_cities',
         underscored: true,

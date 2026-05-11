@@ -2,7 +2,7 @@
 // Endpoints pra a UI do Menin Office consultar status dos backups do Sienge.
 
 import db from '../../models/sequelize/index.js';
-import { runDailyBackup, runImportOnly } from '../../services/sienge/SiengeBackupService.js';
+import { runDailyBackup } from '../../services/sienge/SiengeBackupService.js';
 
 export async function listBackups(req, res) {
   try {
@@ -36,28 +36,15 @@ export async function getBackup(req, res) {
   }
 }
 
+/**
+ * Dispara o pipeline completo (download Sienge → descomprime → pg_restore)
+ * em background. Resposta imediata; UI deve fazer polling em GET /backups.
+ */
 export async function triggerBackup(req, res) {
-  // Dispara em background — resposta imediata. UI deve fazer polling em GET /:id
   const triggeredBy = `manual:${req.user?.id ?? 'unknown'}`;
   runDailyBackup({ triggeredBy })
-    .then(r => console.log(`✅ [SiengeBackup manual] log=${r.logId} object=${r.objectKey}`))
+    .then(r => console.log(`✅ [SiengeBackup manual] log=${r.logId} size=${r.size}`))
     .catch(e => console.error('❌ [SiengeBackup manual] falhou:', e?.message || e));
 
   res.status(202).json({ ok: true, message: 'Backup iniciado em background' });
-}
-
-/**
- * Dispara APENAS a Fase 2 (import + cleanup) sobre o backup mais recente
- * do bucket — sem refazer o download/upload.
- * Body opcional: { "objectKey": "daily/sienge-2026-05-07.dmpc" }
- */
-export async function triggerImportOnly(req, res) {
-  const triggeredBy = `manual-import:${req.user?.id ?? 'unknown'}`;
-  const { objectKey } = req.body || {};
-
-  runImportOnly({ objectKey, triggeredBy })
-    .then(r => console.log(`✅ [SiengeImport manual] log=${r.logId} object=${r.objectKey}`))
-    .catch(e => console.error('❌ [SiengeImport manual] falhou:', e?.message || e));
-
-  res.status(202).json({ ok: true, message: 'Import iniciado em background' });
 }

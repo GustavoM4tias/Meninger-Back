@@ -47,16 +47,33 @@ export default (sequelize, DataTypes) => {
         // ── Controle de sincronização ────────────────────────────────
         // true = departamentos já foram buscados na API (não rebusca mesmo se departments_json estiver vazio)
         departments_fetched: { type: DataTypes.BOOLEAN, defaultValue: false },
-        // true = installments já foram buscados na API e expenses criados (não rebusca, mesmo se count=0)
+        // Legado: true = installments já foram buscados ao menos uma vez. Mantido por compatibilidade,
+        // mas a decisão de re-buscar usa is_settled + installments_synced_at.
         installments_fetched: { type: DataTypes.BOOLEAN, defaultValue: false },
+
+        // ── Status do bill (atualizado no re-sync) ───────────────────
+        // true = todas as parcelas liquidadas (pagas/canceladas) OU bill cancelado. Para de re-buscar.
+        is_settled: { type: DataTypes.BOOLEAN, defaultValue: false },
+        // 'open' | 'paid' | 'cancelled' | 'partial'
+        current_status: { type: DataTypes.STRING(20), defaultValue: 'open' },
+        // Última vez que /v1/bills/{id}/installments foi consultado
+        installments_synced_at: DataTypes.DATE,
+        // Última vez que o bill apareceu no fetch /v1/bills (atualização de notes/changedDate/etc.)
+        last_full_sync_at: DataTypes.DATE,
     }, {
         tableName: 'sienge_bills',
         underscored: true,
         indexes: [
+            // Índices declarados no model para sync({ alter: true }) recriar — os pré-existentes.
+            // Os índices das colunas novas (is_settled, current_status, installments_synced_at)
+            // ficam SÓ nas migrations: sync({ alter: true }) tenta criar índice ANTES da coluna
+            // existir e quebra. Para criá-los manualmente em ambientes sem migrate:
+            //   CREATE INDEX sienge_bills_is_settled ON sienge_bills (is_settled);
+            //   CREATE INDEX sienge_bills_current_status ON sienge_bills (current_status);
+            //   CREATE INDEX sienge_bills_installments_synced_at ON sienge_bills (installments_synced_at);
             { fields: ['cost_center_id'] },
             { fields: ['debtor_id'] },
             { fields: ['issue_date'] },
-            // ✅ novo índice (opcional, mas recomendado)
             { fields: ['installment_number'] },
         ]
     });

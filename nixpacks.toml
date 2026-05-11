@@ -1,0 +1,6 @@
+# Configuração do Nixpacks pro deploy no Railway.
+# Inclui o binário pg_restore (do pacote postgresql) usado pelo
+# SiengeBackupService pra restaurar o dump diário do Sienge no Postgres.
+
+[phases.setup]
+nixPkgs = ["nodejs_24", "postgresql_17"]

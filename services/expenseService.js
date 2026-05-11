@@ -25,14 +25,6 @@ export default class expenseService {
     const monthStart = new Date(y, m - 1, 1);
     const compDate = monthStart.toISOString().slice(0, 10);
 
-    console.log('[ExpenseService.addExpense] input', {
-      billId,
-      competenceMonth,
-      installmentNumber,
-      installmentsNumber,
-      amount,
-    });
-
     const expense = await Expense.create({
       cost_center_id: costCenterId,
       cost_center_name: costCenterName || null,
@@ -48,14 +40,6 @@ export default class expenseService {
       // ✅ NOVO
       installment_number: installmentNumber ?? null,
       installments_number: installmentsNumber ?? null,
-    });
-
-    console.log('[ExpenseService.addExpense] created', {
-      id: expense?.id,
-      bill_id: expense?.bill_id,
-      competence_month: expense?.competence_month,
-      installment_number: expense?.installment_number,
-      installments_number: expense?.installments_number,
     });
 
     return expense;
@@ -102,6 +86,7 @@ export default class expenseService {
         amount: Number(e.amount),
         description: e.description,
         competenceMonth: e.competence_month,
+        dueDate: e.due_date,
 
         installmentNumber: e.installment_number ?? null,
         installmentsNumber: e.installments_number ?? null,
@@ -110,6 +95,9 @@ export default class expenseService {
         departmentName: e.department_name,
         departmentCategoryId: e.department_category_id,
         departmentCategoryName: e.department_category_name,
+
+        status: e.status || 'open',
+        paidAt: e.paid_at || null,
 
         costCenterId: e.cost_center_id,
         costCenterName: e.cost_center_name,
@@ -126,6 +114,8 @@ export default class expenseService {
             installmentNumber: Number(e.bill.installment_number || 0),
             installmentsNumber: Number(e.bill.installments_number || 0),
             creditor_json: e.bill.creditor_json,
+            currentStatus: e.bill.current_status || 'open',
+            isSettled: !!e.bill.is_settled,
           }
           : null,
       })),
@@ -204,6 +194,9 @@ export default class expenseService {
           departmentCategoryId: e.department_category_id,
           departmentCategoryName: e.department_category_name,
 
+          status: e.status || 'open',
+          paidAt: e.paid_at || null,
+
           costCenterId: e.cost_center_id,
           costCenterName: e.cost_center_name,
           billId: e.bill_id,
@@ -219,6 +212,8 @@ export default class expenseService {
               installmentNumber: Number(e.bill.installment_number || 0),
               installmentsNumber: Number(e.bill.installments_number || 0),
               creditor_json: e.bill.creditor_json,
+              currentStatus: e.bill.current_status || 'open',
+              isSettled: !!e.bill.is_settled,
             }
             : null,
         })),
@@ -259,13 +254,12 @@ export default class expenseService {
     }));
   }
 
+  // 'amount' não é atualizável — vem do Sienge e é fonte da verdade
   async updateExpense({
     id,
-    amount,
     description,
     departmentId,
     departmentName,
-    // 👇 NOVO
     departmentCategoryId,
     departmentCategoryName,
   }) {
@@ -275,12 +269,9 @@ export default class expenseService {
     }
 
     await exp.update({
-      amount,
       description,
       department_id: departmentId ?? exp.department_id,
       department_name: departmentName ?? exp.department_name,
-
-      // 👇 NOVO
       department_category_id: departmentCategoryId ?? exp.department_category_id,
       department_category_name: departmentCategoryName ?? exp.department_category_name,
     });
