@@ -1120,17 +1120,40 @@ async function executeQueryReservas(args, user) {
     }
   }
 
-  // Cidade trancada — effectiveCity já reflete user.city para não-admin (sem bypass)
+  // Cidade trancada — match robusto (padrão idêntico ao dashboard reservasReport.js).
+  // 4 estratégias: Sienge ERP id → CRM id direto → idempreendimento_cv → fallback por nome.
+  // Crítico: o match por nome simples (ce.nome ILIKE r.empreendimento) é frágil porque
+  // r.empreendimento pode ter sufixos/variações — então preferimos IDs primeiro.
   if (effectiveCity) {
     replacements.targetCity = effectiveCity;
     whereClauses.push(`
       EXISTS (
-        SELECT 1 FROM cv_enterprises ce_r
-        LEFT JOIN enterprise_cities ec_r
-          ON ec_r.source = 'crm' AND ec_r.crm_id = ce_r.idempreendimento
-        WHERE ce_r.nome ILIKE r.empreendimento
-          AND unaccent(upper(regexp_replace(COALESCE(ec_r.city_override, ec_r.default_city, ce_r.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-              unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g')))
+        SELECT 1
+        FROM enterprise_cities ec_r
+        WHERE (
+          -- 1) Sienge ERP id direto
+          (NULLIF(r.unidade_json->>'idempreendimento_int','') IS NOT NULL
+            AND ec_r.erp_id = r.unidade_json->>'idempreendimento_int')
+          -- 2) idempreendimento_int como crm_id (integração direta)
+          OR (NULLIF(r.unidade_json->>'idempreendimento_int','')::int IS NOT NULL
+            AND ec_r.source = 'crm'
+            AND ec_r.crm_id = NULLIF(r.unidade_json->>'idempreendimento_int','')::int)
+          -- 3) idempreendimento_cv explícito
+          OR (NULLIF(r.unidade_json->>'idempreendimento_cv','')::int IS NOT NULL
+            AND ec_r.source = 'crm'
+            AND ec_r.crm_id = NULLIF(r.unidade_json->>'idempreendimento_cv','')::int)
+          -- 4) fallback por nome normalizado
+          OR (
+            COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''))
+              IS NOT NULL
+            AND unaccent(upper(regexp_replace(COALESCE(ec_r.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
+                unaccent(upper(regexp_replace(
+                  COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
+                  '[^A-Z0-9]+',' ','g')))
+          )
+        )
+        AND unaccent(upper(regexp_replace(COALESCE(ec_r.city_override, ec_r.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
+            unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g')))
       )
     `);
   }

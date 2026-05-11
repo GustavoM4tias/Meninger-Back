@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import pg from 'pg';
 
@@ -84,8 +85,28 @@ async function fetchExpectedMd5() {
   return text.split(/\s+/)[0].toLowerCase();
 }
 
-async function downloadAndHash(localPath) {
-  const res = await fetch(SIENGE_URL, { headers: { Authorization: siengeAuthHeader() } });
+function describeFetchError(err) {
+  // undici (fetch) costuma jogar TypeError "terminated" sem detalhe.
+  // O motivo real fica em err.cause (UND_ERR_SOCKET, ECONNRESET, ETIMEDOUT, etc).
+  const code   = err?.cause?.code || err?.code;
+  const causeMsg = err?.cause?.message;
+  const top      = err?.message || String(err);
+  return [top, code && `code=${code}`, causeMsg && `cause=${causeMsg}`].filter(Boolean).join(' | ');
+}
+
+function isTransientNetworkError(err) {
+  const text = describeFetchError(err).toLowerCase();
+  return /terminated|econnreset|etimedout|enotfound|eai_again|und_err|socket hang up|network|fetch failed|other side closed|aborted/i.test(text);
+}
+
+async function downloadAndHashOnce(localPath) {
+  const res = await fetch(SIENGE_URL, {
+    headers: {
+      Authorization: siengeAuthHeader(),
+      'Accept-Encoding': 'identity', // não pede gzip de novo (já vem .gz por content)
+      'Connection': 'keep-alive',
+    },
+  });
   if (!res.ok) throw new Error(`Download Sienge falhou: ${res.status} ${res.statusText}`);
   if (!res.body) throw new Error('Resposta do Sienge sem body');
 
@@ -100,6 +121,36 @@ async function downloadAndHash(localPath) {
   await pipeline(Readable.fromWeb(res.body), hashTransform, fileStream);
   const stats = await stat(localPath);
   return { md5: hash.digest('hex').toLowerCase(), size: stats.size };
+}
+
+async function downloadAndHash(localPath) {
+  const maxAttempts = Number(process.env.SIENGE_DOWNLOAD_MAX_ATTEMPTS || 3);
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.log(`🔁 [SiengeBackup] Retry download tentativa ${attempt}/${maxAttempts}`);
+      }
+      return await downloadAndHashOnce(localPath);
+    } catch (err) {
+      lastErr = err;
+      const detail = describeFetchError(err);
+      console.warn(`⚠️  [SiengeBackup] download tentativa ${attempt}/${maxAttempts} falhou: ${detail}`);
+      // Limpa arquivo parcial antes da próxima tentativa
+      await unlink(localPath).catch(() => {});
+
+      if (!isTransientNetworkError(err) || attempt === maxAttempts) break;
+
+      // Backoff exponencial: 30s, 2min, 5min (cap)
+      const wait = Math.min(30_000 * Math.pow(4, attempt - 1), 5 * 60_000);
+      console.log(`⏳ [SiengeBackup] aguardando ${wait / 1000}s antes do próximo retry...`);
+      await sleep(wait);
+    }
+  }
+  // Re-lança com mensagem enriquecida
+  const finalErr = new Error(`Download Sienge falhou após ${maxAttempts} tentativas: ${describeFetchError(lastErr)}`);
+  finalErr.cause = lastErr;
+  throw finalErr;
 }
 
 // ─── Fase 2: descomprime localmente ───────────────────────────────────────────

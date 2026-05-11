@@ -52,6 +52,7 @@ import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateSch
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import billsAutoSyncScheduler from './scheduler/billsAutoSyncScheduler.js';
+import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import AlertEngine from './services/alerts/AlertEngine.js';
 
@@ -134,20 +135,13 @@ async function bootServer() {
 
   // Garante que tabelas críticas tenham todas as colunas atualizadas
   for (const [name, model] of [
-    ['User', db.User],                       // adicionar daily_alert_limit
-    ['AlertTriggerLog', db.AlertTriggerLog], // adicionar enum suppressed_daily_limit
-    ['AlertPendingReply', db.AlertPendingReply], // novo enum (awaiting_reply) + meta_message_id
-    // ['EnterpriseCondition', db.EnterpriseCondition],
-    // ['EnterpriseConditionModule', db.EnterpriseConditionModule],
-    // ['EnterpriseConditionCampaign', db.EnterpriseConditionCampaign],
-    // ['McmvMunicipio', db.McmvMunicipio],
-    // ['McmvImportLog', db.McmvImportLog],
-    // ['SiengeBackupLog', db.SiengeBackupLog],
-    // ['Notification', db.Notification],
-    // ['NotificationPreference', db.NotificationPreference],
-    // ['WhatsappConfig', db.WhatsappConfig],
-    // ['WhatsappTemplate', db.WhatsappTemplate],
-    // ['WhatsappMessage', db.WhatsappMessage],
+    ['User', db.User],                                       // adicionar daily_alert_limit
+    ['AlertTriggerLog', db.AlertTriggerLog],                 // enum suppressed_daily_limit
+    ['AlertPendingReply', db.AlertPendingReply],             // enum awaiting_reply + meta_message_id
+    ['SiengeBill', db.SiengeBill],                           // is_settled, current_status, installments_synced_at, last_full_sync_at
+    ['Expense', db.Expense],                                 // status, paid_at
+    ['BillsSyncLog', db.BillsSyncLog],                       // tabela nova
+    ['BillsAutoSyncSubscription', db.BillsAutoSyncSubscription], // tabela nova
   ]) {
     try {
       await model.sync({ alter: true });
@@ -156,6 +150,11 @@ async function bootServer() {
       console.warn(`⚠️  Falha ao sincronizar ${name}:`, e.message);
     }
   }
+
+  // Patch defensivo: ALTER TABLE ADD COLUMN IF NOT EXISTS para campos novos.
+  // Cobre casos onde sync({ alter: true }) falha silenciosamente (ENUM, etc.).
+  // Idempotente — pode rodar a cada boot sem efeito colateral.
+  await ensureBillsAutoSyncSchema();
 
   await seedInitialTypes();
 
