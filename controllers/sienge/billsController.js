@@ -52,22 +52,9 @@ export default class BillsController {
                 return res.status(400).json({ error: 'costCenterId inválido.' });
             }
 
-            if (ids.length > 3) {
-                return res.status(400).json({ error: 'Máximo de 3 centros de custo por consulta.' });
-            }
-
-            // Valida range máximo de 6 meses
-            if (startDate && endDate) {
-                const start = new Date(startDate);
-                const end = new Date(endDate);
-                const diffMonths = (end.getFullYear() - start.getFullYear()) * 12
-                    + (end.getMonth() - start.getMonth());
-                if (diffMonths > 6) {
-                    return res.status(400).json({
-                        error: 'O período máximo de consulta é 6 meses. Reduza o intervalo de datas.'
-                    });
-                }
-            }
+            // Sem limite duro de quantidade de empreendimentos nem de range de datas —
+            // o auto-sync diário mantém o banco populado, e a consulta DB-first é barata.
+            // (Antes existia limite de 3 empreendimentos e 6 meses; removidos em 2026-05.)
 
             const isAdmin = req.user.role === 'admin';
 

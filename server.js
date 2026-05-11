@@ -51,6 +51,7 @@ import cvExtrasScheduler from './scheduler/cvExtrasScheduler.js';
 import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateScheduler.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
+import billsAutoSyncScheduler from './scheduler/billsAutoSyncScheduler.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import AlertEngine from './services/alerts/AlertEngine.js';
 
@@ -175,6 +176,7 @@ async function bootServer() {
   conditionAutoGenerateScheduler.start(); // auto-geração de fichas + polling de assinaturas
   boletoCleanupScheduler.start();         // remove boletos expirados do Supabase
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
+  if (process.env.ENABLE_BILLS_AUTO_SYNC === 'true') billsAutoSyncScheduler.start();
   eventReminderScheduler.start();         // lembretes de evento (D-1) via NotificationService
   await AlertEngine.boot();               // registra crons das alert_rules salvas
 

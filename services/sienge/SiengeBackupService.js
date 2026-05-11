@@ -1,11 +1,16 @@
 // services/sienge/SiengeBackupService.js
-// Pipeline diário de backup do banco Sienge:
-//   FASE 1: baixa o .dmpc.gz da API Sienge → valida MD5 → descomprime e sobe no
-//           bucket Oracle Cloud
-//   FASE 2: dispara impdp via ORDS REST no Autonomous DB → faz polling até
-//           concluir → ao terminar com sucesso, apaga backups antigos do bucket
 //
-// Cada etapa atualiza o registro em sienge_backup_logs.
+// Pipeline diário de backup do banco Sienge:
+//   1. Baixa o .dmpc.gz da API Sienge (Basic Auth) → /tmp local
+//   2. Valida MD5 contra /backup/latest/md5
+//   3. Descomprime em streaming pro disco local (.dmpc)
+//   4. pg_restore contra o Postgres dedicado (Railway) — substitui dados do dia
+//      anterior usando --clean --if-exists
+//   5. Limpa arquivos temporários (mantém só o registro no banco)
+//
+// O Sienge usa PostgreSQL por baixo. O .dmpc é dump no formato custom do
+// pg_dump (-Fc). Restauramos com pg_restore (binário disponível no container
+// via nixpacks.toml).
 
 import { createWriteStream, createReadStream } from 'node:fs';
 import { unlink, mkdir, stat } from 'node:fs/promises';
@@ -13,75 +18,64 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 
-import {
-  S3Client,
-  ListObjectsV2Command,
-  DeleteObjectsCommand,
-} from '@aws-sdk/client-s3';
-import { Upload } from '@aws-sdk/lib-storage';
-import axios from 'axios';
+import pg from 'pg';
 
 import db from '../../models/sequelize/index.js';
 
-// ── Sienge ────────────────────────────────────────────────────────────────────
+// ── Sienge API ────────────────────────────────────────────────────────────────
 const SIENGE_USER     = process.env.SIENGE_BACKUP_USER;
 const SIENGE_PASSWORD = process.env.SIENGE_BACKUP_PASSWORD;
 const SIENGE_URL      = process.env.SIENGE_BACKUP_URL;
 const SIENGE_MD5_URL  = process.env.SIENGE_BACKUP_MD5_URL;
 
-// ── Oracle Cloud Object Storage (S3 compat) ───────────────────────────────────
-const OCI_NAMESPACE     = process.env.OCI_NAMESPACE;
-const OCI_REGION        = process.env.OCI_REGION || 'sa-saopaulo-1';
-const OCI_BUCKET        = process.env.OCI_BUCKET || 'sienge-backups';
-const OCI_S3_ACCESS_KEY = process.env.OCI_S3_ACCESS_KEY;
-const OCI_S3_SECRET_KEY = process.env.OCI_S3_SECRET_KEY;
-
-// ── Oracle Autonomous Database (ORDS REST) ────────────────────────────────────
-const ORACLE_ORDS_URL          = process.env.ORACLE_ORDS_URL;            // ex: https://g03969e302e6e85-siengedb.adb.sa-saopaulo-1.oraclecloudapps.com/ords/
-const ORACLE_ADMIN_USER        = process.env.ORACLE_ADMIN_USER || 'ADMIN';
-const ORACLE_ADMIN_PASSWORD    = process.env.ORACLE_ADMIN_PASSWORD;
-const ORACLE_BACKUP_CREDENTIAL = process.env.ORACLE_BACKUP_CREDENTIAL || 'OCI_BACKUP_CRED';
-const AUTO_IMPORT_ENABLED      = process.env.ENABLE_SIENGE_AUTO_IMPORT !== 'false'; // default ON
-const IMPORT_POLL_INTERVAL_MS  = Number(process.env.SIENGE_IMPORT_POLL_INTERVAL_MS || 15000);
-const IMPORT_TIMEOUT_MS        = Number(process.env.SIENGE_IMPORT_TIMEOUT_MS || 90 * 60 * 1000); // 90 min
+// ── PostgreSQL alvo do restore (Railway) ──────────────────────────────────────
+const SIENGE_PG_URL         = process.env.SIENGE_PG_URL;
+const SIENGE_PG_DATABASE    = process.env.SIENGE_PG_DATABASE || 'sie214801';
+const AUTO_RESTORE_ENABLED  = process.env.ENABLE_SIENGE_AUTO_RESTORE !== 'false';
+const PG_RESTORE_JOBS       = Number(process.env.SIENGE_PG_RESTORE_JOBS || 2);
+const PG_RESTORE_TIMEOUT_MS = Number(process.env.SIENGE_PG_RESTORE_TIMEOUT_MS || 90 * 60 * 1000);
 
 const TMP_DIR = path.join(tmpdir(), 'sienge-backup');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function basicAuthHeader(user, password) {
-  return 'Basic ' + Buffer.from(`${user}:${password}`).toString('base64');
-}
-
 function siengeAuthHeader() {
-  return basicAuthHeader(SIENGE_USER, SIENGE_PASSWORD);
+  return 'Basic ' + Buffer.from(`${SIENGE_USER}:${SIENGE_PASSWORD}`).toString('base64');
 }
 
-function ociS3Client() {
-  if (!OCI_NAMESPACE || !OCI_S3_ACCESS_KEY || !OCI_S3_SECRET_KEY) {
-    throw new Error('Variáveis OCI_NAMESPACE / OCI_S3_ACCESS_KEY / OCI_S3_SECRET_KEY não configuradas');
-  }
-  return new S3Client({
-    region: OCI_REGION,
-    endpoint: `https://${OCI_NAMESPACE}.compat.objectstorage.${OCI_REGION}.oraclecloud.com`,
-    credentials: {
-      accessKeyId: OCI_S3_ACCESS_KEY,
-      secretAccessKey: OCI_S3_SECRET_KEY,
-    },
-    forcePathStyle: true,
-  });
+/**
+ * Constrói duas URLs de conexão a partir de SIENGE_PG_URL:
+ *   - adminUrl: aponta pro database "postgres" (pra CREATE DATABASE)
+ *   - targetUrl: aponta pro database alvo (pra pg_restore)
+ *
+ * SIENGE_PG_URL pode vir com ou sem database no path. Se sem, usamos
+ * SIENGE_PG_DATABASE.
+ */
+function buildPgUrls() {
+  if (!SIENGE_PG_URL) throw new Error('SIENGE_PG_URL não configurada');
+
+  const u = new URL(SIENGE_PG_URL);
+  const hasPath = u.pathname && u.pathname !== '/' && u.pathname !== '';
+  const targetDb = hasPath ? u.pathname.replace(/^\//, '') : SIENGE_PG_DATABASE;
+
+  const admin = new URL(SIENGE_PG_URL);
+  admin.pathname = '/postgres';
+
+  const target = new URL(SIENGE_PG_URL);
+  target.pathname = '/' + targetDb;
+
+  return {
+    adminUrl: admin.toString(),
+    targetUrl: target.toString(),
+    targetDb,
+  };
 }
 
-function bucketObjectUri(objectKey) {
-  // Formato URI nativo do OCI Object Storage que o DBMS_CLOUD/DBMS_DATAPUMP entende
-  return `https://objectstorage.${OCI_REGION}.oraclecloud.com/n/${OCI_NAMESPACE}/b/${OCI_BUCKET}/o/${objectKey}`;
-}
-
-// ─── Sienge download ──────────────────────────────────────────────────────────
+// ─── Fase 1: download do Sienge + MD5 ─────────────────────────────────────────
 
 async function fetchExpectedMd5() {
   const res = await fetch(SIENGE_MD5_URL, { headers: { Authorization: siengeAuthHeader() } });
@@ -108,182 +102,103 @@ async function downloadAndHash(localPath) {
   return { md5: hash.digest('hex').toLowerCase(), size: stats.size };
 }
 
-// ─── Bucket upload + cleanup ──────────────────────────────────────────────────
+// ─── Fase 2: descomprime localmente ───────────────────────────────────────────
 
-async function uploadDecompressedToBucket(gzPath, objectKey) {
-  const s3 = ociS3Client();
-  const fileStream = createReadStream(gzPath);
-  const decompressed = fileStream.pipe(createGunzip());
-
-  const upload = new Upload({
-    client: s3,
-    params: {
-      Bucket: OCI_BUCKET,
-      Key: objectKey,
-      Body: decompressed,
-      ContentType: 'application/octet-stream',
-    },
-    queueSize: 4,
-    partSize: 50 * 1024 * 1024,
-  });
-
-  await upload.done();
-}
-
-async function deleteOtherBackupsInBucket(currentObjectKey, prefix = 'daily/') {
-  const s3 = ociS3Client();
-  let count = 0;
-  let token;
-  do {
-    const list = await s3.send(new ListObjectsV2Command({
-      Bucket: OCI_BUCKET,
-      Prefix: prefix,
-      ContinuationToken: token,
-    }));
-    const toDelete = (list.Contents || [])
-      .filter(o => o.Key && o.Key !== currentObjectKey)
-      .map(o => ({ Key: o.Key }));
-    if (toDelete.length) {
-      await s3.send(new DeleteObjectsCommand({
-        Bucket: OCI_BUCKET,
-        Delete: { Objects: toDelete, Quiet: true },
-      }));
-      count += toDelete.length;
-    }
-    token = list.IsTruncated ? list.NextContinuationToken : undefined;
-  } while (token);
-  return count;
-}
-
-// ─── Oracle ORDS REST ─────────────────────────────────────────────────────────
-
-function ordsAuth() {
-  return { username: ORACLE_ADMIN_USER, password: ORACLE_ADMIN_PASSWORD };
-}
-
-function ordsSqlEndpoint() {
-  if (!ORACLE_ORDS_URL) throw new Error('ORACLE_ORDS_URL não configurada');
-  const base = ORACLE_ORDS_URL.endsWith('/') ? ORACLE_ORDS_URL : ORACLE_ORDS_URL + '/';
-  // Endpoint padrão de SQL pra usuário schema-aware do ORDS
-  return `${base}${ORACLE_ADMIN_USER.toLowerCase()}/_/sql`;
-}
-
-async function runOrdsSql(statementText) {
-  const res = await axios.post(
-    ordsSqlEndpoint(),
-    { statementText },
-    {
-      auth: ordsAuth(),
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 60000,
-      validateStatus: () => true,
-    },
+async function decompressGzToFile(gzPath, dmpcPath) {
+  await pipeline(
+    createReadStream(gzPath),
+    createGunzip(),
+    createWriteStream(dmpcPath),
   );
-  if (res.status < 200 || res.status >= 300) {
-    throw new Error(`ORDS retornou ${res.status}: ${JSON.stringify(res.data).slice(0, 500)}`);
+}
+
+// ─── Fase 3: pg_restore ───────────────────────────────────────────────────────
+
+async function ensureTargetDatabaseExists() {
+  const { adminUrl, targetDb } = buildPgUrls();
+  const client = new pg.Client({ connectionString: adminUrl });
+  await client.connect();
+  try {
+    const r = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [targetDb]);
+    if (r.rowCount === 0) {
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(targetDb)) {
+        throw new Error(`Nome de database inválido: ${targetDb}`);
+      }
+      await client.query(`CREATE DATABASE "${targetDb}"`);
+    }
+  } finally {
+    await client.end();
   }
-  return res.data;
 }
 
-// ─── Fase 2: import via DBMS_DATAPUMP ─────────────────────────────────────────
+function runPgRestore(dmpcPath) {
+  const { targetUrl } = buildPgUrls();
 
-function buildImportPlsql(jobName, fileUri) {
-  return `
-DECLARE
-  v_handle NUMBER;
-BEGIN
-  v_handle := DBMS_DATAPUMP.OPEN(
-    operation => 'IMPORT',
-    job_mode  => 'FULL',
-    job_name  => '${jobName}'
-  );
-  DBMS_DATAPUMP.ADD_FILE(
-    handle    => v_handle,
-    filename  => '${fileUri}',
-    directory => '${ORACLE_BACKUP_CREDENTIAL}',
-    filetype  => DBMS_DATAPUMP.KU$_FILE_TYPE_URIDUMP_FILE
-  );
-  DBMS_DATAPUMP.SET_PARAMETER(
-    handle => v_handle,
-    name   => 'TABLE_EXISTS_ACTION',
-    value  => 'REPLACE'
-  );
-  DBMS_DATAPUMP.START_JOB(v_handle);
-  DBMS_DATAPUMP.DETACH(v_handle);
-END;
-`.trim();
+  return new Promise((resolve, reject) => {
+    const args = [
+      '--clean',
+      '--if-exists',
+      '--no-owner',
+      '--no-privileges',
+      '--no-acl',
+      '--jobs', String(PG_RESTORE_JOBS),
+      '--dbname', targetUrl,
+      dmpcPath,
+    ];
+
+    const proc = spawn('pg_restore', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let stderr = '';
+    let killed = false;
+    const timer = setTimeout(() => {
+      killed = true;
+      try { proc.kill('SIGKILL'); } catch {}
+    }, PG_RESTORE_TIMEOUT_MS);
+
+    proc.stderr.on('data', chunk => {
+      const s = chunk.toString();
+      stderr += s;
+      if (/error|fatal|warning/i.test(s)) {
+        console.log('[pg_restore]', s.trim());
+      }
+    });
+
+    proc.on('error', err => {
+      clearTimeout(timer);
+      reject(new Error(`Não foi possível executar pg_restore (binário disponível?): ${err.message}`));
+    });
+
+    proc.on('close', code => {
+      clearTimeout(timer);
+      if (killed) return reject(new Error('pg_restore timeout'));
+
+      // 0 = success, 1 = warnings (esperado com --no-owner/--no-acl/--clean)
+      if (code === 0 || code === 1) {
+        return resolve({ ok: true, exitCode: code, stderrTail: stderr.slice(-2000) });
+      }
+      reject(new Error(`pg_restore saiu com código ${code}. stderr tail:\n${stderr.slice(-2000)}`));
+    });
+  });
 }
 
-async function fetchImportJobState(jobName) {
-  const sql = `
-SELECT state AS "state", attached_sessions AS "attached_sessions"
-FROM DBA_DATAPUMP_JOBS
-WHERE job_name = '${jobName}' AND owner_name = '${ORACLE_ADMIN_USER}'
-`.trim();
-  const data = await runOrdsSql(sql);
-  const items = data?.items?.[0]?.resultSet?.items
-              ?? data?.items?.[0]?.items
-              ?? [];
-  if (!items.length) return null; // Job sumiu da view = concluiu (com sucesso ou erro)
-  const row = items[0];
-  return {
-    state: row.state ?? row.STATE,
-    attached_sessions: row.attached_sessions ?? row.ATTACHED_SESSIONS,
-  };
-}
-
-async function findLatestBucketObject(prefix = 'daily/') {
-  const s3 = ociS3Client();
-  let latest = null;
-  let token;
-  do {
-    const list = await s3.send(new ListObjectsV2Command({
-      Bucket: OCI_BUCKET,
-      Prefix: prefix,
-      ContinuationToken: token,
-    }));
-    for (const o of (list.Contents || [])) {
-      if (!latest || (o.LastModified && o.LastModified > latest.LastModified)) latest = o;
-    }
-    token = list.IsTruncated ? list.NextContinuationToken : undefined;
-  } while (token);
-  return latest?.Key || null;
-}
-
-async function importIntoOracleDB(objectKey, log) {
-  const jobName = ('IMP_SIENGE_' + new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)).slice(0, 30);
-  const fileUri = bucketObjectUri(objectKey);
-
+async function restoreIntoPostgres(dmpcPath, log) {
   await log.update({
     import_status: 'running',
-    import_job_name: jobName,
+    import_job_name: 'pg_restore',
     import_started_at: new Date(),
-    stage: 'importing',
+    stage: 'restoring',
   });
 
-  // Dispara o job (DBMS_DATAPUMP.START_JOB é não-bloqueante)
-  await runOrdsSql(buildImportPlsql(jobName, fileUri));
+  await ensureTargetDatabaseExists();
+  const result = await runPgRestore(dmpcPath);
 
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < IMPORT_TIMEOUT_MS) {
-    await sleep(IMPORT_POLL_INTERVAL_MS);
-    const row = await fetchImportJobState(jobName);
-    if (!row) {
-      // Sumiu da DBA_DATAPUMP_JOBS = terminou (com ou sem erro)
-      const finishedAt = new Date();
-      await log.update({
-        import_status: 'success',
-        import_finished_at: finishedAt,
-        import_duration_ms: finishedAt - new Date(log.import_started_at),
-      });
-      return { ok: true };
-    }
-    if (row.state === 'STOPPING' || row.state === 'STOPPED') {
-      throw new Error(`Job de import em estado terminal de erro: ${row.state}`);
-    }
-    // EXECUTING / DEFINING / IDLING / COMPLETING -> continua
-  }
-  throw new Error(`Timeout aguardando import (${IMPORT_TIMEOUT_MS}ms)`);
+  const finishedAt = new Date();
+  await log.update({
+    import_status: 'success',
+    import_finished_at: finishedAt,
+    import_duration_ms: finishedAt - new Date(log.import_started_at),
+  });
+  return result;
 }
 
 // ─── Pipeline principal ───────────────────────────────────────────────────────
@@ -294,7 +209,7 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
   const startedAt = new Date();
   const yyyymmdd  = startedAt.toISOString().slice(0, 10);
   const localGz   = path.join(TMP_DIR, `sienge-${yyyymmdd}.dmpc.gz`);
-  const objectKey = `daily/sienge-${yyyymmdd}.dmpc`;
+  const localDmpc = path.join(TMP_DIR, `sienge-${yyyymmdd}.dmpc`);
 
   const log = await db.SiengeBackupLog.create({
     started_at: startedAt,
@@ -304,11 +219,11 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
   });
 
   try {
-    // Fase 1.1 - MD5 esperado
+    // 1. MD5 esperado
     await log.update({ stage: 'fetching_md5' });
     const expectedMd5 = await fetchExpectedMd5();
 
-    // Fase 1.2 - download
+    // 2. Download + hash local
     await log.update({ stage: 'downloading' });
     const { md5: actualMd5, size } = await downloadAndHash(localGz);
 
@@ -323,40 +238,31 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
       throw new Error(`MD5 não bate. esperado=${expectedMd5} baixado=${actualMd5}`);
     }
 
-    // Fase 1.3 - upload no bucket
-    await log.update({ stage: 'uploading' });
-    await uploadDecompressedToBucket(localGz, objectKey);
-
-    await log.update({
-      bucket_object: objectKey,
-      stage: 'uploaded',
-    });
-
-    // Fase 1.4 - cleanup do .gz local
+    // 3. Descomprime localmente
+    await log.update({ stage: 'decompressing' });
+    await decompressGzToFile(localGz, localDmpc);
     await unlink(localGz).catch(() => {});
 
-    // ─── Fase 2 - import + cleanup do bucket ───
-    if (!AUTO_IMPORT_ENABLED) {
+    // 4. Restore no Postgres
+    if (!AUTO_RESTORE_ENABLED) {
       await log.update({ import_status: 'skipped' });
     } else {
       try {
-        await importIntoOracleDB(objectKey, log);
-        // Só apaga backups antigos APÓS import OK
-        await log.update({ stage: 'cleaning_bucket' });
-        const cleaned = await deleteOtherBackupsInBucket(objectKey);
-        await log.update({ cleaned_objects_count: cleaned });
-      } catch (importErr) {
+        await restoreIntoPostgres(localDmpc, log);
+      } catch (restoreErr) {
         const finishedAt = new Date();
         await log.update({
           import_status: 'failed',
           import_finished_at: finishedAt,
           import_duration_ms: finishedAt - new Date(log.import_started_at || startedAt),
-          import_error_message: String(importErr?.message || importErr).slice(0, 4000),
+          import_error_message: String(restoreErr?.message || restoreErr).slice(0, 4000),
         });
-        // Mantém backup atual no bucket (não apaga os antigos) — assim ainda dá pra retry/debug
-        throw importErr;
+        throw restoreErr;
       }
     }
+
+    // 5. Cleanup local
+    await unlink(localDmpc).catch(() => {});
 
     const finishedAt = new Date();
     await log.update({
@@ -366,7 +272,7 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
       duration_ms: finishedAt - startedAt,
     });
 
-    return { ok: true, logId: log.id, objectKey, size };
+    return { ok: true, logId: log.id, size };
   } catch (err) {
     const finishedAt = new Date();
     await log.update({
@@ -376,60 +282,9 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
       error_message: String(err?.message || err).slice(0, 4000),
     });
     await unlink(localGz).catch(() => {});
+    await unlink(localDmpc).catch(() => {});
     throw err;
   }
 }
 
-/**
- * Roda apenas a Fase 2 (import + cleanup) sobre um objeto que já existe
- * no bucket. Útil quando o backup do dia já foi baixado/upado e você
- * só quer disparar o restore.
- *
- * Se objectKey não for passado, pega o mais recente em "daily/".
- */
-export async function runImportOnly({ objectKey, triggeredBy = 'manual-import' } = {}) {
-  const startedAt = new Date();
-  const targetKey = objectKey || await findLatestBucketObject();
-
-  if (!targetKey) {
-    throw new Error('Nenhum objeto encontrado em daily/ no bucket');
-  }
-
-  const log = await db.SiengeBackupLog.create({
-    started_at: startedAt,
-    status: 'running',
-    stage: 'importing',
-    triggered_by: triggeredBy,
-    bucket_object: targetKey,
-    file_name: path.basename(targetKey),
-  });
-
-  try {
-    await importIntoOracleDB(targetKey, log);
-
-    await log.update({ stage: 'cleaning_bucket' });
-    const cleaned = await deleteOtherBackupsInBucket(targetKey);
-    await log.update({ cleaned_objects_count: cleaned });
-
-    const finishedAt = new Date();
-    await log.update({
-      status: 'success',
-      stage: 'done',
-      finished_at: finishedAt,
-      duration_ms: finishedAt - startedAt,
-    });
-
-    return { ok: true, logId: log.id, objectKey: targetKey };
-  } catch (err) {
-    const finishedAt = new Date();
-    await log.update({
-      status: 'failed',
-      finished_at: finishedAt,
-      duration_ms: finishedAt - startedAt,
-      error_message: String(err?.message || err).slice(0, 4000),
-    });
-    throw err;
-  }
-}
-
-export default { runDailyBackup, runImportOnly };
+export default { runDailyBackup };
