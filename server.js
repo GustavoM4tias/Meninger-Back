@@ -53,6 +53,7 @@ import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import billsAutoSyncScheduler from './scheduler/billsAutoSyncScheduler.js';
 import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
+import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import AlertEngine from './services/alerts/AlertEngine.js';
 
@@ -138,6 +139,7 @@ async function bootServer() {
     ['User', db.User],                                       // adicionar daily_alert_limit
     ['AlertTriggerLog', db.AlertTriggerLog],                 // enum suppressed_daily_limit
     ['AlertPendingReply', db.AlertPendingReply],             // enum awaiting_reply + meta_message_id
+    ['Favorite', db.Favorite],                               // router/section VARCHAR(120) + created_at DEFAULT NOW()
     ['SiengeBill', db.SiengeBill],                           // is_settled, current_status, installments_synced_at, last_full_sync_at
     ['Expense', db.Expense],                                 // status, paid_at
     ['BillsSyncLog', db.BillsSyncLog],                       // tabela nova
@@ -155,6 +157,7 @@ async function bootServer() {
   // Cobre casos onde sync({ alter: true }) falha silenciosamente (ENUM, etc.).
   // Idempotente — pode rodar a cada boot sem efeito colateral.
   await ensureBillsAutoSyncSchema();
+  await ensureSiengeBackupLogSchema();
 
   await seedInitialTypes();
 

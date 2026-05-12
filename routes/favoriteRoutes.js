@@ -5,8 +5,8 @@ import { addFavorite, removeFavorite, getFavorites } from '../controllers/favori
 
 const router = express.Router();
 
-router.post('/', authenticate, addFavorite); // Adicionar favorito
-router.delete('/:router/:section', authenticate, removeFavorite); // Remover favorito - Alterando a rota para passar router e section como parâmetros
-router.get('/', authenticate, getFavorites);// Obter favoritos do usuário
+router.post('/', authenticate, addFavorite);
+router.delete('/:router/:section', authenticate, removeFavorite);
+router.get('/', authenticate, getFavorites);
 
 export default router;

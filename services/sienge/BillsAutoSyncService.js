@@ -14,11 +14,17 @@ const { BillsSyncLog } = db;
  * SQL que retorna a lista de empreendimentos elegíveis ao auto-sync, anexando
  * companyId/companyName para que a tela agrupe por empresa.
  *
- * - companyId: extraído de raw_payload->>'idCompany' (vem do sync /v1/cost-centers)
- * - companyName: 1º raw_payload->>'companyName', 2º último payment_launch da mesma
- *   companyId, 3º fica null (frontend mostra "Empresa #{companyId}")
+ * Filtro `source='erp'`: só processa registros que vieram do sync de cost-centers
+ * do Sienge. CRM-only não tem idCompany e não faz sentido sincronizar bills.
+ * Bônus: source='erp' tem unique(source, erp_id) → não há duplicatas.
  *
- * Exportado para reuso no controller (CTE em listAutoSyncStatus).
+ * companyId: extraído de raw_payload->>'idCompany' (sync /v1/cost-centers)
+ *
+ * companyName fallback em cascata:
+ *   1. raw_payload->>'companyName' do próprio cost-center
+ *   2. raw_payload->>'companyName' de OUTRO cost-center com a mesma companyId
+ *   3. último payment_launches.company_name da mesma companyId
+ *   4. null → frontend mostra "Empresa #{companyId}"
  */
 export const ENTERPRISES_SQL = `
     SELECT
@@ -31,6 +37,15 @@ export const ENTERPRISES_SQL = `
         COALESCE(
             NULLIF(ec.raw_payload->>'companyName',''),
             (
+                SELECT NULLIF(ec2.raw_payload->>'companyName','')
+                FROM enterprise_cities ec2
+                WHERE ec2.source = 'erp'
+                  AND NULLIF(ec2.raw_payload->>'idCompany','')::int
+                      = NULLIF(ec.raw_payload->>'idCompany','')::int
+                  AND NULLIF(ec2.raw_payload->>'companyName','') IS NOT NULL
+                LIMIT 1
+            ),
+            (
                 SELECT pl.company_name
                 FROM payment_launches pl
                 WHERE pl.company_id = NULLIF(ec.raw_payload->>'idCompany','')::int
@@ -39,12 +54,23 @@ export const ENTERPRISES_SQL = `
                 LIMIT 1
             )
         ) AS company_name,
-        (sub.enterprise_city_id IS NOT NULL) AS is_recurring,
-        sub.enabled_at  AS recurring_since,
-        sub.enabled_by  AS recurring_enabled_by
+        EXISTS (
+            SELECT 1 FROM bills_auto_sync_subscriptions sub
+            WHERE sub.enterprise_city_id::bigint = ec.id::bigint
+        ) AS is_recurring,
+        (
+            SELECT sub.enabled_at FROM bills_auto_sync_subscriptions sub
+            WHERE sub.enterprise_city_id::bigint = ec.id::bigint
+            LIMIT 1
+        ) AS recurring_since,
+        (
+            SELECT sub.enabled_by FROM bills_auto_sync_subscriptions sub
+            WHERE sub.enterprise_city_id::bigint = ec.id::bigint
+            LIMIT 1
+        ) AS recurring_enabled_by
     FROM enterprise_cities ec
-    LEFT JOIN bills_auto_sync_subscriptions sub ON sub.enterprise_city_id = ec.id
-    WHERE ec.erp_id IS NOT NULL
+    WHERE ec.source = 'erp'
+      AND ec.erp_id IS NOT NULL
       AND ec.erp_id ~ '^[0-9]+$'
 `;
 
@@ -79,6 +105,7 @@ export async function runAutoSync({
     triggeredBy = 'cron',
     enterpriseCityIds = null,
     companyId = null,
+    includeNonRecurring = false,
 } = {}) {
     if (currentRun?.running) {
         console.warn('⚠️ [BillsAutoSync] Já há uma execução em andamento. Abortando nova chamada.');
@@ -88,9 +115,13 @@ export async function runAutoSync({
     // Monta filtro de escopo via CTE.
     // Usamos IN(:array) — o Sequelize expande corretamente para IN (1,2,3) com replacements.
     //
-    // Regra do cron diário (triggeredBy='cron' sem escopo): roda APENAS inscritos
-    // como recorrentes (bills_auto_sync_subscriptions). Disparo manual sem escopo
-    // pega todos os 2400+ — só usar manualmente quando quiser exatamente isso.
+    // Regra de escopo:
+    //   - enterpriseCityIds[]  → CCs específicos
+    //   - companyId            → todos os CCs daquela empresa
+    //   - SEM escopo           → APENAS recorrentes (mesmo comportamento de cron e "rodar todos" manual)
+    //
+    // Para rodar literalmente TODOS os CCs (incluindo não-recorrentes), passe a flag
+    // explícita includeNonRecurring=true. Útil só para casos especiais (carga inicial).
     let scopeFilter = '';
     const replacements = {};
 
@@ -100,7 +131,7 @@ export async function runAutoSync({
     } else if (companyId) {
         scopeFilter = `WHERE company_id = :companyId`;
         replacements.companyId = companyId;
-    } else if (triggeredBy === 'cron') {
+    } else if (!includeNonRecurring) {
         scopeFilter = `WHERE is_recurring = true`;
     }
 

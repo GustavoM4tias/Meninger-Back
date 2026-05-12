@@ -66,16 +66,16 @@ export const fetchBuildingsFromDb = async (req, res) => {
             SELECT ec.crm_id AS idempreendimento
             FROM enterprise_cities ec
             WHERE ec.crm_id IS NOT NULL
-              AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+',' ','g'))) =
-                  unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
+              AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+',' ','g'))) || ' ')
+                  LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g'))) || ' %')
 
             UNION
 
             SELECT ce.idempreendimento
             FROM cv_enterprises ce
             WHERE ce.cidade IS NOT NULL
-              AND unaccent(upper(regexp_replace(ce.cidade, '[^A-Z0-9]+',' ','g'))) =
-                  unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
+              AND (' ' || unaccent(upper(regexp_replace(ce.cidade, '[^A-Z0-9]+',' ','g'))) || ' ')
+                  LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g'))) || ' %')
           ) AS allowed
           WHERE idempreendimento IS NOT NULL
         `,
@@ -196,8 +196,8 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
         SELECT 1
         FROM enterprise_cities ec
         WHERE ec.source = 'crm' AND ec.crm_id = :id
-          AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-              unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+          AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+              LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
         LIMIT 1
       `, {
         replacements: { id, userCity },

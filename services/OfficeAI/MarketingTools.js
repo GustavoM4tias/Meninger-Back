@@ -216,8 +216,8 @@ async function executeQueryLeads(args, user) {
              NULLIF(e_city->>'idempreendimento','')::int,
              NULLIF(e_city->>'id_empreendimento','')::int
            )
-      WHERE unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-            unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+      WHERE (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+         LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
     )`);
   }
 
@@ -415,8 +415,8 @@ async function executeQueryEvents(args, user) {
   // Padrão idêntico ao Faturamento — tolera "São Paulo" / "SAO PAULO" / "sao-paulo".
   if (effectiveCity) {
     whereClauses.push(`
-      unaccent(upper(regexp_replace(COALESCE(ev.address->>'city', ''), '[^A-Z0-9]+', ' ', 'g'))) =
-      unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+      (' ' || unaccent(upper(regexp_replace(COALESCE(ev.address->>'city', ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+      LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
     `);
     replacements.userCity = effectiveCity;
   }

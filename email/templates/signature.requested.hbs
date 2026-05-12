@@ -1,0 +1,30 @@
+<h2 style="margin:0 0 8px 0;">📝 Documento aguardando sua assinatura</h2>
+<p class="muted" style="margin:0 0 16px 0; color:#6b7280;">
+  Você foi designado como assinante de um documento no Menin Office.
+</p>
+
+<div style="margin:16px 0; padding:16px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px;">
+  <p style="margin:0 0 6px 0; font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.05em;">Documento</p>
+  <p style="margin:0 0 12px 0; font-size:15px; font-weight:600; color:#111827;">{{documentName}}</p>
+
+  {{#if requesterName}}
+  <p style="margin:0 0 4px 0; font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.05em;">Solicitado por</p>
+  <p style="margin:0 0 12px 0; font-size:13px; color:#374151;">{{requesterName}}</p>
+  {{/if}}
+
+  {{#if documentUrl}}
+  <a href="{{documentUrl}}" target="_blank" style="display:inline-block; margin-top:6px; padding:8px 14px; background:#2563eb; color:#fff; text-decoration:none; font-weight:600; font-size:13px; border-radius:6px;">
+    🔍 Visualizar documento
+  </a>
+  {{/if}}
+</div>
+
+<p style="margin:0 0 12px 0; font-size:14px; color:#111827;">
+  Acesse o sistema para revisar e assinar. Sua assinatura é registrada com autenticação biométrica e auditoria completa.
+</p>
+
+{{#if signUrl}}
+<a href="{{signUrl}}" target="_blank" style="display:inline-block; margin-top:8px; padding:12px 22px; background:#1d4ed8; color:#fff; text-decoration:none; font-weight:700; font-size:14px; border-radius:8px;">
+  Ir para o Menin Office
+</a>
+{{/if}}

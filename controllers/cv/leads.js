@@ -135,8 +135,8 @@ export async function getLeads(req, res) {
                 NULLIF(e_city->>'idempreendimento','')::int,
                 NULLIF(e_city->>'id_empreendimento','')::int
               )
-          WHERE unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-                unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+          WHERE (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+                LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
         )`);
     }
     const userCity = effectiveCity; // mantém a variável usada no log abaixo

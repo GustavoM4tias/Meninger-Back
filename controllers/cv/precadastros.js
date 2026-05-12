@@ -184,8 +184,8 @@ export const listPrecadastros = async (req, res) => {
               :isAdmin = TRUE
               OR (
                 ec_emp.city_resolved IS NOT NULL
-                AND unaccent(upper(regexp_replace(ec_emp.city_resolved, '[^A-Z0-9]+',' ','g'))) =
-                    unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g')))
+                AND (' ' || unaccent(upper(regexp_replace(ec_emp.city_resolved, '[^A-Z0-9]+',' ','g'))) || ' ')
+                    LIKE ('% ' || unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g'))) || ' %')
               )
             )
           ORDER BY p.data_cad DESC
@@ -233,8 +233,8 @@ export const getPrecadastro = async (req, res) => {
                   (ec.source = 'crm' AND ec.crm_id = :idemp)
                   OR (ec.erp_id IS NOT NULL AND ec.erp_id = :erpId)
                 )
-                AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-                    unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+                AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+                    LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
                 LIMIT 1
             `, {
                 replacements: {
