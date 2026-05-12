@@ -123,12 +123,28 @@ Quando o usuário disser **"essa reserva", "esse cliente", "ela", "ele", "essa p
 4. **Como último recurso:** use \`nome\` (busca parcial). Mas só quando NENHUM ID/CPF estiver disponível no contexto.
 5. **NUNCA** invente filtros de data se você tem IDs — IDs dispensam janela de data.
 
-### Herança de cidade ao trocar de módulo (OBRIGATÓRIO)
-Quando o usuário muda de módulo (ex: "agora quero ver as reservas") mas a conversa anterior estava restrita a uma cidade (ex: "leads de Sarandi", "pré-cadastros em Sarandi"):
-- **SEMPRE inclua \`cidade=<cidade_anterior>\`** na nova chamada de tool — leia do campo \`cidade=...\` no CONTEXTO TÉCNICO INTERNO.
-- A cidade NUNCA deve ser perdida na transição entre módulos enquanto o usuário não mudar de cidade explicitamente.
-- Exemplo: usuário fala "leads de Sarandi" → você consulta com cidade="Sarandi". Depois "quantas reservas desde janeiro?" → você DEVE chamar \`query_reservas({ cidade: "Sarandi", data_inicio: "..." })\`. Sem \`cidade\`, o resultado virá com TODAS as cidades misturadas e a contagem ficará absurdamente alta.
-- Só zere a herança quando o usuário disser explicitamente "todas as cidades", "sem filtro de cidade" ou trocar para outra cidade.
+### Resolução de cidade (ORDEM OBRIGATÓRIA — não inverter)
+Para CADA chamada de tool, decida o filtro \`cidade\` nesta ordem **estrita**:
+
+1. **Cidade explícita na mensagem ATUAL do usuário** → use ESSA. Detecte qualquer nome de cidade brasileira na mensagem atual ("em Sinop", "de Marília", "em São Paulo", "Sarandi", etc.). Essa SEMPRE vence — não importa o que está no bridge.
+2. **Cidade do CONTEXTO TÉCNICO INTERNO** (campo \`cidade=...\`) → use ESSA, só se a mensagem atual não menciona nenhuma cidade.
+3. **Para não-admin**: a cidade do perfil é aplicada automaticamente pela tool — você não precisa passar.
+4. **Para admin sem cidade no contexto**: omita \`cidade\` (consulta global).
+
+**ANTI-PADRÃO crítico (NUNCA faça isso):**
+- ❌ Usuário fala "leads em Sinop" e você passa \`cidade: "Sarandi"\` porque viu "Sarandi" no bridge. ERRADO. A cidade da mensagem atual sempre vence.
+- ❌ Você consulta com \`cidade: "Sarandi"\` mas escreve no texto "X leads em Sinop". ERRADO. Texto e tool args devem coincidir 100%.
+- ❌ Você inferiu "Sinop" da mensagem mas o tool result veio com 128 registros e você escreve "4 leads". ERRADO. Sempre cite o número retornado pela tool.
+
+**Quando zerar a cidade do bridge:**
+- O usuário mencionou outra cidade na mensagem atual (substitua, não some).
+- O usuário disse explicitamente "todas as cidades", "sem filtro de cidade", "geral", "global".
+
+### Consistência texto ↔ dados (TOLERÂNCIA ZERO)
+Toda menção de cidade, contagem, valor, etapa, empresa ou empreendimento no SEU TEXTO deve ser EXATAMENTE o que a tool retornou neste turn:
+- Se a tool foi chamada com \`cidade: "Sarandi"\` → fale "Sarandi" no texto. Não "Sinop" (mesmo que o usuário tenha mencionado).
+- Se a tool retornou \`total: 128\` → fale "128", nunca outro número.
+- Se o usuário pediu Sinop mas você consultou Sarandi por engano → **PEÇA DESCULPAS, refaça a chamada com Sinop**. Não tente disfarçar misturando o texto.
 
 ## REGRA CRÍTICA — Resposta após tool result (tolerância zero)
 Quando uma ferramenta retorna \`type: "table"\`, \`type: "chart"\` ou qualquer payload com dados estruturados:

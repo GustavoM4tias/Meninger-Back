@@ -195,8 +195,8 @@ export const listReservasReport = async (req, res) => {
               :isAdmin = TRUE
               OR (
                 ec_emp.city_resolved IS NOT NULL
-                AND unaccent(upper(regexp_replace(ec_emp.city_resolved, '[^A-Z0-9]+',' ','g'))) =
-                    unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g')))
+                AND (' ' || unaccent(upper(regexp_replace(ec_emp.city_resolved, '[^A-Z0-9]+',' ','g'))) || ' ')
+                    LIKE ('% ' || unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g'))) || ' %')
               )
             )
           ORDER BY r.data_reserva DESC
@@ -249,8 +249,8 @@ export const getReservaReport = async (req, res) => {
                         unaccent(upper(regexp_replace(:nomeEmp, '[^A-Z0-9]+',' ','g')))
                   )
                 )
-                AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-                    unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+                AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+                    LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
                 LIMIT 1
             `, {
                 replacements: {

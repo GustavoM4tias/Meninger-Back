@@ -28,6 +28,9 @@ export async function listAutoSyncStatus(req, res) {
                 ec.city_override         AS city_override,
                 ec.company_id            AS company_id,
                 ec.company_name          AS company_name,
+                ec.is_recurring          AS is_recurring,
+                ec.recurring_since       AS recurring_since,
+                ec.recurring_enabled_by  AS recurring_enabled_by,
                 bsl.started_at           AS last_started_at,
                 bsl.finished_at          AS last_finished_at,
                 bsl.status               AS last_status,
@@ -117,6 +120,7 @@ export async function runAutoSyncNow(req, res) {
             enterpriseCityId,
             enterpriseCityIds,
             companyId,
+            includeNonRecurring = false,
         } = req.body || {};
 
         if (!['default', 'full', 'bootstrap'].includes(mode)) {
@@ -138,6 +142,7 @@ export async function runAutoSyncNow(req, res) {
                     triggeredBy: 'manual',
                     enterpriseCityIds: scopeIds,
                     companyId: !scopeIds && companyId ? Number(companyId) : null,
+                    includeNonRecurring: !!includeNonRecurring,
                 });
             } catch (err) {
                 console.error('[BillsAutoSync] run-now background error:', err);
@@ -211,26 +216,31 @@ export async function setRecurring(req, res) {
         const ids = enterpriseCityIds.map(Number).filter(Number.isFinite);
 
         if (enabled) {
-            const rows = ids.map(id => ({
-                enterprise_city_id: id,
-                enabled_by: req.user.name || req.user.email || String(req.user.id),
-                enabled_at: new Date(),
-            }));
-            // Idempotente: ignora ids já inscritos
-            await BillsAutoSyncSubscription.bulkCreate(rows, { ignoreDuplicates: true });
+            // INSERT explícito por id — evita quirks de bulkCreate com PK customizado.
+            // Usa SQL puro com ON CONFLICT para garantir idempotência.
+            const enabledBy = req.user.name || req.user.email || String(req.user.id);
+            for (const id of ids) {
+                await db.sequelize.query(
+                    `INSERT INTO bills_auto_sync_subscriptions
+                        (enterprise_city_id, enabled_by, enabled_at, created_at, updated_at)
+                     VALUES (:id, :by, NOW(), NOW(), NOW())
+                     ON CONFLICT (enterprise_city_id) DO NOTHING`,
+                    { replacements: { id, by: enabledBy } }
+                );
+            }
         } else {
-            await BillsAutoSyncSubscription.destroy({
-                where: { enterprise_city_id: { [Op.in]: ids } },
-            });
+            await db.sequelize.query(
+                `DELETE FROM bills_auto_sync_subscriptions WHERE enterprise_city_id IN (:ids)`,
+                { replacements: { ids } }
+            );
         }
 
-        return res.json({
-            ok: true,
-            enabled,
-            affected: ids.length,
-        });
+        return res.json({ ok: true, enabled, affected: ids.length });
     } catch (err) {
-        console.error('[BillsAutoSync] setRecurring error:', err);
-        return res.status(500).json({ error: err.message });
+        console.error('[BillsAutoSync] setRecurring error:', err?.message, '| parent:', err?.parent?.message);
+        return res.status(500).json({
+            error: err.message,
+            sqlDetail: err?.parent?.message,
+        });
     }
 }

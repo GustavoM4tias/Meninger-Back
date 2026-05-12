@@ -15,8 +15,8 @@ async function getVisibleEnterpriseIds(req) {
     const rows = await db.sequelize.query(`
         SELECT crm_id FROM enterprise_cities
         WHERE source = 'crm' AND crm_id IS NOT NULL
-          AND unaccent(upper(regexp_replace(COALESCE(city_override, default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-              unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+          AND (' ' || unaccent(upper(regexp_replace(COALESCE(city_override, default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+              LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
     `, { replacements: { userCity }, type: db.Sequelize.QueryTypes.SELECT });
     return rows.map(r => Number(r.crm_id)).filter(Boolean);
 }
@@ -216,8 +216,8 @@ export const fetchReservaPagamentos = async (req, res) => {
                    AND ec.crm_id = NULLIF(r.unidade_json->>'idempreendimento_cv','')::int)
                 )
                 WHERE r.idreserva = :idreserva
-                  AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-                      unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g')))
+                  AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+                      LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
                 LIMIT 1
             `, {
                 replacements: { idreserva: parseInt(idreserva, 10) || 0, userCity },

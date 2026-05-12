@@ -66,7 +66,22 @@ function getSmartModels() {
  * para preservar coerência sem custo extra na maioria das interações.
  */
 function selectModelPool(userMessage) {
-  const text = (userMessage || '').toLowerCase();
+  const original = userMessage || '';
+  const text = original.toLowerCase();
+
+  // Sinal 0: menção de filtro explícito (cidade) com módulo no escopo — flash
+  // costuma falhar em arbitrar herança vs override; pro respeita melhor a regra.
+  // Pega ambos: "em Sinop" (capitalizado) ou "em sinop" + palavra de módulo.
+  const hasCapitalizedAfterPrep =
+    /\b(?:em|de|para|no|na)\s+[A-ZÁÉÍÓÚÃÕÂÊÔÇ][a-zA-Záéíóúãõâêôç]{2,}/.test(original);
+  const MODULE_KEYWORDS = [
+    'lead', 'leads', 'reserva', 'reservas', 'pré-cad', 'pre-cad', 'precad',
+    'pasta', 'pastas', 'empreendiment', 'evento', 'eventos', 'mcmv',
+    'cliente', 'clientes', 'cca', 'imobiliária', 'imobiliaria', 'corretor',
+  ];
+  const hasModuleKw = MODULE_KEYWORDS.some(kw => text.includes(kw));
+  const hasPrepWord = /\b(?:em|de|para|no|na)\s+[a-záéíóúãõâêôç]{3,}\b/i.test(text);
+  if (hasCapitalizedAfterPrep || (hasModuleKw && hasPrepWord)) return 'smart';
 
   // Sinal 1: mensagem longa
   if (text.length > 280) return 'smart';

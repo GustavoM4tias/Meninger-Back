@@ -1,5 +1,7 @@
 // controllers/comercial/enterpriseConditionController.js
 import db from '../../models/sequelize/index.js';
+import NotificationService from '../../services/notification/NotificationService.js';
+import { NotificationType } from '../../services/notification/notificationTypes.js';
 
 const {
     EnterpriseCondition,
@@ -126,6 +128,11 @@ async function getUnitCountForStage(idetapa) {
 }
 
 async function getPriceDistribution(idempreendimento, idetapa = null) {
+    // Ficha avulsa (sem CV) ou idempreendimento inválido (NaN/null/0) → não há distribuição
+    if (!idetapa && !(Number.isFinite(idempreendimento) && idempreendimento > 0)) {
+        return [];
+    }
+
     const stages = idetapa
         ? [{ idetapa }]
         : await CvEnterpriseStage.findAll({
@@ -268,13 +275,30 @@ export const getCondition = async (req, res) => {
 
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
         if (!isAdmin(req)) {
-            // Comum: vê apenas approved + closed, e só de empreendimentos da sua cidade
-            if (!['approved', 'closed'].includes(condition.status)) {
-                return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
+            // Exceção: o usuário é signatário do SignatureDocument vinculado à ficha?
+            // Se sim, libera leitura mesmo com status pending_approval (precisa ver para assinar).
+            let isAssignedSigner = false;
+            if (condition.status === 'pending_approval' && condition.signature_document_id) {
+                const signerRow = await SignatureDocumentSigner.findOne({
+                    where: {
+                        document_id: condition.signature_document_id,
+                        user_id: req.user?.id,
+                    },
+                    attributes: ['id'],
+                });
+                isAssignedSigner = !!signerRow;
             }
-            const visibleIds = await getVisibleEnterpriseIdsForUser(req);
-            if (!visibleIds || !visibleIds.includes(Number(condition.idempreendimento))) {
-                return res.status(403).json({ error: 'Você não tem acesso a este empreendimento.' });
+
+            if (!isAssignedSigner) {
+                // Comum: vê apenas approved + closed
+                if (!['approved', 'closed'].includes(condition.status)) {
+                    return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
+                }
+                // E só de empreendimentos da sua cidade
+                const visibleIds = await getVisibleEnterpriseIdsForUser(req);
+                if (!visibleIds || !visibleIds.includes(Number(condition.idempreendimento))) {
+                    return res.status(403).json({ error: 'Você não tem acesso a este empreendimento.' });
+                }
             }
         }
 
@@ -620,17 +644,23 @@ export const submitForApproval = async (req, res) => {
             return res.status(422).json({ error: 'Nenhum aprovador configurado. Configure os aprovadores em Configurações > Comercial.' });
         }
 
-        // Cria SignatureDocument com os aprovadores configurados
+        // Cria SignatureDocument com os aprovadores configurados.
+        // original_document_url aponta para o detalhe da ficha no frontend — permite que
+        // o aprovador clique em "Visualizar documento" no modal de assinatura.
         const enterpriseName = condition.enterprise?.nome || `Empreendimento #${condition.idempreendimento}`;
         const monthLabel = condition.reference_month?.substring(0, 7);
+        const frontendBase = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
+        const fichaUrl = `${frontendBase}/comercial/conditions/${condition.id}`;
 
         const signers = [approver1Id, approver2Id].filter(Boolean);
         const signDoc = await SignatureDocument.create({
             created_by: req.user?.id,
             document_name: `Ficha Comercial — ${enterpriseName} — ${monthLabel}`,
+            original_document_url: fichaUrl,
             status: 'PENDING',
             required_signers_count: signers.length,
             signed_signers_count: 0,
+            metadata: { condition_id: condition.id, idempreendimento: condition.idempreendimento, reference_month: monthLabel },
         });
 
         for (let i = 0; i < signers.length; i++) {
@@ -640,7 +670,7 @@ export const submitForApproval = async (req, res) => {
                 requested_by: req.user?.id,
                 sign_order: i + 1,
                 is_required: true,
-                status: 'PENDING',
+                status: 'REQUESTED', // estado inicial — initiateSignerSession transiciona para PENDING ao abrir o modal
             });
         }
 
@@ -653,6 +683,30 @@ export const submitForApproval = async (req, res) => {
             approval_history: newHistory,
             updated_by: req.user?.id,
         });
+
+        // Notifica cada signatário (in-app + e-mail) — não bloqueia a resposta.
+        // O link in-app aponta para a tela de assinatura com o docId já marcado,
+        // abrindo o modal direto. O e-mail tem CTA pro mesmo destino + um "ver documento"
+        // separado que leva pra ficha em si.
+        const signUrl = `${frontendBase}/tools/signature?tab=pending&docId=${signDoc.id}`;
+        NotificationService.notify({
+            type: NotificationType.SIGNATURE_REQUESTED,
+            recipients: { users: signers },
+            title: `Documento aguardando sua assinatura`,
+            body:  `${enterpriseName} — ${monthLabel}`,
+            link:  `/tools/signature?tab=pending&docId=${signDoc.id}`,
+            importance: 8,
+            data: {
+                signatureDocumentId: signDoc.id,
+                conditionId:         condition.id,
+            },
+            emailData: {
+                documentName:  signDoc.document_name,
+                requesterName: req.user?.username || 'Menin Office',
+                documentUrl:   fichaUrl,    // botão "Visualizar documento" → ficha
+                signUrl:       signUrl,     // botão "Ir para o Menin Office" → tela de assinatura
+            },
+        }).catch(err => console.warn('[submitForApproval] notify failed:', err.message));
 
         return res.json({ ok: true, status: 'pending_approval', signatureDocumentId: signDoc.id });
     } catch (e) {
@@ -1257,9 +1311,19 @@ export const getPriceDistributionForEnterprise = async (req, res) => {
         const { idempreendimento } = req.params;
         const { idetapa } = req.query;
 
+        // Normaliza — params podem vir como "null", "undefined", "NaN" (string) ou faltar de fato.
+        // Em qualquer caso de inválido (típico em fichas avulsas), retorna lista vazia.
+        const empId = Number(idempreendimento);
+        const stageId = idetapa ? Number(idetapa) : null;
+        if (!Number.isFinite(empId) || empId <= 0) {
+            if (!Number.isFinite(stageId) || stageId <= 0) {
+                return res.json([]);
+            }
+        }
+
         const distribution = await getPriceDistribution(
-            Number(idempreendimento),
-            idetapa ? Number(idetapa) : null
+            Number.isFinite(empId) ? empId : null,
+            Number.isFinite(stageId) ? stageId : null
         );
 
         return res.json(distribution);

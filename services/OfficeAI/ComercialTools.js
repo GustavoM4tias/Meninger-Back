@@ -311,8 +311,8 @@ async function executeQueryEnterprises(args, user) {
   // Cidade trancada — não-admin nunca pode usar args.cidade pra outra cidade
   if (effectiveCity) {
     whereClauses.push(`
-      unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ce.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-      unaccent(upper(regexp_replace(:city, '[^A-Z0-9]+', ' ', 'g')))
+      (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ce.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+      LIKE ('% ' || unaccent(upper(regexp_replace(:city, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
     `);
     replacements.city = effectiveCity;
   }
@@ -685,8 +685,8 @@ async function executeQueryPrecadastros(args, user) {
       EXISTS (
         SELECT 1 FROM enterprise_cities ec
         WHERE ec.source = 'crm' AND ec.crm_id = p.idempreendimento
-          AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-              unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g')))
+          AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+              LIKE ('% ' || unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
       )
     `);
   }
@@ -1152,8 +1152,8 @@ async function executeQueryReservas(args, user) {
                   '[^A-Z0-9]+',' ','g')))
           )
         )
-        AND unaccent(upper(regexp_replace(COALESCE(ec_r.city_override, ec_r.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) =
-            unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g')))
+        AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec_r.city_override, ec_r.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+            LIKE ('% ' || unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
       )
     `);
   }

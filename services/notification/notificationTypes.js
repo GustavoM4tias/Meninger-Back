@@ -16,11 +16,12 @@
 // "whatsappData" passado em notify) para preencher {{1}}, {{2}}, ... do template.
 
 export const NotificationType = {
-    EVENT_CREATED:   'event.created',
-    EVENT_REMINDER:  'event.reminder',
-    SUPPORT_OPENED:  'support.opened',
-    SUPPORT_UPDATED: 'support.updated',
-    GENERIC:         'generic',
+    EVENT_CREATED:        'event.created',
+    EVENT_REMINDER:       'event.reminder',
+    SUPPORT_OPENED:       'support.opened',
+    SUPPORT_UPDATED:      'support.updated',
+    SIGNATURE_REQUESTED:  'signature.requested',
+    GENERIC:              'generic',
 };
 
 export const NOTIFICATION_CATALOG = {
@@ -77,6 +78,15 @@ export const NOTIFICATION_CATALOG = {
             category: 'UTILITY',
             variables: ['protocol', 'latestUpdate'],
         },
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.SIGNATURE_REQUESTED]: {
+        label: 'Documento aguardando assinatura',
+        group: 'Assinatura Digital',
+        description: 'Quando um documento é enviado para você assinar (ex.: ficha comercial enviada para autorização).',
+        emailType: 'signature.requested',
+        whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },

@@ -76,6 +76,42 @@ function buildPgUrls() {
   };
 }
 
+/**
+ * Atualiza o stage do log + registra timing (fecha o anterior, abre o novo).
+ * Idempotente: chamar duas vezes com o mesmo stage não duplica.
+ */
+async function setStage(log, name) {
+  const now = new Date().toISOString();
+  const timings = { ...(log.stage_timings || {}) };
+
+  // Fecha o stage anterior se ainda aberto
+  const prev = log.stage;
+  if (prev && timings[prev] && !timings[prev].finished_at) {
+    timings[prev].finished_at = now;
+  }
+
+  // Abre o novo (se ainda não tem)
+  if (!timings[name]) {
+    timings[name] = { started_at: now };
+  }
+
+  await log.update({ stage: name, stage_timings: timings });
+  log.stage = name;
+  log.stage_timings = timings;
+}
+
+/**
+ * Fecha o stage corrente no momento de uma falha, pra UI mostrar quanto durou.
+ */
+async function closeCurrentStage(log) {
+  const timings = { ...(log.stage_timings || {}) };
+  const curr = log.stage;
+  if (curr && timings[curr] && !timings[curr].finished_at) {
+    timings[curr].finished_at = new Date().toISOString();
+    await log.update({ stage_timings: timings }).catch(() => {});
+  }
+}
+
 // ─── Fase 1: download do Sienge + MD5 ─────────────────────────────────────────
 
 async function fetchExpectedMd5() {
@@ -99,7 +135,7 @@ function isTransientNetworkError(err) {
   return /terminated|econnreset|etimedout|enotfound|eai_again|und_err|socket hang up|network|fetch failed|other side closed|aborted/i.test(text);
 }
 
-async function downloadAndHashOnce(localPath) {
+async function downloadAndHashOnce(localPath, log) {
   const res = await fetch(SIENGE_URL, {
     headers: {
       Authorization: siengeAuthHeader(),
@@ -110,28 +146,53 @@ async function downloadAndHashOnce(localPath) {
   if (!res.ok) throw new Error(`Download Sienge falhou: ${res.status} ${res.statusText}`);
   if (!res.body) throw new Error('Resposta do Sienge sem body');
 
+  // Content-Length, quando o Sienge manda, serve pra UI calcular % progresso
+  const contentLength = Number(res.headers.get('content-length')) || null;
+  if (contentLength && log) {
+    await log.update({ file_size_bytes: contentLength }).catch(() => {});
+  }
+
   const hash = createHash('md5');
   const fileStream = createWriteStream(localPath);
+  let bytesAcc = 0;
+  let lastFlush = 0;
+  const FLUSH_INTERVAL_MS = 2000;
+
   const hashTransform = new Transform({
     transform(chunk, _enc, cb) {
       hash.update(chunk);
+      bytesAcc += chunk.length;
+      if (log) {
+        const now = Date.now();
+        if (now - lastFlush > FLUSH_INTERVAL_MS) {
+          lastFlush = now;
+          // fire-and-forget pra não bloquear o stream
+          log.update({ bytes_downloaded: bytesAcc }).catch(() => {});
+        }
+      }
       cb(null, chunk);
     },
   });
+
   await pipeline(Readable.fromWeb(res.body), hashTransform, fileStream);
+
+  if (log) await log.update({ bytes_downloaded: bytesAcc }).catch(() => {});
+
   const stats = await stat(localPath);
   return { md5: hash.digest('hex').toLowerCase(), size: stats.size };
 }
 
-async function downloadAndHash(localPath) {
+async function downloadAndHash(localPath, log) {
   const maxAttempts = Number(process.env.SIENGE_DOWNLOAD_MAX_ATTEMPTS || 3);
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (log) await log.update({ download_attempts: attempt }).catch(() => {});
     try {
       if (attempt > 1) {
         console.log(`🔁 [SiengeBackup] Retry download tentativa ${attempt}/${maxAttempts}`);
+        if (log) await log.update({ bytes_downloaded: 0 }).catch(() => {});
       }
-      return await downloadAndHashOnce(localPath);
+      return await downloadAndHashOnce(localPath, log);
     } catch (err) {
       lastErr = err;
       const detail = describeFetchError(err);
@@ -182,7 +243,7 @@ async function ensureTargetDatabaseExists() {
   }
 }
 
-function runPgRestore(dmpcPath) {
+function runPgRestore(dmpcPath, log) {
   const { targetUrl } = buildPgUrls();
 
   return new Promise((resolve, reject) => {
@@ -192,6 +253,7 @@ function runPgRestore(dmpcPath) {
       '--no-owner',
       '--no-privileges',
       '--no-acl',
+      '--verbose',                       // emite "processing data for table X" → UI
       '--jobs', String(PG_RESTORE_JOBS),
       '--dbname', targetUrl,
       dmpcPath,
@@ -201,6 +263,9 @@ function runPgRestore(dmpcPath) {
 
     let stderr = '';
     let killed = false;
+    let lastFlush = 0;
+    const FLUSH_INTERVAL_MS = 2000;
+
     const timer = setTimeout(() => {
       killed = true;
       try { proc.kill('SIGKILL'); } catch {}
@@ -212,6 +277,14 @@ function runPgRestore(dmpcPath) {
       if (/error|fatal|warning/i.test(s)) {
         console.log('[pg_restore]', s.trim());
       }
+      if (log) {
+        const now = Date.now();
+        if (now - lastFlush > FLUSH_INTERVAL_MS) {
+          lastFlush = now;
+          // só os últimos 4KB pra UI ver a atividade corrente
+          log.update({ restore_log_tail: stderr.slice(-4000) }).catch(() => {});
+        }
+      }
     });
 
     proc.on('error', err => {
@@ -221,6 +294,9 @@ function runPgRestore(dmpcPath) {
 
     proc.on('close', code => {
       clearTimeout(timer);
+      const finalTail = stderr.slice(-4000);
+      if (log) log.update({ restore_log_tail: finalTail }).catch(() => {});
+
       if (killed) return reject(new Error('pg_restore timeout'));
 
       // 0 = success, 1 = warnings (esperado com --no-owner/--no-acl/--clean)
@@ -233,15 +309,15 @@ function runPgRestore(dmpcPath) {
 }
 
 async function restoreIntoPostgres(dmpcPath, log) {
+  await setStage(log, 'restoring');
   await log.update({
     import_status: 'running',
     import_job_name: 'pg_restore',
     import_started_at: new Date(),
-    stage: 'restoring',
   });
 
   await ensureTargetDatabaseExists();
-  const result = await runPgRestore(dmpcPath);
+  const result = await runPgRestore(dmpcPath, log);
 
   const finishedAt = new Date();
   await log.update({
@@ -267,16 +343,19 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
     status: 'running',
     stage: 'starting',
     triggered_by: triggeredBy,
+    stage_timings: {
+      starting: { started_at: startedAt.toISOString(), finished_at: startedAt.toISOString() },
+    },
   });
 
   try {
     // 1. MD5 esperado
-    await log.update({ stage: 'fetching_md5' });
+    await setStage(log, 'fetching_md5');
     const expectedMd5 = await fetchExpectedMd5();
 
     // 2. Download + hash local
-    await log.update({ stage: 'downloading' });
-    const { md5: actualMd5, size } = await downloadAndHash(localGz);
+    await setStage(log, 'downloading');
+    const { md5: actualMd5, size } = await downloadAndHash(localGz, log);
 
     await log.update({
       md5_expected: expectedMd5,
@@ -290,7 +369,7 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
     }
 
     // 3. Descomprime localmente
-    await log.update({ stage: 'decompressing' });
+    await setStage(log, 'decompressing');
     await decompressGzToFile(localGz, localDmpc);
     await unlink(localGz).catch(() => {});
 
@@ -315,10 +394,10 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
     // 5. Cleanup local
     await unlink(localDmpc).catch(() => {});
 
+    await setStage(log, 'done');
     const finishedAt = new Date();
     await log.update({
       status: 'success',
-      stage: 'done',
       finished_at: finishedAt,
       duration_ms: finishedAt - startedAt,
     });
@@ -326,6 +405,7 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
     return { ok: true, logId: log.id, size };
   } catch (err) {
     const finishedAt = new Date();
+    await closeCurrentStage(log);
     await log.update({
       status: 'failed',
       finished_at: finishedAt,
