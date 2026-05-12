@@ -1,6 +1,9 @@
 # Configuração do Nixpacks pro deploy no Railway.
 # Inclui o binário pg_restore (do pacote postgresql) usado pelo
 # SiengeBackupService pra restaurar o dump diário do Sienge no Postgres.
+#
+# nodejs_22 = última LTS estável disponível no nixpkgs no commit padrão do nixpacks.
+# nodejs_24 só está em nixpkgs muito recente — pode não estar no commit que o nixpacks resolve.
 
 [phases.setup]
-nixPkgs = ["nodejs_24", "postgresql_17"]
+nixPkgs = ["nodejs_22", "postgresql_17"]
