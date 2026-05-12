@@ -139,11 +139,6 @@ async function bootServer() {
     ['User', db.User],                                       // adicionar daily_alert_limit
     ['AlertTriggerLog', db.AlertTriggerLog],                 // enum suppressed_daily_limit
     ['AlertPendingReply', db.AlertPendingReply],             // enum awaiting_reply + meta_message_id
-    ['Favorite', db.Favorite],                               // router/section VARCHAR(120) + created_at DEFAULT NOW()
-    ['SiengeBill', db.SiengeBill],                           // is_settled, current_status, installments_synced_at, last_full_sync_at
-    ['Expense', db.Expense],                                 // status, paid_at
-    ['BillsSyncLog', db.BillsSyncLog],                       // tabela nova
-    ['BillsAutoSyncSubscription', db.BillsAutoSyncSubscription], // tabela nova
   ]) {
     try {
       await model.sync({ alter: true });
