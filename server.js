@@ -54,6 +54,7 @@ import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import billsAutoSyncScheduler from './scheduler/billsAutoSyncScheduler.js';
 import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
+import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import AlertEngine from './services/alerts/AlertEngine.js';
 
@@ -153,6 +154,7 @@ async function bootServer() {
   // Idempotente — pode rodar a cada boot sem efeito colateral.
   await ensureBillsAutoSyncSchema();
   await ensureSiengeBackupLogSchema();
+  await ensureBoletoSchema();
 
   await seedInitialTypes();
 
