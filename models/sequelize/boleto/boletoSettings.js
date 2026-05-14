@@ -24,11 +24,21 @@ export default (sequelize, DataTypes) => {
             comment: 'IDs das séries de entrada aceitas (JSON array). Ex: [21] ou [21,22]',
             get() {
                 const raw = this.getDataValue('idserie_ra');
-                try { return JSON.parse(raw || '[21]'); } catch { return [21]; }
+                let parsed;
+                try { parsed = JSON.parse(raw || '[21]'); } catch { return [21]; }
+                // Tolera dados legados aninhados como [[[21,9]]] vindos do sync alter
+                if (Array.isArray(parsed)) {
+                    const flat = parsed.flat(Infinity).map(Number).filter(n => Number.isFinite(n) && n > 0);
+                    return Array.from(new Set(flat));
+                }
+                const n = Number(parsed);
+                return Number.isFinite(n) && n > 0 ? [n] : [];
             },
             set(val) {
-                const arr = Array.isArray(val) ? val : [val];
-                this.setDataValue('idserie_ra', JSON.stringify(arr.map(Number).filter(Boolean)));
+                const raw = Array.isArray(val) ? val : [val];
+                const flat = raw.flat(Infinity).map(Number).filter(n => Number.isFinite(n) && n > 0);
+                const unique = Array.from(new Set(flat));
+                this.setDataValue('idserie_ra', JSON.stringify(unique));
             },
         },
 

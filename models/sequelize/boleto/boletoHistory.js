@@ -15,6 +15,17 @@ export default (sequelize, DataTypes) => {
         valor: {
             type: DataTypes.DECIMAL(15, 2),
             allowNull: true,
+            comment: 'Valor efetivamente emitido no boleto (após aplicação de regra de comissão, se houver).',
+        },
+        valor_original: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+            comment: 'Valor original da série na reserva, antes da regra de comissão embutida.',
+        },
+        comissao_percentual_aplicada: {
+            type: DataTypes.DECIMAL(6, 2),
+            allowNull: true,
+            comment: 'Percentual aplicado pela regra de comissão (null = sem regra).',
         },
         vencimento: {
             type: DataTypes.DATEONLY,

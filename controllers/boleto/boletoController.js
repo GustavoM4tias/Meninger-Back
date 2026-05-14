@@ -70,10 +70,24 @@ export async function updateSettings(req, res) {
             'situacao_sucesso_id', 'situacao_erro_id',
             'active',
         ];
-        // Normaliza idserie_ra para array antes de salvar
+        // Normaliza idserie_ra: aceita string "21,9", array, ou aninhamentos legados.
+        // O setter do model também faz flatten, mas normalizamos aqui antes para
+        // garantir uma única forma canônica chegar até ele.
         if (req.body.idserie_ra !== undefined) {
             const raw = req.body.idserie_ra;
-            req.body.idserie_ra = Array.isArray(raw) ? raw : [raw];
+            let arr;
+            if (Array.isArray(raw)) {
+                arr = raw;
+            } else if (typeof raw === 'string') {
+                arr = raw.split(',');
+            } else {
+                arr = [raw];
+            }
+            const flat = arr
+                .flat(Infinity)
+                .map(v => Number(String(v).trim()))
+                .filter(n => Number.isFinite(n) && n > 0);
+            req.body.idserie_ra = Array.from(new Set(flat));
         }
         const updates = {};
         for (const key of allowed) {
@@ -129,6 +143,101 @@ export async function getHistoryItem(req, res) {
         const item = await db.BoletoHistory.findByPk(req.params.id);
         if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
         return res.json(item);
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
+ * Re-dispara o processamento para uma reserva (admin only).
+ * Útil quando a configuração foi corrigida e o admin quer reprocessar
+ * uma reserva que falhou anteriormente.
+ */
+export async function retryHistoryItem(req, res) {
+    try {
+        const item = await db.BoletoHistory.findByPk(req.params.id);
+        if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
+
+        res.status(200).json({ retrying: true, idreserva: item.idreserva });
+
+        processBoletoWebhook({ idreserva: Number(item.idreserva), idtransacao: item.idtransacao || null })
+            .catch(err => console.error('[BOLETO_RETRY] Erro no re-disparo:', err.message));
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+// ── Comission Rules (admin) ───────────────────────────────────────────────────
+
+export async function listComissionRules(req, res) {
+    try {
+        const rules = await db.BoletoComissionRule.findAll({
+            order: [['empreendimento_nome', 'ASC'], ['id', 'ASC']],
+        });
+        return res.json({ rows: rules });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+function parseComissionPayload(body) {
+    const idempreendimento_cv = body.idempreendimento_cv != null ? Number(body.idempreendimento_cv) : null;
+    if (!Number.isFinite(idempreendimento_cv) || idempreendimento_cv <= 0) {
+        throw new Error('idempreendimento_cv é obrigatório e deve ser numérico.');
+    }
+    const percentual = body.percentual_boleto != null ? Number(body.percentual_boleto) : 100;
+    if (!Number.isFinite(percentual) || percentual < 0 || percentual > 100) {
+        throw new Error('percentual_boleto deve ser um número entre 0 e 100.');
+    }
+    return {
+        idempreendimento_cv,
+        empreendimento_nome: body.empreendimento_nome || null,
+        percentual_boleto: percentual,
+        observacao: body.observacao || null,
+        active: body.active !== undefined ? Boolean(body.active) : true,
+    };
+}
+
+export async function createComissionRule(req, res) {
+    try {
+        const data = parseComissionPayload(req.body || {});
+        const existing = await db.BoletoComissionRule.findOne({
+            where: { idempreendimento_cv: data.idempreendimento_cv },
+        });
+        if (existing) {
+            return res.status(409).json({
+                error: `Já existe regra para o empreendimento ${data.idempreendimento_cv}. Edite a regra existente.`,
+            });
+        }
+        const created = await db.BoletoComissionRule.create({
+            ...data,
+            updated_by: req.user?.id || null,
+        });
+        return res.status(201).json(created);
+    } catch (err) {
+        return res.status(400).json({ error: err.message });
+    }
+}
+
+export async function updateComissionRule(req, res) {
+    try {
+        const rule = await db.BoletoComissionRule.findByPk(req.params.id);
+        if (!rule) return res.status(404).json({ error: 'Regra não encontrada.' });
+
+        const data = parseComissionPayload({ ...rule.toJSON(), ...req.body });
+        await rule.update({ ...data, updated_by: req.user?.id || null });
+        return res.json(rule);
+    } catch (err) {
+        return res.status(400).json({ error: err.message });
+    }
+}
+
+export async function deleteComissionRule(req, res) {
+    try {
+        const rule = await db.BoletoComissionRule.findByPk(req.params.id);
+        if (!rule) return res.status(404).json({ error: 'Regra não encontrada.' });
+        await rule.destroy();
+        return res.json({ deleted: true });
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }

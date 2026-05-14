@@ -125,8 +125,14 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         const { titular, condicoes, unidade } = reservaData;
 
         // ── 2. Localiza séries de entrada configuradas ────────────────────────
-        // settings.idserie_ra é um array via getter do model: [21] ou [21, 22, 35]
-        const idseriesAlvo = Array.isArray(settings.idserie_ra) ? settings.idserie_ra : [21];
+        // Flatten defensivo: tolera dados legados aninhados (ex.: [[[21,9]]]) que
+        // possam ter ficado em produção antes do fix do setter.
+        const rawIdseries = Array.isArray(settings.idserie_ra) ? settings.idserie_ra : [settings.idserie_ra];
+        const idseriesAlvo = Array.from(new Set(
+            rawIdseries.flat(Infinity).map(Number).filter(n => Number.isFinite(n) && n > 0)
+        ));
+        if (idseriesAlvo.length === 0) idseriesAlvo.push(21);
+
         const seriesEncontradas = (condicoes?.series || []).filter(
             s => idseriesAlvo.includes(Number(s.idserie))
         );
@@ -171,6 +177,36 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         const serie = seriesEncontradas[0];
         console.log(`[BOLETO] Série encontrada: idserie=${serie.idserie}`);
 
+        // ── 2b. Aplica regra de comissão embutida (se houver para o empreendimento) ─
+        const valorOriginal = parseFloat(serie.valor);
+        let valorEmitir = valorOriginal;
+        let comissaoPercentualAplicada = null;
+        let comissaoRuleId = null;
+
+        if (unidade?.idempreendimento_cv) {
+            const rule = await db.BoletoComissionRule.findOne({
+                where: {
+                    idempreendimento_cv: Number(unidade.idempreendimento_cv),
+                    active: true,
+                },
+            });
+            if (rule) {
+                const pct = parseFloat(rule.percentual_boleto);
+                if (Number.isFinite(pct) && pct >= 0 && pct < 100) {
+                    valorEmitir = Number((valorOriginal * (pct / 100)).toFixed(2));
+                    comissaoPercentualAplicada = pct;
+                    comissaoRuleId = rule.id;
+                    console.log(
+                        `[BOLETO] Regra de comissão aplicada (empreendimento ${unidade.idempreendimento_cv}): `
+                        + `${pct}% de ${formatCurrency(valorOriginal)} = ${formatCurrency(valorEmitir)}`
+                    );
+                }
+            }
+        }
+
+        // Substitui o valor da série pelo valor a emitir (mantém referência ao original).
+        serie.valor = valorEmitir;
+
         // ── 3. Valida vencimento (deve ser >= hoje) ───────────────────────────
         const vencimento = serie.vencimento;
         const hoje = new Date();
@@ -192,7 +228,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 titular_nome: titular?.nome,
                 empreendimento: unidade?.empreendimento,
                 idpessoa_cv: titular?.idpessoa_cv,
-                valor: parseFloat(serie.valor),
+                valor: valorEmitir,
+                valor_original: valorOriginal,
+                comissao_percentual_aplicada: comissaoPercentualAplicada,
                 vencimento,
                 cv_mensagem_enviada: true,
                 cv_situacao_alterada: situacaoAlterada,
@@ -217,7 +255,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
             titular_nome: titular.nome,
             empreendimento: unidade.empreendimento,
             cnpj_empresa: cnpjEmpresa,
-            valor: parseFloat(serie.valor),
+            valor: valorEmitir,
+            valor_original: valorOriginal,
+            comissao_percentual_aplicada: comissaoPercentualAplicada,
             vencimento,
         });
 
@@ -280,13 +320,17 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         }
 
         // ── 10. Envia mensagem de sucesso com resumo completo do boleto ────────
+        const linhaValor = comissaoPercentualAplicada != null
+            ? `💰 Valor: ${formatCurrency(valorEmitir)} (${comissaoPercentualAplicada}% de ${formatCurrency(valorOriginal)} — comissão embutida deduzida)`
+            : `💰 Valor: ${formatCurrency(valorEmitir)}`;
+
         const msgSucesso = [
             '✅ Boleto Caixa emitido com sucesso!',
             '',
             `📋 Empreendimento: ${unidade.empreendimento}`,
             `👤 Titular: ${titular.nome}`,
             `🪪 CPF/CNPJ: ${titular.documento}`,
-            `💰 Valor: ${formatCurrency(serie.valor)}`,
+            linhaValor,
             `📅 Vencimento: ${formatDate(vencimento)}`,
             `🔢 Nosso Número: ${nossoNumero}`,
             `📄 Nº Documento: ${seuNumero}`,
