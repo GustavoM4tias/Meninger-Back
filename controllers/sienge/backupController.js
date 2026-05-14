@@ -48,3 +48,39 @@ export async function triggerBackup(req, res) {
 
   res.status(202).json({ ok: true, message: 'Backup iniciado em background' });
 }
+
+/**
+ * Marca um backup `running` como `failed`. Usado quando o processo morreu
+ * fora do nosso controle (deploy do Railway derrubou o container, OOM, etc.)
+ * e o log ficou zumbi, bloqueando o trigger de um novo backup.
+ *
+ * NÃO tenta matar processo nenhum — assume que o processo já morreu. Só
+ * libera o estado pra a UI.
+ */
+export async function cancelBackup(req, res) {
+  try {
+    const log = await db.SiengeBackupLog.findByPk(req.params.id);
+    if (!log) return res.status(404).json({ error: 'Backup não encontrado' });
+    if (log.status !== 'running') {
+      return res.status(400).json({ error: `Backup não está em execução (status=${log.status})` });
+    }
+
+    const finishedAt = new Date();
+    const reason = `Cancelado manualmente por ${req.user?.id ?? 'desconhecido'} — processo provavelmente morto (deploy/crash).`;
+    await log.update({
+      status: 'failed',
+      finished_at: finishedAt,
+      duration_ms: finishedAt - new Date(log.started_at),
+      error_message: reason,
+      // Se o restore estava rodando, marca como falho também
+      import_status: log.import_status === 'running' ? 'failed' : log.import_status,
+      import_finished_at: log.import_status === 'running' ? finishedAt : log.import_finished_at,
+      import_error_message: log.import_status === 'running' ? reason : log.import_error_message,
+    });
+    console.log(`[backupController.cancelBackup] log=${log.id} marcado como failed`);
+    res.json({ ok: true, log });
+  } catch (err) {
+    console.error('[backupController.cancelBackup]', err);
+    res.status(500).json({ error: err.message });
+  }
+}

@@ -27,6 +27,7 @@ import {
     listBackups,
     getBackup,
     triggerBackup,
+    cancelBackup,
 } from '../controllers/sienge/backupController.js';
 import {
     listAutoSyncStatus,
@@ -105,6 +106,7 @@ router.patch('/launch-types/:id', authenticate, updateLaunchType);
 router.get('/backups', authenticate, listBackups);
 router.get('/backups/:id', authenticate, getBackup);
 router.post('/backups/trigger', authenticate, triggerBackup);
+router.post('/backups/:id/cancel', authenticate, cancelBackup);
 
 // ── Empreendimentos (enterprise_cities) ───────────────────────────────────────
 router.get('/payment-flow/enterprises', authenticate, listFlowEnterprises);   // ?q=termo
