@@ -104,6 +104,7 @@ import McmvImportLogDefine from './comercial/mcmvImportLog.js';
 // Boleto Caixa
 import BoletoSettingsDefine from './boleto/boletoSettings.js';
 import BoletoHistoryDefine from './boleto/boletoHistory.js';
+import BoletoComissionRuleDefine from './boleto/boletoComissionRule.js';
 
 // OfficeAI Chat
 import ChatSessionDefine from './chatSession.js';
@@ -234,8 +235,9 @@ db.McmvMunicipio               = McmvMunicipioDefine(sequelize, DataTypes);
 db.McmvImportLog               = McmvImportLogDefine(sequelize, DataTypes);
 
 // Boleto Caixa
-db.BoletoSettings = BoletoSettingsDefine(sequelize, DataTypes);
-db.BoletoHistory  = BoletoHistoryDefine(sequelize, DataTypes);
+db.BoletoSettings      = BoletoSettingsDefine(sequelize, DataTypes);
+db.BoletoHistory       = BoletoHistoryDefine(sequelize, DataTypes);
+db.BoletoComissionRule = BoletoComissionRuleDefine(sequelize, DataTypes);
 
 // OfficeAI Chat
 db.ChatSession  = ChatSessionDefine(sequelize, DataTypes);

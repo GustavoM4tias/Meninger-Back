@@ -226,9 +226,18 @@ async function decompressGzToFile(gzPath, dmpcPath) {
 
 // ─── Fase 3: pg_restore ───────────────────────────────────────────────────────
 
+// Railway distribui cert TLS auto-assinado no Postgres. O driver Node `pg`
+// valida a cadeia por default (falha com "self-signed certificate"). O psql
+// e o pg_restore com sslmode=require encriptam mas não validam CA — aqui
+// fazemos o mesmo via { rejectUnauthorized: false }.
+const PG_CLIENT_OPTS = (connectionString) => ({
+  connectionString,
+  ssl: { rejectUnauthorized: false },
+});
+
 async function ensureTargetDatabaseExists() {
   const { adminUrl, targetDb } = buildPgUrls();
-  const client = new pg.Client({ connectionString: adminUrl });
+  const client = new pg.Client(PG_CLIENT_OPTS(adminUrl));
   await client.connect();
   try {
     const r = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [targetDb]);
