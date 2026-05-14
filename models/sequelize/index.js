@@ -19,6 +19,8 @@ import SiengeBillDefine from './sienge/bill.js';
 import SiengeBillInstallmentDefine from './sienge/billInstallment.js';
 
 import ExpenseDefine from './expense.js';
+import CostCenterOverrideDefine from './costCenterOverride.js';
+import ExpenseDepartmentVisibilityDefine from './expenseDepartmentVisibility.js';
 
 // perto dos outros imports
 import LeadDefine from './cv/lead.js';
@@ -148,6 +150,8 @@ db.SiengeBill = SiengeBillDefine(sequelize, DataTypes);
 db.SiengeBillInstallment = SiengeBillInstallmentDefine(sequelize, DataTypes);
 
 db.Expense = ExpenseDefine(sequelize, DataTypes);
+db.CostCenterOverride = CostCenterOverrideDefine(sequelize, DataTypes);
+db.ExpenseDepartmentVisibility = ExpenseDepartmentVisibilityDefine(sequelize, DataTypes);
 
 // ... após definir outros modelos:
 db.Lead = LeadDefine(sequelize, DataTypes);

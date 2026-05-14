@@ -27,6 +27,16 @@ export default (sequelize, DataTypes) => {
     bytes_downloaded:      { type: DataTypes.BIGINT, allowNull: true },                  // atualizado live durante download
     download_attempts:     { type: DataTypes.INTEGER, allowNull: true },                 // contagem de tentativas
     restore_log_tail:      { type: DataTypes.TEXT, allowNull: true },                    // cauda do stderr do pg_restore
+
+    // Totais por categoria do TOC do .dmpc (parseados via `pg_restore -l`).
+    // Usados pra calcular % por fase e % total geral no painel da UI.
+    // Estrutura: { TABLE_DATA, INDEX, CONSTRAINT, FK_CONSTRAINT, TRIGGER, SEQUENCE_SET, OTHER, TOTAL }
+    toc_totals:            { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
+
+    // Progresso live do pg_restore separado por fase. Cada fase tem
+    // { done, total, started_at, finished_at, current } — a UI desenha 5
+    // barras (data, index, constraint, fk, trigger) com ETA por fase.
+    phase_progress:        { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
   }, {
     tableName: 'sienge_backup_logs',
     underscored: true,
