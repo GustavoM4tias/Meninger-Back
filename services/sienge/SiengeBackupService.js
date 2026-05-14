@@ -18,7 +18,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -243,7 +243,54 @@ async function ensureTargetDatabaseExists() {
   }
 }
 
-function runPgRestore(dmpcPath, log) {
+/**
+ * Roda `pg_restore -l` no dump e categoriza cada item do TOC. Usado pelo
+ * frontend pra calcular % de progresso por fase. Devolve os totais — barato
+ * (<200ms num dump de 1.5GB).
+ */
+function parseTocCounts(dmpcPath) {
+  const r = spawnSync('pg_restore', ['-l', dmpcPath], {
+    stdio: 'pipe',
+    maxBuffer: 200 * 1024 * 1024,
+  });
+  if (r.status !== 0) {
+    throw new Error(`pg_restore -l falhou (exit=${r.status}): ${r.stderr?.toString().slice(0, 400)}`);
+  }
+  const counts = {
+    TABLE_DATA: 0, INDEX: 0, CONSTRAINT: 0, FK_CONSTRAINT: 0,
+    TRIGGER: 0, SEQUENCE_SET: 0, OTHER: 0, TOTAL: 0,
+  };
+  for (const raw of r.stdout.toString().split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith(';')) continue;
+    // formato: "id; oid id TIPO schema nome owner". Tipos compostos têm 2
+    // palavras: "TABLE DATA", "FK CONSTRAINT", "SEQUENCE SET", "DEFAULT ACL"
+    const m = /^\d+;\s+\d+\s+\d+\s+([A-Z][A-Z]*(?:\s+[A-Z]+)?)\s/.exec(line);
+    if (!m) continue;
+    counts.TOTAL++;
+    const type = m[1];
+    if      (type === 'TABLE DATA')    counts.TABLE_DATA++;
+    else if (type === 'INDEX')         counts.INDEX++;
+    else if (type === 'FK CONSTRAINT') counts.FK_CONSTRAINT++;
+    else if (type === 'CONSTRAINT')    counts.CONSTRAINT++;
+    else if (type === 'TRIGGER')       counts.TRIGGER++;
+    else if (type === 'SEQUENCE SET')  counts.SEQUENCE_SET++;
+    else                                counts.OTHER++;
+  }
+  return counts;
+}
+
+function buildEmptyPhaseProgress(totals) {
+  return {
+    data:       { done: 0, total: totals.TABLE_DATA    || 0, current: null, started_at: null, finished_at: null },
+    index:      { done: 0, total: totals.INDEX         || 0, current: null, started_at: null, finished_at: null },
+    constraint: { done: 0, total: totals.CONSTRAINT    || 0, current: null, started_at: null, finished_at: null },
+    fk:         { done: 0, total: totals.FK_CONSTRAINT || 0, current: null, started_at: null, finished_at: null },
+    trigger:    { done: 0, total: totals.TRIGGER       || 0, current: null, started_at: null, finished_at: null },
+  };
+}
+
+function runPgRestore(dmpcPath, log, totals) {
   const { targetUrl } = buildPgUrls();
 
   return new Promise((resolve, reject) => {
@@ -263,26 +310,89 @@ function runPgRestore(dmpcPath, log) {
 
     let stderr = '';
     let killed = false;
+    let killReason = null;
     let lastFlush = 0;
     const FLUSH_INTERVAL_MS = 2000;
 
+    // Tracking por fase pra UI desenhar barras de progresso
+    const phases = buildEmptyPhaseProgress(totals);
+    const errors = []; // [{ at, msg }] — usado pra detectar cascata
+
     const timer = setTimeout(() => {
       killed = true;
+      killReason = 'timeout';
       try { proc.kill('SIGKILL'); } catch {}
     }, PG_RESTORE_TIMEOUT_MS);
 
+    function markPhase(name, currentName) {
+      const ph = phases[name];
+      if (!ph) return;
+      if (!ph.started_at) ph.started_at = new Date().toISOString();
+      ph.done++;
+      ph.current = currentName;
+      if (ph.total > 0 && ph.done >= ph.total && !ph.finished_at) {
+        ph.finished_at = new Date().toISOString();
+      }
+    }
+
+    function flushLine(rawLine) {
+      const line = rawLine.replace(/^pg_restore:\s*/i, '').trim();
+      if (!line) return;
+
+      const mData = /^processing data for table\s+"([^"]+)"/i.exec(line);
+      if (mData) return markPhase('data', mData[1]);
+
+      // "creating INDEX | FK CONSTRAINT | CONSTRAINT | TRIGGER | SEQUENCE SET"
+      const mCreate = /^creating\s+(INDEX|FK CONSTRAINT|CONSTRAINT|TRIGGER|SEQUENCE SET)\s+"?([^"]+)"?/i.exec(line);
+      if (mCreate) {
+        const type = mCreate[1].toUpperCase();
+        const name = mCreate[2];
+        if (type === 'INDEX')         return markPhase('index', name);
+        if (type === 'FK CONSTRAINT') return markPhase('fk', name);
+        if (type === 'CONSTRAINT')    return markPhase('constraint', name);
+        if (type === 'TRIGGER')       return markPhase('trigger', name);
+        return; // SEQUENCE SET: silencioso
+      }
+
+      if (/^error|^fatal/i.test(line)) {
+        const now = Date.now();
+        errors.push({ at: now, msg: line });
+        // Cascata de erros = proxy derrubou todas as conexões. Aborta pg_restore
+        // pra não ficar em loop infinito de "could not execute query".
+        if (!killed) {
+          const recent = errors.filter(e => now - e.at < 10_000).length;
+          if (recent > 50) {
+            killed = true;
+            killReason = `cascata de ${recent} erros em 10s (provável queda de conexão)`;
+            console.error(`[pg_restore] ${killReason}. Matando processo...`);
+            try { proc.kill('SIGKILL'); } catch {}
+          }
+        }
+      }
+    }
+
+    let lineBuffer = '';
     proc.stderr.on('data', chunk => {
       const s = chunk.toString();
       stderr += s;
-      if (/error|fatal|warning/i.test(s)) {
-        console.log('[pg_restore]', s.trim());
+      if (/error|fatal/i.test(s)) {
+        console.log('[pg_restore]', s.trim().slice(0, 400));
+      }
+      lineBuffer += s;
+      let nl;
+      while ((nl = lineBuffer.indexOf('\n')) >= 0) {
+        flushLine(lineBuffer.slice(0, nl));
+        lineBuffer = lineBuffer.slice(nl + 1);
       }
       if (log) {
         const now = Date.now();
         if (now - lastFlush > FLUSH_INTERVAL_MS) {
           lastFlush = now;
-          // só os últimos 4KB pra UI ver a atividade corrente
-          log.update({ restore_log_tail: stderr.slice(-4000) }).catch(() => {});
+          // Persiste progress + tail. Fire-and-forget (não trava o stream).
+          log.update({
+            restore_log_tail: stderr.slice(-4000),
+            phase_progress: phases,
+          }).catch(() => {});
         }
       }
     });
@@ -294,14 +404,20 @@ function runPgRestore(dmpcPath, log) {
 
     proc.on('close', code => {
       clearTimeout(timer);
+      if (lineBuffer) flushLine(lineBuffer);
+      // Marca fases iniciadas-mas-não-fechadas como fechadas
+      const closedAt = new Date().toISOString();
+      for (const ph of Object.values(phases)) {
+        if (ph.started_at && !ph.finished_at) ph.finished_at = closedAt;
+      }
       const finalTail = stderr.slice(-4000);
-      if (log) log.update({ restore_log_tail: finalTail }).catch(() => {});
+      if (log) log.update({ restore_log_tail: finalTail, phase_progress: phases }).catch(() => {});
 
-      if (killed) return reject(new Error('pg_restore timeout'));
+      if (killed) return reject(new Error(`pg_restore abortado: ${killReason || 'timeout'}`));
 
       // 0 = success, 1 = warnings (esperado com --no-owner/--no-acl/--clean)
       if (code === 0 || code === 1) {
-        return resolve({ ok: true, exitCode: code, stderrTail: stderr.slice(-2000) });
+        return resolve({ ok: true, exitCode: code, stderrTail: stderr.slice(-2000), phases, errors });
       }
       reject(new Error(`pg_restore saiu com código ${code}. stderr tail:\n${stderr.slice(-2000)}`));
     });
@@ -310,14 +426,26 @@ function runPgRestore(dmpcPath, log) {
 
 async function restoreIntoPostgres(dmpcPath, log) {
   await setStage(log, 'restoring');
+
+  // Inventário do dump (rápido) → UI consegue calcular % por fase.
+  let totals;
+  try {
+    totals = parseTocCounts(dmpcPath);
+    console.log(`[SiengeBackup] TOC totals:`, totals);
+  } catch (err) {
+    console.warn(`[SiengeBackup] parseTocCounts falhou: ${err.message}`);
+    totals = { TABLE_DATA: 0, INDEX: 0, CONSTRAINT: 0, FK_CONSTRAINT: 0, TRIGGER: 0, SEQUENCE_SET: 0, OTHER: 0, TOTAL: 0 };
+  }
   await log.update({
+    toc_totals: totals,
+    phase_progress: buildEmptyPhaseProgress(totals),
     import_status: 'running',
     import_job_name: 'pg_restore',
     import_started_at: new Date(),
   });
 
   await ensureTargetDatabaseExists();
-  const result = await runPgRestore(dmpcPath, log);
+  const result = await runPgRestore(dmpcPath, log, totals);
 
   const finishedAt = new Date();
   await log.update({

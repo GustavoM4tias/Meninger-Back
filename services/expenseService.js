@@ -1,7 +1,7 @@
 // services/expenseService.js
 import db from '../models/sequelize/index.js';
 
-const { Expense, SiengeBill, Sequelize } = db;
+const { Expense, SiengeBill, Sequelize, sequelize } = db;
 const { Op } = Sequelize;
 
 export default class expenseService {
@@ -165,6 +165,80 @@ export default class expenseService {
       groupsMap.get(cc).push(e);
     }
 
+    // ── Resolve nome de empreendimento para os cost_center_ids que apareceram ───
+    //
+    // Identidade do empreendimento = cost_center_id (perpetuado pelo CC, não pelo nome).
+    // O nome exibido é apenas uma label; fontes em ordem de prioridade:
+    //   0) cost_center_overrides.display_name (admin sobrepôs manualmente) — MÁXIMA
+    //   1) enterprise_cities, match direto, preferência source='crm'
+    //   2) enterprise_cities, match pelo "CC base" (sub-CC herda do pai)
+    const costCenterIdsInUse = [...groupsMap.keys()].filter(Number.isFinite);
+    const nameByCc = new Map();
+
+    if (costCenterIdsInUse.length) {
+      // Passo 0 — overrides admin (mais alta prioridade)
+      const overrides = await sequelize.query(
+        `SELECT cost_center_id, display_name FROM cost_center_overrides
+         WHERE cost_center_id IN (:ids)`,
+        { replacements: { ids: costCenterIdsInUse }, type: Sequelize.QueryTypes.SELECT }
+      );
+      for (const o of overrides) {
+        nameByCc.set(Number(o.cost_center_id), o.display_name);
+      }
+      // Passo 1 — match direto
+      const directRows = await sequelize.query(
+        `SELECT DISTINCT ON (ec.erp_id::int)
+            ec.erp_id::int AS erp_id,
+            ec.enterprise_name
+         FROM enterprise_cities ec
+         WHERE ec.erp_id IS NOT NULL
+           AND ec.erp_id ~ '^[0-9]+$'
+           AND ec.erp_id::int IN (:ids)
+           AND COALESCE(NULLIF(TRIM(ec.enterprise_name), ''), NULL) IS NOT NULL
+         ORDER BY ec.erp_id::int, CASE ec.source WHEN 'crm' THEN 1 ELSE 2 END, ec.id`,
+        { replacements: { ids: costCenterIdsInUse }, type: Sequelize.QueryTypes.SELECT }
+      );
+      for (const r of directRows) {
+        // não sobrescreve override admin já setado no Passo 0
+        if (!nameByCc.has(Number(r.erp_id))) {
+          nameByCc.set(Number(r.erp_id), r.enterprise_name);
+        }
+      }
+
+      // Passo 2 — para CCs sem match, busca pelo "CC base" (heurística de sub-CC)
+      const stillMissing = costCenterIdsInUse.filter(cc => !nameByCc.has(Number(cc)));
+      if (stillMissing.length) {
+        const baseToOriginals = new Map();
+        for (const cc of stillMissing) {
+          const base = Math.floor(Number(cc) / 100) * 100 + 1;
+          if (base === Number(cc)) continue; // já tentamos o exato no passo 1
+          if (!baseToOriginals.has(base)) baseToOriginals.set(base, []);
+          baseToOriginals.get(base).push(Number(cc));
+        }
+        const baseIds = [...baseToOriginals.keys()];
+        if (baseIds.length) {
+          const baseRows = await sequelize.query(
+            `SELECT DISTINCT ON (ec.erp_id::int)
+                ec.erp_id::int AS erp_id,
+                ec.enterprise_name
+             FROM enterprise_cities ec
+             WHERE ec.erp_id IS NOT NULL
+               AND ec.erp_id ~ '^[0-9]+$'
+               AND ec.erp_id::int IN (:ids)
+               AND COALESCE(NULLIF(TRIM(ec.enterprise_name), ''), NULL) IS NOT NULL
+             ORDER BY ec.erp_id::int, CASE ec.source WHEN 'crm' THEN 1 ELSE 2 END, ec.id`,
+            { replacements: { ids: baseIds }, type: Sequelize.QueryTypes.SELECT }
+          );
+          for (const r of baseRows) {
+            const originals = baseToOriginals.get(Number(r.erp_id)) || [];
+            for (const original of originals) {
+              nameByCc.set(original, r.enterprise_name);
+            }
+          }
+        }
+      }
+    }
+
     const groups = [];
     let totalAll = 0;
 
@@ -172,8 +246,10 @@ export default class expenseService {
       const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
       totalAll += total;
 
+      // Ordem: 1) enterprise_cities (preferência ERP) 2) cost_center_name salvo no Expense 3) null
       const costCenterName =
-        expenses.length ? expenses[0].cost_center_name || null : null;
+        nameByCc.get(Number(costCenterId))
+        || (expenses.length ? expenses[0].cost_center_name || null : null);
 
       groups.push({
         costCenterId,
@@ -220,11 +296,19 @@ export default class expenseService {
       });
     }
 
+    // Lista de departamentos ocultos pelo admin — frontend filtra do dropdown
+    const hiddenRows = await sequelize.query(
+      `SELECT name FROM expense_department_visibility WHERE hidden = true`,
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+    const hiddenDepartments = hiddenRows.map(r => r.name);
+
     return {
       startDate: startDate || competenceMonth,
       endDate: endDate || competenceMonth,
       total: totalAll,
       groups,
+      hiddenDepartments,
     };
   }
 

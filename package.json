@@ -8,7 +8,10 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
     "sequelize": "sequelize",
-    "postinstall": "npx playwright install chromium --with-deps"
+    "postinstall": "npx playwright install chromium --with-deps",
+    "setup:pg-tools": "node scripts/setup-pg-tools.js",
+    "test:sienge-backup": "node scripts/test-sienge-backup-local.js",
+    "restore:sienge-to-railway": "node scripts/restore-sienge-to-railway.js"
   },
   "keywords": [],
   "author": "",

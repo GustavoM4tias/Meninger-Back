@@ -19,6 +19,9 @@ out/
 coverage/
 *.log
 
+# Binários portáteis baixados por scripts/setup-pg-tools.js
+bin/
+
 # Ambiente
 .env
 .env.*
