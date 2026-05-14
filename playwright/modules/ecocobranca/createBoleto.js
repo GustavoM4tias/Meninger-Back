@@ -41,6 +41,52 @@ function tipoPessoa(documento) {
 }
 
 /**
+ * Remove acentos e normaliza caracteres para o subset que o Ecobrança aceita.
+ * O portal legado da Caixa frequentemente rejeita acentos no campo "Endereço do Sacado"
+ * com a mensagem "ENDERECO SACADO INVALIDO".
+ */
+function sanitizeForEco(text) {
+    return String(text || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')   // remove diacríticos (acentos)
+        .replace(/[^\x20-\x7E]/g, '')      // remove qualquer non-ASCII restante (ç vira c após NFD; emojis caem)
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Extrai a mensagem real de erro mostrada pelo portal Ecobrança após o submit.
+ * Cobre os padrões legados da Caixa (font[color=red], spans com classe de erro,
+ * textos em caixa alta com "INVALIDO/INCORRETO/OBRIGATORIO").
+ */
+async function extractPortalError(page) {
+    return page.evaluate(() => {
+        const cleanup = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+        // 1. Seletores comuns de mensagens de erro em forms legados da Caixa.
+        const selectors = [
+            '.erro', '.error', '.mensagem-erro', '.msgErro', '.msg_erro',
+            '[class*="erro"]', '[class*="error"]', '[class*="msg"]',
+            'font[color="red"]', 'font[color="#FF0000"]', 'font[color="#ff0000"]',
+            'span[style*="color: red"]', 'span[style*="color:red"]',
+            'td[style*="color: red"]', 'td[style*="color:red"]',
+        ];
+        for (const sel of selectors) {
+            for (const el of document.querySelectorAll(sel)) {
+                const txt = cleanup(el.textContent);
+                if (txt && txt.length > 3) return txt;
+            }
+        }
+
+        // 2. Procura por linhas que casam com padrões clássicos do Ecobrança.
+        const body = cleanup(document.body?.innerText || '');
+        const m = body.match(/[A-ZÀ-Ú0-9\s/-]{6,80}\b(INV[AÁ]LID[OA]|INCORRET[OA]|OBRIGAT[OÓ]RI[OA]|N[ÃA]O\s+ENCONTRAD[OA])\b[^\n.]*/);
+        if (m) return cleanup(m[0]);
+        return null;
+    }).catch(() => null);
+}
+
+/**
  * Preenche o formulário de inclusão de título no Ecobrança e retorna
  * o buffer do boleto PDF baixado.
  *
@@ -133,7 +179,7 @@ export async function createBoleto(page, dados) {
     await page.selectOption('select[name="tipoPagamento"]', '3');
 
     // ── Nome do Sacado ─────────────────────────────────────────────────────────
-    await page.fill('input[name="nomeSacado"]', String(nome || '').substring(0, 40));
+    await page.fill('input[name="nomeSacado"]', sanitizeForEco(nome).substring(0, 40));
 
     // ── Tipo de Pessoa ─────────────────────────────────────────────────────────
     await page.selectOption('select[name="tipoPessoa"]', tipoPessoaVal);
@@ -150,21 +196,29 @@ export async function createBoleto(page, dados) {
     await page.selectOption('select[name="ufSacado"]', ufSacado);
 
     // ── Endereço do Sacado ────────────────────────────────────────────────────
-    await page.fill('input[name="endSacado"]', String(endereco || '').substring(0, 40));
+    // Ecobrança rejeita acentos / caracteres especiais com "ENDERECO SACADO INVALIDO".
+    // Sanitiza preventivamente (NFD + strip diacríticos + ASCII puro).
+    const endSan = sanitizeForEco(endereco).substring(0, 40);
+    if (!endSan) {
+        throw new Error('Endereço do sacado vazio na reserva — preencha o endereço do titular no CV.');
+    }
+    await page.fill('input[name="endSacado"]', endSan);
 
     // ── Número do Sacado ──────────────────────────────────────────────────────
-    await page.fill('input[name="nSacado"]', String(numero || '').substring(0, 15));
+    // Número alfanumérico (ex: "S/N") é aceito, mas vazio quebra o submit.
+    const numSan = sanitizeForEco(numero).substring(0, 15) || 'SN';
+    await page.fill('input[name="nSacado"]', numSan);
 
     // ── Complemento ───────────────────────────────────────────────────────────
     if (complemento) {
-        await page.fill('input[name="compSacado"]', String(complemento).substring(0, 25));
+        await page.fill('input[name="compSacado"]', sanitizeForEco(complemento).substring(0, 25));
     }
 
     // ── Bairro do Sacado ──────────────────────────────────────────────────────
-    await page.fill('input[name="bairroSacado"]', String(bairro || '').substring(0, 25));
+    await page.fill('input[name="bairroSacado"]', sanitizeForEco(bairro).substring(0, 25));
 
     // ── Município do Sacado ───────────────────────────────────────────────────
-    await page.fill('input[name="municipioSacado"]', String(cidade || '').substring(0, 35));
+    await page.fill('input[name="municipioSacado"]', sanitizeForEco(cidade).substring(0, 35));
 
     // ── Mensagem da Ficha de Compensação ──────────────────────────────────────
     await page.fill('input[name="msgb1"]', 'NÃO RECEBER APÓS O VENCIMENTO');
@@ -182,10 +236,18 @@ export async function createBoleto(page, dados) {
     try {
         await page.waitForSelector('img[src*="botao_visualizar_impressao.gif"]', { timeout: 20000 });
     } catch {
+        // Captura a mensagem real exibida pelo portal Ecobrança (ex.:
+        // "ENDERECO SACADO INVALIDO", "CEP INVALIDO PARA O MUNICIPIO INFORMADO",
+        // "VENCIMENTO INVALIDO", "VALOR INVALIDO", etc.).
+        const portalError = await extractPortalError(page);
         const bodySnippet = await page.textContent('body').catch(() => '');
+        if (portalError) {
+            error('ECO_BOLETO', `Portal recusou o boleto: ${portalError}`);
+            throw new Error(`Portal Ecobrança: ${portalError}`);
+        }
         throw new Error(
-            `Botão de impressão não encontrado após confirmação.\n` +
-            `URL: ${page.url()}\nBody: ${bodySnippet.slice(0, 300)}`
+            `Boleto não emitido — botão de impressão não apareceu (sem mensagem de erro identificável no portal).\n` +
+            `URL: ${page.url()}\nTrecho: ${bodySnippet.slice(0, 300)}`
         );
     }
 

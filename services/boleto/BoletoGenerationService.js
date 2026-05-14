@@ -3,6 +3,7 @@ import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
 import { runEcoCobrancaBoleto } from '../../playwright/services/ecocobrancaService.js';
 import { createClient } from '@supabase/supabase-js';
+import { validateTitular, formatTitularErrorsMessage } from './titularValidator.js';
 
 const supabase = createClient(
     process.env.SUPABASE_URL,
@@ -176,6 +177,39 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
 
         const serie = seriesEncontradas[0];
         console.log(`[BOLETO] Série encontrada: idserie=${serie.idserie}`);
+
+        // ── 2.5. Valida dados do titular antes de qualquer chamada cara ──────
+        // O portal Ecobrança rejeita silenciosamente endereços/CPF/CEP malformados
+        // com "ENDERECO SACADO INVALIDO" etc. Validamos antes pra dar feedback
+        // claro ao admin sobre o que ajustar no CV.
+        const titularCheck = validateTitular(titular);
+        if (!titularCheck.valid) {
+            console.warn(
+                `[BOLETO] Titular com divergências (${titularCheck.errors.length}): `
+                + titularCheck.errors.map(e => `${e.campo}=${e.motivo}`).join('; ')
+            );
+            const msg = formatTitularErrorsMessage(titularCheck.errors);
+            await sendCvMessage(idreserva, msg);
+
+            let situacaoAlterada = false;
+            if (settings.situacao_erro_id) {
+                situacaoAlterada = await alterarSituacaoCv(idreserva, settings.situacao_erro_id);
+            }
+
+            const resumoErro = `Divergência nos dados do titular: ${titularCheck.errors.map(e => e.campo).join(', ')}.`;
+            await history.update({
+                status: 'error',
+                error_message: resumoErro,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                valor: parseFloat(serie.valor),
+                vencimento: serie.vencimento,
+                cv_mensagem_enviada: true,
+                cv_situacao_alterada: situacaoAlterada,
+            });
+            return;
+        }
 
         // ── 2b. Aplica regra de comissão embutida (se houver para o empreendimento) ─
         const valorOriginal = parseFloat(serie.valor);
