@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { QueryTypes, Op, where, fn, col } from 'sequelize';
 import fetch from 'node-fetch';
+import { buildSubtitle } from './MarketingTools.js';
 
 const MCMV_FAIXA3 = 400000;
 const MCMV_FAIXA4 = 600000;
@@ -359,6 +360,7 @@ async function executeQueryEnterprises(args, user) {
   return {
     type:    'table',
     title:   'Empreendimentos',
+    subtitle: buildSubtitle(context),
     columns: [
       { key: 'nome',                    label: 'Empreendimento' },
       { key: 'cidade',                  label: 'Cidade' },
@@ -405,13 +407,23 @@ async function executeEnterprisesGrouped(groupBy, whereClauses, replacements, co
     segmento:           'Empreendimentos por Segmento',
   };
 
+  const labels = rows.map(r => r.label || 'Não informado');
+  const data   = rows.map(r => Number(r.total));
+  const totalSum = data.reduce((acc, v) => acc + (Number(v) || 0), 0);
+  const top    = labels.map((label, i) => ({
+    label, value: data[i], percent: totalSum > 0 ? Math.round((data[i] / totalSum) * 1000) / 10 : 0,
+  })).slice(0, 3);
+
   return {
     type:      'chart',
     chartType: 'bar',
     title:     titles[groupBy] || 'Empreendimentos',
-    labels:    rows.map(r => r.label || 'Não informado'),
-    data:      rows.map(r => Number(r.total)),
+    subtitle:  buildSubtitle(context),
+    labels,
+    data,
     rawRows:   rows,
+    total:     totalSum,
+    top_breakdown: top,
     context:   { ...context, group_by: groupBy },
   };
 }
@@ -885,12 +897,22 @@ async function executePrecadGrouped(args, whereSql, replacements, context) {
 
   const metricTitleSuffix = metric === 'count' ? '' : ` — ${metricLabel}`;
 
+  const labels = rows.map(r => r.label || 'Não informado');
+  const data   = rows.map(r => r.value == null ? null : Number(r.value));
+  // Para métricas count, soma; para taxas/tempos, mostra média (descarta nulos)
+  const validData = data.filter(v => v != null);
+  const totalSum = metric === 'count'
+    ? validData.reduce((acc, v) => acc + v, 0)
+    : (validData.length ? Math.round((validData.reduce((acc, v) => acc + v, 0) / validData.length) * 10) / 10 : 0);
+  const totalRows = rows.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
+
   return {
     type:      'chart',
     chartType: 'bar',
     title:     `${titleMap[args.group_by] || 'Pré-cadastros'}${metricTitleSuffix}`,
-    labels:    rows.map(r => r.label || 'Não informado'),
-    data:      rows.map(r => r.value == null ? null : Number(r.value)),
+    subtitle:  buildSubtitle(context),
+    labels,
+    data,
     rawRows:   rows.map(r => ({
       label:     r.label,
       total:     Number(r.total),
@@ -901,6 +923,9 @@ async function executePrecadGrouped(args, whereSql, replacements, context) {
     valueSuffix,
     valueDecimals,
     metric,
+    // Para count: total = soma dos valores; para taxas/tempos: total_pastas é o ground truth
+    total:        metric === 'count' ? totalSum : totalRows,
+    metric_value: metric === 'count' ? null     : totalSum, // média geral da métrica
     context:   { ...context, metric },
   };
 }
@@ -978,7 +1003,8 @@ async function executePrecadList(args, whereSql, replacements, context, start, e
 
   return {
     type:    'table',
-    title:   `Pré-cadastros — ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')} (${rows.length})`,
+    title:   'Pré-cadastros',
+    subtitle: buildSubtitle(context),
     columns,
     rows,
     total:   rows.length,
@@ -1354,12 +1380,21 @@ async function executeReservasGrouped(args, whereSql, replacements, context) {
 
   const metricTitleSuffix = metric === 'count' ? '' : ` — ${metricLabel}`;
 
+  const labels = rows.map(r => r.label || 'Não informado');
+  const data   = rows.map(r => r.value == null ? null : Number(r.value));
+  const validData = data.filter(v => v != null);
+  const totalSum = metric === 'count'
+    ? validData.reduce((acc, v) => acc + v, 0)
+    : (validData.length ? Math.round((validData.reduce((acc, v) => acc + v, 0) / validData.length) * 10) / 10 : 0);
+  const totalRows = rows.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
+
   return {
     type:      'chart',
     chartType: 'bar',
     title:     `${titleMap[args.group_by] || 'Reservas'}${metricTitleSuffix}`,
-    labels:    rows.map(r => r.label || 'Não informado'),
-    data:      rows.map(r => r.value == null ? null : Number(r.value)),
+    subtitle:  buildSubtitle(context),
+    labels,
+    data,
     rawRows:   rows.map(r => ({
       label:      r.label,
       total:      Number(r.total),
@@ -1370,6 +1405,8 @@ async function executeReservasGrouped(args, whereSql, replacements, context) {
     valueSuffix,
     valueDecimals,
     metric,
+    total:        metric === 'count' ? totalSum : totalRows,
+    metric_value: metric === 'count' ? null     : totalSum,
     context: { ...context, metric },
   };
 }
@@ -1445,7 +1482,8 @@ async function executeReservasList(args, whereSql, replacements, context, start,
 
   return {
     type:    'table',
-    title:   `Reservas — ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')} (${rows.length})`,
+    title:   'Reservas',
+    subtitle: buildSubtitle(context),
     columns,
     rows,
     total:   rows.length,
