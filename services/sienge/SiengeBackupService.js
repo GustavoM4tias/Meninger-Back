@@ -12,8 +12,9 @@
 // pg_dump (-Fc). Restauramos com pg_restore (binário disponível no container
 // via nixpacks.toml).
 
-import { createWriteStream, createReadStream } from 'node:fs';
-import { unlink, mkdir, stat } from 'node:fs/promises';
+import { createWriteStream, createReadStream, existsSync } from 'node:fs';
+import { unlink, mkdir, stat, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createGunzip } from 'node:zlib';
@@ -34,13 +35,20 @@ const SIENGE_URL      = process.env.SIENGE_BACKUP_URL;
 const SIENGE_MD5_URL  = process.env.SIENGE_BACKUP_MD5_URL;
 
 // ── PostgreSQL alvo do restore (Railway) ──────────────────────────────────────
-const SIENGE_PG_URL         = process.env.SIENGE_PG_URL;
-const SIENGE_PG_DATABASE    = process.env.SIENGE_PG_DATABASE || 'sie214801';
-const AUTO_RESTORE_ENABLED  = process.env.ENABLE_SIENGE_AUTO_RESTORE !== 'false';
-const PG_RESTORE_JOBS       = Number(process.env.SIENGE_PG_RESTORE_JOBS || 2);
-const PG_RESTORE_TIMEOUT_MS = Number(process.env.SIENGE_PG_RESTORE_TIMEOUT_MS || 90 * 60 * 1000);
+const SIENGE_PG_URL          = process.env.SIENGE_PG_URL;
+const SIENGE_PG_DATABASE     = process.env.SIENGE_PG_DATABASE || 'sie214801';
+const SIENGE_PG_STAGING_DB   = process.env.SIENGE_PG_STAGING_DATABASE || `${SIENGE_PG_DATABASE}_staging`;
+const AUTO_RESTORE_ENABLED   = process.env.ENABLE_SIENGE_AUTO_RESTORE !== 'false';
+const PG_RESTORE_JOBS        = Number(process.env.SIENGE_PG_RESTORE_JOBS || 2);
+const PG_RESTORE_TIMEOUT_MS  = Number(process.env.SIENGE_PG_RESTORE_TIMEOUT_MS || 90 * 60 * 1000);
 
 const TMP_DIR = path.join(tmpdir(), 'sienge-backup');
+
+// Caminho do arquivo de GRANTs reaplicado após cada swap. Opcional: se não
+// existir, o stage `applying_grants` é pulado sem falhar.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const GRANTS_SQL_PATH = path.join(__dirname, '..', '..', 'scripts', 'sienge-grants.sql');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -49,12 +57,13 @@ function siengeAuthHeader() {
 }
 
 /**
- * Constrói duas URLs de conexão a partir de SIENGE_PG_URL:
- *   - adminUrl: aponta pro database "postgres" (pra CREATE DATABASE)
- *   - targetUrl: aponta pro database alvo (pra pg_restore)
+ * Constrói as URLs de conexão a partir de SIENGE_PG_URL:
+ *   - adminUrl   : aponta pro database "postgres" (CREATE/DROP/RENAME DATABASE)
+ *   - targetUrl  : aponta pro database alvo final (queries, validações)
+ *   - stagingUrl : aponta pro database de staging onde o restore acontece
  *
- * SIENGE_PG_URL pode vir com ou sem database no path. Se sem, usamos
- * SIENGE_PG_DATABASE.
+ * SIENGE_PG_URL pode vir com ou sem database no path. Se sem, usa
+ * SIENGE_PG_DATABASE como default.
  */
 function buildPgUrls() {
   if (!SIENGE_PG_URL) throw new Error('SIENGE_PG_URL não configurada');
@@ -62,6 +71,7 @@ function buildPgUrls() {
   const u = new URL(SIENGE_PG_URL);
   const hasPath = u.pathname && u.pathname !== '/' && u.pathname !== '';
   const targetDb = hasPath ? u.pathname.replace(/^\//, '') : SIENGE_PG_DATABASE;
+  const stagingDb = SIENGE_PG_STAGING_DB;
 
   const admin = new URL(SIENGE_PG_URL);
   admin.pathname = '/postgres';
@@ -69,11 +79,24 @@ function buildPgUrls() {
   const target = new URL(SIENGE_PG_URL);
   target.pathname = '/' + targetDb;
 
+  const staging = new URL(SIENGE_PG_URL);
+  staging.pathname = '/' + stagingDb;
+
   return {
-    adminUrl: admin.toString(),
-    targetUrl: target.toString(),
+    adminUrl:   admin.toString(),
+    targetUrl:  target.toString(),
+    stagingUrl: staging.toString(),
     targetDb,
+    stagingDb,
   };
+}
+
+// Valida o nome do database antes de injetar em SQL (RENAME / DROP / CREATE
+// não aceitam parâmetros bindados, então temos que validar e interpolar).
+function assertValidDbName(name) {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(name)) {
+    throw new Error(`Nome de database inválido: ${name}`);
+  }
 }
 
 /**
@@ -235,20 +258,161 @@ const PG_CLIENT_OPTS = (connectionString) => ({
   ssl: { rejectUnauthorized: false },
 });
 
-async function ensureTargetDatabaseExists() {
-  const { adminUrl, targetDb } = buildPgUrls();
+// ── Helpers de gerenciamento de database (blue-green) ────────────────────────
+
+async function withAdminClient(fn) {
+  const { adminUrl } = buildPgUrls();
   const client = new pg.Client(PG_CLIENT_OPTS(adminUrl));
   await client.connect();
   try {
-    const r = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [targetDb]);
-    if (r.rowCount === 0) {
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(targetDb)) {
-        throw new Error(`Nome de database inválido: ${targetDb}`);
-      }
-      await client.query(`CREATE DATABASE "${targetDb}"`);
-    }
+    return await fn(client);
   } finally {
-    await client.end();
+    await client.end().catch(() => {});
+  }
+}
+
+async function databaseExists(dbName) {
+  return withAdminClient(async (c) => {
+    const r = await c.query('SELECT 1 FROM pg_database WHERE datname = $1', [dbName]);
+    return r.rowCount > 0;
+  });
+}
+
+/**
+ * Força fechamento de conexões num database (necessário antes de DROP/RENAME)
+ * e dropa com FORCE. Idempotente: se DB não existir, retorna sem erro.
+ */
+async function dropDatabaseIfExists(dbName) {
+  assertValidDbName(dbName);
+  return withAdminClient(async (c) => {
+    await c.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+       WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      [dbName]
+    );
+    await c.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
+  });
+}
+
+async function createDatabase(dbName) {
+  assertValidDbName(dbName);
+  return withAdminClient(async (c) => {
+    await c.query(`CREATE DATABASE "${dbName}"`);
+  });
+}
+
+/**
+ * Swap atômico: renomeia o database de produção pra um nome temporário, promove
+ * o staging pro nome de produção, depois dropa o antigo. Tudo numa única
+ * conexão admin pra reduzir janela de inconsistência (<1s típico).
+ *
+ * Se o DB de produção não existe (primeira execução): só promove staging.
+ *
+ * Em caso de falha após renomear o atual: tenta rollback (volta o nome
+ * original). Se rollback também falhar, registra pra intervenção manual.
+ */
+async function swapDatabases(currentDb, stagingDb) {
+  assertValidDbName(currentDb);
+  assertValidDbName(stagingDb);
+  const oldDb = `${currentDb}_old_${Date.now()}`;
+  assertValidDbName(oldDb);
+
+  return withAdminClient(async (c) => {
+    // Termina TODAS as conexões nos 2 DBs (RENAME exige zero conexões)
+    await c.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+       WHERE datname IN ($1, $2) AND pid <> pg_backend_pid()`,
+      [currentDb, stagingDb]
+    );
+
+    const cur = await c.query('SELECT 1 FROM pg_database WHERE datname = $1', [currentDb]);
+    let renamedCurrent = false;
+
+    try {
+      if (cur.rowCount > 0) {
+        await c.query(`ALTER DATABASE "${currentDb}" RENAME TO "${oldDb}"`);
+        renamedCurrent = true;
+      }
+      await c.query(`ALTER DATABASE "${stagingDb}" RENAME TO "${currentDb}"`);
+      if (renamedCurrent) {
+        await c.query(`DROP DATABASE IF EXISTS "${oldDb}" WITH (FORCE)`);
+      }
+    } catch (err) {
+      if (renamedCurrent) {
+        // Rollback: volta o nome original. Se falhar, registra crítico.
+        try {
+          await c.query(`ALTER DATABASE "${oldDb}" RENAME TO "${currentDb}"`);
+          console.error(`[SiengeBackup] swap falhou, rollback OK: ${err.message}`);
+        } catch (rbErr) {
+          console.error(`[SiengeBackup] !!! CRÍTICO !!! swap falhou E rollback falhou. Database em "${oldDb}", staging em "${stagingDb}". Erro original: ${err.message}. Rollback: ${rbErr.message}`);
+        }
+      }
+      throw err;
+    }
+  });
+}
+
+/**
+ * Roda queries de validação contra o database recém-restaurado pra detectar
+ * restores corrompidos antes do swap (ex: poucos objetos, banco minúsculo).
+ * Se falhar, o staging é descartado e o atual fica intacto.
+ */
+async function validateStaging(stagingUrl, totals) {
+  const client = new pg.Client(PG_CLIENT_OPTS(stagingUrl));
+  await client.connect();
+  try {
+    const r = await client.query(`
+      SELECT
+        (SELECT count(*) FROM pg_tables   WHERE schemaname='public')::int AS tables,
+        (SELECT count(*) FROM pg_indexes  WHERE schemaname='public')::int AS indexes,
+        (SELECT count(*) FROM pg_constraint c
+           JOIN pg_namespace n ON n.oid = c.connamespace
+           WHERE n.nspname = 'public' AND c.contype = 'f')::int AS fks,
+        pg_database_size(current_database())::bigint AS bytes,
+        pg_size_pretty(pg_database_size(current_database()))     AS size
+    `);
+    const obs = r.rows[0];
+    const errors = [];
+
+    // Limiares conservadores: 90% do esperado pra tolerar pequenas diferenças
+    // entre TOC e estado final (algumas categorias do TOC criam vários objetos).
+    if (totals?.TABLE_DATA > 0 && obs.tables < totals.TABLE_DATA * 0.9) {
+      errors.push(`tabelas=${obs.tables} (esperado ~${totals.TABLE_DATA})`);
+    }
+    if (totals?.FK_CONSTRAINT > 0 && obs.fks < totals.FK_CONSTRAINT * 0.9) {
+      errors.push(`fks=${obs.fks} (esperado ~${totals.FK_CONSTRAINT})`);
+    }
+    if (Number(obs.bytes) < 100 * 1024 * 1024) {
+      errors.push(`banco muito pequeno: ${obs.size}`);
+    }
+    return { ok: errors.length === 0, errors, observed: obs };
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/**
+ * Aplica o arquivo scripts/sienge-grants.sql (se existir) contra o database
+ * recém-promovido. Permite reaplicar permissões de usuários sem precisar editar
+ * o código.
+ *
+ * NÃO falha o restore inteiro se der erro aqui (banco já foi promovido).
+ */
+async function applyGrants(targetUrl) {
+  if (!existsSync(GRANTS_SQL_PATH)) {
+    return { skipped: true, reason: 'arquivo scripts/sienge-grants.sql não existe' };
+  }
+  const sql = (await readFile(GRANTS_SQL_PATH, 'utf8')).trim();
+  if (!sql) {
+    return { skipped: true, reason: 'arquivo de grants vazio' };
+  }
+  const client = new pg.Client(PG_CLIENT_OPTS(targetUrl));
+  await client.connect();
+  try {
+    await client.query(sql);
+    return { skipped: false, statements: sql.split(/;\s*$/m).filter(s => s.trim()).length };
+  } finally {
+    await client.end().catch(() => {});
   }
 }
 
@@ -299,13 +463,12 @@ function buildEmptyPhaseProgress(totals) {
   };
 }
 
-function runPgRestore(dmpcPath, log, totals) {
-  const { targetUrl } = buildPgUrls();
-
+function runPgRestore(dmpcPath, log, totals, targetUrl) {
   return new Promise((resolve, reject) => {
+    // Sem --clean --if-exists: o staging é virgem (acabou de ser criado).
+    // Banco atual de produção fica intocado — substituição acontece via swap
+    // atômico depois do restore validar.
     const args = [
-      '--clean',
-      '--if-exists',
       '--no-owner',
       '--no-privileges',
       '--no-acl',
@@ -433,10 +596,24 @@ function runPgRestore(dmpcPath, log, totals) {
   });
 }
 
+/**
+ * Pipeline blue-green do restore:
+ *   1. preparing_staging  : dropa o staging anterior se sobrou, cria novo virgem
+ *   2. restoring          : pg_restore no staging (banco de produção intacto)
+ *   3. validating         : sanity check no staging (contagem/tamanho)
+ *   4. swapping           : rename atômico — staging vira produção, antiga é dropada
+ *   5. applying_grants    : reaplica permissões a partir de scripts/sienge-grants.sql
+ *
+ * Se qualquer passo até "validating" falhar, o staging é descartado e o banco
+ * de produção continua intocado (sem janela de inconsistência).
+ *
+ * A janela entre o RENAME do antigo e o RENAME do staging dura tipicamente
+ * <1s (rename é só metadado no catálogo do Postgres).
+ */
 async function restoreIntoPostgres(dmpcPath, log) {
-  await setStage(log, 'restoring');
+  const { targetDb, stagingDb, targetUrl, stagingUrl } = buildPgUrls();
 
-  // Inventário do dump (rápido) → UI consegue calcular % por fase.
+  // ── Inventário do dump (rápido) → UI consegue calcular % por fase ─────────
   let totals;
   try {
     totals = parseTocCounts(dmpcPath);
@@ -453,8 +630,47 @@ async function restoreIntoPostgres(dmpcPath, log) {
     import_started_at: new Date(),
   });
 
-  await ensureTargetDatabaseExists();
-  const result = await runPgRestore(dmpcPath, log, totals);
+  // ── 1. Prepara staging ────────────────────────────────────────────────────
+  await setStage(log, 'preparing_staging');
+  console.log(`[SiengeBackup] preparing staging "${stagingDb}" (drop+create)...`);
+  await dropDatabaseIfExists(stagingDb);
+  await createDatabase(stagingDb);
+
+  let restoreResult;
+  try {
+    // ── 2. Restaura no staging ──────────────────────────────────────────────
+    await setStage(log, 'restoring');
+    restoreResult = await runPgRestore(dmpcPath, log, totals, stagingUrl);
+
+    // ── 3. Valida o staging ─────────────────────────────────────────────────
+    await setStage(log, 'validating');
+    const validation = await validateStaging(stagingUrl, totals);
+    console.log(`[SiengeBackup] validation:`, validation);
+    if (!validation.ok) {
+      throw new Error(`Validação do staging falhou: ${validation.errors.join('; ')}`);
+    }
+  } catch (err) {
+    // Qualquer falha até aqui = staging descartado, produção intocada
+    console.warn(`[SiengeBackup] descartando staging "${stagingDb}" devido a falha: ${err.message}`);
+    await dropDatabaseIfExists(stagingDb).catch(e => {
+      console.warn(`[SiengeBackup] cleanup do staging falhou: ${e.message}`);
+    });
+    throw err;
+  }
+
+  // ── 4. Swap atômico ─────────────────────────────────────────────────────
+  await setStage(log, 'swapping');
+  console.log(`[SiengeBackup] swap: "${stagingDb}" → "${targetDb}"...`);
+  await swapDatabases(targetDb, stagingDb);
+
+  // ── 5. Reaplica grants (não falha o restore se der erro) ────────────────
+  await setStage(log, 'applying_grants');
+  try {
+    const grantsResult = await applyGrants(targetUrl);
+    console.log(`[SiengeBackup] grants:`, grantsResult);
+  } catch (e) {
+    console.warn(`[SiengeBackup] applyGrants falhou (banco já promovido, ignorando): ${e.message}`);
+  }
 
   const finishedAt = new Date();
   await log.update({
@@ -462,7 +678,7 @@ async function restoreIntoPostgres(dmpcPath, log) {
     import_finished_at: finishedAt,
     import_duration_ms: finishedAt - new Date(log.import_started_at),
   });
-  return result;
+  return restoreResult;
 }
 
 // ─── Pipeline principal ───────────────────────────────────────────────────────

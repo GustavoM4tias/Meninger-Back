@@ -34,6 +34,7 @@ import {
     runAutoSyncNow,
     listSyncLog,
     setRecurring,
+    purgeEnterprise,
 } from '../controllers/sienge/billsAutoSyncController.js';
 
 
@@ -71,6 +72,7 @@ router.get('/bills/sync-enterprise/status/:costCenterId', authenticate, ctrl.get
 router.get('/bills/auto-sync', authenticate, listAutoSyncStatus);
 router.post('/bills/auto-sync/run-now', authenticate, runAutoSyncNow);
 router.post('/bills/auto-sync/recurring', authenticate, setRecurring);
+router.post('/bills/auto-sync/purge', authenticate, purgeEnterprise);
 router.get('/bills/sync-log', authenticate, listSyncLog);
 
 router.post("/awards/nfse", authenticate, upload.single("file"), uploadNfseAward);

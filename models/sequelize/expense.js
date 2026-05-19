@@ -66,6 +66,13 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.DATEONLY,
             allowNull: true,
         },
+        // true = departamento foi editado manualmente no sistema (modal/bulk).
+        // Blinda contra qualquer sobrescrita futura do sync, mesmo em mudanças de lógica.
+        department_overridden: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false,
+        },
     }, {
         tableName: 'expenses',
         underscored: true,

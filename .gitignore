@@ -22,6 +22,10 @@ coverage/
 # Binários portáteis baixados por scripts/setup-pg-tools.js
 bin/
 
+# Arquivo real de GRANTs do Sienge — contém senhas, não vai pro repo.
+# O .example.sql fica versionado como template.
+scripts/sienge-grants.sql
+
 # Ambiente
 .env
 .env.*

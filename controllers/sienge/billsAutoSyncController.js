@@ -244,3 +244,70 @@ export async function setRecurring(req, res) {
         });
     }
 }
+
+/**
+ * POST /api/sienge/bills/auto-sync/purge
+ * body: { costCenterId: number }  (ou enterpriseCityId — resolvemos o erp_id)
+ *
+ * Apaga 100% dos dados locais de UM empreendimento:
+ *   expenses → sienge_bill_installments → sienge_bills (nessa ordem por FK)
+ * Para o próximo sync recriar tudo do zero. Admin-only. Irreversível.
+ */
+export async function purgeEnterprise(req, res) {
+    try {
+        if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+        if (req.user.role !== 'admin') return res.status(403).json({ error: 'Apenas administradores.' });
+
+        let { costCenterId, enterpriseCityId } = req.body || {};
+
+        // Se veio enterpriseCityId, resolve o erp_id (= cost_center_id)
+        if (!costCenterId && enterpriseCityId) {
+            const [rows] = await db.sequelize.query(
+                `SELECT erp_id FROM enterprise_cities WHERE id = :id AND erp_id ~ '^[0-9]+$'`,
+                { replacements: { id: Number(enterpriseCityId) } }
+            );
+            costCenterId = rows[0]?.erp_id ? Number(rows[0].erp_id) : null;
+        }
+
+        const ccId = Number(costCenterId);
+        if (!Number.isFinite(ccId)) {
+            return res.status(400).json({ error: 'costCenterId (ou enterpriseCityId válido) é obrigatório.' });
+        }
+
+        console.log(`[Purge] >>> apagando dados do CC ${ccId} (user=${req.user.id})`);
+
+        const t = await db.sequelize.transaction();
+        try {
+            // 1. expenses do CC
+            const [expRes] = await db.sequelize.query(
+                `DELETE FROM expenses WHERE cost_center_id = :ccId`,
+                { replacements: { ccId }, transaction: t }
+            );
+            // 2. installments dos bills do CC
+            await db.sequelize.query(
+                `DELETE FROM sienge_bill_installments
+                 WHERE bill_id IN (SELECT id FROM sienge_bills WHERE cost_center_id = :ccId)`,
+                { replacements: { ccId }, transaction: t }
+            );
+            // 3. bills do CC
+            const [billRes] = await db.sequelize.query(
+                `DELETE FROM sienge_bills WHERE cost_center_id = :ccId`,
+                { replacements: { ccId }, transaction: t }
+            );
+            await t.commit();
+
+            console.log(`[Purge] <<< CC ${ccId} apagado.`);
+            return res.json({
+                ok: true,
+                costCenterId: ccId,
+                message: 'Dados apagados. Rode o sync deste empreendimento para repopular.',
+            });
+        } catch (inner) {
+            await t.rollback();
+            throw inner;
+        }
+    } catch (err) {
+        console.error('[Purge] !!! erro:', err?.message, '| parent:', err?.parent?.message);
+        return res.status(500).json({ error: err.message, sqlDetail: err?.parent?.message });
+    }
+}

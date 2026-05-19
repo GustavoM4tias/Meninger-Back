@@ -117,6 +117,9 @@ function selectModelPool(userMessage) {
     /\b(?:por|pelo|pela)\s+(?:el[ae]s?|cliente|nome|documento|cpf|reserva|pasta)\b/,
     /\b(?:busque|procure|encontre|abra)\s+(?:pelo|pela|por|o|a|os|as)\s/,
     /\b(?:essa|esse|essas|esses)\s+(?:reserva|pasta|cliente|lead|empreendimento)\b/,
+    // Perguntas curtas sobre agregação — flash adora improvisar nelas
+    /^\s*(?:e\s+)?(?:qual|quanto[s]?|quantas?)\s+(?:é\s+)?(?:o\s+|a\s+)?total\b/i,
+    /\b(?:no\s+total|na\s+soma|somat[oó]ria|total\s+geral)\b/i,
   ];
   if (CONTEXTUAL_REFS.some(re => re.test(text))) return 'smart';
 
@@ -190,6 +193,7 @@ async function buildHistory(sessionId) {
 
   return messages.map(m => {
     let text = m.content;
+    let hadAction = false;
     if (m.role === 'assistant' && m.content) {
       // Tenta parsear se for estruturado OU se parecer JSON {text, action} salvo
       // antes do fix do response_type (defensivo).
@@ -199,9 +203,15 @@ async function buildHistory(sessionId) {
           const parsed = JSON.parse(m.content);
           if (parsed && (parsed.text !== undefined || parsed.action !== undefined)) {
             text = parsed.text || '';
+            hadAction = !!parsed.action;
           }
         } catch { /* mantém content original */ }
       }
+    }
+    // Marca respostas text-only do assistente (sem tool) que tenham dados específicos
+    // como NÃO VERIFICADAS — modelo NÃO deve usar essas como fonte.
+    if (m.role === 'assistant' && !hadAction && text && /\d{2,}/.test(text)) {
+      text = `[ATENÇÃO: resposta anterior sem tool call — dados podem estar incorretos, NÃO use como fonte] ${text}`;
     }
     return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
   });
@@ -246,6 +256,27 @@ async function getLastBridgeContext(sessionId) {
 
   const bits = [];
   if (c.source)                 bits.push(`source=${c.source}`);
+  // Totais do tool anterior — CRÍTICO para responder "qual total?" sem re-chamar
+  if (action.total != null)     bits.push(`ultimo_total=${action.total}`);
+  if (action.metric_value != null) bits.push(`ultima_metrica=${action.metric_value}`);
+  // Breakdown COMPLETO do chart anterior (todas as categorias) — autoritativo
+  // para responder qualquer pergunta sobre valores específicos sem re-chamar.
+  if (Array.isArray(action.labels) && Array.isArray(action.data) && action.labels.length) {
+    const total = action.total ?? action.data.reduce((s, v) => s + (Number(v) || 0), 0);
+    const allBreakdown = action.labels.slice(0, 30).map((label, i) => {
+      const value = action.data[i];
+      const pct = total > 0 && value != null ? Math.round((Number(value) / total) * 1000) / 10 : null;
+      return `${label}=${value}${pct != null ? `(${pct}%)` : ''}`;
+    });
+    bits.push(`categorias_anteriores=[${allBreakdown.join(' | ')}]`);
+  } else if (Array.isArray(action.top_breakdown) && action.top_breakdown.length) {
+    // Fallback se só temos top_breakdown (legacy)
+    const topStr = action.top_breakdown
+      .slice(0, 5)
+      .map(t => `${t.label}=${t.value}${t.percent != null ? `(${t.percent}%)` : ''}`)
+      .join(' | ');
+    bits.push(`categorias_anteriores=[${topStr}]`);
+  }
   if (c.data_inicio || c.data_fim) bits.push(`periodo=${c.data_inicio || '?'}..${c.data_fim || '?'}`);
   if (c.cidade)                 bits.push(`cidade=${c.cidade}`);
   if (c.bucket)                 bits.push(`bucket=${c.bucket}`);
@@ -256,6 +287,8 @@ async function getLastBridgeContext(sessionId) {
   if (c.excluir_painel)         bits.push('excluir_painel=true');
   if (c.only_active)            bits.push('only_active=true');
   if (c.format)                 bits.push(`format=${c.format}`);
+  if (c.group_by)               bits.push(`group_by=${c.group_by}`);
+  if (c.metric)                 bits.push(`metric=${c.metric}`);
 
   const arrayKeys = ['idleads', 'idprecadastros', 'idreservas', 'idrepasses', 'documentos'];
   for (const key of arrayKeys) {
@@ -450,12 +483,25 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
   }
 
   // Pós-filtro: remove pseudo-tool-calls (ex: "call:query_X{...}" ou "query_X({...})")
-  // que o modelo às vezes escreve em texto ao invés de invocar via function calling API.
-  // Isso é defensivo — o modelo está proibido pelo prompt, mas pode escapar.
   const cleanedFinal = stripPseudoToolCalls(fullAssistantText);
   if (cleanedFinal !== fullAssistantText) {
     sendSSE(res, { type: 'replace', text: cleanedFinal });
     fullAssistantText = cleanedFinal;
+  }
+
+  // ── VALIDAÇÃO ANTI-ALUCINAÇÃO ─────────────────────────────────────────────
+  // Detecta números/labels no texto que NÃO existem no tool result do turn nem
+  // no bridge. Não bloqueia — emite warning visível ao usuário pra revisar.
+  const hallucinationReport = detectHallucinations(fullAssistantText, actionResult, lastBridge);
+  if (hallucinationReport.suspicious.length > 0) {
+    console.warn('[Eme] Possíveis alucinações detectadas:',
+      hallucinationReport.suspicious.map(s => s.value).join(', '),
+      '| message:', fullAssistantText.slice(0, 200));
+    sendSSE(res, {
+      type: 'warning',
+      message: `Alguns valores na resposta podem não corresponder à consulta. Confira no gráfico/tabela abaixo.`,
+      details: hallucinationReport.suspicious,
+    });
   }
 
   // Salva resposta final do assistente.
@@ -480,6 +526,114 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
 
 function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
+ * Detecta possíveis alucinações comparando números/labels do texto do AI
+ * contra os valores autoritativos do tool result e do bridge.
+ *
+ * Estratégia:
+ *  1. Extrai todos os números inteiros >=10 (filtra acima de years e CPFs).
+ *  2. Compara cada número contra os valores conhecidos (tool result + bridge).
+ *  3. Marca como suspeito se não encontrar match exato.
+ *
+ * Conservador: ignora datas (1900-2100), CPFs (11 dígitos), IDs longos,
+ * percentuais óbvios (0-100 quando seguidos de %).
+ */
+function detectHallucinations(text, actionResult, bridgeStr) {
+  if (!text || typeof text !== 'string') return { suspicious: [] };
+
+  // Conjunto de valores numéricos autoritativos
+  const allowed = new Set();
+  const addNum = (v) => {
+    const n = Number(v);
+    if (Number.isFinite(n)) allowed.add(n);
+  };
+
+  // 1. Valores do tool result
+  if (actionResult) {
+    if (actionResult.total != null) addNum(actionResult.total);
+    if (actionResult.metric_value != null) addNum(actionResult.metric_value);
+    if (Array.isArray(actionResult.data)) actionResult.data.forEach(addNum);
+    if (Array.isArray(actionResult.top_breakdown)) {
+      actionResult.top_breakdown.forEach(t => { addNum(t.value); addNum(t.percent); });
+    }
+    if (Array.isArray(actionResult.rows)) {
+      actionResult.rows.forEach(r => {
+        for (const v of Object.values(r || {})) {
+          if (typeof v === 'number' || (typeof v === 'string' && /^-?\d+(?:\.\d+)?$/.test(v))) addNum(v);
+        }
+      });
+    }
+    // Valores específicos de KPIs (precadastros_summary, reservas_summary)
+    for (const k of ['em_analise', 'documentacao', 'aprovados', 'reserva', 'reprovado',
+                      'pendentes', 'taxa_aprovacao', 'taxa_conv_reserva', 'taxa_reprovacao',
+                      'tempo_medio_em_analise', 'tempo_medio_finalizar',
+                      'em_repasse', 'vendida_crm', 'cancelada_distrato',
+                      'pct_vendida_crm', 'pct_distrato', 'tempo_medio_reserva',
+                      'tempo_medio_ate_contrato', 'tempo_medio_ate_venda']) {
+      if (actionResult[k] != null) addNum(actionResult[k]);
+    }
+  }
+
+  // 2. Valores do bridge (ultimo_total, categorias)
+  if (bridgeStr) {
+    const numbers = bridgeStr.match(/\b\d+(?:[.,]\d+)?\b/g) || [];
+    numbers.forEach(addNum);
+  }
+
+  // 3. Extrai números do texto e procura suspeitos
+  // Aceita formatos: 100, 1.500, 1,5, 4.700,50, etc.
+  const pattern = /\b(\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?|\d+(?:[,.]\d+)?)\b/g;
+  const suspicious = [];
+  let m;
+  while ((m = pattern.exec(text)) !== null) {
+    const raw = m[1];
+    // Parse formato BR: 1.500,75 → 1500.75; 1500 → 1500; 0,5 → 0.5
+    let normalized = raw.replace(/\s/g, '');
+    if (normalized.includes(',')) {
+      normalized = normalized.replace(/\./g, '').replace(',', '.');
+    } else if ((normalized.match(/\./g) || []).length === 1 && /\.\d{3}\b/.test(normalized)) {
+      // Caso ambíguo: "1.500" é mil e quinhentos. Remove o ponto.
+      normalized = normalized.replace('.', '');
+    }
+    const num = Number(normalized);
+    if (!Number.isFinite(num)) continue;
+
+    // Ignora: 1-9 (muito pequenos, alta chance de FP)
+    if (num < 10) continue;
+    // Ignora: anos prováveis
+    if (num >= 1900 && num <= 2100) continue;
+    // Ignora: CPF/CNPJ (11/14 dígitos seguidos)
+    if (/^\d{11}$/.test(raw) || /^\d{14}$/.test(raw)) continue;
+    // Ignora: IDs muito longos (provável idlead/idreserva)
+    if (num > 1_000_000) continue;
+    // Janelas antes/depois para checagens contextuais
+    const after  = text.slice(m.index + raw.length, m.index + raw.length + 15);
+    const before = text.slice(Math.max(0, m.index - 5), m.index);
+    // Ignora: percentuais (seguidos de %)
+    if (/^\s*%/.test(after) && num <= 100) continue;
+    // Ignora: dia/mês em data (14/05, 01–14/05, 14/05/2026)
+    if (/[\/\-–]\s*$/.test(before)) continue;          // precedido por / - –
+    if (/^[\/\-–]/.test(after))     continue;          // seguido por / - –
+    // Ignora: "X horas", "X dias", etc.
+    if (/^\s*(hor[a]?s?|min(uto)?s?|dias?|meses?|anos?|sem(ana)?s?)\b/i.test(after)) continue;
+    // Ignora: "R$ 123" — valores monetários grandes (admin verifica via tabela)
+    if (/R\$\s*$/.test(before)) continue;
+
+    // Verifica se o número aparece nos allowed (tolerância de 0.5 pra decimais)
+    let found = allowed.has(num);
+    if (!found) {
+      for (const a of allowed) {
+        if (Math.abs(a - num) < 0.5) { found = true; break; }
+      }
+    }
+    if (!found) {
+      suspicious.push({ value: raw, parsed: num, pos: m.index });
+    }
+  }
+
+  return { suspicious, allowed_count: allowed.size };
 }
 
 /**
@@ -662,21 +816,26 @@ function summarizeForGemini(result) {
   if (type === 'table') {
     summary.total = total ?? result.rows?.length ?? 0;
     summary.message =
-      `A tabela com ${summary.total} registros já está RENDERIZADA visualmente na UI do chat. ` +
-      `Sua resposta de texto deve ter NO MÁXIMO 1 frase curta de introdução/comentário. ` +
-      `NÃO liste, escreva, copie, dump, cite ou reproduza os dados (linhas, nomes, CPFs, valores, JSON, listas). ` +
-      `NÃO invente dados — se você não tem um valor específico, diga "veja na tabela" e pare.`;
+      `[POLÍTICA #0] Tabela com ${summary.total} registros JÁ ESTÁ na UI. ` +
+      `Sua resposta = 1 frase curta de introdução. NADA além disso. ` +
+      `PROIBIDO: listar linhas, escrever nomes/CPFs/valores/JSON, parafrasear, inventar números ou nomes não presentes neste result.json. ` +
+      `Se faltar dado: "veja na tabela acima" e pare.`;
     // Para tabelas pequenas, inclui os dados para o modelo citar valores corretos
     if (summary.total <= 5 && result.rows?.length) {
       summary.rows = result.rows;
     }
   } else if (type === 'chart') {
-    summary.total = result.data?.length ?? 0;
+    const dataArr = Array.isArray(result.data) ? result.data : [];
+    const sumOfValues = dataArr.reduce((acc, v) => acc + (Number(v) || 0), 0);
+    summary.categorias = dataArr.length;
+    summary.soma_total = sumOfValues;
     summary.message =
-      `O gráfico com ${summary.total} categorias já está RENDERIZADO visualmente na UI. ` +
-      `Faça apenas 1-2 frases de comentário (insight, destaque). NÃO liste todos os valores nem reproduza os dados em texto.`;
-    // Inclui labels compactos para o modelo poder mencionar
-    if (result.labels?.length <= 10) {
+      `[POLÍTICA #0] Gráfico RENDERIZADO na UI com ${dataArr.length} categorias. SOMA TOTAL = ${sumOfValues}. ` +
+      `Para "qual total?" responda EXATAMENTE ${sumOfValues}. ` +
+      `Para citar categoria, use LABEL EXATO de labels[] (proibido parafrasear ex: "Sem contato" se label é "1ª Tentativa de Contato"). ` +
+      `Resposta = 1-2 frases. PROIBIDO: listar todos os valores, inventar categorias, inventar percentuais não em data[].`;
+    // SEMPRE inclui labels e data — o modelo precisa para responder com precisão
+    if (result.labels?.length <= 15) {
       summary.labels = result.labels;
       summary.data   = result.data;
     }

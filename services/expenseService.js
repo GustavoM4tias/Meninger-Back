@@ -352,12 +352,19 @@ export default class expenseService {
       throw new Error('Despesa não encontrada');
     }
 
+    // Se o departamento foi informado explicitamente, marca como override manual.
+    // Isso blinda o campo contra qualquer sobrescrita do re-sync (presente e futura).
+    const departmentTouched =
+      (departmentName !== undefined && departmentName !== null) ||
+      (departmentId !== undefined && departmentId !== null);
+
     await exp.update({
       description,
       department_id: departmentId ?? exp.department_id,
       department_name: departmentName ?? exp.department_name,
       department_category_id: departmentCategoryId ?? exp.department_category_id,
       department_category_name: departmentCategoryName ?? exp.department_category_name,
+      department_overridden: departmentTouched ? true : exp.department_overridden,
     });
 
     return exp;

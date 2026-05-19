@@ -2,6 +2,40 @@ import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { QueryTypes } from 'sequelize';
 
+/**
+ * Monta uma linha resumo (subtitle) com período + cidade + filtros principais.
+ * Usado no cabeçalho de tabelas/gráficos pro usuário identificar o escopo da
+ * consulta sem precisar perguntar "qual total?".
+ */
+export function buildSubtitle(ctx, extras = {}) {
+  if (!ctx) return null;
+  const bits = [];
+  if (ctx.data_inicio && ctx.data_fim) {
+    const sameMonth = ctx.data_inicio.slice(0, 7) === ctx.data_fim.slice(0, 7);
+    if (sameMonth) {
+      bits.push(`${dayjs(ctx.data_inicio).format('DD')}–${dayjs(ctx.data_fim).format('DD/MM/YYYY')}`);
+    } else {
+      bits.push(`${dayjs(ctx.data_inicio).format('DD/MM/YYYY')} a ${dayjs(ctx.data_fim).format('DD/MM/YYYY')}`);
+    }
+  } else if (ctx.data_inicio) {
+    bits.push(`a partir de ${dayjs(ctx.data_inicio).format('DD/MM/YYYY')}`);
+  }
+  if (ctx.cidade)                 bits.push(`📍 ${ctx.cidade}`);
+  if (ctx.empreendimento)         bits.push(`🏗 ${ctx.empreendimento}`);
+  if (ctx.empresa_correspondente) bits.push(`🏦 ${ctx.empresa_correspondente}`);
+  if (ctx.imobiliaria)            bits.push(`🤝 ${ctx.imobiliaria}`);
+  if (ctx.corretor)               bits.push(`👤 ${ctx.corretor}`);
+  if (ctx.midia)                  bits.push(`📣 ${ctx.midia}`);
+  if (ctx.bucket)                 bits.push(`◉ ${ctx.bucket}`);
+  if (ctx.excluir_painel)         bits.push('sem Painel');
+  if (ctx.only_active)            bits.push('só ativas');
+  if (ctx.with_lead)              bits.push('com lead');
+  for (const [k, v] of Object.entries(extras)) {
+    if (v != null && v !== '') bits.push(`${k}: ${v}`);
+  }
+  return bits.length ? bits.join(' · ') : null;
+}
+
 export const TOOL_DECLARATIONS = [
   {
     name: 'navigate_to_page',
@@ -291,12 +325,14 @@ async function executeQueryLeads(args, user) {
   const documentos = [...new Set(rows.map(r => r.documento).filter(Boolean))];
 
   const title = hasIdFilter
-    ? `Leads (${rows.length} ${rows.length === 1 ? 'registro' : 'registros'})`
-    : `Leads — ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')}`;
+    ? `Leads`
+    : `Leads`;
+  const subtitle = buildSubtitle(context);
 
   return {
     type:    'table',
     title,
+    subtitle,
     columns,
     rows,
     total:   rows.length,
@@ -347,13 +383,25 @@ async function executeLeadsGrouped(groupBy, where, replacements, context) {
     mes:                 'Leads por Mês',
   };
 
+  const labels = rows.map(r => r.label || 'Não informado');
+  const data   = rows.map(r => Number(r.total));
+  const total  = data.reduce((acc, v) => acc + (Number(v) || 0), 0);
+  const top    = labels.length && data.length
+    ? labels.map((label, i) => ({
+        label, value: data[i], percent: total > 0 ? Math.round((data[i] / total) * 1000) / 10 : 0,
+      })).slice(0, 3)
+    : [];
+
   return {
     type:      'chart',
     chartType: 'bar',
     title:     titles[groupBy] || `Leads por ${groupBy}`,
-    labels:    rows.map(r => r.label || 'Não informado'),
-    data:      rows.map(r => Number(r.total)),
+    subtitle:  buildSubtitle(context),
+    labels,
+    data,
     rawRows:   rows,
+    total,             // soma agregada — exibida pelo ChatChart no cabeçalho
+    top_breakdown: top, // top 3 categorias com %
     context:   { ...context, group_by: groupBy },
   };
 }
@@ -471,7 +519,8 @@ async function executeQueryEvents(args, user) {
 
   return {
     type:    'table',
-    title:   `Eventos — ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')}`,
+    title:   'Eventos',
+    subtitle: buildSubtitle(context),
     columns,
     rows:    processedRows,
     total:   processedRows.length,
@@ -539,13 +588,23 @@ async function executeEventsGrouped(groupBy, where, replacements, context) {
     tag:            'Eventos por Tag',
   };
 
+  const labels = rows.map(r => r.label || 'Não informado');
+  const data   = rows.map(r => Number(r.total));
+  const totalSum = data.reduce((acc, v) => acc + (Number(v) || 0), 0);
+  const top    = labels.map((label, i) => ({
+    label, value: data[i], percent: totalSum > 0 ? Math.round((data[i] / totalSum) * 1000) / 10 : 0,
+  })).slice(0, 3);
+
   return {
     type:      'chart',
     chartType: 'bar',
     title:     titles[groupBy] || `Eventos por ${groupBy}`,
-    labels:    rows.map(r => r.label || 'Não informado'),
-    data:      rows.map(r => Number(r.total)),
+    subtitle:  buildSubtitle(context),
+    labels,
+    data,
     rawRows:   rows,
+    total:     totalSum,
+    top_breakdown: top,
     context:   { ...context, group_by: groupBy },
   };
 }

@@ -975,7 +975,10 @@ export default class BillsService {
                 continue;
             }
 
-            // Update parcial: só campos que vêm do Sienge — NUNCA sobrescreve edição manual
+            // Update parcial: só campos que vêm do Sienge (amount/due_date/status/paid_at).
+            // INVARIANTE: department_*, department_category_*, description e
+            // department_overridden NUNCA entram aqui — edição manual é soberana.
+            // Mesmo que department_overridden=true, o re-sync nem toca o campo.
             const updates = {
                 amount: inst.amount ?? 0,
                 due_date: inst.dueDate || inst.baseDate || bill.issue_date || null,
