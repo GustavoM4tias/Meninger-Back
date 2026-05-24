@@ -1,14 +1,6 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-
-function normalizeAudience(a) {
-    return ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'].includes(a) ? a : 'BOTH';
-}
-
-function audienceWhere(a) {
-    if (a === 'BOTH') return { audience: { [Op.in]: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] } };
-    return { audience: { [Op.in]: ['BOTH', a] } };
-}
+import { normalizeAudience, audienceWhere } from './audience.js';
 
 function safePage(n) {
     const v = Number(n);
@@ -91,32 +83,64 @@ const academyUsersService = {
         };
     },
 
-    async rank({ q, page, pageSize, audience }) {
+    async rank({ q, page, pageSize, audience, scopeType = null, scopeValue = null } = {}) {
         const finalAudience = normalizeAudience(audience);
 
         const p = safePage(page);
         const ps = safePageSize(pageSize);
-        const offset = (p - 1) * ps;
 
-        // 1) filtra usuários (busca por username)
-        const userWhere = {};
+        // 1) Busca usuários ativos. Suporta scope filter (S5.4):
+        //    - DEPARTMENT → users cuja position pertence a esse department
+        //    - POSITION   → users com essa position (filtrado por Position.code → name)
+        //    - CITY       → users dessa cidade
+        //    - ROLE       → users com esse role
+        //    Sem scope → ranking global.
+        const userWhere = { status: true };
         if (q && String(q).trim()) {
             userWhere.username = { [Op.iLike]: `%${String(q).trim()}%` };
         }
 
-        const { rows: users, count: total } = await db.User.findAndCountAll({
+        if (scopeType && scopeValue != null) {
+            const st = String(scopeType).toUpperCase().trim();
+            const sv = String(scopeValue).trim();
+
+            if (st === 'ROLE') {
+                userWhere.role = sv;
+            } else if (st === 'POSITION') {
+                const pos = await db.Position.findOne({
+                    where: { code: sv },
+                    attributes: ['name'],
+                    raw: true,
+                });
+                if (!pos?.name) return { page: p, pageSize: ps, total: 0, results: [], scope: { type: st, value: sv } };
+                userWhere.position = pos.name;
+            } else if (st === 'DEPARTMENT') {
+                const positions = await db.Position.findAll({
+                    where: { department_id: Number(sv) },
+                    attributes: ['name'],
+                    raw: true,
+                });
+                const names = positions.map(p2 => p2.name).filter(Boolean);
+                if (!names.length) return { page: p, pageSize: ps, total: 0, results: [], scope: { type: st, value: sv } };
+                userWhere.position = { [Op.in]: names };
+            } else if (st === 'CITY') {
+                const city = await db.UserCity.findByPk(Number(sv), { attributes: ['name'], raw: true });
+                if (!city?.name) return { page: p, pageSize: ps, total: 0, results: [], scope: { type: st, value: sv } };
+                userWhere.city = city.name;
+            }
+        }
+
+        const users = await db.User.findAll({
             where: userWhere,
             attributes: ['id', 'username', 'email', 'position', 'city', 'createdAt'],
-            order: [['username', 'ASC']],
-            limit: ps,
-            offset,
             raw: true,
         });
 
+        const total = users.length;
         const userIds = users.map(u => u.id);
 
         if (!userIds.length) {
-            return { page: p, pageSize: ps, total, results: [] };
+            return { page: p, pageSize: ps, total: 0, results: [] };
         }
 
         // 2) agregações por usuário (em paralelo)
@@ -170,8 +194,8 @@ const academyUsersService = {
         const completedBy = byUser(trackCompletedRows, 'userId');
         const inProgressBy = byUser(trackInProgressRows, 'userId');
 
-        // 3) monta resultados + score
-        const results = users.map(u => {
+        // 3) monta resultados + score para TODOS os usuários
+        const allResults = users.map(u => {
             const published = kbPublishedBy[u.id] || 0;
             const drafts = kbDraftBy[u.id] || 0;
             const topicsCreated = topicsBy[u.id] || 0;
@@ -187,12 +211,18 @@ const academyUsersService = {
                 community: { topicsCreated, answersPosted },
                 tracks: { completed, inProgress },
                 score,
-                updatedAt: new Date().toISOString(), // opcional
             };
         });
 
-        // 4) ordena por score desc (e username como tie-breaker)
-        results.sort((a, b) => (b.score - a.score) || String(a.user.username).localeCompare(String(b.user.username)));
+        // 4) ordena por score GLOBAL desc (username como tie-breaker), depois pagina
+        allResults.sort((a, b) =>
+            (b.score - a.score) || String(a.user.username).localeCompare(String(b.user.username))
+        );
+
+        const offset = (p - 1) * ps;
+        const results = allResults
+            .slice(offset, offset + ps)
+            .map((r, idx) => ({ ...r, rank: offset + idx + 1 }));
 
         return { page: p, pageSize: ps, total, results };
     },

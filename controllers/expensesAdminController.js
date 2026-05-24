@@ -22,7 +22,7 @@ function ensureAdmin(req, res) {
 
 // ── COST CENTER OVERRIDES ──────────────────────────────────────────────────
 
-/** GET /api/expenses/admin/cost-center-overrides */
+/** GET /api/expenses/admin/cost-center-overrides — lista completa (admin) */
 export const listCostCenterOverrides = async (req, res) => {
     if (!ensureAdmin(req, res)) return;
     try {
@@ -36,9 +36,28 @@ export const listCostCenterOverrides = async (req, res) => {
     }
 };
 
+/**
+ * GET /api/expenses/cost-center-overrides/map
+ * Mapa leve { "<cost_center_id>": "Nome de exibição" } para qualquer usuário autenticado.
+ * Usado pelos selectors (Custos/Títulos) aplicarem o nome de exibição.
+ */
+export const getCostCenterOverrideMap = async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+    try {
+        const rows = await CostCenterOverride.findAll({
+            attributes: ['cost_center_id', 'display_name'],
+        });
+        const map = {};
+        for (const r of rows) map[String(r.cost_center_id)] = r.display_name;
+        return res.json(map);
+    } catch (err) {
+        console.error('[expensesAdmin] getCostCenterOverrideMap erro:', err?.message);
+        return res.status(500).json({ error: err.message });
+    }
+};
+
 /** PUT /api/expenses/admin/cost-center-overrides/:ccId  body: { displayName } */
 export const setCostCenterOverride = async (req, res) => {
-    console.log('[CCOverride] >>> PUT body=', req.body, ' params=', req.params, ' user=', req.user?.id, ' role=', req.user?.role);
     if (!ensureAdmin(req, res)) return;
     const ccId = Number(req.params.ccId);
     const displayName = String(req.body?.displayName || '').trim();
@@ -59,25 +78,9 @@ export const setCostCenterOverride = async (req, res) => {
                    updated_at = NOW()`,
             { replacements: { ccId, name: displayName, by: updatedBy } }
         );
-
-        // Verificação RAW imediata: prova que o registro está no banco depois do INSERT
-        const [verify] = await sequelize.query(
-            `SELECT cost_center_id, display_name FROM cost_center_overrides WHERE cost_center_id = :ccId`,
-            { replacements: { ccId } }
-        );
-        console.log('[CCOverride] <<< persistido:', verify[0] || '(NENHUM!)');
-
-        return res.json({
-            ok: true,
-            costCenterId: ccId,
-            displayName,
-            verifiedInDb: verify.length > 0,
-        });
+        return res.json({ ok: true, costCenterId: ccId, displayName });
     } catch (err) {
-        console.error('[CCOverride] !!! ERRO:');
-        console.error('  message:', err?.message);
-        console.error('  parent :', err?.parent?.message);
-        console.error('  sql    :', err?.sql);
+        console.error('[expensesAdmin] setCostCenterOverride erro:', err?.message, '| parent:', err?.parent?.message);
         return res.status(500).json({ error: err.message, sqlDetail: err?.parent?.message });
     }
 };

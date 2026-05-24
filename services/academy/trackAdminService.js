@@ -292,13 +292,26 @@ const trackAdminService = {
 
     if (!ids.length) throw new Error('Ordem inválida.');
 
-    const rows = await db.AcademyTrackItem.findAll({
-      where: { trackId: track.id, id: { [Op.in]: ids } },
+    // detecta duplicatas no array (mesmo id repetido)
+    if (new Set(ids).size !== ids.length) {
+      throw new Error('Ordem contém IDs duplicados.');
+    }
+
+    // valida pertinência E completude: o array precisa cobrir TODOS os items da trilha,
+    // senão items fora do array mantêm orderIndex antigo e geram colisões.
+    const allRows = await db.AcademyTrackItem.findAll({
+      where: { trackId: track.id },
       attributes: ['id'],
       raw: true,
     });
 
-    if (rows.length !== ids.length) throw new Error('Ordem contém itens que não pertencem à trilha.');
+    const allIds = new Set(allRows.map((r) => Number(r.id)));
+    if (allIds.size !== ids.length) {
+      throw new Error('Ordem precisa conter todos os itens da trilha (recebido: ' + ids.length + ', esperado: ' + allIds.size + ').');
+    }
+    for (const id of ids) {
+      if (!allIds.has(id)) throw new Error('Ordem contém item que não pertence à trilha (id ' + id + ').');
+    }
 
     // transação simples
     await db.sequelize.transaction(async (t) => {

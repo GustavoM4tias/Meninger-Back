@@ -1,15 +1,6 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-
-function normalizeAudience(audience) {
-    const allowed = new Set(['BOTH', 'GESTOR_ONLY', 'ADM_ONLY']);
-    return allowed.has(audience) ? audience : 'BOTH';
-}
-
-function audienceWhere(finalAudience) {
-    if (finalAudience === 'BOTH') return { audience: { [Op.in]: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] } };
-    return { audience: { [Op.in]: ['BOTH', finalAudience] } };
-}
+import { normalizeAudience, audienceWhere } from './audience.js';
 
 function normalizeMode(mode) {
     return String(mode || '').toLowerCase() === 'admin' ? 'admin' : '';

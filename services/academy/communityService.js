@@ -1,14 +1,10 @@
-import { Op } from 'sequelize';
+import { Op, fn, col } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-
-function normalizeAudience(a) {
-    return ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'].includes(a) ? a : 'BOTH';
-}
-
-function audienceWhere(a) {
-    if (a === 'BOTH') return { audience: { [Op.in]: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] } };
-    return { audience: { [Op.in]: ['BOTH', a] } };
-}
+import NotificationService from '../notification/NotificationService.js';
+import { NotificationType } from '../notification/notificationTypes.js';
+import { normalizeAudience, audienceWhere } from './audience.js';
+import mentionsService from './mentionsService.js';
+import gamificationService from './gamificationService.js';
 
 function normalizeMyMode(mode) {
     const v = String(mode || '').toUpperCase();
@@ -220,10 +216,31 @@ const communityService = {
             type: 'COMMENT',
         });
 
+        // S4.3: Mentions @usuario no body do tópico.
+        mentionsService.notifyMentioned({
+            body,
+            authorUserId: userId,
+            context: {
+                kind: 'topic',
+                refId: Number(topic.id),
+                refTitle: title,
+                refLink: `/academy/community/topic/${topic.id}`,
+                snippet: body.length > 140 ? `${body.slice(0, 140)}…` : body,
+            },
+        }).catch(err => console.warn('[academy.community.createTopic] mentions failed', err?.message));
+
+        // S5.1: XP por criar tópico
+        gamificationService.awardXp({
+            userId,
+            reason: 'TOPIC_CREATED',
+            refKind: 'topic',
+            refId: String(topic.id),
+        }).catch(err => console.warn('[gamification.topicCreated]', err?.message));
+
         return { topic, firstPost };
     },
 
-    async getTopic({ id, audience }) {
+    async getTopic({ id, audience, userId = null }) {
         const finalAudience = normalizeAudience(audience);
 
         const topicId = Number(id);
@@ -285,10 +302,22 @@ const communityService = {
         if (topicJson.acceptedBy) topicJson.acceptedBy = pickUser(topicJson.acceptedBy);
         if (topicJson.closedBy) topicJson.closedBy = pickUser(topicJson.closedBy);
 
+        // upvotes do usuário atual (para flag hasUpvoted)
+        let myUpvotedPostIds = new Set();
+        if (userId && posts.length) {
+            const myVotes = await db.AcademyPostUpvote.findAll({
+                where: { userId: Number(userId), postId: { [Op.in]: posts.map(p => p.id) } },
+                attributes: ['postId'],
+                raw: true,
+            });
+            myUpvotedPostIds = new Set(myVotes.map(v => Number(v.postId)));
+        }
+
         const postsJson = posts.map(p => {
             const o = p.toJSON();
             if (o.createdBy) o.createdBy = pickUser(o.createdBy);
             if (o.updatedBy) o.updatedBy = pickUser(o.updatedBy);
+            o.hasUpvoted = myUpvotedPostIds.has(Number(o.id));
             return o;
         });
 
@@ -316,6 +345,46 @@ const communityService = {
         });
 
         await topic.update({ updatedByUserId: userId });
+
+        // Notifica o autor do tópico (se não for o próprio que respondeu).
+        // Falha silenciosa: notificação não pode quebrar o fluxo de post.
+        try {
+            const topicAuthorId = Number(topic.createdByUserId);
+            if (topicAuthorId && topicAuthorId !== Number(userId)) {
+                await NotificationService.notify({
+                    type: NotificationType.ACADEMY_TOPIC_REPLIED,
+                    recipients: { users: [topicAuthorId] },
+                    title: `Nova resposta em "${topic.title}"`,
+                    body: body.length > 140 ? `${body.slice(0, 140)}…` : body,
+                    data: { topicId: Number(topic.id), postId: Number(post.id) },
+                    link: `/academy/community/topic/${topic.id}`,
+                    importance: 4,
+                });
+            }
+        } catch (notifyErr) {
+            console.warn('[academy.community.createPost] notify failed', notifyErr?.message);
+        }
+
+        // S4.3: Mentions @usuario no body do post.
+        mentionsService.notifyMentioned({
+            body,
+            authorUserId: userId,
+            context: {
+                kind: 'post',
+                refId: Number(post.id),
+                refTitle: topic.title,
+                refLink: `/academy/community/topic/${topic.id}`,
+                snippet: body.length > 140 ? `${body.slice(0, 140)}…` : body,
+            },
+        }).catch(err => console.warn('[academy.community.createPost] mentions failed', err?.message));
+
+        // S5.1: XP por criar post
+        gamificationService.awardXp({
+            userId,
+            reason: 'POST_CREATED',
+            refKind: 'post',
+            refId: String(post.id),
+        }).catch(err => console.warn('[gamification.postCreated]', err?.message));
 
         return post;
     },
@@ -386,6 +455,84 @@ const communityService = {
         });
 
         return { ok: true };
+    },
+
+    async getMeta({ audience }) {
+        const finalAudience = normalizeAudience(audience);
+        const counts = await countsByType({
+            ...audienceWhere(finalAudience),
+            status: 'OPEN',
+        });
+
+        return {
+            audience: finalAudience,
+            categories: COMMUNITY_CATEGORIES,
+            types: [
+                { key: 'questions', label: 'Dúvidas', value: 'QUESTION', count: counts.questions },
+                { key: 'discussions', label: 'Discussões', value: 'DISCUSSION', count: counts.discussions },
+                { key: 'suggestions', label: 'Sugestões', value: 'SUGGESTION', count: counts.suggestions },
+                { key: 'incidents', label: 'Incidentes', value: 'INCIDENT', count: counts.incidents },
+            ],
+        };
+    },
+
+    async upvotePost({ userId, postId }) {
+        const uid = Number(userId);
+        const pid = Number(postId);
+        if (!Number.isFinite(uid) || uid <= 0) throw new Error('Usuário não identificado.');
+        if (!Number.isFinite(pid) || pid <= 0) throw new Error('Post inválido.');
+
+        const post = await db.AcademyPost.findByPk(pid);
+        if (!post) throw new Error('Post não encontrado.');
+
+        // upvote do próprio post: rejeita (regra simples).
+        if (Number(post.createdByUserId) === uid) {
+            const e = new Error('Você não pode votar no próprio post.');
+            e.statusCode = 400;
+            throw e;
+        }
+
+        // tenta criar — se UNIQUE colidir, já tinha votado.
+        try {
+            await db.AcademyPostUpvote.create({ postId: pid, userId: uid });
+        } catch (err) {
+            const isDup = err?.name === 'SequelizeUniqueConstraintError';
+            if (!isDup) throw err;
+            // já votou: idempotente, devolve estado atual.
+            return { ok: true, upvoted: true, upvotes: Number(post.upvotes || 0) };
+        }
+
+        // recalcula contador agregado a partir da tabela (fonte de verdade).
+        const upvotes = await db.AcademyPostUpvote.count({ where: { postId: pid } });
+        await post.update({ upvotes });
+
+        // S5.1: XP para o AUTOR do post pelo upvote recebido.
+        // refId composto (postId+voterId) garante idempotência por par.
+        gamificationService.awardXp({
+            userId: Number(post.createdByUserId),
+            reason: 'POST_UPVOTED',
+            refKind: 'upvote',
+            refId: `${pid}:${uid}`,
+        }).catch(err => console.warn('[gamification.postUpvoted]', err?.message));
+
+        return { ok: true, upvoted: true, upvotes };
+    },
+
+    async clearUpvote({ userId, postId }) {
+        const uid = Number(userId);
+        const pid = Number(postId);
+        if (!Number.isFinite(uid) || uid <= 0) throw new Error('Usuário não identificado.');
+        if (!Number.isFinite(pid) || pid <= 0) throw new Error('Post inválido.');
+
+        const post = await db.AcademyPost.findByPk(pid);
+        if (!post) throw new Error('Post não encontrado.');
+
+        await db.AcademyPostUpvote.destroy({ where: { postId: pid, userId: uid } });
+
+        const upvotes = await db.AcademyPostUpvote.count({ where: { postId: pid } });
+        await post.update({ upvotes });
+
+        return { ok: true, upvoted: false, upvotes };
     },
 
     async listMyTopics({ userId, q, status, audience, page, pageSize }) {

@@ -1,9 +1,15 @@
 export default (sequelize, DataTypes) => {
     const AcademyTrackAssignment = sequelize.define('AcademyTrackAssignment', {
         trackSlug: { type: DataTypes.STRING, allowNull: false },
-        scopeType: { type: DataTypes.STRING, allowNull: false }, // ROLE | POSITION | CITY | USER
+        scopeType: { type: DataTypes.STRING, allowNull: false }, // ROLE | POSITION | DEPARTMENT | CITY | USER
         scopeValue: { type: DataTypes.STRING, allowNull: false }, // ex: "admin", "3" (positionId), "2" (cityId), "15" (userId)
         required: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+
+        // Compliance (S1.4): trilha "obrigatória" tem deadline de conclusão.
+        // - mandatory=true: aluno DEVE concluir até dueAt (recebe lembrete + entra no dashboard de aderência).
+        // - mandatory=false: trilha "recomendada" — aparece, mas sem cobrança.
+        mandatory: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        dueAt: { type: DataTypes.DATE, allowNull: true },
     }, {
         tableName: 'academy_track_assignments',
         timestamps: true,

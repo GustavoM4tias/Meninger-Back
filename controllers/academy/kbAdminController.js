@@ -84,7 +84,8 @@ const kbAdminController = {
                 title,
                 categorySlug,
                 body,
-                payload, // ✅ novo
+                payload,
+                versionMessage: req.body?.versionMessage || null, // S2.4: mensagem de "commit"
             });
 
             return res.json({ article });
@@ -123,6 +124,46 @@ const kbAdminController = {
         } catch (e) {
             console.error('[academy.kbAdmin.getById]', e);
             return res.status(400).json({ message: e.message || 'Erro ao carregar artigo.' });
+        }
+    },
+
+    // S2.4: histórico de versões
+    async listVersions(req, res) {
+        try {
+            const id = Number(req.params.id);
+            if (!id) return res.status(400).json({ message: 'ID inválido.' });
+            const data = await kbAdminService.listVersions(id);
+            return res.json(data);
+        } catch (e) {
+            console.error('[academy.kbAdmin.listVersions]', e);
+            return res.status(400).json({ message: e.message || 'Erro ao listar versões.' });
+        }
+    },
+
+    async getVersion(req, res) {
+        try {
+            const id = Number(req.params.id);
+            const vn = Number(req.params.versionNumber);
+            if (!id || !vn) return res.status(400).json({ message: 'IDs inválidos.' });
+            const data = await kbAdminService.getVersion(id, vn);
+            return res.json(data);
+        } catch (e) {
+            console.error('[academy.kbAdmin.getVersion]', e);
+            return res.status(400).json({ message: e.message || 'Erro ao carregar versão.' });
+        }
+    },
+
+    async restoreVersion(req, res) {
+        try {
+            const userId = resolveUserId(req);
+            const id = Number(req.params.id);
+            const vn = Number(req.params.versionNumber);
+            if (!id || !vn) return res.status(400).json({ message: 'IDs inválidos.' });
+            const article = await kbAdminService.restoreVersion(id, vn, { userId });
+            return res.json({ article });
+        } catch (e) {
+            console.error('[academy.kbAdmin.restoreVersion]', e);
+            return res.status(400).json({ message: e.message || 'Erro ao restaurar versão.' });
         }
     },
 };

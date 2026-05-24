@@ -29,11 +29,13 @@ app.use(cors());
 app.use(helmet());
 app.use(express.json());
 
-// Rotas
-app.use('/validator', documentRoutes(upload));
+// 🔒 SEGURANÇA (E5 - Fix crítico): TODOS os endpoints agora exigem authenticate.
+// O endpoint /validator era PÚBLICO — qualquer um podia validar contratos e
+// ver dados de clientes. Mesma coisa para /chat e /token.
+app.use('/validator', authenticate, documentRoutes(upload));
 app.use('/validator/history', authenticate, historyRoutes);
-app.use('/chat', chatRoutes);
-app.use('/token', statsRoutes);
+app.use('/chat', authenticate, chatRoutes);
+app.use('/token', authenticate, statsRoutes);
 app.use('/payment-flow', authenticate, paymentFlowRoutes(upload));
 
 app.use(errorHandler);

@@ -1,15 +1,7 @@
 // services/academy/meService.js
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-
-function normalizeAudience(a) {
-    return ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'].includes(a) ? a : 'BOTH';
-}
-
-function audienceWhere(a) {
-    if (a === 'BOTH') return { audience: { [Op.in]: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] } };
-    return { audience: { [Op.in]: ['BOTH', a] } };
-}
+import { normalizeAudience, audienceWhere } from './audience.js';
 
 const meService = {
     async getSummary({ userId, audience }) {
