@@ -1,5 +1,6 @@
 import communityService from '../../services/academy/communityService.js';
 import { COMMUNITY_CATEGORIES } from '../../services/academy/communityService.js';
+import { resolveAudienceForUser } from '../../services/academy/audience.js';
 
 function resolveUserId(req) {
     if (req.user?.id) return req.user.id;
@@ -28,10 +29,12 @@ const communityController = {
                 type = '',
                 q = '',
                 status = 'OPEN',
-                audience = 'BOTH',
                 page = '1',
                 pageSize = '20',
             } = req.query;
+
+            // 🔒 audience derivada do user no servidor
+            const audience = await resolveAudienceForUser(resolveUserId(req));
 
             const p = Number(page);
             const ps = Number(pageSize);
@@ -66,13 +69,15 @@ const communityController = {
     async getTopic(req, res) {
         try {
             const id = Number(req.params.id);
-            const audience = req.query.audience || 'BOTH';
+            const userId = resolveUserId(req);
+            // 🔒 audience derivada do user
+            const audience = await resolveAudienceForUser(userId);
 
             if (!Number.isFinite(id) || id <= 0) {
                 return res.status(400).json({ message: 'ID inválido.' });
             }
 
-            const data = await communityService.getTopic({ id, audience });
+            const data = await communityService.getTopic({ id, audience, userId });
             if (!data) return res.status(404).json({ message: 'Tópico não encontrado.' });
 
             return res.json(data);
@@ -158,7 +163,10 @@ const communityController = {
             const userId = resolveUserId(req);
             if (!userId) return res.status(401).json({ message: 'Não autenticado.' });
 
-            const { q = '', status = '', audience = 'BOTH', page = '1', pageSize = '20' } = req.query;
+            const { q = '', status = '', page = '1', pageSize = '20' } = req.query;
+
+            // 🔒 audience derivada do user
+            const audience = await resolveAudienceForUser(userId);
 
             const p = Number(page);
             const ps = Number(pageSize);
@@ -202,16 +210,62 @@ const communityController = {
         }
     },
 
+    async upvotePost(req, res) {
+        try {
+            const userId = resolveUserId(req);
+            if (!userId) return res.status(401).json({ message: 'Não autenticado.' });
+
+            const postId = Number(req.params.postId);
+            if (!Number.isFinite(postId) || postId <= 0) {
+                return res.status(400).json({ message: 'ID inválido.' });
+            }
+
+            const data = await communityService.upvotePost({ userId, postId });
+            return res.json(data);
+        } catch (err) {
+            console.error('[academy.community.upvotePost]', err);
+            const status = err.statusCode || 400;
+            return res.status(status).json({ message: err.message || 'Erro ao registrar voto.' });
+        }
+    },
+
+    async clearUpvote(req, res) {
+        try {
+            const userId = resolveUserId(req);
+            if (!userId) return res.status(401).json({ message: 'Não autenticado.' });
+
+            const postId = Number(req.params.postId);
+            if (!Number.isFinite(postId) || postId <= 0) {
+                return res.status(400).json({ message: 'ID inválido.' });
+            }
+
+            const data = await communityService.clearUpvote({ userId, postId });
+            return res.json(data);
+        } catch (err) {
+            console.error('[academy.community.clearUpvote]', err);
+            const status = err.statusCode || 400;
+            return res.status(status).json({ message: err.message || 'Erro ao remover voto.' });
+        }
+    },
+
     async getMeta(req, res) {
-        return res.json({
-            categories: COMMUNITY_CATEGORIES,
-            types: [
-                { key: 'questions', label: 'Dúvidas', value: 'QUESTION' },
-                { key: 'discussions', label: 'Discussões', value: 'DISCUSSION' },
-                { key: 'suggestions', label: 'Sugestões', value: 'SUGGESTION' },
-                { key: 'incidents', label: 'Incidentes', value: 'INCIDENT' },
-            ],
-        });
+        try {
+            // 🔒 audience derivada do user
+            const audience = await resolveAudienceForUser(resolveUserId(req));
+            const data = await communityService.getMeta({ audience });
+            return res.json(data);
+        } catch (err) {
+            console.error('[academy.community.getMeta]', err);
+            return res.status(500).json({
+                categories: COMMUNITY_CATEGORIES,
+                types: [
+                    { key: 'questions', label: 'Dúvidas', value: 'QUESTION', count: 0 },
+                    { key: 'discussions', label: 'Discussões', value: 'DISCUSSION', count: 0 },
+                    { key: 'suggestions', label: 'Sugestões', value: 'SUGGESTION', count: 0 },
+                    { key: 'incidents', label: 'Incidentes', value: 'INCIDENT', count: 0 },
+                ],
+            });
+        }
     },
 };
 

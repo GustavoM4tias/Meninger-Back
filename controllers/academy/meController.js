@@ -1,5 +1,6 @@
 import meService from '../../services/academy/meService.js';
 import academyUsersService from '../../services/academy/academyUsersService.js';
+import { resolveAudienceForUser } from '../../services/academy/audience.js';
 
 function resolveUserId(req) {
     if (req.user?.id) return req.user.id;
@@ -14,9 +15,14 @@ const meController = {
             const q = req.query.q || '';
             const page = Number(req.query.page || 1);
             const pageSize = Number(req.query.pageSize || 20);
-            const audience = req.query.audience || 'BOTH';
+            // S5.4: scope filter — ROLE | POSITION | DEPARTMENT | CITY
+            const scopeType = req.query.scopeType || null;
+            const scopeValue = req.query.scopeValue ?? null;
 
-            const data = await academyUsersService.rank({ q, page, pageSize, audience });
+            // 🔒 audience derivada do user (afeta contagem de topics que entra no score)
+            const audience = await resolveAudienceForUser(resolveUserId(req));
+
+            const data = await academyUsersService.rank({ q, page, pageSize, audience, scopeType, scopeValue });
             return res.json(data);
         } catch (err) {
             console.error('[academy.users.rank]', err);
@@ -28,7 +34,8 @@ const meController = {
             const userId = resolveUserId(req);
             if (!userId) return res.status(401).json({ message: 'Usuário não identificado.' });
 
-            const audience = req.query.audience || 'BOTH';
+            // 🔒 audience derivada do user
+            const audience = await resolveAudienceForUser(userId);
             const data = await meService.getSummary({ userId, audience });
             return res.json(data);
         } catch (err) {
@@ -43,7 +50,8 @@ const meController = {
                 return res.status(400).json({ message: 'Usuário inválido.' });
             }
 
-            const audience = req.query.audience || 'BOTH';
+            // 🔒 audience derivada do user QUE FEZ a requisição (não do alvo) — afeta visibilidade
+            const audience = await resolveAudienceForUser(resolveUserId(req));
             const data = await academyUsersService.getUserSummary({ userId, audience });
 
             // perfil público: sem progresso recente

@@ -3,6 +3,7 @@ import { Router } from 'express';
 import expenseController from '../controllers/expenseController.js';
 import {
     listCostCenterOverrides,
+    getCostCenterOverrideMap,
     setCostCenterOverride,
     deleteCostCenterOverride,
     listDepartmentVisibility,
@@ -21,6 +22,9 @@ router.get('', ctrl.listMonth);
 router.put('/:id', ctrl.update);
 router.delete('/:id', ctrl.remove);
 router.get('/links', ctrl.listLinks);
+
+// ── Leitura do mapa de overrides (qualquer usuário autenticado) ──────────
+router.get('/cost-center-overrides/map', getCostCenterOverrideMap);
 
 // ── Admin: gestão de overrides de nome de empreendimento por CC ──────────
 router.get('/admin/cost-center-overrides', listCostCenterOverrides);

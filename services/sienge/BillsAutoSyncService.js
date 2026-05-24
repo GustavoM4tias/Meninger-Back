@@ -30,7 +30,12 @@ export const ENTERPRISES_SQL = `
     SELECT
         ec.id,
         ec.erp_id,
-        ec.enterprise_name,
+        -- nome de exibição: override admin (cost_center_overrides) tem prioridade
+        COALESCE(
+            (SELECT cco.display_name FROM cost_center_overrides cco
+             WHERE cco.cost_center_id = ec.erp_id::int),
+            ec.enterprise_name
+        ) AS enterprise_name,
         ec.default_city,
         ec.city_override,
         NULLIF(ec.raw_payload->>'idCompany','')::int AS company_id,

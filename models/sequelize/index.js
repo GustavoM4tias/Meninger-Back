@@ -73,6 +73,23 @@ import AcademyTrackItemDefine from './academy/trackItem.js';
 import AcademyUserProgressDefine from './academy/userProgress.js';
 import AcademyTrackAssignmentDefine from './academy/trackAssignment.js';
 import AcademyUserQuizAttemptDefine from './academy/userQuizAttempt.js';
+import AcademyPostUpvoteDefine from './academy/postUpvote.js';
+import AcademyCertificateDefine from './academy/certificate.js';
+import AcademyModuleDefine from './academy/module.js';
+import AcademyQuestionDefine from './academy/question.js';
+import AcademyQuizQuestionDefine from './academy/quizQuestion.js';
+import AcademyArticleVersionDefine from './academy/articleVersion.js';
+import AcademyTrackPrerequisiteDefine from './academy/trackPrerequisite.js';
+import AcademyFollowDefine from './academy/follow.js';
+import AcademyArticleCommentDefine from './academy/articleComment.js';
+import AcademyRatingDefine from './academy/rating.js';
+import AcademyUserXpDefine from './academy/userXp.js';
+import AcademyXpLogDefine from './academy/xpLog.js';
+import AcademyBadgeDefine from './academy/badge.js';
+import AcademyUserBadgeDefine from './academy/userBadge.js';
+import AcademyVideoWatchDefine from './academy/videoWatch.js';
+import AcademyOnboardingRuleDefine from './academy/onboardingRule.js';
+import EmeAuditLogDefine from './emeAuditLog.js';
 
 import ExternalOrganizationDefine from './academy/external/externalOrganization.js';
 import AuthAccessCodeDefine from './academy/external/authAccessCode.js';
@@ -125,6 +142,11 @@ import WhatsappMessageDefine from './whatsapp/whatsappMessage.js';
 import AlertRuleDefine         from './alerts/alertRule.js';
 import AlertTriggerLogDefine   from './alerts/alertTriggerLog.js';
 import AlertPendingReplyDefine from './alerts/alertPendingReply.js';
+
+// Marketing — Captação de Leads
+import InboundLeadDefine      from './marketing/inboundLead.js';
+import InboundLeadEventDefine from './marketing/inboundLeadEvent.js';
+import LeadFormDefine         from './marketing/leadForm.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -206,6 +228,23 @@ db.AcademyTrackItem = AcademyTrackItemDefine(sequelize, DataTypes);
 db.AcademyUserProgress = AcademyUserProgressDefine(sequelize, DataTypes);
 db.AcademyTrackAssignment = AcademyTrackAssignmentDefine(sequelize, DataTypes);
 db.AcademyUserQuizAttempt = AcademyUserQuizAttemptDefine(sequelize, DataTypes);
+db.AcademyPostUpvote = AcademyPostUpvoteDefine(sequelize, DataTypes);
+db.AcademyCertificate = AcademyCertificateDefine(sequelize, DataTypes);
+db.AcademyModule = AcademyModuleDefine(sequelize, DataTypes);
+db.AcademyQuestion = AcademyQuestionDefine(sequelize, DataTypes);
+db.AcademyQuizQuestion = AcademyQuizQuestionDefine(sequelize, DataTypes);
+db.AcademyArticleVersion = AcademyArticleVersionDefine(sequelize, DataTypes);
+db.AcademyTrackPrerequisite = AcademyTrackPrerequisiteDefine(sequelize, DataTypes);
+db.AcademyFollow = AcademyFollowDefine(sequelize, DataTypes);
+db.AcademyArticleComment = AcademyArticleCommentDefine(sequelize, DataTypes);
+db.AcademyRating = AcademyRatingDefine(sequelize, DataTypes);
+db.AcademyUserXp = AcademyUserXpDefine(sequelize, DataTypes);
+db.AcademyXpLog = AcademyXpLogDefine(sequelize, DataTypes);
+db.AcademyBadge = AcademyBadgeDefine(sequelize, DataTypes);
+db.AcademyUserBadge = AcademyUserBadgeDefine(sequelize, DataTypes);
+db.AcademyVideoWatch = AcademyVideoWatchDefine(sequelize, DataTypes);
+db.AcademyOnboardingRule = AcademyOnboardingRuleDefine(sequelize, DataTypes);
+db.EmeAuditLog = EmeAuditLogDefine(sequelize, DataTypes);
 
 db.ExternalOrganization = ExternalOrganizationDefine(sequelize, DataTypes);
 db.AuthAccessCode = AuthAccessCodeDefine(sequelize, DataTypes);
@@ -258,6 +297,11 @@ db.WhatsappMessage  = WhatsappMessageDefine(sequelize, DataTypes);
 db.AlertRule         = AlertRuleDefine(sequelize, DataTypes);
 db.AlertTriggerLog   = AlertTriggerLogDefine(sequelize, DataTypes);
 db.AlertPendingReply = AlertPendingReplyDefine(sequelize, DataTypes);
+
+// Marketing — Captação de Leads
+db.InboundLead      = InboundLeadDefine(sequelize, DataTypes);
+db.InboundLeadEvent = InboundLeadEventDefine(sequelize, DataTypes);
+db.LeadForm         = LeadFormDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

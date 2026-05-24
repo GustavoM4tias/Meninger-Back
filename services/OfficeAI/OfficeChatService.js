@@ -3,9 +3,15 @@ import dotenv from 'dotenv';
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { buildSystemPrompt } from './systemPrompt.js';
+import { buildAcademyTutorPrompt } from './academyTutorPrompt.js';
 import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
 import { TOOL_DECLARATIONS as COMERCIAL_DECLARATIONS, executeTool as comercialExecuteTool } from './ComercialTools.js';
 import { TOOL_DECLARATIONS as ALERT_DECLARATIONS,     executeTool as alertExecuteTool }     from './AlertTools.js';
+// Dual-context (E3): tools do Academy + runner seguro.
+// O import de AcademyTools dispara o auto-registro das tools no ToolRegistry.
+import './AcademyTools.js';
+import { getToolsFor, toGeminiDeclarations, findTool } from './ToolRegistry.js';
+import { runTool as runSecureTool } from './SecureRunner.js';
 
 // Registry: nome → { declaration, executor }
 const TOOLS = new Map();
@@ -22,6 +28,41 @@ async function executeTool(name, args, user) {
   const tool = TOOLS.get(name);
   if (!tool) return { error: `Ferramenta desconhecida: ${name}` };
   return tool.executor(name, args, user);
+}
+
+// E4: audit log das tool calls do Office. NÃO altera a execução — só registra
+// no EmeAuditLog (compliance/LGPD). Falha silenciosa: audit nunca quebra o chat.
+function auditOfficeTool({ user, sessionId, toolName, args, result, ms, ip, userAgent, context = 'OFFICE' }) {
+  try {
+    const argsSnap = {};
+    for (const [k, v] of Object.entries(args || {})) {
+      if (typeof v === 'string') argsSnap[k] = v.slice(0, 500);
+      else if (typeof v === 'number' || typeof v === 'boolean') argsSnap[k] = v;
+      else if (Array.isArray(v)) argsSnap[k] = v.slice(0, 50);
+      else argsSnap[k] = v && typeof v === 'object' ? '[object]' : null;
+    }
+    let resultCount = null;
+    if (result && typeof result === 'object') {
+      if (Array.isArray(result.rows)) resultCount = result.rows.length;
+      else if (Array.isArray(result.data)) resultCount = result.data.length;
+      else if (result.total != null) resultCount = Number(result.total);
+    }
+    db.EmeAuditLog.create({
+      userId: user?.id || null,
+      sessionId: sessionId || null,
+      context: String(context || 'OFFICE').toUpperCase(),
+      toolName: String(toolName).slice(0, 80),
+      argsJson: argsSnap,
+      permissionGranted: true, // Office: city/role filtrado dentro da própria tool
+      resultCount,
+      ms: ms != null ? Math.round(ms) : null,
+      error: result?.error ? String(result.error).slice(0, 1000) : null,
+      ip: ip ? String(ip).slice(0, 64) : null,
+      userAgent: userAgent ? String(userAgent).slice(0, 500) : null,
+    }).catch((err) => console.warn('[auditOfficeTool]', err?.message));
+  } catch (err) {
+    console.warn('[auditOfficeTool]', err?.message);
+  }
 }
 
 // Exports para reuso fora do chat (ex: AlertReportService re-executa as mesmas tools)
@@ -141,14 +182,14 @@ export async function getUserStorageUsage(userId) {
 /**
  * Carrega ou cria uma sessão de chat.
  */
-export async function getOrCreateSession(userId, sessionId = null) {
+export async function getOrCreateSession(userId, sessionId = null, context = 'OFFICE') {
   if (sessionId) {
     const session = await db.ChatSession.findOne({
       where: { id: sessionId, user_id: userId, deleted_at: null },
     });
     if (session) return session;
   }
-  return db.ChatSession.create({ user_id: userId, title: null });
+  return db.ChatSession.create({ user_id: userId, title: null, context });
 }
 
 /**
@@ -312,7 +353,12 @@ async function getLastBridgeContext(sessionId) {
  *   {type:"done", sessionId, msgId}  — stream concluído
  *   {type:"error", message:"..."}    — erro
  */
-export async function streamChat({ req, res, userId, sessionId, userMessage }) {
+export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE' }) {
+  // Contexto do Eme: OFFICE (operacional) ou ACADEMY (tutor de estudos).
+  // É determinado pela ROTA — nunca pelo cliente.
+  const ctx = String(context || 'OFFICE').toUpperCase() === 'ACADEMY' ? 'ACADEMY' : 'OFFICE';
+  const isAcademy = ctx === 'ACADEMY';
+
   // Verifica limite de armazenamento
   const usage = await getUserStorageUsage(userId);
   if (usage >= STORAGE_LIMIT_BYTES) {
@@ -323,25 +369,49 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
 
   // Carrega dados do usuário (city, position, etc.) + memórias
   const fullUser = await db.User.findByPk(userId, {
-    attributes: ['id', 'username', 'email', 'role', 'position', 'city'],
+    attributes: ['id', 'username', 'email', 'role', 'position', 'city', 'auth_provider', 'external_kind'],
   });
-  const [enterprises] = await Promise.all([
-    loadAccessibleEnterprises(fullUser),
-  ]);
 
-  const session = await getOrCreateSession(userId, sessionId);
+  // Usuário INTERNO = funcionário Menin (não é login externo do Academy).
+  // Interno tem acesso às ferramentas operacionais do Office em qualquer contexto.
+  const isExternalUser =
+    String(fullUser?.auth_provider || '').toUpperCase() === 'CVCRM' || !!fullUser?.external_kind;
+  const isInternalUser = !isExternalUser;
+
+  const session = await getOrCreateSession(userId, sessionId, ctx);
   await saveMessage(session.id, 'user', userMessage);
 
-  let systemPrompt = buildSystemPrompt(fullUser, enterprises);
-  // Anexa contexto de bridge (IDs/filtros da última consulta) ao SYSTEM
-  // instruction — não ao histórico — para evitar que o modelo replique o bloco.
-  const lastBridge = await getLastBridgeContext(session.id);
-  if (lastBridge) {
-    systemPrompt += `\n\n## CONTEXTO TÉCNICO INTERNO (não reproduza em respostas)\n` +
-      `IDs e filtros da última consulta — disponíveis para bridge entre módulos:\n` +
-      `${lastBridge}\n\n` +
-      `**REGRA RÍGIDA:** este bloco é APENAS para você consultar. NUNCA escreva, copie ou cite ` +
-      `os IDs ou filtros acima na sua resposta de texto. Use-os apenas como argumento de tool calls.`;
+  // ── Resolução de prompt + tools por contexto ──────────────────────────────
+  let systemPrompt;
+  let activeDeclarations;
+  let lastBridge = null; // usado depois pela detecção de alucinação (só Office)
+
+  if (isAcademy) {
+    // ACADEMY: tutor de estudos. Tools do ToolRegistry (AcademyTools).
+    // Se o usuário é INTERNO, o tutor também ganha as ferramentas do Office —
+    // assim ele responde sobre estudos E sobre dados operacionais. Aluno
+    // externo (corretor/correspondente) só recebe as tools de estudo.
+    systemPrompt = buildAcademyTutorPrompt(fullUser, { isInternal: isInternalUser });
+    const academyTools = await getToolsFor(fullUser, 'ACADEMY');
+    activeDeclarations = toGeminiDeclarations(academyTools);
+    if (isInternalUser) {
+      activeDeclarations = activeDeclarations.concat(TOOL_DECLARATIONS);
+    }
+  } else {
+    // OFFICE: comportamento idêntico ao histórico — zero regressão.
+    const enterprises = await loadAccessibleEnterprises(fullUser);
+    systemPrompt = buildSystemPrompt(fullUser, enterprises);
+    // Anexa contexto de bridge (IDs/filtros da última consulta) ao SYSTEM
+    // instruction — não ao histórico — para evitar que o modelo replique o bloco.
+    lastBridge = await getLastBridgeContext(session.id);
+    if (lastBridge) {
+      systemPrompt += `\n\n## CONTEXTO TÉCNICO INTERNO (não reproduza em respostas)\n` +
+        `IDs e filtros da última consulta — disponíveis para bridge entre módulos:\n` +
+        `${lastBridge}\n\n` +
+        `**REGRA RÍGIDA:** este bloco é APENAS para você consultar. NUNCA escreva, copie ou cite ` +
+        `os IDs ou filtros acima na sua resposta de texto. Use-os apenas como argumento de tool calls.`;
+    }
+    activeDeclarations = TOOL_DECLARATIONS;
   }
   const history = await buildHistory(session.id);
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
@@ -362,8 +432,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
     }
   };
 
-  // Seleciona pool com base na complexidade da pergunta (fast por padrão, smart se necessário)
-  const pool = selectModelPool(userMessage);
+  // Seleciona pool com base na complexidade da pergunta (fast por padrão, smart se necessário).
+  // ACADEMY: força 'smart' (Gemini Pro) — segue muito melhor a regra de só
+  // responder com dados vindos de ferramenta, evitando o tutor alucinar conteúdo.
+  const pool = isAcademy ? 'smart' : selectModelPool(userMessage);
   const modelList = pool === 'smart' ? getSmartModels() : getFastModels();
   let geminiModel = modelList[0];
 
@@ -380,11 +452,19 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
     for (let k = 0; k < keysCount; k++) {
       try {
         const genAI = getGeminiClient(k);
-        const mdl = genAI.getGenerativeModel({
+        const modelParams = {
           model: modelList[i],
           systemInstruction: systemPrompt,
-          tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
-        });
+          tools: [{ functionDeclarations: activeDeclarations }],
+        };
+        // ACADEMY — TRAVA anti-alucinação: força o modelo a chamar uma
+        // ferramenta ANTES de responder (proíbe responder "de cabeça").
+        // O follow-up, após o resultado da tool, roda em modo NONE p/ o
+        // modelo ser obrigado a escrever o texto a partir do dado real.
+        if (isAcademy) {
+          modelParams.toolConfig = { functionCallingConfig: { mode: 'ANY' } };
+        }
+        const mdl = genAI.getGenerativeModel(modelParams);
         chat = mdl.startChat({ history: historyWithoutLast });
         const streamResult = await chat.sendMessageStream(userMessage);
         streamIterator = streamResult.stream[Symbol.asyncIterator]();
@@ -437,7 +517,32 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
 
           const { name, args } = part.functionCall;
           const toolStart = Date.now();
-          const toolResult = await executeTool(name, args, fullUser);
+
+          // Roteamento da tool:
+          //  - ACADEMY + tool do registry (academy_*) → SecureRunner (permissão + audit).
+          //  - ACADEMY + tool do Office (interno pediu dado operacional) → executeTool
+          //    do Office (que se protege por city/role) + audit marcado ACADEMY.
+          //  - OFFICE → caminho histórico — executeTool + audit (E4). Zero regressão.
+          let toolResult;
+          if (isAcademy && findTool(name)) {
+            toolResult = await runSecureTool({
+              user: fullUser,
+              toolName: name,
+              args: args || {},
+              context: 'ACADEMY',
+              sessionId: session.id,
+              ip: req?.ip || null,
+              userAgent: req?.headers?.['user-agent'] || null,
+            });
+          } else {
+            toolResult = await executeTool(name, args, fullUser);
+            auditOfficeTool({
+              user: fullUser, sessionId: session.id, toolName: name,
+              args: args || {}, result: toolResult, ms: Date.now() - toolStart,
+              context: isAcademy ? 'ACADEMY' : 'OFFICE',
+              ip: req?.ip || null, userAgent: req?.headers?.['user-agent'] || null,
+            });
+          }
 
           toolCalls.push({
             name,
@@ -453,10 +558,36 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
           // Envia o resultado de volta para o Gemini (sem arrays volumosos — evita JSON no texto).
           // Falhas aqui (503, etc.) não devem matar a resposta: o usuário já recebeu a ação/dados.
           try {
-            const followUp = await chat.sendMessageStream([
-              { functionResponse: { name, response: summarizeForGemini(toolResult) } },
-            ]);
-            for await (const followChunk of followUp.stream) {
+            // OFFICE: follow-up no mesmo chat (comportamento histórico, intacto).
+            // ACADEMY: o chat principal está em modo ANY (tool obrigatória). O
+            // follow-up usa um chat NOVO em modo NONE — assim o modelo é
+            // OBRIGADO a responder em TEXTO a partir do resultado da tool
+            // (não chama outra tool nem inventa). Histórico reconstruído.
+            let followStream;
+            if (isAcademy) {
+              const followChat = getGeminiClient()
+                .getGenerativeModel({
+                  model: geminiModel,
+                  systemInstruction: systemPrompt,
+                  tools: [{ functionDeclarations: activeDeclarations }],
+                  toolConfig: { functionCallingConfig: { mode: 'NONE' } },
+                })
+                .startChat({
+                  history: [
+                    ...historyWithoutLast,
+                    { role: 'user', parts: [{ text: userMessage }] },
+                    { role: 'model', parts: [{ functionCall: { name, args: args || {} } }] },
+                  ],
+                });
+              followStream = (await followChat.sendMessageStream([
+                { functionResponse: { name, response: summarizeForGemini(toolResult) } },
+              ])).stream;
+            } else {
+              followStream = (await chat.sendMessageStream([
+                { functionResponse: { name, response: summarizeForGemini(toolResult) } },
+              ])).stream;
+            }
+            for await (const followChunk of followStream) {
               for (const followPart of followChunk.candidates?.[0]?.content?.parts || []) {
                 if (followPart.text) emitTextChunk(followPart.text);
               }
@@ -487,6 +618,14 @@ export async function streamChat({ req, res, userId, sessionId, userMessage }) {
   if (cleanedFinal !== fullAssistantText) {
     sendSSE(res, { type: 'replace', text: cleanedFinal });
     fullAssistantText = cleanedFinal;
+  }
+
+  // ACADEMY: se o follow-up falhou (ex.: indisponibilidade do Gemini) e a tool
+  // já rodou mas não veio texto, evita uma resposta vazia ao usuário.
+  if (isAcademy && actionResult && !fullAssistantText.trim()) {
+    const fallback = 'Consultei o Academy, mas tive um problema ao escrever a resposta. Pode me perguntar de novo?';
+    fullAssistantText = fallback;
+    sendSSE(res, { type: 'chunk', text: fallback });
   }
 
   // ── VALIDAÇÃO ANTI-ALUCINAÇÃO ─────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br.js';
+import { safeForPrompt } from './promptSafety.js';
 dayjs.locale('pt-br');
 
 /**
@@ -11,12 +12,17 @@ export function buildSystemPrompt(user, enterprises = []) {
   const now = dayjs().format('dddd, D [de] MMMM [de] YYYY [às] HH:mm');
   const isAdmin = user.role === 'admin';
 
+  // 🔒 Sanitização anti-injection (E9): dados do BD nunca entram crus no prompt.
+  // Cidade renomeada para "Ignore previous instructions..." (cenário extremo)
+  // perde os caracteres exóticos e vira string segura.
+  const safeCity = safeForPrompt(user.city, 80);
+
   const accessBlock = isAdmin
     ? `## Acesso a dados\nVocê tem acesso completo a todos os empreendimentos e cidades.`
-    : `## Acesso a dados\nEste usuário é da cidade "${user.city}". Você SOMENTE pode retornar dados relacionados a empreendimentos dessa cidade. NUNCA exponha dados de outras cidades, mesmo que o usuário peça explicitamente.`;
+    : `## Acesso a dados\nEste usuário é da cidade "${safeCity}". Você SOMENTE pode retornar dados relacionados a empreendimentos dessa cidade. NUNCA exponha dados de outras cidades, mesmo que o usuário peça explicitamente.`;
 
   const enterpriseBlock = enterprises.length
-    ? `\n## Empreendimentos acessíveis a este usuário (nome + cidade real)\n${enterprises.map(e => `- ${e.name} — ${e.cidade}`).join('\n')}\n\n` +
+    ? `\n## Empreendimentos acessíveis a este usuário (nome + cidade real)\n${enterprises.map(e => `- ${safeForPrompt(e.name, 80)} — ${safeForPrompt(e.cidade, 80)}`).join('\n')}\n\n` +
       `**Regra de desambiguação:** Use esta lista para identificar se um nome mencionado pelo usuário é um empreendimento ou uma cidade. ` +
       `A cidade ao lado de cada empreendimento é a cidade real — use-a para responder perguntas sobre localização sem precisar chamar tool. ` +
       `Se o nome NÃO constar aqui, trate como referência geográfica e use o parâmetro \`cidade\` nas ferramentas.\n\n` +

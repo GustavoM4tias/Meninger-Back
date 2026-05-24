@@ -2,6 +2,10 @@ export default (sequelize, DataTypes) => {
     const AcademyTrackItem = sequelize.define('AcademyTrackItem', {
         trackId: { type: DataTypes.INTEGER, allowNull: false },
 
+        // S2.1: Items podem estar dentro de um módulo (Track → Module → Item)
+        // OU soltos no nível da track (moduleId = null). Permite migração suave.
+        moduleId: { type: DataTypes.INTEGER, allowNull: true },
+
         orderIndex: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
 
         // TEXT | VIDEO | QUIZ | ARTICLE | COMMUNITY_TOPIC | LINK | TASK | FORM
@@ -24,11 +28,18 @@ export default (sequelize, DataTypes) => {
         tableName: 'academy_track_items',
         timestamps: true,
         underscored: true,
-        indexes: [{ fields: ['track_id'] }, { fields: ['order_index'] }],
+        indexes: [
+            { fields: ['track_id'] },
+            { fields: ['order_index'] },
+            { fields: ['module_id'] },
+        ],
     });
 
     AcademyTrackItem.associate = (db) => {
         AcademyTrackItem.belongsTo(db.AcademyTrack, { foreignKey: 'trackId', as: 'track' });
+        if (db.AcademyModule) {
+            AcademyTrackItem.belongsTo(db.AcademyModule, { foreignKey: 'moduleId', as: 'module' });
+        }
     };
 
     return AcademyTrackItem;

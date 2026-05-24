@@ -144,6 +144,29 @@ export default class expenseService {
       whereClause.cost_center_id = costCenterId;
     }
 
+    // ── Departamentos ocultos pelo admin ─────────────────────────────────────
+    // Carrega ANTES da query principal para excluir os gastos desses departamentos
+    // direto da fonte — o dropdown do front filtrar não bastava (sem filtro o
+    // usuário via tudo, incluindo o que estava desativado em configurações).
+    const hiddenRows = await sequelize.query(
+      `SELECT name FROM expense_department_visibility WHERE hidden = true`,
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+    const hiddenDepartments = hiddenRows.map(r => r.name).filter(Boolean);
+
+    if (hiddenDepartments.length) {
+      // department_name NULL não é "oculto" (admin nem tinha como desativar) → mantém visível
+      whereClause[Op.and] = [
+        ...(whereClause[Op.and] || []),
+        {
+          [Op.or]: [
+            { department_name: null },
+            { department_name: { [Op.notIn]: hiddenDepartments } },
+          ],
+        },
+      ];
+    }
+
     const rows = await Expense.findAll({
       where: whereClause,
       include: [
@@ -296,13 +319,9 @@ export default class expenseService {
       });
     }
 
-    // Lista de departamentos ocultos pelo admin — frontend filtra do dropdown
-    const hiddenRows = await sequelize.query(
-      `SELECT name FROM expense_department_visibility WHERE hidden = true`,
-      { type: Sequelize.QueryTypes.SELECT }
-    );
-    const hiddenDepartments = hiddenRows.map(r => r.name);
-
+    // hiddenDepartments já foi carregado no topo da função e usado no WHERE.
+    // Retornamos no metadata também para o front continuar filtrando o dropdown
+    // (consistência: lista do dropdown == backend está filtrando).
     return {
       startDate: startDate || competenceMonth,
       endDate: endDate || competenceMonth,

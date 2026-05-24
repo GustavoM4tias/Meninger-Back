@@ -6,6 +6,11 @@ export default (sequelize, DataTypes) => {
     is_favorited: { type: DataTypes.BOOLEAN, defaultValue: false },
     total_bytes: { type: DataTypes.BIGINT, defaultValue: 0 },
     deleted_at: { type: DataTypes.DATE, allowNull: true },
+
+    // E10: contexto da sessão — OFFICE | ACADEMY.
+    // Determinado pelo host de origem (academy.menin.com.br vs menin.com.br)
+    // — NÃO confiamos no client. Default OFFICE para retrocompat.
+    context: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'OFFICE' },
   }, {
     tableName: 'chat_sessions',
     underscored: true,

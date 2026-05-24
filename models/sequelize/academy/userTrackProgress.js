@@ -16,6 +16,11 @@ export default (sequelize, DataTypes) => {
             { fields: ['user_id'] },
             { fields: ['track_slug'] },
             { fields: ['status'] },
+            {
+                unique: true,
+                fields: ['user_id', 'track_slug'],
+                name: 'academy_user_track_progress_user_track_unique',
+            },
         ],
     });
 

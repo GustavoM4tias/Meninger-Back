@@ -35,37 +35,65 @@ export async function siengeLogin(credentials = {}) {
         await page.waitForLoadState("domcontentloaded");
     }
 
-    // E-mail
-    const campoEmail = page.getByRole("textbox", { name: "Seu e-mail" });
+    // E-mail — suporta Sienge ID v1 (legacy) e v2 (atual, 2026-05)
+    // v2: campo e botão na mesma tela, senha aparece habilitada após "Continuar"
+    const campoEmail = page
+        .getByTestId("sign-in-v2-email-input").locator('input:not([disabled])')
+        .or(page.getByRole("textbox", { name: "Seu e-mail" }))
+        .first();
+
     if (await campoEmail.count()) {
         log("LOGIN", "Preenchendo e-mail...");
         await campoEmail.fill(email);
 
         log("LOGIN", "Clicando CONTINUAR...");
-        await page
-            .getByTestId("signInForm")
-            .getByRole("button", { name: "CONTINUAR" })
-            .click();
+        const btnContinuar = page
+            .getByTestId("sign-in-v2-submit-button")
+            .or(page.getByTestId("signInForm").getByRole("button", { name: "CONTINUAR" }))
+            .first();
+        await btnContinuar.click();
     }
 
-    // Senha
+    // Senha — em v2 o campo já existe no DOM (era apenas oculto/desabilitado), então
+    // aguardamos por um campo de senha realmente VISÍVEL e habilitado.
     log("LOGIN", "Aguardando campo de senha...");
-    const campoSenha = page.getByRole("textbox", { name: "Digite a sua senha" });
-    await campoSenha.waitFor({ timeout: 15000 });
+    const campoSenha = page
+        .getByTestId("sign-in-v2-password-input").locator('input:not([disabled])')
+        .or(page.getByRole("textbox", { name: "Digite a sua senha" }))
+        .first();
+    await campoSenha.waitFor({ state: "visible", timeout: 15000 });
 
     log("LOGIN", "Preenchendo senha...");
     await campoSenha.fill(password);
 
     log("LOGIN", "Clicando ENTRAR...");
-    await page.getByRole("button", { name: "ENTRAR" }).click();
-    await page.waitForLoadState("domcontentloaded");
+    // No v2 o botão tem o mesmo testid do "Continuar", agora com texto "Entrar"
+    const btnEntrar = page
+        .getByTestId("sign-in-v2-submit-button")
+        .or(page.getByRole("button", { name: "ENTRAR" }))
+        .first();
+    await btnEntrar.click();
 
-    // Prosseguir
-    const btnProsseguir = page.getByRole("link", { name: "Prosseguir" });
-    if (await btnProsseguir.count()) {
-        log("LOGIN", "Clicando em 'Prosseguir'...");
+    // O login envolve uma cadeia de redirects (id.sienge.com.br → menin.sienge.com.br).
+    // Usamos networkidle em vez de domcontentloaded para que a cadeia estabilize antes
+    // de procurarmos a tela "usuário já está conectado".
+    await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => null);
+
+    // Tela "usuário já está conectado ao sistema" — aparece com frequência quando
+    // há sessão Sienge ativa do mesmo usuário (caso comum na Menin). Pode reaparecer
+    // em sequência se houver múltiplos avisos, por isso o loop.
+    for (let i = 0; i < 3; i++) {
+        const btnProsseguir = page.getByRole("link", { name: "Prosseguir" });
+        const visivel = await btnProsseguir
+            .waitFor({ state: "visible", timeout: 4000 })
+            .then(() => true)
+            .catch(() => false);
+
+        if (!visivel) break;
+
+        log("LOGIN", `Clicando em 'Prosseguir' (aviso ${i + 1})...`);
         await btnProsseguir.click();
-        await page.waitForLoadState("domcontentloaded");
+        await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => null);
     }
 
     log("LOGIN", "Aguardando painel Sienge...");

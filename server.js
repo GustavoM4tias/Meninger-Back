@@ -28,9 +28,13 @@ import conditionsRoutes from './routes/conditionsRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
+import academyChatRoutes from './routes/academyChatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
+import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
+import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
+import marketingRoutes from './routes/marketingRoutes.js';
 import alertRoutes from './routes/alertRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
@@ -52,10 +56,16 @@ import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateSch
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import billsAutoSyncScheduler from './scheduler/billsAutoSyncScheduler.js';
+import marketingDispatchScheduler from './scheduler/marketingDispatchScheduler.js';
 import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
+import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
+import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
+import { startAcademyDeadlineScheduler } from './scheduler/academyDeadlineScheduler.js';
+import { startAcademyRecertifyScheduler } from './scheduler/academyRecertifyScheduler.js';
+import { startAcademyOnboardingScheduler } from './scheduler/academyOnboardingScheduler.js';
 import AlertEngine from './services/alerts/AlertEngine.js';
 
 const app = express();
@@ -64,6 +74,8 @@ const app = express();
 const corsOptions = {
   origin: [
     'http://localhost:5173',
+    'http://lp.localhost:5173',
+    'http://academy.localhost:5173',
     'https://meninger.vercel.app',
     'https://office.menin.com.br',
     'https://academy.menin.com.br'
@@ -77,6 +89,13 @@ app.use(cors(corsOptions));
 // ⚠️ Webhook do WhatsApp precisa do raw body para validar HMAC.
 // Por isso é montado ANTES do express.json() global.
 app.use('/api/whatsapp/webhook', whatsappWebhookRoutes);
+
+// Captação de marketing — endpoints públicos (CORS aberto + body parsers próprios).
+// Montado ANTES do express.json() global; o router traz seus próprios parsers.
+app.use('/api/marketing/public', marketingPublicRoutes);
+
+// Webhook do Meta Lead Ads — precisa do raw body para validar o HMAC.
+app.use('/api/marketing/webhook', marketingWebhookRoutes);
 
 app.use(express.json());
 
@@ -104,13 +123,19 @@ app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
+app.use('/api/academy-chat', academyChatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/marketing', marketingRoutes);
 
 const PORT = process.env.PORT || 5000;
 
-db.sequelize.sync({ alter: false })
+// Academy: dedup + drop UNIQUE antiga ANTES do sync, para que os models novos
+// possam recriar a UNIQUE correta sem conflito com dados/índices antigos.
+ensureAcademyPreSync()
+  .catch(err => console.warn('⚠️  Academy pre-sync falhou:', err.message))
+  .finally(() => db.sequelize.sync({ alter: false }))
   .then(async () => {
     console.log('Banco sincronizado com sucesso!');
     await bootServer();
@@ -140,7 +165,44 @@ async function bootServer() {
     ['User', db.User],                                       // adicionar daily_alert_limit
     ['AlertTriggerLog', db.AlertTriggerLog],                 // enum suppressed_daily_limit
     ['AlertPendingReply', db.AlertPendingReply],             // enum awaiting_reply + meta_message_id
+
+    // Academy: tabelas em evolução constante (Fase 1 + S1 + S2).
+    // sync alter aqui pega colunas novas (mandatory, dueAt, attemptNumber, scorePercent, etc.).
+    ['AcademyArticle', db.AcademyArticle],
+    ['AcademyArticleVersion', db.AcademyArticleVersion],
+    ['AcademyTrack', db.AcademyTrack],
+    ['AcademyModule', db.AcademyModule],
+    ['AcademyTrackItem', db.AcademyTrackItem],
+    ['AcademyTrackAssignment', db.AcademyTrackAssignment],
+    ['AcademyUserProgress', db.AcademyUserProgress],
+    ['AcademyUserTrackProgress', db.AcademyUserTrackProgress],
+    ['AcademyUserQuizAttempt', db.AcademyUserQuizAttempt],
+    ['AcademyQuestion', db.AcademyQuestion],
+    ['AcademyQuizQuestion', db.AcademyQuizQuestion],
+    ['AcademyCertificate', db.AcademyCertificate],
+    ['AcademyHighlight', db.AcademyHighlight],
+    ['AcademyTopic', db.AcademyTopic],
+    ['AcademyPost', db.AcademyPost],
+    ['AcademyPostUpvote', db.AcademyPostUpvote],
+    ['AcademyTrackPrerequisite', db.AcademyTrackPrerequisite],
+    ['AcademyFollow', db.AcademyFollow],
+    ['AcademyArticleComment', db.AcademyArticleComment],
+    ['AcademyRating', db.AcademyRating],
+    ['AcademyUserXp', db.AcademyUserXp],
+    ['AcademyXpLog', db.AcademyXpLog],
+    ['AcademyBadge', db.AcademyBadge],
+    ['AcademyUserBadge', db.AcademyUserBadge],
+    ['AcademyVideoWatch', db.AcademyVideoWatch],
+    ['AcademyOnboardingRule', db.AcademyOnboardingRule],
+    ['EmeAuditLog', db.EmeAuditLog],
+    ['ChatSession', db.ChatSession], // context column (E10)
+
+    // Marketing — Captação de Leads (tabelas novas, em evolução na Fase 1)
+    ['InboundLead', db.InboundLead],
+    ['InboundLeadEvent', db.InboundLeadEvent],
+    ['LeadForm', db.LeadForm],
   ]) {
+    if (!model) continue; // model pode não estar registrado em ambientes parciais
     try {
       await model.sync({ alter: true });
       console.log(`✅ ${name} sincronizado.`);
@@ -155,6 +217,8 @@ async function bootServer() {
   await ensureBillsAutoSyncSchema();
   await ensureSiengeBackupLogSchema();
   await ensureBoletoSchema();
+  await ensureAcademyPostSync();
+  await ensureMarketingCaptureSchema();
 
   await seedInitialTypes();
 
@@ -177,6 +241,10 @@ async function bootServer() {
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
   if (process.env.ENABLE_BILLS_AUTO_SYNC === 'true') billsAutoSyncScheduler.start();
   eventReminderScheduler.start();         // lembretes de evento (D-1) via NotificationService
+  startAcademyDeadlineScheduler();        // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
+  startAcademyRecertifyScheduler();       // recertificação periódica (expira certificado + reassign mandatory)
+  startAcademyOnboardingScheduler();      // aplica regras de onboarding (auto-atribui trilhas)
+  if (process.env.ENABLE_MARKETING_CAPTURE !== 'false') marketingDispatchScheduler.start(); // re-tenta despacho de leads ao CV
   await AlertEngine.boot();               // registra crons das alert_rules salvas
 
   app.listen(PORT, () => {
