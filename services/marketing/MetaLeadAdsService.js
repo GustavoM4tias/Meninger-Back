@@ -15,6 +15,7 @@ import axios from 'axios';
 import db from '../../models/sequelize/index.js';
 import { captureLead } from './LeadCaptureService.js';
 import MarketingConfigService from './MarketingConfigService.js';
+import MetaLeadFormService from './MetaLeadFormService.js';
 
 // Lê config do banco (com fallback pro .env). Cache interno do service.
 async function getMetaCfg() {
@@ -155,17 +156,42 @@ async function processOneLead(value) {
     const data = parseLeadFields(graphLead.field_data || []);
 
     const platform = norm(graphLead.platform);
-    const cvOrigem = (platform === 'ig' || platform === 'instagram') ? 'IG' : 'FB';
+    const platformOrigem = (platform === 'ig' || platform === 'instagram') ? 'IG' : 'FB';
+
+    const formId = value.form_id != null
+        ? String(value.form_id)
+        : (graphLead.form_id != null ? String(graphLead.form_id) : null);
+
+    // ── Mapping local do form (definido pelo admin em Marketing > Formulários > Meta).
+    // Se mapping_active + midia_slug configurados, lead vira 'routed' direto.
+    // Caso contrário (sem mapping ou inativo), só cv_origem vai no binding e
+    // o lead cai em 'held' pra roteamento manual.
+    const binding = { cv_origem: platformOrigem };
+    if (formId) {
+        try {
+            const mapping = await MetaLeadFormService.findById(formId);
+            if (mapping?.mapping_active && mapping.midia_slug) {
+                binding.bound_empreendimentos = mapping.bound_empreendimentos || null;
+                binding.midia_slug = mapping.midia_slug;
+                binding.tags = mapping.tags || null;
+                if (mapping.cv_origem) binding.cv_origem = mapping.cv_origem;
+                console.log(`🔗 [marketing-capture] mapping aplicado ao lead Meta ${leadgenId} (form ${formId} → ${mapping.midia_slug}).`);
+            } else if (mapping && !mapping.mapping_active) {
+                console.log(`⏸️  [marketing-capture] mapping do form ${formId} desativado — lead ${leadgenId} ficará em 'held'.`);
+            }
+        } catch (e) {
+            // Não bloqueia a captura — só perde a otimização do mapping.
+            console.warn(`⚠️  [marketing-capture] falha ao consultar mapping do form ${formId}: ${e.message}`);
+        }
+    }
 
     await captureLead({
         channel: 'meta_lead_ads',
         data,
-        // Origem (canal) já conhecida; midia/empreendimento ficam para o
-        // roteamento por campanha (Fase 2) → o lead entra como 'held'.
-        binding: { cv_origem: cvOrigem },
+        binding,
         meta: {
             leadgen_id:  String(leadgenId),
-            form_id:     value.form_id != null ? String(value.form_id) : (graphLead.form_id != null ? String(graphLead.form_id) : null),
+            form_id:     formId,
             page_id:     value.page_id != null ? String(value.page_id) : null,
             ad_id:       value.ad_id != null ? String(value.ad_id) : (graphLead.ad_id != null ? String(graphLead.ad_id) : null),
             campaign_id: graphLead.campaign_id != null ? String(graphLead.campaign_id) : null,
