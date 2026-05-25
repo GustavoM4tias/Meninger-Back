@@ -13,18 +13,23 @@ const { LeadForm } = db;
 export async function getPublicLeadForm(req, res) {
     try {
         const form = await LeadForm.findOne({
-            where: { slug: req.params.slug, active: true },
+            where: { slug: req.params.slug },
             attributes: [
-                'slug', 'name',
+                'slug', 'name', 'active',
                 'fields_config', 'page_config',
                 'consent_required', 'consent_text', 'consent_text_version',
                 'redirect_url',
             ],
         });
         if (!form) {
-            return res.status(404).json({ ok: false, error: 'Formulário não encontrado ou inativo.' });
+            return res.status(404).json({ ok: false, error: 'Página não encontrada.' });
         }
-        return res.json({ ok: true, form });
+        if (!form.active) {
+            return res.status(410).json({ ok: false, error: 'Esta página de captação foi desativada.', inactive: true });
+        }
+        // Não expõe o flag `active` na resposta pública (sempre true se chegou aqui).
+        const { active, ...rest } = form.get({ plain: true });
+        return res.json({ ok: true, form: rest });
     } catch (err) {
         console.error(`❌ [marketing-capture] getPublicLeadForm: ${err.message}`);
         return res.status(500).json({ ok: false, error: 'Erro ao carregar o formulário.' });

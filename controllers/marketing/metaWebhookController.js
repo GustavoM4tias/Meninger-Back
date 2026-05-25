@@ -9,8 +9,8 @@
 
 import { verifySignature, verifyHandshake, processLeadgenPayload } from '../../services/marketing/MetaLeadAdsService.js';
 
-export function verifyMetaWebhook(req, res) {
-    const challenge = verifyHandshake({
+export async function verifyMetaWebhook(req, res) {
+    const challenge = await verifyHandshake({
         mode: req.query['hub.mode'],
         token: req.query['hub.verify_token'],
         challenge: req.query['hub.challenge'],
@@ -22,10 +22,10 @@ export function verifyMetaWebhook(req, res) {
     return res.status(200).send(challenge);
 }
 
-export function receiveMetaWebhook(req, res) {
+export async function receiveMetaWebhook(req, res) {
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || '');
 
-    if (!verifySignature(rawBody, req.headers['x-hub-signature-256'])) {
+    if (!(await verifySignature(rawBody, req.headers['x-hub-signature-256']))) {
         return res.sendStatus(403);
     }
 

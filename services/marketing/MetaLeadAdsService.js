@@ -14,20 +14,31 @@ import crypto from 'crypto';
 import axios from 'axios';
 import db from '../../models/sequelize/index.js';
 import { captureLead } from './LeadCaptureService.js';
+import MarketingConfigService from './MarketingConfigService.js';
 
-const GRAPH_VERSION = process.env.META_GRAPH_API_VERSION || 'v21.0';
+// Lê config do banco (com fallback pro .env). Cache interno do service.
+async function getMetaCfg() {
+    try { return await MarketingConfigService.getConfig({ withSecrets: true }); }
+    catch { return null; }
+}
+
+async function getGraphVersion() {
+    const cfg = await getMetaCfg();
+    return cfg?.meta_graph_api_version || process.env.META_GRAPH_API_VERSION || 'v21.0';
+}
 
 // ── Segurança ───────────────────────────────────────────────────────────────
 
 /**
  * Valida o HMAC SHA-256 do header X-Hub-Signature-256.
- * Fail-closed: sem META_APP_SECRET, REJEITA — o endpoint cria leads que vão ao
- * CRM, não pode aceitar requisição não assinada.
+ * Fail-closed: sem app_secret configurado, REJEITA — o endpoint cria leads que
+ * vão ao CRM, não pode aceitar requisição não assinada.
  */
-export function verifySignature(rawBody, signatureHeader) {
-    const secret = process.env.META_APP_SECRET;
+export async function verifySignature(rawBody, signatureHeader) {
+    const cfg = await getMetaCfg();
+    const secret = cfg?.meta_app_secret || process.env.META_APP_SECRET;
     if (!secret) {
-        console.warn('⚠️  [marketing-capture] META_APP_SECRET ausente — webhook Meta rejeitando até ser configurado.');
+        console.warn('⚠️  [marketing-capture] App Secret do Meta não configurado — webhook rejeitando até ser configurado.');
         return false;
     }
     if (!signatureHeader) return false;
@@ -43,8 +54,9 @@ export function verifySignature(rawBody, signatureHeader) {
  * Handshake GET do webhook (modo subscribe). Retorna o challenge se válido, ou
  * null se inválido.
  */
-export function verifyHandshake({ mode, token, challenge }) {
-    const expected = process.env.META_LEAD_WEBHOOK_VERIFY_TOKEN;
+export async function verifyHandshake({ mode, token, challenge }) {
+    const cfg = await getMetaCfg();
+    const expected = cfg?.meta_verify_token || process.env.META_LEAD_WEBHOOK_VERIFY_TOKEN;
     if (mode !== 'subscribe' || !expected) return null;
     return token === expected ? String(challenge ?? '') : null;
 }
@@ -56,16 +68,18 @@ export function verifyHandshake({ mode, token, challenge }) {
  * campos preenchidos vêm desta chamada.
  */
 export async function fetchLead(leadgenId) {
-    const token = process.env.META_LEAD_ADS_TOKEN;
-    if (!token) throw new Error('META_LEAD_ADS_TOKEN ausente — não é possível buscar o lead.');
-    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(leadgenId)}`;
+    const cfg = await getMetaCfg();
+    const token = cfg?.meta_access_token || process.env.META_LEAD_ADS_TOKEN;
+    if (!token) throw new Error('Token de acesso do Meta não configurado — não é possível buscar o lead.');
+    const version = cfg?.meta_graph_api_version || process.env.META_GRAPH_API_VERSION || 'v21.0';
+    const url = `https://graph.facebook.com/${version}/${encodeURIComponent(leadgenId)}`;
     const params = {
         access_token: token,
         fields: 'id,created_time,field_data,ad_id,form_id,campaign_id,platform',
     };
     // appsecret_proof — exigido quando o app tem "Exigir chave secreta" ligado;
     // é aceito sempre, então enviamos sempre que houver o secret configurado.
-    const secret = process.env.META_APP_SECRET;
+    const secret = cfg?.meta_app_secret || process.env.META_APP_SECRET;
     if (secret) {
         params.appsecret_proof = crypto.createHmac('sha256', secret).update(token).digest('hex');
     }

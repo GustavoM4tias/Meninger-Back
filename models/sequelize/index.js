@@ -147,6 +147,7 @@ import AlertPendingReplyDefine from './alerts/alertPendingReply.js';
 import InboundLeadDefine      from './marketing/inboundLead.js';
 import InboundLeadEventDefine from './marketing/inboundLeadEvent.js';
 import LeadFormDefine         from './marketing/leadForm.js';
+import MarketingConfigDefine  from './marketing/marketingConfig.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -302,6 +303,7 @@ db.AlertPendingReply = AlertPendingReplyDefine(sequelize, DataTypes);
 db.InboundLead      = InboundLeadDefine(sequelize, DataTypes);
 db.InboundLeadEvent = InboundLeadEventDefine(sequelize, DataTypes);
 db.LeadForm         = LeadFormDefine(sequelize, DataTypes);
+db.MarketingConfig  = MarketingConfigDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)
