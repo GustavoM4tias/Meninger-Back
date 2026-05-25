@@ -23,21 +23,31 @@ async function getCreds() {
     return { token, version, base: `https://graph.facebook.com/${version}` };
 }
 
-/** Lista as Páginas acessíveis pelo System User. */
+/**
+ * Lista as Páginas acessíveis pelo System User junto com o Page Access Token
+ * de cada uma. /leadgen_forms exige Page Access Token (não funciona com User
+ * token — devolve erro #190 "must be called with a Page Access Token").
+ */
 async function listPages({ token, base }) {
     const r = await axios.get(`${base}/me/accounts`, {
-        params: { access_token: token, fields: 'id,name', limit: 100 },
+        params: { access_token: token, fields: 'id,name,access_token', limit: 100 },
         timeout: 20000,
     });
     return Array.isArray(r.data?.data) ? r.data.data : [];
 }
 
-/** Lista os lead forms de uma Página. Inclui forms arquivados/desativados. */
-async function listFormsForPage({ token, base }, pageId) {
+/**
+ * Lista os lead forms de uma Página. Inclui forms arquivados/desativados.
+ * Usa o Page Access Token específico (page.access_token vindo do /me/accounts).
+ */
+async function listFormsForPage(base, pageId, pageAccessToken) {
+    if (!pageAccessToken) {
+        throw new Error('Sem Page Access Token — confirme que o System User tem permissão pages_show_list + pages_read_engagement + leads_retrieval nessa Página.');
+    }
     const all = [];
     let url = `${base}/${pageId}/leadgen_forms`;
     let params = {
-        access_token: token,
+        access_token: pageAccessToken,
         fields: 'id,name,status,locale,created_time,questions{key,label,type}',
         limit: 100,
     };
@@ -70,7 +80,10 @@ export async function syncFromMeta() {
     for (const page of pages) {
         let formList;
         try {
-            formList = await listFormsForPage(creds, page.id);
+            // /leadgen_forms exige Page Access Token (não User/System User token).
+            // O page.access_token vem do /me/accounts quando o System User tem
+            // permissão pages_show_list + acesso atribuído à Página.
+            formList = await listFormsForPage(creds.base, page.id, page.access_token);
         } catch (err) {
             const detail = err?.response?.data?.error?.message || err.message;
             errors.push({ page_id: page.id, page_name: page.name, error: detail });
