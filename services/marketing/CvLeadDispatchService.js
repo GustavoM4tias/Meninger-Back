@@ -22,19 +22,31 @@ import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 import { recordLeadEvent } from './leadEventLog.js';
+import MarketingConfigService from './MarketingConfigService.js';
 
 const { InboundLead, User } = db;
 
-// Caminho relativo a CV_API_BASE_URL — que JÁ inclui /api (ex.: .../cvcrm.com.br/api).
-// Endpoint real resultante: {CV_API_BASE_URL}/v1/comercial/leads
-const CV_LEADS_ENDPOINT = process.env.CV_LEADS_ENDPOINT || '/v1/comercial/leads';
-const MAX_ATTEMPTS      = Number(process.env.MARKETING_DISPATCH_MAX_ATTEMPTS) || 6;
-const RETRY_BASE_MS     = 2 * 60 * 1000;        // 2 min
-const RETRY_CAP_MS      = 2 * 60 * 60 * 1000;   // 2 h
-const DISPATCHABLE      = ['routed', 'failed', 'rejected', 'dispatching'];
+const RETRY_BASE_MS = 2 * 60 * 1000;        // 2 min
+const RETRY_CAP_MS  = 2 * 60 * 60 * 1000;   // 2 h
+const DISPATCHABLE  = ['routed', 'failed', 'rejected', 'dispatching'];
 
-function isDryRun() {
+// Acessos à config (DB com fallback pro .env) — cache de 30s dentro do service.
+async function getCfg() {
+    try { return await MarketingConfigService.getConfig(); }
+    catch { return null; }
+}
+async function isDryRun() {
+    const cfg = await getCfg();
+    if (cfg) return !!cfg.dry_run;
     return process.env.MARKETING_CAPTURE_DRY_RUN === 'true';
+}
+async function getMaxAttempts() {
+    const cfg = await getCfg();
+    return cfg?.retry_max_attempts || Number(process.env.MARKETING_DISPATCH_MAX_ATTEMPTS) || 6;
+}
+async function getCvLeadsEndpoint() {
+    const cfg = await getCfg();
+    return cfg?.cv_leads_endpoint || process.env.CV_LEADS_ENDPOINT || '/v1/comercial/leads';
 }
 
 // Backoff exponencial: 2, 4, 8, 16... min (limitado a 2h).
@@ -144,15 +156,16 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
     lead.cv_request_payload = payload;
     await lead.save();
 
+    const dryRun = await isDryRun();
     await recordLeadEvent({
         leadId: lead.id, type: 'dispatch_attempt', actor,
         statusFrom: fromStatus, statusTo: 'dispatching',
         message: `Tentativa ${lead.dispatch_attempts} de envio ao CV.`,
-        detail: { dry_run: isDryRun() },
+        detail: { dry_run: dryRun },
     });
 
     // Modo sombra: pipeline completo, sem POST. O lead volta a 'routed'.
-    if (isDryRun()) {
+    if (dryRun) {
         lead.status = 'routed';
         lead.last_error = null;
         await lead.save();
@@ -167,7 +180,8 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
     }
 
     try {
-        const res  = await apiCv.post(CV_LEADS_ENDPOINT, payload);
+        const endpoint = await getCvLeadsEndpoint();
+        const res  = await apiCv.post(endpoint, payload);
         const body = res?.data || {};
 
         if (body.sucesso === true && body.id != null) {
@@ -223,7 +237,8 @@ async function markRejected(lead, cvBody, message, actor) {
 }
 
 async function markFailed(lead, err, actor) {
-    const deadLetter = lead.dispatch_attempts >= MAX_ATTEMPTS;
+    const maxAttempts = await getMaxAttempts();
+    const deadLetter = lead.dispatch_attempts >= maxAttempts;
     lead.status        = 'failed';
     lead.last_error    = (err?.message || 'erro desconhecido').slice(0, 1000);
     lead.error_code    = err?.response?.status ? `http_${err.response.status}` : (err?.code || 'network_error');

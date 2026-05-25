@@ -10,10 +10,17 @@ import requireAdmin from '../middlewares/requireAdmin.js';
 import {
     listInboundLeads, getInboundLead, routeInboundLead,
     redispatchInboundLead, markSpam, unmarkSpam, captureHealth,
+    listCvEnterprises,
 } from '../controllers/marketing/inboundLeadController.js';
 import {
     listLeadForms, createLeadForm, updateLeadForm,
 } from '../controllers/marketing/leadFormAdminController.js';
+import {
+    getConfig as getMarketingConfig,
+    updateConfig as updateMarketingConfig,
+    generateVerifyToken,
+    testMetaConnection,
+} from '../controllers/marketing/marketingConfigController.js';
 
 const router = express.Router();
 
@@ -22,6 +29,15 @@ router.use(authenticate, requireAdmin);
 
 // Saúde da captação
 router.get('/capture/health', captureHealth);
+
+// Empreendimentos do CV (multiselects)
+router.get('/cv-enterprises', listCvEnterprises);
+
+// Configuração da captação (Geral + Meta Lead Ads)
+router.get('/config', getMarketingConfig);
+router.put('/config', updateMarketingConfig);
+router.post('/config/generate-verify-token', generateVerifyToken);
+router.post('/config/meta-test', testMetaConnection);
 
 // Leads captados
 router.get('/inbound-leads', listInboundLeads);

@@ -213,7 +213,30 @@ export async function captureHealth(req, res) {
     }
 }
 
+// Lista enxuta dos empreendimentos do CV CRM, pra alimentar os multiselects
+// das telas de Formulários e Captação (vínculo de lead).
+export async function listCvEnterprises(req, res) {
+    try {
+        const { CvEnterprise } = db;
+        const rows = await CvEnterprise.findAll({
+            attributes: [
+                ['idempreendimento', 'id'],
+                ['nome', 'name'],
+                ['cidade', 'city'],
+                ['situacao_comercial_nome', 'status'],
+            ],
+            order: [['nome', 'ASC']],
+            raw: true,
+        });
+        return res.json({ ok: true, results: rows });
+    } catch (err) {
+        console.error(`❌ [marketing-capture] listCvEnterprises: ${err.message}`);
+        return res.status(500).json({ ok: false, error: 'Erro ao listar empreendimentos.' });
+    }
+}
+
 export default {
     listInboundLeads, getInboundLead, routeInboundLead,
     redispatchInboundLead, markSpam, unmarkSpam, captureHealth,
+    listCvEnterprises,
 };

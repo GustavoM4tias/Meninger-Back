@@ -9,6 +9,7 @@ import express from 'express';
 import cors from 'cors';
 import { submitLeadForm } from '../controllers/marketing/leadFormController.js';
 import { getPublicLeadForm } from '../controllers/marketing/publicLeadFormController.js';
+import MarketingConfigService from '../services/marketing/MarketingConfigService.js';
 
 const router = express.Router();
 
@@ -19,8 +20,16 @@ router.use(express.urlencoded({ extended: true, limit: '256kb' }));
 
 // ── Rate limit por IP (in-memory) ───────────────────────────────────────────
 const RL_WINDOW_MS = 60 * 1000;
-const RL_MAX = Number(process.env.MARKETING_FORM_RATE_LIMIT) || 10; // submits/min por IP
 const hits = new Map();
+
+async function getRateLimit() {
+    try {
+        const cfg = await MarketingConfigService.getConfig();
+        return cfg?.form_rate_limit_per_min || Number(process.env.MARKETING_FORM_RATE_LIMIT) || 10;
+    } catch {
+        return Number(process.env.MARKETING_FORM_RATE_LIMIT) || 10;
+    }
+}
 
 const cleanup = setInterval(() => {
     const now = Date.now();
@@ -31,12 +40,13 @@ const cleanup = setInterval(() => {
 }, 5 * 60 * 1000);
 cleanup.unref?.();
 
-function rateLimit(req, res, next) {
+async function rateLimit(req, res, next) {
+    const max = await getRateLimit();
     const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim()
         || req.socket?.remoteAddress || 'unknown';
     const now = Date.now();
     const arr = (hits.get(ip) || []).filter(t => now - t < RL_WINDOW_MS);
-    if (arr.length >= RL_MAX) {
+    if (arr.length >= max) {
         return res.status(429).json({ ok: false, error: 'Muitas tentativas. Aguarde um instante.' });
     }
     arr.push(now);

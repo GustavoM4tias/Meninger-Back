@@ -32,9 +32,12 @@ export async function submitLeadForm(req, res) {
         const { slug } = req.params;
         const body = { ...(req.query || {}), ...(req.body || {}) };
 
-        const form = await LeadForm.findOne({ where: { slug, active: true } });
+        const form = await LeadForm.findOne({ where: { slug } });
         if (!form) {
-            return res.status(404).json({ ok: false, error: 'Formulário não encontrado ou inativo.' });
+            return res.status(404).json({ ok: false, error: 'Página não encontrada.' });
+        }
+        if (!form.active) {
+            return res.status(410).json({ ok: false, error: 'Esta página de captação foi desativada.', inactive: true });
         }
 
         // Dados do lead
