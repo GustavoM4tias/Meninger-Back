@@ -21,6 +21,11 @@ import {
     generateVerifyToken,
     testMetaConnection,
 } from '../controllers/marketing/marketingConfigController.js';
+import {
+    list as listMetaForms,
+    sync as syncMetaForms,
+    updateMapping as updateMetaFormMapping,
+} from '../controllers/marketing/metaLeadFormController.js';
 
 const router = express.Router();
 
@@ -47,9 +52,14 @@ router.post('/inbound-leads/:id/redispatch', redispatchInboundLead);
 router.post('/inbound-leads/:id/mark-spam', markSpam);
 router.post('/inbound-leads/:id/unmark-spam', unmarkSpam);
 
-// Formulários de captação
+// Formulários de captação (internos — LPs do site)
 router.get('/lead-forms', listLeadForms);
 router.post('/lead-forms', createLeadForm);
 router.put('/lead-forms/:id', updateLeadForm);
+
+// Formulários Meta Lead Ads (cache local + mapping → empreendimento)
+router.get('/meta-forms', listMetaForms);
+router.post('/meta-forms/sync', syncMetaForms);
+router.put('/meta-forms/:id/mapping', updateMetaFormMapping);
 
 export default router;

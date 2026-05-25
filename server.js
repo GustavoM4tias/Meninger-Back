@@ -203,6 +203,7 @@ async function bootServer() {
     ['InboundLeadEvent', db.InboundLeadEvent],
     ['LeadForm', db.LeadForm],
     ['MarketingConfig', db.MarketingConfig],
+    ['MetaLeadForm', db.MetaLeadForm],
   ]) {
     if (!model) continue; // model pode não estar registrado em ambientes parciais
     try {
