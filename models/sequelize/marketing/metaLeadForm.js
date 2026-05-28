@@ -18,8 +18,17 @@ export default (sequelize, DataTypes) => {
     locale:       { type: DataTypes.STRING(20) },
     created_time: { type: DataTypes.DATE },                            // criação na Meta
 
-    // Questions snapshot — útil pra debugar mapeamento de campos depois.
+    // Questions snapshot — usado tanto pra exibir as perguntas do form quanto
+    // como base pro mapeamento de campos (field_mappings).
     questions:    { type: DataTypes.JSONB },                           // [{ key, label, type }]
+
+    // Mapeamento configurável por form: cada question.key → campo do CV
+    // (nome, email, telefone, etc.) ou 'extra' (vai pra extra_fields) ou
+    // 'ignore' (não envia). Quando vazio/null, usa auto-detecção do parser.
+    //
+    // Exemplo: { "full_name": "nome", "qual_seu_telefone": "telefone",
+    //            "Tem interesse em quê?": "extra", "marketing_consent": "ignore" }
+    field_mappings: { type: DataTypes.JSONB },
 
     // ── Mapping local (o que o usuário configura aqui) ──────────────────────
     // Quando um lead Meta chega com form_id que tem mapping ativo, esses
@@ -32,6 +41,29 @@ export default (sequelize, DataTypes) => {
     // false desativa o mapping — lead Meta volta a cair em 'held' pra
     // roteamento manual mesmo tendo binding configurado.
     mapping_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+
+    // ── Metadados internos (gestão pela equipe) ─────────────────────────────
+    description:  { type: DataTypes.TEXT },                            // nota interna sobre o form
+    priority:     { type: DataTypes.STRING(10), defaultValue: 'normal' }, // low | normal | high
+    campaign_ref: { type: DataTypes.STRING(120) },                     // referência curta da campanha (texto livre)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Não temos start_date/end_date aqui (diferente de LeadForm interno).
+    // A data de referência vem da Meta: `created_time` (criação do form).
+    // O ciclo de vida é controlado pelo Meta via `status` (ACTIVE/ARCHIVED/DELETED).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── UTMs default — aplicados ao lead quando o payload não traz ──────────
+    // Útil pra forms Meta que não passam UTMs no clique (orgânico, in-feed).
+    default_utm_source:   { type: DataTypes.STRING(120) },
+    default_utm_medium:   { type: DataTypes.STRING(120) },
+    default_utm_campaign: { type: DataTypes.STRING(120) },
+    default_utm_content:  { type: DataTypes.STRING(120) },
+    default_utm_term:     { type: DataTypes.STRING(120) },
+
+    // Campos extras a enviar ao CV (key:value). Vão pro raw_payload e podem ser
+    // referenciados no CV depois (ex: { corretor_id: 42, situacao: 'quente' }).
+    cv_extra_fields: { type: DataTypes.JSONB },
 
     // ── Sync metadata ────────────────────────────────────────────────────────
     last_synced_at: { type: DataTypes.DATE },

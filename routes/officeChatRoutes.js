@@ -1,11 +1,13 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
+import requireAdmin from '../middlewares/requireAdmin.js';
 import db from '../models/sequelize/index.js';
 import {
   streamChat,
   getUserStorageUsage,
   getOrCreateSession,
 } from '../services/OfficeAI/OfficeChatService.js';
+import { synthesizeSpeech, ALLOWED_VOICES } from '../services/OfficeAI/EmeTTSService.js';
 
 const router = express.Router();
 
@@ -65,7 +67,7 @@ setInterval(() => {
 // ── POST /api/office-chat/stream ──────────────────────────────────────────────
 // SSE: envia a mensagem e recebe a resposta em streaming
 router.post('/stream', authenticate, rateLimitChat, async (req, res) => {
-  const { message, session_id } = req.body;
+  const { message, session_id, via_voice } = req.body;
 
   if (!message?.trim()) {
     return res.status(400).json({ error: 'Mensagem obrigatória.' });
@@ -92,10 +94,63 @@ router.post('/stream', authenticate, rateLimitChat, async (req, res) => {
       userId: req.user.id,
       sessionId: session_id || null,
       userMessage: message.trim(),
+      viaVoice: !!via_voice,
     });
   } finally {
     clearInterval(heartbeat);
     res.end();
+  }
+});
+
+// ── POST /api/office-chat/tts ─────────────────────────────────────────────────
+// Síntese de voz via Gemini TTS — admin only para controlar custo de tokens.
+// Body: { text: string, voice?: string }
+// Retorna: audio/wav (binary)
+const _ttsBuckets = new Map(); // userId -> { short: [ts], long: [ts] }
+const TTS_LIMITS = {
+  short: { windowMs: 60 * 1000,      max: 30 },   // 30 sínteses/min
+  long:  { windowMs: 60 * 60 * 1000, max: 200 },  // 200 sínteses/hora
+};
+function rateLimitTTS(req, res, next) {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: 'Não autenticado.' });
+  const now = Date.now();
+  let bucket = _ttsBuckets.get(userId);
+  if (!bucket) { bucket = { short: [], long: [] }; _ttsBuckets.set(userId, bucket); }
+  if (pruneAndCount(bucket.short, TTS_LIMITS.short.windowMs, now) >= TTS_LIMITS.short.max)
+    return res.status(429).json({ error: 'Limite curto de síntese atingido.' });
+  if (pruneAndCount(bucket.long, TTS_LIMITS.long.windowMs, now) >= TTS_LIMITS.long.max)
+    return res.status(429).json({ error: 'Limite horário de síntese atingido.' });
+  bucket.short.push(now);
+  bucket.long.push(now);
+  next();
+}
+
+router.post('/tts', authenticate, requireAdmin, rateLimitTTS, async (req, res) => {
+  const { text, voice } = req.body || {};
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    return res.status(400).json({ error: 'Texto obrigatório.' });
+  }
+  if (text.length > 600) {
+    return res.status(400).json({ error: 'Texto longo demais (máx. 600 caracteres).' });
+  }
+  if (voice && !ALLOWED_VOICES.includes(voice)) {
+    return res.status(400).json({ error: 'Voz inválida.', allowed: ALLOWED_VOICES });
+  }
+
+  try {
+    const { audioBuffer, mimeType, durationMs, voice: usedVoice } =
+      await synthesizeSpeech(text, { voice });
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', audioBuffer.length);
+    res.setHeader('X-Eme-Voice', usedVoice);
+    res.setHeader('X-Eme-Duration-Ms', String(durationMs));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(audioBuffer);
+  } catch (err) {
+    console.error('[/tts]', err?.message || err);
+    return res.status(502).json({ error: 'Falha ao sintetizar áudio.' });
   }
 });
 

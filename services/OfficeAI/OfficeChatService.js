@@ -353,7 +353,7 @@ async function getLastBridgeContext(sessionId) {
  *   {type:"done", sessionId, msgId}  — stream concluído
  *   {type:"error", message:"..."}    — erro
  */
-export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE' }) {
+export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE', viaVoice = false }) {
   // Contexto do Eme: OFFICE (operacional) ou ACADEMY (tutor de estudos).
   // É determinado pela ROTA — nunca pelo cliente.
   const ctx = String(context || 'OFFICE').toUpperCase() === 'ACADEMY' ? 'ACADEMY' : 'OFFICE';
@@ -411,6 +411,16 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         `**REGRA RÍGIDA:** este bloco é APENAS para você consultar. NUNCA escreva, copie ou cite ` +
         `os IDs ou filtros acima na sua resposta de texto. Use-os apenas como argumento de tool calls.`;
     }
+    // Pergunta por voz → resposta deve ser falada → conciso é melhor (menos TTS, menos tempo)
+    if (viaVoice) {
+      systemPrompt += `\n\n## MODO VOZ (CRÍTICO)\n` +
+        `Esta pergunta veio por reconhecimento de voz e a resposta será FALADA.\n` +
+        `- Máximo 2-3 frases curtas no texto. Nada de listas, bullets, formatação rica.\n` +
+        `- Cite os 1-2 números mais importantes apenas (não enumere tudo).\n` +
+        `- Se for chamar tool, faça normalmente — o gráfico/tabela aparece na tela; ` +
+        `seu texto só comenta o destaque principal.\n` +
+        `- Evite frases longas com subordinadas — fluxo natural de voz.`;
+    }
     activeDeclarations = TOOL_DECLARATIONS;
   }
   const history = await buildHistory(session.id);
@@ -435,7 +445,8 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // Seleciona pool com base na complexidade da pergunta (fast por padrão, smart se necessário).
   // ACADEMY: força 'smart' (Gemini Pro) — segue muito melhor a regra de só
   // responder com dados vindos de ferramenta, evitando o tutor alucinar conteúdo.
-  const pool = isAcademy ? 'smart' : selectModelPool(userMessage);
+  // Voz → SEMPRE flash (latência manda). Academy → smart. Resto → heurística.
+  const pool = isAcademy ? 'smart' : (viaVoice ? 'fast' : selectModelPool(userMessage));
   const modelList = pool === 'smart' ? getSmartModels() : getFastModels();
   let geminiModel = modelList[0];
 
@@ -633,12 +644,25 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // no bridge. Não bloqueia — emite warning visível ao usuário pra revisar.
   const hallucinationReport = detectHallucinations(fullAssistantText, actionResult, lastBridge);
   if (hallucinationReport.suspicious.length > 0) {
-    console.warn('[Eme] Possíveis alucinações detectadas:',
-      hallucinationReport.suspicious.map(s => s.value).join(', '),
+    const byKind = hallucinationReport.suspicious.reduce((acc, s) => {
+      (acc[s.kind || 'number'] = acc[s.kind || 'number'] || []).push(s.value);
+      return acc;
+    }, {});
+    console.warn('[Eme] Possíveis alucinações:', byKind,
       '| message:', fullAssistantText.slice(0, 200));
+
+    // Monta mensagem específica por tipo de problema
+    const parts = [];
+    if (byKind.number)         parts.push(`valores numéricos suspeitos (${byKind.number.join(', ')})`);
+    if (byKind.unknown_label)  parts.push(`nomes não encontrados nos dados (${byKind.unknown_label.join(', ')})`);
+    if (byKind.wrong_ranking)  parts.push(`possível inversão de ranking — ${byKind.wrong_ranking.join(', ')} não está no top 3`);
+    const message = parts.length
+      ? `A resposta mencionou ${parts.join('; ')}. Confira no gráfico/tabela abaixo.`
+      : `Alguns valores na resposta podem não corresponder à consulta. Confira no gráfico/tabela abaixo.`;
+
     sendSSE(res, {
       type: 'warning',
-      message: `Alguns valores na resposta podem não corresponder à consulta. Confira no gráfico/tabela abaixo.`,
+      message,
       details: hallucinationReport.suspicious,
     });
   }
@@ -689,6 +713,12 @@ function detectHallucinations(text, actionResult, bridgeStr) {
     if (Number.isFinite(n)) allowed.add(n);
   };
 
+  // Labels autoritativos (normalizados pra comparação)
+  const labelsList = [];                   // mantém ordem original (ranking)
+  const labelsNormalized = new Set();      // versão normalizada para match
+  const normLabel = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toUpperCase().replace(/[^A-Z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
   // 1. Valores do tool result
   if (actionResult) {
     if (actionResult.total != null) addNum(actionResult.total);
@@ -696,6 +726,13 @@ function detectHallucinations(text, actionResult, bridgeStr) {
     if (Array.isArray(actionResult.data)) actionResult.data.forEach(addNum);
     if (Array.isArray(actionResult.top_breakdown)) {
       actionResult.top_breakdown.forEach(t => { addNum(t.value); addNum(t.percent); });
+    }
+    if (Array.isArray(actionResult.labels)) {
+      actionResult.labels.forEach(l => {
+        if (!l) return;
+        labelsList.push(String(l));
+        labelsNormalized.add(normLabel(l));
+      });
     }
     if (Array.isArray(actionResult.rows)) {
       actionResult.rows.forEach(r => {
@@ -719,6 +756,17 @@ function detectHallucinations(text, actionResult, bridgeStr) {
   if (bridgeStr) {
     const numbers = bridgeStr.match(/\b\d+(?:[.,]\d+)?\b/g) || [];
     numbers.forEach(addNum);
+    // Labels do bridge: "categorias_anteriores=[Label1=120 | Label2=35 | ...]"
+    const catMatch = bridgeStr.match(/categorias_anteriores=\[([^\]]+)\]/);
+    if (catMatch) {
+      catMatch[1].split('|').forEach(chunk => {
+        const labelPart = chunk.split('=')[0]?.trim();
+        if (labelPart) {
+          labelsList.push(labelPart);
+          labelsNormalized.add(normLabel(labelPart));
+        }
+      });
+    }
   }
 
   // 3. Extrai números do texto e procura suspeitos
@@ -768,11 +816,77 @@ function detectHallucinations(text, actionResult, bridgeStr) {
       }
     }
     if (!found) {
-      suspicious.push({ value: raw, parsed: num, pos: m.index });
+      suspicious.push({ value: raw, parsed: num, pos: m.index, kind: 'number' });
     }
   }
 
-  return { suspicious, allowed_count: allowed.size };
+  // 4. Validação de LABELS — detecta nomes em texto que não estão em labels[]
+  //    e detecta inversão de ranking (citar item do meio/fim como "o maior").
+  if (labelsList.length > 0) {
+    const top3Set = new Set(labelsList.slice(0, 3).map(normLabel));
+
+    // Quebra texto em sentenças e procura keywords de ranking dentro de cada
+    const sentences = text.split(/(?<=[.!?])\s+|\n+/);
+    const RANK_KEYWORDS = /\b(?:l[íi]der|destaque|primeiro lugar|o maior|maior gerador|top\s*\d*|encabeç\w*|foi o que mais|que mais gerou|mais\s+(?:gerou|teve|registrou|contribuiu|trouxe|recebeu)|primeiro colocado)\b/i;
+
+    const GENERIC = /^(leads?|reservas?|pastas?|cliente|cliente|usu[áa]rio|empreendimento|empresa|cidade|m[eê]s|m[eê]ses|per[íi]odo|sarandi|sinop|mar[íi]lia|cuiab[áa]|que|mais|outros?|destaque|l[íi]der|top|maior|menor|primeiro|segundo|terceiro|janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|painel|residencial)$/i;
+
+    for (const sentence of sentences) {
+      if (!RANK_KEYWORDS.test(sentence)) continue;
+      // Extrai possíveis nomes próprios: sequências de palavras que CADA UMA
+      // começa com letra maiúscula (acentuada ou não). Para na primeira palavra
+      // minúscula (verbos como "foi", "encabeçou", etc.).
+      // Aceita "INGÁ" (uppercase com acento) e nomes compostos "JARDIM DOS IPÊS".
+      // \p{Lu}=letras maiúsculas, \p{L}=qualquer letra (com /u, suporta acentos).
+      // Word boundary do \b não funciona com chars acentuados em modo non-unicode.
+      const CAP_WORD = `\\p{Lu}[\\p{L}&]{2,}`;
+      const NAME_RX = new RegExp(
+        `(?:"([^"]+)"|'([^']+)'|(?<![\\p{L}])(${CAP_WORD}(?:\\s+${CAP_WORD})*)(?![\\p{L}]))`,
+        'gu'
+      );
+      const nameMatches = sentence.match(NAME_RX) || [];
+      for (const nm of nameMatches) {
+        const cleaned = nm.replace(/["']/g, '').trim();
+        if (GENERIC.test(cleaned)) continue;
+        const normCleaned = normLabel(cleaned);
+        if (!normCleaned || normCleaned.length < 3) continue;
+
+        // Verifica match em algum label conhecido.
+        // Critério: TODAS as palavras do nome citado devem aparecer como
+        // palavras separadas no label. Evita falsos positivos tipo
+        // "Mondial" matching "MOND" via substring.
+        let matchedLabel = null;
+        if (labelsNormalized.has(normCleaned)) matchedLabel = normCleaned;
+        if (!matchedLabel) {
+          const words = normCleaned.split(' ').filter(Boolean);
+          for (const ln of labelsNormalized) {
+            const lnWords = ln.split(' ');
+            // Word-level match: cada palavra do texto está no label (em qualquer ordem)
+            if (words.every(w => lnWords.includes(w))) { matchedLabel = ln; break; }
+          }
+        }
+
+        if (!matchedLabel) {
+          // Nome citado não existe em labels[] — provavelmente inventado
+          suspicious.push({ value: cleaned, parsed: null, kind: 'unknown_label' });
+        } else {
+          // Nome existe mas pode não estar no top 3 → ranking invertido
+          let isTop3 = false;
+          for (const t of top3Set) {
+            if (t === matchedLabel) { isTop3 = true; break; }
+            // Match palavras
+            const tw = t.split(' '); const lw = matchedLabel.split(' ');
+            if (tw.every(w => lw.includes(w)) || lw.every(w => tw.includes(w))) { isTop3 = true; break; }
+          }
+          if (!isTop3) {
+            suspicious.push({ value: cleaned, parsed: null, kind: 'wrong_ranking' });
+          }
+        }
+      }
+    }
+  }
+
+  return { suspicious, allowed_count: allowed.size, labels_count: labelsList.length };
 }
 
 /**
@@ -965,18 +1079,40 @@ function summarizeForGemini(result) {
     }
   } else if (type === 'chart') {
     const dataArr = Array.isArray(result.data) ? result.data : [];
+    const labelsArr = Array.isArray(result.labels) ? result.labels : [];
     const sumOfValues = dataArr.reduce((acc, v) => acc + (Number(v) || 0), 0);
+
+    // Top 3 com label + valor + posição. Para o modelo NUNCA inverter o ranking
+    // (problema observado: AI citou últimas barras do chart como se fossem as maiores).
+    const top3 = labelsArr.slice(0, 3).map((label, i) => ({
+      rank: i + 1,
+      label,
+      value: dataArr[i],
+      percent: sumOfValues > 0 ? Math.round((Number(dataArr[i]) / sumOfValues) * 1000) / 10 : 0,
+    }));
+
     summary.categorias = dataArr.length;
     summary.soma_total = sumOfValues;
+    summary.top3 = top3;
     summary.message =
       `[POLÍTICA #0] Gráfico RENDERIZADO na UI com ${dataArr.length} categorias. SOMA TOTAL = ${sumOfValues}. ` +
+      `\n\n` +
+      `**ORDENAÇÃO CRÍTICA**: labels[] está ORDENADO DESCENDENTE por data[]. labels[0] = MAIOR, labels[1] = SEGUNDO MAIOR, etc. ` +
+      `Para citar "o maior", "líder", "destaque", "top" → use SEMPRE labels[0] (= ${top3[0]?.label || '?'} com ${top3[0]?.value ?? '?'}). ` +
+      `Para "top 3" → use labels[0..2] = [${top3.map(t => `${t.label} (${t.value})`).join(' | ')}]. ` +
+      `**PROIBIDO** citar labels do meio/fim como "destaque" — itens lá são os MENORES. ` +
       `Para "qual total?" responda EXATAMENTE ${sumOfValues}. ` +
-      `Para citar categoria, use LABEL EXATO de labels[] (proibido parafrasear ex: "Sem contato" se label é "1ª Tentativa de Contato"). ` +
-      `Resposta = 1-2 frases. PROIBIDO: listar todos os valores, inventar categorias, inventar percentuais não em data[].`;
+      `Para citar categoria, use LABEL EXATO de labels[] (proibido parafrasear). ` +
+      `Resposta = 1-2 frases. PROIBIDO: inventar categorias, inverter ranking, percentuais não em data[].`;
     // SEMPRE inclui labels e data — o modelo precisa para responder com precisão
-    if (result.labels?.length <= 15) {
-      summary.labels = result.labels;
-      summary.data   = result.data;
+    if (labelsArr.length <= 15) {
+      summary.labels = labelsArr;
+      summary.data   = dataArr;
+    } else {
+      // Charts grandes: envia só top 10 + total para evitar contexto inchado
+      summary.labels = labelsArr.slice(0, 10);
+      summary.data   = dataArr.slice(0, 10);
+      summary.truncated = `Mais ${labelsArr.length - 10} categorias não mostradas — todas com valor menor que ${dataArr[9]}.`;
     }
   } else if (type === 'navigate') {
     summary.route   = result.route;

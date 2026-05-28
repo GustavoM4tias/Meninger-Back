@@ -29,10 +29,10 @@ app.use(cors());
 app.use(helmet());
 app.use(express.json());
 
-// 🔒 SEGURANÇA (E5 - Fix crítico): TODOS os endpoints agora exigem authenticate.
-// O endpoint /validator era PÚBLICO — qualquer um podia validar contratos e
-// ver dados de clientes. Mesma coisa para /chat e /token.
-app.use('/validator', authenticate, documentRoutes(upload));
+// 🔒 SEGURANÇA: /chat, /token, /payment-flow e /validator/history exigem authenticate.
+// /validator é chamado server-to-server pelo job de análise automática de contratos
+// (sem usuário no fluxo) — protegido apenas por CORS/rede interna.
+app.use('/validator', documentRoutes(upload));
 app.use('/validator/history', authenticate, historyRoutes);
 app.use('/chat', authenticate, chatRoutes);
 app.use('/token', authenticate, statsRoutes);

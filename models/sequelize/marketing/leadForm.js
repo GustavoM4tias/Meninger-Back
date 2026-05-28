@@ -41,6 +41,28 @@ export default (sequelize, DataTypes) => {
 
     // Redirecionamento pós-cadastro (página de obrigado).
     redirect_url: { type: DataTypes.STRING(500) },
+
+    // ── Metadados internos (gestão pela equipe) ─────────────────────────────
+    description:  { type: DataTypes.TEXT },                            // nota interna sobre o form
+    priority:     { type: DataTypes.STRING(10), defaultValue: 'normal' }, // low | normal | high
+    campaign_ref: { type: DataTypes.STRING(120) },                     // referência curta da campanha
+
+    // ── Programação (campanha) ──────────────────────────────────────────────
+    // start_date informativo — usado pra filtros/relatórios.
+    // end_date opcional — quando passar dessa data o form passa a recusar
+    // submissões mesmo com active=true (controle via controller).
+    start_date: { type: DataTypes.DATEONLY },
+    end_date:   { type: DataTypes.DATEONLY },
+
+    // ── UTMs default — aplicados ao lead quando o payload não traz ──────────
+    default_utm_source:   { type: DataTypes.STRING(120) },
+    default_utm_medium:   { type: DataTypes.STRING(120) },
+    default_utm_campaign: { type: DataTypes.STRING(120) },
+    default_utm_content:  { type: DataTypes.STRING(120) },
+    default_utm_term:     { type: DataTypes.STRING(120) },
+
+    // Campos extras a enviar ao CV (key:value).
+    cv_extra_fields: { type: DataTypes.JSONB },
   }, {
     tableName: 'lead_forms',
     underscored: true,

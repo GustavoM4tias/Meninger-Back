@@ -7,12 +7,13 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { dispatchLead } from '../../services/marketing/CvLeadDispatchService.js';
 import { recordLeadEvent } from '../../services/marketing/leadEventLog.js';
+import CvReconciliationService from '../../services/marketing/CvReconciliationService.js';
 
 const { InboundLead, InboundLeadEvent } = db;
 
 const LEAD_STATUSES = [
     'received', 'validated', 'spam', 'held', 'routed',
-    'dispatching', 'delivered', 'rejected', 'failed',
+    'dispatching', 'delivered', 'rejected', 'failed', 'historical',
 ];
 
 // Lista paginada — exclui os JSONB pesados (vêm só no detalhe).
@@ -51,7 +52,7 @@ export async function listInboundLeads(req, res) {
     }
 }
 
-// Detalhe completo + timeline de eventos.
+// Detalhe completo + timeline de eventos + info do form Meta (se aplicável).
 export async function getInboundLead(req, res) {
     try {
         const lead = await InboundLead.findByPk(req.params.id);
@@ -60,7 +61,25 @@ export async function getInboundLead(req, res) {
             where: { inbound_lead_id: lead.id },
             order: [['id', 'ASC']],
         });
-        return res.json({ ok: true, lead, events });
+
+        // Enriquecimento: nome + perguntas do form Meta (pra leads channel=meta_lead_ads)
+        // e nome do form interno (pra channel=site_form).
+        let meta_form = null;
+        let lead_form = null;
+        if (lead.meta_form_id && db.MetaLeadForm) {
+            const f = await db.MetaLeadForm.findByPk(lead.meta_form_id, {
+                attributes: ['id', 'name', 'page_name', 'status', 'created_time', 'questions'],
+            });
+            if (f) meta_form = f.get({ plain: true });
+        }
+        if (lead.source_form_id && db.LeadForm) {
+            const f = await db.LeadForm.findByPk(lead.source_form_id, {
+                attributes: ['id', 'slug', 'name', 'fields_config', 'midia_slug'],
+            });
+            if (f) lead_form = f.get({ plain: true });
+        }
+
+        return res.json({ ok: true, lead, events, meta_form, lead_form });
     } catch (err) {
         console.error(`❌ [marketing-capture] getInboundLead: ${err.message}`);
         return res.status(500).json({ ok: false, error: 'Erro ao carregar o lead.' });
@@ -235,8 +254,28 @@ export async function listCvEnterprises(req, res) {
     }
 }
 
+/** Tenta achar esse lead no CV via email/telefone e gravar o cv_idlead. */
+export async function reconcileWithCv(req, res) {
+    try {
+        const result = await CvReconciliationService.reconcileLead(req.params.id);
+        if (result.matched) {
+            // Registra evento (sem mudar status — lead histórico continua como histórico).
+            await recordLeadEvent({
+                leadId: req.params.id, type: 'cv_reconciled',
+                statusFrom: null, statusTo: null,
+                message: `Reconciliado com CV via ${result.via} (cv_idlead=${result.cv_idlead}).`,
+                detail: result,
+            });
+        }
+        return res.json({ ok: true, ...result });
+    } catch (err) {
+        console.error(`❌ [marketing-capture] reconcileWithCv: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
 export default {
     listInboundLeads, getInboundLead, routeInboundLead,
     redispatchInboundLead, markSpam, unmarkSpam, captureHealth,
-    listCvEnterprises,
+    listCvEnterprises, reconcileWithCv,
 };

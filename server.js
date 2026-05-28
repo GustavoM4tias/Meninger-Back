@@ -57,6 +57,7 @@ import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import billsAutoSyncScheduler from './scheduler/billsAutoSyncScheduler.js';
 import marketingDispatchScheduler from './scheduler/marketingDispatchScheduler.js';
+import marketingSyncScheduler     from './scheduler/marketingSyncScheduler.js';
 import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
 import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
@@ -161,51 +162,18 @@ ensureAcademyPreSync()
 
 async function bootServer() {
 
-  // Garante que tabelas críticas tenham todas as colunas atualizadas
+  // Sync alter só pros models que estão em evolução ativa.
+  // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
+  // sync normal via db.sequelize.sync({ alter: false }) no boot, que cria
+  // tabelas novas sem alterar as existentes.
   for (const [name, model] of [
-    ['User', db.User],                                       // adicionar daily_alert_limit
-    ['AlertTriggerLog', db.AlertTriggerLog],                 // enum suppressed_daily_limit
-    ['AlertPendingReply', db.AlertPendingReply],             // enum awaiting_reply + meta_message_id
-
-    // Academy: tabelas em evolução constante (Fase 1 + S1 + S2).
-    // sync alter aqui pega colunas novas (mandatory, dueAt, attemptNumber, scorePercent, etc.).
-    ['AcademyArticle', db.AcademyArticle],
-    ['AcademyArticleVersion', db.AcademyArticleVersion],
-    ['AcademyTrack', db.AcademyTrack],
-    ['AcademyModule', db.AcademyModule],
-    ['AcademyTrackItem', db.AcademyTrackItem],
-    ['AcademyTrackAssignment', db.AcademyTrackAssignment],
-    ['AcademyUserProgress', db.AcademyUserProgress],
-    ['AcademyUserTrackProgress', db.AcademyUserTrackProgress],
-    ['AcademyUserQuizAttempt', db.AcademyUserQuizAttempt],
-    ['AcademyQuestion', db.AcademyQuestion],
-    ['AcademyQuizQuestion', db.AcademyQuizQuestion],
-    ['AcademyCertificate', db.AcademyCertificate],
-    ['AcademyHighlight', db.AcademyHighlight],
-    ['AcademyTopic', db.AcademyTopic],
-    ['AcademyPost', db.AcademyPost],
-    ['AcademyPostUpvote', db.AcademyPostUpvote],
-    ['AcademyTrackPrerequisite', db.AcademyTrackPrerequisite],
-    ['AcademyFollow', db.AcademyFollow],
-    ['AcademyArticleComment', db.AcademyArticleComment],
-    ['AcademyRating', db.AcademyRating],
-    ['AcademyUserXp', db.AcademyUserXp],
-    ['AcademyXpLog', db.AcademyXpLog],
-    ['AcademyBadge', db.AcademyBadge],
-    ['AcademyUserBadge', db.AcademyUserBadge],
-    ['AcademyVideoWatch', db.AcademyVideoWatch],
-    ['AcademyOnboardingRule', db.AcademyOnboardingRule],
-    ['EmeAuditLog', db.EmeAuditLog],
-    ['ChatSession', db.ChatSession], // context column (E10)
-
-    // Marketing — Captação de Leads (tabelas novas, em evolução na Fase 1)
-    ['InboundLead', db.InboundLead],
-    ['InboundLeadEvent', db.InboundLeadEvent],
+    // Marketing — Captação de Leads (em evolução: forms, campanhas, ads)
     ['LeadForm', db.LeadForm],
-    ['MarketingConfig', db.MarketingConfig],
     ['MetaLeadForm', db.MetaLeadForm],
+    ['MetaCampaign', db.MetaCampaign],
+    ['MetaAd', db.MetaAd],
   ]) {
-    if (!model) continue; // model pode não estar registrado em ambientes parciais
+    if (!model) continue;
     try {
       await model.sync({ alter: true });
       console.log(`✅ ${name} sincronizado.`);
@@ -248,6 +216,7 @@ async function bootServer() {
   startAcademyRecertifyScheduler();       // recertificação periódica (expira certificado + reassign mandatory)
   startAcademyOnboardingScheduler();      // aplica regras de onboarding (auto-atribui trilhas)
   if (process.env.ENABLE_MARKETING_CAPTURE !== 'false') marketingDispatchScheduler.start(); // re-tenta despacho de leads ao CV
+  marketingSyncScheduler.start(); // sync Meta (forms/campanhas/ads/leads) — full a cada 2h em horário comercial + light 15/15min
   await AlertEngine.boot();               // registra crons das alert_rules salvas
 
   app.listen(PORT, () => {

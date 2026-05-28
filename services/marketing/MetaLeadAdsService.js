@@ -90,43 +90,143 @@ export async function fetchLead(leadgenId) {
 
 // ── Mapeamento de campos ────────────────────────────────────────────────────
 
-const norm = s => String(s || '').trim().toLowerCase();
+/**
+ * Lista fechada dos campos do CV que aceitamos como destino de mapeamento.
+ * Esses são os campos diretos do inbound_lead (que viram payload no CV CRM).
+ * Tudo que não bate aqui vai pra 'extra' (JSONB extra_fields), ou 'ignore'.
+ */
+export const CV_TARGET_FIELDS = [
+    { key: 'nome',           label: 'Nome',                       group: 'Identificação' },
+    { key: 'email',          label: 'E-mail',                     group: 'Identificação' },
+    { key: 'telefone',       label: 'Telefone / WhatsApp',        group: 'Identificação' },
+    { key: 'documento',      label: 'Documento (CPF/CNPJ)',       group: 'Identificação' },
+    { key: 'sexo',           label: 'Sexo',                       group: 'Demográfico' },
+    { key: 'renda_familiar', label: 'Renda familiar',             group: 'Demográfico' },
+    { key: 'cep',            label: 'CEP',                        group: 'Endereço' },
+    { key: 'endereco',       label: 'Endereço (rua)',             group: 'Endereço' },
+    { key: 'numero',         label: 'Número',                     group: 'Endereço' },
+    { key: 'complemento',    label: 'Complemento',                group: 'Endereço' },
+    { key: 'bairro',         label: 'Bairro',                     group: 'Endereço' },
+    { key: 'cidade',         label: 'Cidade',                     group: 'Endereço' },
+    { key: 'estado',         label: 'Estado / UF',                group: 'Endereço' },
+    { key: 'extra',          label: 'extra_fields (custom JSON)', group: 'Custom' },
+    { key: 'ignore',         label: 'Ignorar (não enviar)',       group: 'Custom' },
+];
+export const CV_TARGET_KEYS = new Set(CV_TARGET_FIELDS.map(f => f.key));
+
+// Normaliza removendo espaços, traços, acentos e underscores → permite bater
+// 'Nome Completo' com 'nome_completo' com 'nomecompleto'.
+const norm = s => String(s || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')   // remove diacríticos
+    .toLowerCase().replace(/[\s_\-]+/g, '').trim();
 
 function pickField(fd, ...names) {
     const wanted = names.map(norm);
     for (const f of fd) {
         if (wanted.includes(norm(f?.name)) && Array.isArray(f?.values) && f.values.length) {
-            return String(f.values[0]).trim();
+            const v = String(f.values[0]).trim();
+            if (v) return v;
         }
     }
     return null;
 }
 
+// Variantes de cada campo CV — usadas pelo auto-detect.
+const FIELD_VARIANTS = {
+    email:    ['email', 'e_mail', 'emailaddress', 'seuemail', 'seuemailprincipal'],
+    telefone: ['phone_number', 'phone', 'telefone', 'celular', 'whatsapp', 'fone',
+               'telefonecontato', 'numerotelefone', 'numerowhatsapp',
+               'qualseunumerodewhatsapp', 'qualseutelefone'],
+    nome:     ['full_name', 'fullname', 'nome', 'nomecompleto', 'name',
+               'seunome', 'qualseunome', 'qualseunomecompleto', 'comoseuchama', 'comosechama'],
+    cidade:   ['city', 'cidade', 'suacidade'],
+    estado:   ['state', 'province', 'estado', 'uf'],
+    endereco: ['street_address', 'address', 'endereco'],
+    cep:      ['post_code', 'zip_code', 'postal_code', 'cep'],
+    documento: ['cpf', 'documento', 'cnpj'],
+};
+
 /**
- * Mapeia o field_data do Meta para os campos do inbound_lead. Campos padrão vão
- * para colunas; TODOS os campos (inclusive perguntas personalizadas) são
- * preservados em extra_fields.
+ * Pra uma question key, retorna o campo CV que o auto-detect escolheria.
+ * Retorna null se não bate em nenhuma variante (vai pra extra_fields).
  */
-export function parseLeadFields(fieldData = []) {
-    const fd = Array.isArray(fieldData) ? fieldData : [];
-    const data = {
-        email:    pickField(fd, 'email'),
-        telefone: pickField(fd, 'phone_number', 'phone'),
-        nome:     pickField(fd, 'full_name'),
-        cidade:   pickField(fd, 'city'),
-        estado:   pickField(fd, 'state', 'province'),
-        endereco: pickField(fd, 'street_address'),
-        cep:      pickField(fd, 'post_code', 'zip_code', 'postal_code'),
-    };
-    if (!data.nome) {
-        const first = pickField(fd, 'first_name');
-        const last = pickField(fd, 'last_name');
-        if (first || last) data.nome = [first, last].filter(Boolean).join(' ');
+export function autoDetectCvField(questionKey) {
+    const normKey = norm(questionKey);
+    for (const [cvField, variants] of Object.entries(FIELD_VARIANTS)) {
+        if (variants.map(norm).includes(normKey)) return cvField;
     }
-    // Preserva tudo — perguntas personalizadas (CPF, empreendimento de interesse...).
+    // first_name / last_name fallback: ambos viram parte de nome, mas como
+    // único campo precisamos escolher um — devolvemos 'nome' (será concat
+    // depois pelo parser quando ambos existirem).
+    if (['firstname', 'lastname', 'primeironome', 'sobrenome', 'ultimonome'].includes(normKey)) {
+        return 'nome';
+    }
+    return null;
+}
+
+/**
+ * Mapeia o field_data do Meta para os campos do inbound_lead.
+ *
+ * Se `formMappings` for fornecido ({ "questionKey": "cvField" | "extra" | "ignore" }),
+ * usa esse mapeamento FIRST, e completa o resto com auto-detecção.
+ */
+export function parseLeadFields(fieldData = [], { formMappings = null } = {}) {
+    const fd = Array.isArray(fieldData) ? fieldData : [];
+    const data = {};
     const extra = {};
+    const consumedQuestions = new Set();
+
+    // 1) Aplica formMappings explícitos primeiro.
+    if (formMappings && typeof formMappings === 'object') {
+        for (const f of fd) {
+            if (!f?.name) continue;
+            const target = formMappings[f.name];
+            if (target == null) continue;
+            consumedQuestions.add(f.name);
+
+            const value = Array.isArray(f.values) && f.values.length ? String(f.values[0]).trim() : '';
+            if (!value) continue;
+
+            if (target === 'ignore') continue;
+            if (target === 'extra') {
+                const vals = Array.isArray(f.values) ? f.values : [];
+                extra[f.name] = vals.length === 1 ? vals[0] : vals;
+            } else if (CV_TARGET_KEYS.has(target)) {
+                // Pra nome: se já tem (provavelmente first_name veio antes), concatena.
+                if (target === 'nome' && data.nome) {
+                    data.nome = (data.nome + ' ' + value).trim();
+                } else {
+                    data[target] = value;
+                }
+            }
+        }
+    }
+
+    // 2) Auto-detect pros campos faltantes.
+    const autoData = {
+        email:    pickField(fd, ...FIELD_VARIANTS.email),
+        telefone: pickField(fd, ...FIELD_VARIANTS.telefone),
+        nome:     pickField(fd, ...FIELD_VARIANTS.nome),
+        cidade:   pickField(fd, ...FIELD_VARIANTS.cidade),
+        estado:   pickField(fd, ...FIELD_VARIANTS.estado),
+        endereco: pickField(fd, ...FIELD_VARIANTS.endereco),
+        cep:      pickField(fd, ...FIELD_VARIANTS.cep),
+        documento: pickField(fd, ...FIELD_VARIANTS.documento),
+    };
+    if (!autoData.nome) {
+        const first = pickField(fd, 'first_name', 'firstname', 'primeironome');
+        const last  = pickField(fd, 'last_name',  'lastname',  'sobrenome', 'ultimonome');
+        if (first || last) autoData.nome = [first, last].filter(Boolean).join(' ').trim();
+    }
+    for (const [k, v] of Object.entries(autoData)) {
+        if (!data[k] && v) data[k] = v;
+    }
+
+    // 3) Tudo que não foi consumido por mapping/auto vai pra extra_fields,
+    //    EXCETO o que o formMappings já mandou pra 'ignore'.
     for (const f of fd) {
         if (!f?.name) continue;
+        if (consumedQuestions.has(f.name)) continue;
         const vals = Array.isArray(f.values) ? f.values : [];
         extra[f.name] = vals.length === 1 ? vals[0] : vals;
     }
@@ -153,8 +253,6 @@ async function processOneLead(value) {
     }
 
     const graphLead = await fetchLead(leadgenId);
-    const data = parseLeadFields(graphLead.field_data || []);
-
     const platform = norm(graphLead.platform);
     const platformOrigem = (platform === 'ig' || platform === 'instagram') ? 'IG' : 'FB';
 
@@ -162,12 +260,59 @@ async function processOneLead(value) {
         ? String(value.form_id)
         : (graphLead.form_id != null ? String(graphLead.form_id) : null);
 
-    // ── Mapping local do form (definido pelo admin em Marketing > Formulários > Meta).
-    // Se mapping_active + midia_slug configurados, lead vira 'routed' direto.
-    // Caso contrário (sem mapping ou inativo), só cv_origem vai no binding e
-    // o lead cai em 'held' pra roteamento manual.
-    const binding = { cv_origem: platformOrigem };
+    // Carrega field_mappings do form (se houver) ANTES de parsear, pra dar
+    // ao parser a chance de respeitar a configuração manual do admin.
+    let formMappings = null;
     if (formId) {
+        try {
+            const form = await db.MetaLeadForm.findByPk(formId, { attributes: ['field_mappings'] });
+            if (form?.field_mappings && typeof form.field_mappings === 'object') {
+                formMappings = form.field_mappings;
+            }
+        } catch (e) {
+            console.warn(`⚠️  [marketing-capture] falha ao ler field_mappings do form ${formId}: ${e.message}`);
+        }
+    }
+    const data = parseLeadFields(graphLead.field_data || [], { formMappings });
+
+    // ── Mapping: prioriza CAMPANHA, fallback ao form (legado) ────────────────
+    // O vínculo CV mora agora na campanha (campanha = 1 empreendimento; um
+    // mesmo form pode rodar em N campanhas). Form mapping é fallback durante a
+    // transição — vamos remover quando migração estiver consolidada.
+    const binding = { cv_origem: platformOrigem };
+    const attribution = {};
+    let mappingSource = null;
+
+    const campaignId = graphLead.campaign_id != null ? String(graphLead.campaign_id) : null;
+
+    // 1) Tenta mapping da campanha
+    if (campaignId) {
+        try {
+            const camp = await db.MetaCampaign.findByPk(campaignId);
+            if (camp?.mapping_active && camp.midia_slug) {
+                binding.bound_empreendimentos = camp.bound_empreendimentos || null;
+                binding.midia_slug = camp.midia_slug;
+                binding.tags = camp.tags || null;
+                if (camp.cv_origem) binding.cv_origem = camp.cv_origem;
+                mappingSource = `campanha ${campaignId}`;
+            }
+            if (camp) {
+                if (camp.default_utm_source)   attribution.utm_source   = camp.default_utm_source;
+                if (camp.default_utm_medium)   attribution.utm_medium   = camp.default_utm_medium;
+                if (camp.default_utm_campaign) attribution.utm_campaign = camp.default_utm_campaign;
+                if (camp.default_utm_content)  attribution.utm_content  = camp.default_utm_content;
+                if (camp.default_utm_term)     attribution.utm_term     = camp.default_utm_term;
+                if (camp.cv_extra_fields && typeof camp.cv_extra_fields === 'object') {
+                    data.extra_fields = { ...(camp.cv_extra_fields), ...(data.extra_fields || {}) };
+                }
+            }
+        } catch (e) {
+            console.warn(`⚠️  [marketing-capture] falha ao consultar mapping da campanha ${campaignId}: ${e.message}`);
+        }
+    }
+
+    // 2) Fallback: mapping do form (legado)
+    if (!binding.midia_slug && formId) {
         try {
             const mapping = await MetaLeadFormService.findById(formId);
             if (mapping?.mapping_active && mapping.midia_slug) {
@@ -175,9 +320,17 @@ async function processOneLead(value) {
                 binding.midia_slug = mapping.midia_slug;
                 binding.tags = mapping.tags || null;
                 if (mapping.cv_origem) binding.cv_origem = mapping.cv_origem;
-                console.log(`🔗 [marketing-capture] mapping aplicado ao lead Meta ${leadgenId} (form ${formId} → ${mapping.midia_slug}).`);
-            } else if (mapping && !mapping.mapping_active) {
-                console.log(`⏸️  [marketing-capture] mapping do form ${formId} desativado — lead ${leadgenId} ficará em 'held'.`);
+                mappingSource = `form ${formId} (fallback)`;
+            }
+            if (mapping) {
+                if (!attribution.utm_source   && mapping.default_utm_source)   attribution.utm_source   = mapping.default_utm_source;
+                if (!attribution.utm_medium   && mapping.default_utm_medium)   attribution.utm_medium   = mapping.default_utm_medium;
+                if (!attribution.utm_campaign && mapping.default_utm_campaign) attribution.utm_campaign = mapping.default_utm_campaign;
+                if (!attribution.utm_content  && mapping.default_utm_content)  attribution.utm_content  = mapping.default_utm_content;
+                if (!attribution.utm_term     && mapping.default_utm_term)     attribution.utm_term     = mapping.default_utm_term;
+                if (mapping.cv_extra_fields && typeof mapping.cv_extra_fields === 'object') {
+                    data.extra_fields = { ...(mapping.cv_extra_fields), ...(data.extra_fields || {}) };
+                }
             }
         } catch (e) {
             // Não bloqueia a captura — só perde a otimização do mapping.
@@ -185,10 +338,17 @@ async function processOneLead(value) {
         }
     }
 
+    if (mappingSource) {
+        console.log(`🔗 [marketing-capture] mapping de ${mappingSource} → ${binding.midia_slug} (lead ${leadgenId}).`);
+    } else {
+        console.log(`⏸️  [marketing-capture] sem mapping pra lead ${leadgenId} (camp ${campaignId}, form ${formId}) — ficará em 'held'.`);
+    }
+
     await captureLead({
         channel: 'meta_lead_ads',
         data,
         binding,
+        attribution,
         meta: {
             leadgen_id:  String(leadgenId),
             form_id:     formId,
