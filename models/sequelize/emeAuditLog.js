@@ -1,8 +1,8 @@
 export default (sequelize, DataTypes) => {
     const EmeAuditLog = sequelize.define('EmeAuditLog', {
         userId: { type: DataTypes.INTEGER, allowNull: true },
-        sessionId: { type: DataTypes.INTEGER, allowNull: true },
-        messageId: { type: DataTypes.INTEGER, allowNull: true },
+        sessionId: { type: DataTypes.UUID, allowNull: true },
+        messageId: { type: DataTypes.UUID, allowNull: true },
 
         // ACADEMY | OFFICE
         context: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'OFFICE' },

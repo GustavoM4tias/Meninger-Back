@@ -149,6 +149,8 @@ import InboundLeadEventDefine from './marketing/inboundLeadEvent.js';
 import LeadFormDefine         from './marketing/leadForm.js';
 import MarketingConfigDefine  from './marketing/marketingConfig.js';
 import MetaLeadFormDefine     from './marketing/metaLeadForm.js';
+import MetaCampaignDefine     from './marketing/metaCampaign.js';
+import MetaAdDefine           from './marketing/metaAd.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -306,6 +308,8 @@ db.InboundLeadEvent = InboundLeadEventDefine(sequelize, DataTypes);
 db.LeadForm         = LeadFormDefine(sequelize, DataTypes);
 db.MarketingConfig  = MarketingConfigDefine(sequelize, DataTypes);
 db.MetaLeadForm     = MetaLeadFormDefine(sequelize, DataTypes);
+db.MetaCampaign     = MetaCampaignDefine(sequelize, DataTypes);
+db.MetaAd           = MetaAdDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

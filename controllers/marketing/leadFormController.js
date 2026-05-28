@@ -39,6 +39,20 @@ export async function submitLeadForm(req, res) {
         if (!form.active) {
             return res.status(410).json({ ok: false, error: 'Esta página de captação foi desativada.', inactive: true });
         }
+        // end_date — auto-encerra captação mesmo com active=true.
+        if (form.end_date) {
+            const end = new Date(form.end_date);
+            // Considera o dia inteiro do end_date — só recusa após 23:59:59 dele.
+            end.setHours(23, 59, 59, 999);
+            if (Date.now() > end.getTime()) {
+                return res.status(410).json({
+                    ok: false,
+                    error: 'Esta campanha de captação foi encerrada.',
+                    inactive: true,
+                    ended: true,
+                });
+            }
+        }
 
         // Dados do lead
         const data = {};
@@ -50,7 +64,12 @@ export async function submitLeadForm(req, res) {
         for (const [k, v] of Object.entries(body)) {
             if (!CONTROL_KEYS.has(k) && v != null && v !== '') extra[k] = v;
         }
-        if (Object.keys(extra).length) data.extra_fields = extra;
+        // cv_extra_fields do form — mesclado em extra_fields (campos do submit prevalecem).
+        if (form.cv_extra_fields && typeof form.cv_extra_fields === 'object') {
+            data.extra_fields = { ...(form.cv_extra_fields), ...extra };
+        } else if (Object.keys(extra).length) {
+            data.extra_fields = extra;
+        }
 
         // Atribuição
         const attribution = {
@@ -61,6 +80,17 @@ export async function submitLeadForm(req, res) {
         };
         for (const k of UTM_FIELDS) {
             if (body[k]) attribution[k] = String(body[k]).trim();
+        }
+        // UTMs default do form — só preenche o que o submit não trouxe.
+        const utmDefaults = {
+            utm_source:   form.default_utm_source,
+            utm_medium:   form.default_utm_medium,
+            utm_campaign: form.default_utm_campaign,
+            utm_content:  form.default_utm_content,
+            utm_term:     form.default_utm_term,
+        };
+        for (const [k, v] of Object.entries(utmDefaults)) {
+            if (!attribution[k] && v) attribution[k] = v;
         }
 
         const binding = {
