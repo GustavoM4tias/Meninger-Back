@@ -21,7 +21,13 @@
 import cron from 'node-cron';
 import Handlebars from 'handlebars';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import tz from 'dayjs/plugin/timezone.js';
 import { Op } from 'sequelize';
+dayjs.extend(utc); dayjs.extend(tz);
+
+const DEFAULT_TZ = process.env.TIMEZONE || 'America/Sao_Paulo';
+const DEDUPE_WINDOW_MS = 2 * 60 * 1000; // 2 min — janela pra detectar fire duplicado entre instâncias
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
@@ -121,6 +127,33 @@ async function fire(ruleId, { force = false } = {}) {
         return;
     }
 
+    // ── Dedup entre instâncias (Railway multi-replica) ───────────────────────
+    // Lock atômico via UPDATE: só atualiza last_triggered_at se a anterior é
+    // mais antiga que a janela de dedup. Apenas UMA instância passa por
+    // disparo simultâneo — as outras recebem updated=0 e skipam.
+    if (!force) {
+        const cutoff = new Date(Date.now() - DEDUPE_WINDOW_MS);
+        const [updated] = await AlertRule.update(
+            { last_triggered_at: new Date(), trigger_count: rule.trigger_count + 1 },
+            {
+                where: {
+                    id: rule.id,
+                    [Op.or]: [
+                        { last_triggered_at: null },
+                        { last_triggered_at: { [Op.lt]: cutoff } },
+                    ],
+                },
+            }
+        );
+        if (updated === 0) {
+            console.log(`[AlertEngine] fire ${rule.id} SKIPPED (dedup) — outra instância já está disparando`);
+            return;
+        }
+        // Atualiza o objeto local pra refletir o que foi gravado no DB
+        rule.last_triggered_at = new Date();
+        rule.trigger_count += 1;
+    }
+
     const owner = rule.owner;
     if (!owner) {
         console.warn(`[AlertEngine] regra ${rule.id} sem owner válido — pulando.`);
@@ -141,12 +174,14 @@ async function fire(ruleId, { force = false } = {}) {
     const { preview, report, raw, resolvedToolCall } = await AlertReportService.execute(rule, owner);
 
     // 2) Renderiza title/preview
+    // IMPORTANTE: usa o TZ DA REGRA explicitamente — se o OS da instância está em
+    // UTC, dayjs().format() sem .tz() retorna UTC e o body sai 3h adiantado.
     const ctx = {
         rule:    { name: rule.name },
         owner:   { username: owner.username, email: owner.email },
         result:  raw,
         preview, // preview gerado pela tool
-        now:     dayjs().format('DD/MM/YYYY HH:mm'),
+        now:     dayjs().tz(rule.timezone || DEFAULT_TZ).format('DD/MM/YYYY HH:mm'),
     };
     const title       = safeRender(rule.title_template,   ctx) || rule.name;
     const previewText = safeRender(rule.preview_template, ctx) || preview;
@@ -193,12 +228,7 @@ async function fire(ruleId, { force = false } = {}) {
             .catch(err => { console.error('[AlertEngine] whatsapp falhou:', err?.message); return null; });
     }
 
-    // 5) Atualiza contadores e loga
-    await rule.update({
-        last_triggered_at: new Date(),
-        trigger_count: rule.trigger_count + 1,
-    });
-
+    // 5) Loga o disparo (contador e last_triggered_at já foram atualizados no lock atômico no topo)
     await AlertTriggerLog.create({
         alert_rule_id: rule.id,
         status: 'success',
@@ -209,7 +239,9 @@ async function fire(ruleId, { force = false } = {}) {
 
 // ─── Envio do template inicial (alerta) + criação do pending reply ───────────
 
-const ALERT_TEMPLATE_NAME = 'alert_generic_v1';
+// v2: sem variável de resumo — só user + nome do alerta. O resumo era redundante
+// porque o relatório completo vem via SIM (texto livre, grátis na janela 24h).
+const ALERT_TEMPLATE_NAME = 'alert_generic_v2';
 const ALERT_TEMPLATE_LANG = 'pt_BR';
 const REPLY_WINDOW_HOURS  = 23; // 1h de margem da janela 24h
 
@@ -226,11 +258,11 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
         return null;
     }
 
-    // Variáveis do template alert_generic_v1: {{1}} = nome do user, {{2}} = título do alerta, {{3}} = resumo
+    // Variáveis do template alert_generic_v2: {{1}} = nome do user, {{2}} = título do alerta
+    // (sem resumo — o relatório completo vem via reply SIM em texto livre)
     const variables = [
         owner.username || 'usuário',
         title,
-        (preview || 'Relatório disponível').slice(0, 200),
     ];
 
     // Loga a mensagem como "queued" antes do send

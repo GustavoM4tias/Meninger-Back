@@ -172,6 +172,7 @@ async function bootServer() {
     ['MetaLeadForm', db.MetaLeadForm],
     ['MetaCampaign', db.MetaCampaign],
     ['MetaAd', db.MetaAd],
+    ['MetaAdSet', db.MetaAdSet],
   ]) {
     if (!model) continue;
     try {

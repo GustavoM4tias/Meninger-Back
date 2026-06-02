@@ -10,7 +10,7 @@ import requireAdmin from '../middlewares/requireAdmin.js';
 
 import {
     getConfig, updateConfig, healthCheck, syncTemplates, testSend,
-    discover, applyDiscovered,
+    discover, applyDiscovered, registerPhone,
 } from '../controllers/whatsapp/whatsappConfigController.js';
 import {
     listTemplates, getTemplate, createTemplate, deleteTemplate,
@@ -30,6 +30,7 @@ router.put('/config',                       authenticate, requireAdmin, updateCo
 router.post('/config/health',               authenticate, requireAdmin, healthCheck);
 router.post('/config/sync-templates',       authenticate, requireAdmin, syncTemplates);
 router.post('/config/test-send',            authenticate, requireAdmin, testSend);
+router.post('/config/register-phone',       authenticate, requireAdmin, registerPhone);
 router.post('/config/discover',             authenticate, requireAdmin, discover);
 router.post('/config/apply-discovered',     authenticate, requireAdmin, applyDiscovered);
 

@@ -246,20 +246,27 @@ async function notify({
             // 1) in-app (cria a row)
             let createdNotif = null;
             if (pref.inapp) {
-                createdNotif = await Notification.create({
-                    user_id: u.id,
-                    type,
-                    title,
-                    body,
-                    data,
-                    link,
-                    importance,
-                    channel_inapp: true,
-                    channel_email: pref.email && !!emailType,
-                    channel_whatsapp: pref.whatsapp && !!whatsappSpec && userHasActiveConsent(u),
-                    expires_at: expiresAt,
-                });
-                inappCreated++;
+                try {
+                    createdNotif = await Notification.create({
+                        user_id: u.id,
+                        type,
+                        title,
+                        body,
+                        data,
+                        link,
+                        importance,
+                        channel_inapp: true,
+                        channel_email: pref.email && !!emailType,
+                        channel_whatsapp: pref.whatsapp && !!whatsappSpec && userHasActiveConsent(u),
+                        expires_at: expiresAt,
+                    });
+                    inappCreated++;
+                    console.log(`[notify ${type}] in-app criado #${createdNotif.id} pra user ${u.id} ("${u.username}")`);
+                } catch (err) {
+                    console.error(`[notify ${type}] FALHA ao criar in-app pra user ${u.id}:`, err?.message || err);
+                }
+            } else {
+                console.log(`[notify ${type}] in-app pulado pra user ${u.id} — pref.inapp=false (bypass=${bypassPrefs})`);
             }
 
             // 2) e-mail (acumula pra envio em lote)

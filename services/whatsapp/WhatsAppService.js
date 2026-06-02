@@ -178,6 +178,43 @@ async function healthCheck() {
 }
 
 /**
+ * Registra o número na Cloud API. Necessário 1× depois de adicionar um número
+ * novo à WABA. Cria a conta na Cloud API e define o PIN de 2FA.
+ *
+ * @param {object} params
+ * @param {string} params.pin  - 6 dígitos (qualquer um — não tem validação semântica)
+ */
+async function registerPhoneNumber({ pin }) {
+    if (!/^\d{6}$/.test(String(pin || ''))) {
+        throw new CloudApiError('PIN deve ter exatamente 6 dígitos.', { code: 'BAD_PIN' });
+    }
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: true });
+    if (!cfg?.access_token) throw new CloudApiError('Sem access_token configurado.', { code: 'NO_TOKEN' });
+    if (!cfg.phone_number_id) throw new CloudApiError('Sem phone_number_id configurado.', { code: 'NO_PHONE_ID' });
+
+    const url = `${GRAPH_BASE}/${cfg.api_version}/${cfg.phone_number_id}/register`;
+    try {
+        const { data } = await axios.post(url, {
+            messaging_product: 'whatsapp',
+            pin: String(pin),
+        }, {
+            headers: {
+                Authorization: `Bearer ${cfg.access_token}`,
+                'Content-Type': 'application/json',
+            },
+            timeout: 15000,
+        });
+        return data;
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            apiErr?.error_user_msg || apiErr?.message || err.message || 'Falha ao registrar número',
+            { status: err.response?.status, code: apiErr?.code, details: err.response?.data }
+        );
+    }
+}
+
+/**
  * Cria um novo template no lado da Meta (entra em IN_REVIEW e depois APPROVED/REJECTED).
  *
  * @param {object} params
@@ -382,6 +419,7 @@ export default {
     fetchTemplates,
     createTemplate,
     deleteTemplate,
+    registerPhoneNumber,
     healthCheck,
     discoverFromToken,
     normalizePhone,

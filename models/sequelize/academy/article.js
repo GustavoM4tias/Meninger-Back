@@ -8,6 +8,10 @@ export default (sequelize, DataTypes) => {
         body: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
         payload: { type: DataTypes.JSONB, allowNull: true },
 
+        // Apelidos / sinônimos / siglas — usados no auto-link estilo wiki.
+        // Ex.: para "Nota Fiscal de Serviço", aliases = ["NFS", "NFS-e"].
+        aliases: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+
         createdByUserId: { type: DataTypes.INTEGER, allowNull: true },
         updatedByUserId: { type: DataTypes.INTEGER, allowNull: true },
     }, {

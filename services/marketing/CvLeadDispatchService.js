@@ -74,6 +74,60 @@ async function detectReentry(lead) {
 }
 
 // ── Monta o JSON do CV ──────────────────────────────────────────────────────
+
+/**
+ * Constrói a interação que carrega os campos custom do lead pro CV.
+ *
+ * O CV CRM aceita `interacoes` no POST de criação — array de objetos com pelo
+ * menos `descricao` (texto livre). É onde colocamos respostas a perguntas
+ * que não têm coluna direta no CV (renda? quando pretende comprar? interesse?).
+ *
+ * Formato:
+ *   "📋 Cadastro automático via Office (Meta Lead Ads)
+ *    Campanha: 120239301852500414
+ *    Formulário: 1105807337686348
+ *
+ *    Respostas:
+ *    - Renda familiar: R$ 5.000
+ *    - Tem interesse em qual unidade: 2 dorms
+ *    - Quando pretende comprar: Em até 6 meses"
+ */
+function buildInteracaoExtras(lead) {
+    const extras = lead.extra_fields && typeof lead.extra_fields === 'object'
+        ? Object.entries(lead.extra_fields).filter(([_, v]) => v != null && v !== '')
+        : [];
+
+    // Sem campos extras e sem contexto → não envia interação.
+    const hasContext = lead.meta_campaign_id || lead.meta_form_id || lead.channel === 'meta_lead_ads';
+    if (!extras.length && !hasContext) return null;
+
+    const lines = [];
+    lines.push(`📋 Cadastro automático via Office`);
+
+    if (lead.channel === 'meta_lead_ads') lines.push('Origem: Meta Lead Ads');
+    if (lead.meta_campaign_id) lines.push(`Campanha: ${lead.meta_campaign_id}`);
+    if (lead.meta_form_id)     lines.push(`Formulário: ${lead.meta_form_id}`);
+    if (lead.meta_ad_id)       lines.push(`Anúncio: ${lead.meta_ad_id}`);
+    if (lead.midia_slug)       lines.push(`Mídia: ${lead.midia_slug}`);
+
+    if (extras.length) {
+        lines.push('');
+        lines.push('Respostas do formulário:');
+        for (const [k, v] of extras) {
+            const val = Array.isArray(v) ? v.join(', ') : String(v);
+            lines.push(`- ${k}: ${val}`);
+        }
+    }
+
+    return {
+        descricao: lines.join('\n'),
+        // Tipo opcional — o CV usa "Observação" como default quando não vem idtipo.
+        // Se a empresa quiser categorizar (ex: "Mídia paga"), criar um tipo no CV
+        // e setar via env: CV_INTERACAO_IDTIPO=N.
+        ...(process.env.CV_INTERACAO_IDTIPO ? { idtipo: Number(process.env.CV_INTERACAO_IDTIPO) } : {}),
+    };
+}
+
 function buildCvPayload(lead) {
     const p = {
         permitir_alteracao: true,   // cria-ou-atualiza: o CV deduplica por email/telefone
@@ -115,6 +169,14 @@ function buildCvPayload(lead) {
 
     if (lead.is_reentry && lead.conversao_name) {
         p.conversao = lead.conversao_name;
+    }
+
+    // ── Interações: leva pro CV o que não tem coluna direta ─────────────────
+    // Campos custom do form (extra_fields) + contexto (campanha/anúncio) viram
+    // uma interação inicial no lead, visível pra equipe comercial no CV.
+    const interacao = buildInteracaoExtras(lead);
+    if (interacao) {
+        p.interacoes = [interacao];
     }
 
     return p;
