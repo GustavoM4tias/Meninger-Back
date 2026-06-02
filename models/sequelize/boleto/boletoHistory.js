@@ -70,6 +70,26 @@ export default (sequelize, DataTypes) => {
         cv_situacao_alterada: { type: DataTypes.BOOLEAN, defaultValue: false },
         cv_documento_anexado: { type: DataTypes.BOOLEAN, defaultValue: false },
 
+        // ── Avisos por etapa (anexo CV, mensagem CV, alteração situação) ──────
+        // JSON serializado em TEXT — etapas que falham silenciosamente são
+        // empurradas aqui pra aparecerem no log do frontend. Formato:
+        //   [{ etapa: 'cv_anexo'|'cv_mensagem'|'cv_situacao', erro: '...', httpStatus?: 404 }]
+        // Usamos TEXT (não JSONB) porque `sync({ alter: true })` falha
+        // silenciosamente em tabelas com ENUM (`status`).
+        warnings: {
+            type: DataTypes.TEXT,
+            allowNull: true,
+            get() {
+                const raw = this.getDataValue('warnings');
+                if (!raw) return null;
+                try { return JSON.parse(raw); } catch { return null; }
+            },
+            set(val) {
+                if (val == null) { this.setDataValue('warnings', null); return; }
+                this.setDataValue('warnings', JSON.stringify(val));
+            },
+        },
+
     }, {
         tableName: 'boleto_history',
         underscored: true,

@@ -239,11 +239,27 @@ async function fire(ruleId, { force = false } = {}) {
 
 // ─── Envio do template inicial (alerta) + criação do pending reply ───────────
 
-// v2: sem variável de resumo — só user + nome do alerta. O resumo era redundante
-// porque o relatório completo vem via SIM (texto livre, grátis na janela 24h).
-const ALERT_TEMPLATE_NAME = 'alert_generic_v2';
+// Templates de alerta em ordem de preferência. O engine tenta o 1º; se não estiver
+// APPROVED na Meta, cai pro 2º, e assim por diante. Permite migrar entre versões
+// (v2, v3...) sem janela de queda enquanto a Meta aprova a nova.
+//
+// CADA entrada precisa declarar quantas variáveis o template usa, pra a engine
+// montar o array de variables certo.
+const ALERT_TEMPLATES = [
+    { name: 'alert_generic_v2', vars: 2 }, // {{1}} user, {{2}} title
+    { name: 'alert_generic_v1', vars: 3 }, // {{1}} user, {{2}} title, {{3}} preview
+];
 const ALERT_TEMPLATE_LANG = 'pt_BR';
 const REPLY_WINDOW_HOURS  = 23; // 1h de margem da janela 24h
+
+// Escolhe o template aprovado de mais alta prioridade. Retorna { name, vars } ou null.
+async function pickApprovedTemplate() {
+    for (const t of ALERT_TEMPLATES) {
+        const tpl = await WhatsAppTemplateService.findApproved(t.name, ALERT_TEMPLATE_LANG);
+        if (tpl) return t;
+    }
+    return null;
+}
 
 async function sendInitialAlert({ rule, owner, title, preview, report }) {
     if (!owner.whatsapp_phone) return null;
@@ -258,12 +274,31 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
         return null;
     }
 
-    // Variáveis do template alert_generic_v2: {{1}} = nome do user, {{2}} = título do alerta
-    // (sem resumo — o relatório completo vem via reply SIM em texto livre)
-    const variables = [
-        owner.username || 'usuário',
-        title,
-    ];
+    // Escolhe o template aprovado (v2 prioritário, fallback v1)
+    const chosen = await pickApprovedTemplate();
+    console.log(`[AlertEngine] template escolhido pra rule ${rule.id}: ${chosen ? chosen.name + ' (' + chosen.vars + ' vars)' : 'NENHUM APROVADO'}`);
+    if (!chosen) {
+        const m = await WhatsappMessage.create({
+            direction: 'out',
+            user_id: owner.id,
+            to_phone: owner.whatsapp_phone,
+            type: 'template',
+            template_name: ALERT_TEMPLATES[0].name,
+            template_language: ALERT_TEMPLATE_LANG,
+            status: 'failed',
+            error_code: 'TEMPLATE_NOT_APPROVED',
+            error_message: `Nenhum dos templates (${ALERT_TEMPLATES.map(t => t.name).join(', ')}) está APPROVED. Crie e sincronize.`,
+            failed_at: new Date(),
+        });
+        return m.id;
+    }
+
+    // Monta variáveis conforme o template escolhido
+    //   2 vars (v2): user, title
+    //   3 vars (v1): user, title, preview
+    const variables = chosen.vars === 3
+        ? [owner.username || 'usuário', title, (preview || 'Relatório disponível').slice(0, 200)]
+        : [owner.username || 'usuário', title];
 
     // Loga a mensagem como "queued" antes do send
     const baseMsg = {
@@ -271,7 +306,7 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
         user_id: owner.id,
         to_phone: owner.whatsapp_phone,
         type: 'template',
-        template_name: ALERT_TEMPLATE_NAME,
+        template_name: chosen.name,
         template_language: ALERT_TEMPLATE_LANG,
         variables,
         body: `${title} — ${preview}`,
@@ -284,23 +319,12 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
         return m.id;
     }
 
-    // Verifica template aprovado
-    const tpl = await WhatsAppTemplateService.findApproved(ALERT_TEMPLATE_NAME, ALERT_TEMPLATE_LANG);
-    if (!tpl) {
-        const m = await WhatsappMessage.create({
-            ...baseMsg,
-            status: 'failed',
-            error_code: 'TEMPLATE_NOT_APPROVED',
-            error_message: `Crie o template "${ALERT_TEMPLATE_NAME}" e sincronize.`,
-            failed_at: new Date(),
-        });
-        return m.id;
-    }
+    // (template aprovado já foi validado em pickApprovedTemplate logo acima)
 
     try {
         const { id: wamid } = await WhatsAppService.sendTemplate({
             to: owner.whatsapp_phone,
-            templateName: ALERT_TEMPLATE_NAME,
+            templateName: chosen.name,
             language: ALERT_TEMPLATE_LANG,
             variables,
         });
@@ -360,6 +384,7 @@ function schedule(rule) {
     }
 
     const task = cron.schedule(rule.cron, () => {
+        console.log(`[AlertEngine] CRON TICK rule=${rule.id} ("${rule.name}") cron="${rule.cron}" tz=${rule.timezone}`);
         fire(rule.id).catch(err => {
             console.error(`[AlertEngine] fire ${rule.id} erro:`, err?.message || err);
         });
@@ -368,20 +393,77 @@ function schedule(rule) {
     });
 
     _tasks.set(rule.id, task);
+    console.log(`[AlertEngine] agendado rule=${rule.id} ("${rule.name}") cron="${rule.cron}" tz=${rule.timezone}`);
 }
 
 async function reschedule(ruleId) {
     const rule = await AlertRule.findByPk(ruleId);
-    if (rule) schedule(rule);
+    if (rule) {
+        schedule(rule);
+        _scheduledMeta.set(rule.id, { updatedAtMs: new Date(rule.updated_at).getTime() });
+    }
+}
+
+// ─── Reconciliação periódica ─────────────────────────────────────────────────
+//
+// Multi-instância no Railway: quando o user edita uma regra pela UI, só a
+// instância que recebeu o PUT chama reschedule(). As outras continuam com o
+// cron antigo. Pra evitar isso, todas as instâncias rodam reconcile a cada
+// minuto: leem o estado atual do DB e ajustam seus crons locais.
+//
+// Cada instância mantém o updated_at da regra na última vez que agendou. Se
+// mudou no DB, reagenda. Se a regra foi deletada/desativada, desagenda.
+
+const _scheduledMeta = new Map(); // ruleId → { updatedAtMs }
+
+async function reconcile() {
+    try {
+        const rules = await AlertRule.findAll({
+            where: { enabled: true, trigger_type: 'schedule' },
+            attributes: ['id', 'cron', 'timezone', 'enabled', 'trigger_type', 'updated_at'],
+        });
+        const validIds = new Set(rules.map(r => r.id));
+
+        // Remove tasks pra regras que não existem mais ou foram desativadas
+        for (const id of Array.from(_tasks.keys())) {
+            if (!validIds.has(id)) {
+                console.log(`[AlertEngine] reconcile: removendo task da regra ${id}`);
+                unschedule(id);
+                _scheduledMeta.delete(id);
+            }
+        }
+
+        // Adiciona / reagenda regras novas ou modificadas desde o último schedule
+        for (const r of rules) {
+            const updatedMs = new Date(r.updated_at).getTime();
+            const known = _scheduledMeta.get(r.id);
+            if (!known || known.updatedAtMs !== updatedMs) {
+                if (known) console.log(`[AlertEngine] reconcile: regra ${r.id} mudou — reagendando`);
+                else       console.log(`[AlertEngine] reconcile: regra ${r.id} nova — agendando`);
+                schedule(r);
+                _scheduledMeta.set(r.id, { updatedAtMs: updatedMs });
+            }
+        }
+    } catch (err) {
+        console.error('[AlertEngine] reconcile falhou:', err?.message || err);
+    }
 }
 
 // ─── Boot inicial ────────────────────────────────────────────────────────────
 
+let _reconcileTimer = null;
+
 async function boot() {
     try {
-        const rules = await AlertRule.findAll({ where: { enabled: true, trigger_type: 'schedule' } });
-        for (const r of rules) schedule(r);
-        console.log(`✅ AlertEngine iniciado com ${rules.length} regra(s) agendada(s).`);
+        await reconcile(); // primeira sincronização (em vez do antigo findAll)
+        console.log(`✅ AlertEngine iniciado com ${_tasks.size} regra(s) agendada(s).`);
+
+        // Reconcile periódico — pega edições feitas por outras instâncias
+        if (_reconcileTimer) clearInterval(_reconcileTimer);
+        _reconcileTimer = setInterval(() => {
+            reconcile().catch(e => console.error('[AlertEngine] reconcile periódico erro:', e?.message));
+        }, 60_000); // 60s
+        _reconcileTimer.unref?.();
     } catch (err) {
         console.error('[AlertEngine] falha no boot:', err?.message || err);
     }
@@ -397,5 +479,6 @@ export default {
     reschedule,
     unschedule,
     fire,
+    reconcile,
     listScheduled,
 };

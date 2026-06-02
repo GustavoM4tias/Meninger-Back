@@ -29,11 +29,31 @@ async function getSettings() {
     return s;
 }
 
+// Extrai mensagem legível da resposta de erro do CV, achatando objetos comuns
+// (data.mensagem, data.erro, data.errors[]). Cai pra err.message se nada bater.
+function describeCvError(err) {
+    const data = err?.response?.data;
+    if (data) {
+        if (typeof data === 'string') return data;
+        if (data.mensagem) return String(data.mensagem);
+        if (data.erro)     return String(data.erro);
+        if (data.message)  return String(data.message);
+        if (Array.isArray(data.errors) && data.errors.length) {
+            return data.errors.map(e => e.mensagem || e.message || JSON.stringify(e)).join(' | ');
+        }
+        try { return JSON.stringify(data).slice(0, 500); } catch { /* noop */ }
+    }
+    return err?.message || 'erro desconhecido';
+}
+
 async function sendCvMessage(idreserva, mensagem) {
     try {
         await apiCv.post('/v2/comercial/reservas/mensagens', { idreserva, mensagem });
+        return { ok: true };
     } catch (err) {
-        console.error(`[BOLETO] Falha ao enviar mensagem na reserva ${idreserva}:`, err.message);
+        const detail = describeCvError(err);
+        console.error(`[BOLETO] Falha ao enviar mensagem na reserva ${idreserva}: ${detail}`);
+        return { ok: false, error: detail };
     }
 }
 
@@ -48,15 +68,13 @@ async function alterarSituacaoCv(idreserva, idsituacao) {
             idsituacao_destino: Number(idsituacao),
             comentario: 'Alteração automática — Boleto Caixa',
         });
-        return true;
+        return { ok: true };
     } catch (err) {
-        const responseData = err.response?.data;
+        const detail = describeCvError(err);
         console.error(
-            `[BOLETO] Falha ao alterar situação da reserva ${idreserva} para ${idsituacao}:`,
-            err.message,
-            responseData ? JSON.stringify(responseData) : ''
+            `[BOLETO] Falha ao alterar situação da reserva ${idreserva} para ${idsituacao}: ${detail}`
         );
-        return false;
+        return { ok: false, error: detail };
     }
 }
 
@@ -77,16 +95,29 @@ async function uploadToSupabase(buffer, historyId, idreserva) {
 
 async function attachToCV(idreserva, buffer, settings) {
     if (!settings.cv_idtipo_documento) {
-        console.warn('[BOLETO] cv_idtipo_documento não configurado — boleto não será anexado no CV.');
-        return false;
+        return { ok: false, skipped: true, error: 'cv_idtipo_documento não configurado nas Configurações.' };
     }
-    const base64 = buffer.toString('base64');
-    await apiCv.post('/v1/comercial/reservas/documentos', {
-        idreserva,
-        idtipo: settings.cv_idtipo_documento,
-        documento_base64: base64,
-    });
-    return true;
+    try {
+        const base64 = buffer.toString('base64');
+        // Endpoint v3 — idreserva vai na URL e os documentos em array no body.
+        // Doc: POST /v3/comercial/reservas/{idreserva}/documentos
+        await apiCv.post(`/v3/comercial/reservas/${Number(idreserva)}/documentos`, {
+            documentos: [
+                {
+                    idtipo: Number(settings.cv_idtipo_documento),
+                    documento_base64: base64,
+                },
+            ],
+        });
+        return { ok: true };
+    } catch (err) {
+        const detail = describeCvError(err);
+        const status = err?.response?.status;
+        console.error(
+            `[BOLETO] Falha ao anexar boleto na reserva ${idreserva} (HTTP ${status || '??'}): ${detail}`
+        );
+        return { ok: false, error: detail, httpStatus: status || null };
+    }
 }
 
 // ── Processamento principal ───────────────────────────────────────────────────
@@ -115,6 +146,22 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         idtransacao: idtransacao || null,
         status: 'processing',
     });
+
+    // Avisos por etapa que não jogam exceção (anexo CV, mensagem CV, alteração
+    // de situação). Persistidos em `history.warnings` ao final pra aparecerem
+    // no log do frontend mesmo quando o boleto foi emitido com sucesso.
+    const warnings = [];
+    const pushWarn = (result, etapa) => {
+        if (!result?.ok) {
+            warnings.push({
+                etapa,
+                erro: result?.error || 'erro desconhecido',
+                ...(result?.httpStatus ? { httpStatus: result.httpStatus } : {}),
+                ...(result?.skipped ? { skipped: true } : {}),
+            });
+        }
+        return !!result?.ok;
+    };
 
     try {
         // ── 1. Busca dados da reserva no CV ───────────────────────────────────
@@ -158,10 +205,13 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 'Parcelas encontradas:',
                 `• ${detalhe}`,
             ].join('\n');
-            await sendCvMessage(idreserva, msg);
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
             let situacaoAlterada = false;
             if (settings.situacao_erro_id) {
-                situacaoAlterada = await alterarSituacaoCv(idreserva, settings.situacao_erro_id);
+                situacaoAlterada = pushWarn(
+                    await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
+                    'cv_situacao',
+                );
             }
             await history.update({
                 status: 'error',
@@ -169,8 +219,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 titular_nome: titular?.nome,
                 empreendimento: unidade?.empreendimento,
                 idpessoa_cv: titular?.idpessoa_cv,
-                cv_mensagem_enviada: true,
+                cv_mensagem_enviada: msgOk,
                 cv_situacao_alterada: situacaoAlterada,
+                warnings: warnings.length ? warnings : null,
             });
             return;
         }
@@ -189,11 +240,14 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 + titularCheck.errors.map(e => `${e.campo}=${e.motivo}`).join('; ')
             );
             const msg = formatTitularErrorsMessage(titularCheck.errors);
-            await sendCvMessage(idreserva, msg);
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
 
             let situacaoAlterada = false;
             if (settings.situacao_erro_id) {
-                situacaoAlterada = await alterarSituacaoCv(idreserva, settings.situacao_erro_id);
+                situacaoAlterada = pushWarn(
+                    await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
+                    'cv_situacao',
+                );
             }
 
             const resumoErro = `Divergência nos dados do titular: ${titularCheck.errors.map(e => e.campo).join(', ')}.`;
@@ -205,8 +259,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 idpessoa_cv: titular?.idpessoa_cv,
                 valor: parseFloat(serie.valor),
                 vencimento: serie.vencimento,
-                cv_mensagem_enviada: true,
+                cv_mensagem_enviada: msgOk,
                 cv_situacao_alterada: situacaoAlterada,
+                warnings: warnings.length ? warnings : null,
             });
             return;
         }
@@ -249,11 +304,14 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
 
         if (vencDate < hoje) {
             const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} está no passado.\nSomente vencimentos a partir de hoje são aceitos.`;
-            await sendCvMessage(idreserva, msg);
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
 
             let situacaoAlterada = false;
             if (settings.situacao_erro_id) {
-                situacaoAlterada = await alterarSituacaoCv(idreserva, settings.situacao_erro_id);
+                situacaoAlterada = pushWarn(
+                    await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
+                    'cv_situacao',
+                );
             }
 
             await history.update({
@@ -266,8 +324,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 valor_original: valorOriginal,
                 comissao_percentual_aplicada: comissaoPercentualAplicada,
                 vencimento,
-                cv_mensagem_enviada: true,
+                cv_mensagem_enviada: msgOk,
                 cv_situacao_alterada: situacaoAlterada,
+                warnings: warnings.length ? warnings : null,
             });
             return;
         }
@@ -340,17 +399,18 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         });
 
         // ── 8. Anexa boleto na reserva do CV ──────────────────────────────────
-        let documentoAnexado = false;
-        try {
-            documentoAnexado = await attachToCV(idreserva, boletoBuffer, settings);
-        } catch (attachErr) {
-            console.error(`[BOLETO] Falha ao anexar no CV: ${attachErr.message}`);
-        }
+        const documentoAnexado = pushWarn(
+            await attachToCV(idreserva, boletoBuffer, settings),
+            'cv_anexo',
+        );
 
         // ── 9. Altera situação para "em processamento/emitido" ────────────────
         let situacaoAlteradaSucesso = false;
         if (settings.situacao_sucesso_id) {
-            situacaoAlteradaSucesso = await alterarSituacaoCv(idreserva, settings.situacao_sucesso_id);
+            situacaoAlteradaSucesso = pushWarn(
+                await alterarSituacaoCv(idreserva, settings.situacao_sucesso_id),
+                'cv_situacao',
+            );
         }
 
         // ── 10. Envia mensagem de sucesso com resumo completo do boleto ────────
@@ -371,33 +431,48 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
             supabaseUrl ? `🔗 Boleto: ${supabaseUrl}` : null,
         ].filter(Boolean).join('\n');
 
-        await sendCvMessage(idreserva, msgSucesso);
+        const msgSucessoOk = pushWarn(await sendCvMessage(idreserva, msgSucesso), 'cv_mensagem');
 
+        // Boleto foi emitido — status segue 'success' mesmo com warnings de
+        // etapas pós-emissão (anexo/situação/mensagem). O frontend mostra os
+        // avisos via `warnings` pra o admin agir.
         await history.update({
             status: 'success',
-            cv_mensagem_enviada: true,
+            cv_mensagem_enviada: msgSucessoOk,
             cv_documento_anexado: documentoAnexado,
             cv_situacao_alterada: situacaoAlteradaSucesso,
+            warnings: warnings.length ? warnings : null,
         });
 
-        console.log(`[BOLETO] Reserva ${idreserva} processada com sucesso.`);
+        if (warnings.length) {
+            console.warn(
+                `[BOLETO] Reserva ${idreserva} emitida com ${warnings.length} aviso(s) pós-emissão: `
+                + warnings.map(w => `${w.etapa}=${w.erro}`).join(' | ')
+            );
+        } else {
+            console.log(`[BOLETO] Reserva ${idreserva} processada com sucesso.`);
+        }
 
     } catch (err) {
         console.error(`[BOLETO] Erro no processamento da reserva ${idreserva}:`, err.message);
 
         const msgErro = `❌ Falha na emissão do boleto:\n${err.message}`;
-        await sendCvMessage(idreserva, msgErro);
+        const msgOk = pushWarn(await sendCvMessage(idreserva, msgErro), 'cv_mensagem');
 
         let situacaoAlterada = false;
         if (settings.situacao_erro_id) {
-            situacaoAlterada = await alterarSituacaoCv(idreserva, settings.situacao_erro_id);
+            situacaoAlterada = pushWarn(
+                await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
+                'cv_situacao',
+            );
         }
 
         await history.update({
             status: 'error',
             error_message: err.message,
-            cv_mensagem_enviada: true,
+            cv_mensagem_enviada: msgOk,
             cv_situacao_alterada: situacaoAlterada,
+            warnings: warnings.length ? warnings : null,
         }).catch(() => {});
     }
 }

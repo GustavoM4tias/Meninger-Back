@@ -207,6 +207,9 @@ export const remove = async (req, res) => {
         if (error === 'forbidden') return res.status(403).json({ error: 'Sem permissão.' });
 
         AlertEngine.unschedule(rule.id);
+        // Cascade manual — as FKs foram criadas sem ON DELETE CASCADE
+        await db.AlertPendingReply.destroy({ where: { alert_rule_id: rule.id } });
+        await db.AlertTriggerLog.destroy({ where: { alert_rule_id: rule.id } });
         await rule.destroy();
         return res.json({ ok: true });
     } catch (err) {

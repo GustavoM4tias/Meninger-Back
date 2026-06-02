@@ -8,9 +8,9 @@ import { Model } from 'sequelize';
 export default (sequelize, DataTypes) => {
   class AlertTriggerLog extends Model {
     static associate(models) {
-      AlertTriggerLog.belongsTo(models.AlertRule,        { foreignKey: 'alert_rule_id', as: 'rule' });
-      AlertTriggerLog.belongsTo(models.Notification,     { foreignKey: 'notification_id', as: 'notification' });
-      AlertTriggerLog.belongsTo(models.WhatsappMessage,  { foreignKey: 'whatsapp_message_id', as: 'whatsappMessage' });
+      AlertTriggerLog.belongsTo(models.AlertRule,        { foreignKey: 'alert_rule_id', as: 'rule', onDelete: 'CASCADE' });
+      AlertTriggerLog.belongsTo(models.Notification,     { foreignKey: 'notification_id', as: 'notification', onDelete: 'SET NULL' });
+      AlertTriggerLog.belongsTo(models.WhatsappMessage,  { foreignKey: 'whatsapp_message_id', as: 'whatsappMessage', onDelete: 'SET NULL' });
     }
   }
 
