@@ -106,17 +106,49 @@ const TOOL_DECLARATIONS = [
             required: ['alert_id'],
         },
     },
+    {
+        name: 'open_alert_editor',
+        description: 'Abre um modal visual no app pra criar OU editar um alerta. Use quando o user pedir "abrir o editor", "quero editar/configurar visualmente" ou quando ele quiser ajustar canais/cron antes de salvar. Para CRIAR: passe tool_call (use o MESMO que você passou no preview_alert) + name sugerido + cron sugerido. Para EDITAR: passe apenas alert_id. NÃO use isso pra criar diretamente — preveja o conteúdo antes (preview_alert) e só abra o editor quando o user pedir visual.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                mode:     { type: 'STRING', description: '"create" (default) ou "edit".' },
+                alert_id: { type: 'INTEGER', description: 'Obrigatório quando mode="edit".' },
+                tool_call: {
+                    type: 'OBJECT',
+                    description: 'Receita da consulta (igual ao preview_alert). Obrigatório quando mode="create".',
+                    properties: {
+                        tool: { type: 'STRING' },
+                        args: { type: 'OBJECT' },
+                    },
+                },
+                name:             { type: 'STRING',  description: 'Nome sugerido pro alerta (mode=create).' },
+                cron:             { type: 'STRING',  description: 'Cron sugerido (mode=create).' },
+                title_template:   { type: 'STRING',  description: 'Template Handlebars do título (mode=create).' },
+                preview_template: { type: 'STRING',  description: 'Template Handlebars do resumo (mode=create).' },
+                channels: {
+                    type: 'OBJECT',
+                    properties: {
+                        inapp:    { type: 'BOOLEAN' },
+                        email:    { type: 'BOOLEAN' },
+                        whatsapp: { type: 'BOOLEAN' },
+                    },
+                },
+            },
+        },
+    },
 ];
 
 // ─── Executor ────────────────────────────────────────────────────────────────
 
 async function executeTool(name, args, user) {
     switch (name) {
-        case 'preview_alert':   return executePreview(args, user);
-        case 'create_alert':    return executeCreate(args, user);
-        case 'list_alerts':     return executeList(args, user);
-        case 'delete_alert':    return executeDelete(args, user);
-        case 'get_alert_limit': return executeGetLimit(args, user);
+        case 'preview_alert':     return executePreview(args, user);
+        case 'create_alert':      return executeCreate(args, user);
+        case 'list_alerts':       return executeList(args, user);
+        case 'delete_alert':      return executeDelete(args, user);
+        case 'get_alert_limit':   return executeGetLimit(args, user);
+        case 'open_alert_editor': return executeOpenEditor(args, user);
         default: return { error: `Ferramenta desconhecida: ${name}` };
     }
 }
@@ -237,6 +269,9 @@ async function executeDelete(args, user) {
     if (!isAdmin(user) && rule.owner_user_id !== user.id) return { error: 'Sem permissão.' };
 
     AlertEngine.unschedule(rule.id);
+    // Cascade manual — FKs sem ON DELETE CASCADE
+    await db.AlertPendingReply.destroy({ where: { alert_rule_id: rule.id } });
+    await db.AlertTriggerLog.destroy({ where: { alert_rule_id: rule.id } });
     await rule.destroy();
     return { ok: true, message: 'Alerta removido.' };
 }
@@ -262,6 +297,47 @@ async function executeGetLimit(_args, user) {
         daily_limit: limit,
         used_today: usedToday,
         remaining: Math.max(0, limit - usedToday),
+    };
+}
+
+async function executeOpenEditor(args, user) {
+    const mode = args?.mode === 'edit' ? 'edit' : 'create';
+
+    if (mode === 'edit') {
+        const id = Number(args?.alert_id);
+        if (!id) return { error: 'alert_id é obrigatório quando mode="edit".' };
+        const rule = await AlertRule.findByPk(id);
+        if (!rule) return { error: 'Alerta não encontrado.' };
+        if (!isAdmin(user) && rule.owner_user_id !== user.id) {
+            return { error: 'Sem permissão pra editar esse alerta.' };
+        }
+        return {
+            type: 'open_alert_editor',
+            mode: 'edit',
+            alertId: rule.id,
+            message: `Abrindo o editor visual do alerta "${rule.name}".`,
+        };
+    }
+
+    // mode = 'create' — exige pelo menos tool_call pra fazer sentido
+    if (!args?.tool_call?.tool) {
+        return { error: 'tool_call.tool é obrigatório quando mode="create" — passe a mesma receita que você usou no preview_alert.' };
+    }
+
+    return {
+        type: 'open_alert_editor',
+        mode: 'create',
+        toolCall:         args.tool_call,
+        name:             args.name || '',
+        cron:             args.cron || '0 8 * * *',
+        title_template:   args.title_template || '',
+        preview_template: args.preview_template || '',
+        channels: {
+            inapp:    args.channels?.inapp    !== false,
+            email:    !!args.channels?.email,
+            whatsapp: !!args.channels?.whatsapp,
+        },
+        message: 'Editor visual aberto — ajuste o que quiser e clique em "Criar alerta".',
     };
 }
 

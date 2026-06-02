@@ -24,19 +24,55 @@ import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 
 const { AlertPendingReply, WhatsappMessage } = db;
 
-const YES_WORDS = ['sim', 's', 'si', 'yes', 'y', 'ok', 'enviar', 'mostrar', 'detalhes', 'quero'];
-const NO_WORDS  = ['nao', 'n', 'no', 'cancelar', 'cancela', 'descartar', 'ignorar'];
+const YES_WORDS = new Set(['sim', 's', 'si', 'yes', 'y', 'ok', 'enviar', 'mostrar', 'detalhes', 'quero', 'confirmo', 'confirmar']);
+const NO_WORDS  = new Set(['nao', 'n', 'no', 'cancelar', 'cancela', 'descartar', 'ignorar', 'pular']);
 
+// Normaliza pra comparar (lowercase + sem acento + sem pontuação).
 function normalize(text) {
     return String(text || '').trim().toLowerCase()
-        .normalize('NFD').replace(/[̀-ͯ]/g, '')   // remove acentos
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')   // remove combining diacriticals
         .replace(/[^a-z0-9]/g, '');
 }
 
+// Tokeniza preservando palavras inteiras (separadas por espaço/quebra/pontuação).
+function tokenize(text) {
+    return String(text || '').toLowerCase()
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
+}
+
+/**
+ * Classifica resposta em yes/no/other com tolerância a ruído:
+ *   1. Match exato da mensagem inteira (caso ideal: "SIM").
+ *   2. Match da ÚLTIMA LINHA (caso comum: user usou Reply com citação).
+ *   3. Match de QUALQUER TOKEN (caso "SIM por favor", "Pode ser SIM", etc).
+ * "no" tem prioridade quando ambos aparecem (não enviar um relatório indevido).
+ */
 function classify(text) {
-    const n = normalize(text);
-    if (YES_WORDS.includes(n)) return 'yes';
-    if (NO_WORDS.includes(n))  return 'no';
+    if (!text) return 'other';
+
+    // 1) mensagem inteira
+    const whole = normalize(text);
+    if (YES_WORDS.has(whole)) return 'yes';
+    if (NO_WORDS.has(whole))  return 'no';
+
+    // 2) última linha não vazia (típico após "Reply" do WhatsApp)
+    const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const last = lines[lines.length - 1];
+    if (last && last !== text) {
+        const n = normalize(last);
+        if (YES_WORDS.has(n)) return 'yes';
+        if (NO_WORDS.has(n))  return 'no';
+    }
+
+    // 3) qualquer token — NÃO ganha de SIM se ambos aparecerem
+    const tokens = tokenize(text);
+    const hasNo  = tokens.some(t => NO_WORDS.has(t));
+    const hasYes = tokens.some(t => YES_WORDS.has(t));
+    if (hasNo)  return 'no';
+    if (hasYes) return 'yes';
+
     return 'other';
 }
 

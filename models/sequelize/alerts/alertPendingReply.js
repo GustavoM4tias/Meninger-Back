@@ -19,8 +19,8 @@ import { Model } from 'sequelize';
 export default (sequelize, DataTypes) => {
   class AlertPendingReply extends Model {
     static associate(models) {
-      AlertPendingReply.belongsTo(models.AlertRule,       { foreignKey: 'alert_rule_id', as: 'rule' });
-      AlertPendingReply.belongsTo(models.AlertTriggerLog, { foreignKey: 'log_id',        as: 'log' });
+      AlertPendingReply.belongsTo(models.AlertRule,       { foreignKey: 'alert_rule_id', as: 'rule', onDelete: 'CASCADE' });
+      AlertPendingReply.belongsTo(models.AlertTriggerLog, { foreignKey: 'log_id',        as: 'log', onDelete: 'SET NULL' });
       AlertPendingReply.belongsTo(models.User,            { foreignKey: 'user_id',       as: 'user' });
     }
   }
