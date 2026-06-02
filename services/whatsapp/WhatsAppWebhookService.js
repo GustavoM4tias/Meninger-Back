@@ -132,6 +132,10 @@ async function handleIncomingMessage(m, fromPhone) {
     // Mensagens soltas no número do sistema não disparam relatório.
     const contextId = m?.context?.id || null;
     console.log(`[whatsapp/webhook] inbound type=${type} from=${fromPhone} body="${body}" contextId=${contextId || 'NONE'}`);
+    // Payload completo pra debug — útil pra ver estrutura real do button/reply
+    console.log(`[whatsapp/webhook] inbound full payload:`, JSON.stringify({
+        id: m.id, type: m.type, button: m.button, text: m.text, interactive: m.interactive, context: m.context,
+    }));
     try {
         await AlertReplyHandler.handleInbound({ fromPhone, body, contextId });
     } catch (err) {

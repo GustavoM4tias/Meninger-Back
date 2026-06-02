@@ -132,6 +132,24 @@ export const applyDiscovered = async (req, res) => {
     }
 };
 
+/**
+ * POST /api/whatsapp/config/register-phone
+ * body: { pin }   — 6 dígitos
+ *
+ * Registra o phone_number_id atual na Cloud API. Necessário 1× depois de
+ * adicionar um número novo à WABA (antes do primeiro envio).
+ */
+export const registerPhone = async (req, res) => {
+    try {
+        const { pin } = req.body || {};
+        const r = await WhatsAppService.registerPhoneNumber({ pin });
+        return res.json({ ok: true, ...r });
+    } catch (err) {
+        console.error('[whatsapp/config/register-phone]', err);
+        return res.status(400).json({ ok: false, error: err.message, code: err.code, details: err.details });
+    }
+};
+
 /** POST /api/whatsapp/config/test-send — envia template de teste para um número */
 export const testSend = async (req, res) => {
     try {

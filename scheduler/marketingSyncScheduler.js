@@ -37,14 +37,24 @@ let lightRunning = false;
 // ────────────────────────────────────────────────────────────────────────────
 // FULL — full sync (varre tudo)
 // ────────────────────────────────────────────────────────────────────────────
-async function runFullSync() {
+async function runFullSync(opts = {}) {
+    // opts:
+    //   sinceDays        — janela de campanhas (default FULL_SINCE_DAYS)
+    //   historicalDays   — janela do import histórico (default 7)
+    //   reconcileLimit   — limite de reconciliação CV (default 100)
+    //   adsAllStatuses   — true → sync ads de TODAS campanhas (não só ATIVAS)
+    //                      Útil pra "Sincronizar tudo" manual.
     if (fullRunning) {
         console.warn('⏭️  [marketing-full-sync] anterior ainda rodando — pulando esta execução.');
-        return;
+        return { skipped: true, reason: 'Outro full sync já está em andamento.' };
     }
     fullRunning = true;
     const startedAt = Date.now();
-    console.log('🔁 [marketing-full-sync] iniciando varredura completa Meta...');
+    const sinceDays      = opts.sinceDays      ?? FULL_SINCE_DAYS;
+    const historicalDays = opts.historicalDays ?? 7;
+    const reconcileLimit = opts.reconcileLimit ?? 100;
+    const adsAllStatuses = !!opts.adsAllStatuses;
+    console.log(`🔁 [marketing-full-sync] iniciando varredura completa Meta (${sinceDays}d${adsAllStatuses ? ', todas campanhas' : ', só ativas'})...`);
 
     const summary = {
         forms: null, campaigns: null, ads: null,
@@ -62,23 +72,24 @@ async function runFullSync() {
 
     // 2) Campanhas (todas as contas)
     try {
-        summary.campaigns = await MetaCampaignService.syncFromMeta({ sinceDays: FULL_SINCE_DAYS });
+        summary.campaigns = await MetaCampaignService.syncFromMeta({ sinceDays });
         console.log(`✅ [marketing-full-sync] campanhas: ${summary.campaigns.campaigns_total}`);
     } catch (e) {
         summary.errors.push({ step: 'campaigns', error: e.message });
         console.error(`❌ [marketing-full-sync] campanhas: ${e.message}`);
     }
 
-    // 3) Ads — por campanha. Pra não estourar rate limit, só ATIVAS aqui.
+    // 3) Ads — por campanha. No cron, só ATIVAS (rate limit).
+    //         No manual ("Sincronizar tudo"), pode pegar TODAS via adsAllStatuses.
     try {
-        const activeCampaigns = await db.MetaCampaign.findAll({
-            where: { effective_status: 'ACTIVE' },
-            attributes: ['id', 'name'],
+        const where = adsAllStatuses ? {} : { effective_status: 'ACTIVE' };
+        const targetCampaigns = await db.MetaCampaign.findAll({
+            where, attributes: ['id', 'name'],
         });
         let adsOk = 0, adsErr = 0, adsTotal = 0;
-        for (const c of activeCampaigns) {
+        for (const c of targetCampaigns) {
             try {
-                const r = await MetaAdService.syncForCampaign(c.id, { sinceDays: FULL_SINCE_DAYS });
+                const r = await MetaAdService.syncForCampaign(c.id, { sinceDays });
                 adsOk += 1;
                 adsTotal += r.ads_total;
             } catch (e) {
@@ -86,27 +97,26 @@ async function runFullSync() {
                 console.warn(`  ⚠️  [marketing-full-sync] ads campanha ${c.id}: ${e.message}`);
             }
         }
-        summary.ads = { campaigns_processed: activeCampaigns.length, ads_total: adsTotal, errors: adsErr };
-        console.log(`✅ [marketing-full-sync] ads: ${adsTotal} em ${adsOk}/${activeCampaigns.length} campanhas (${adsErr} erros)`);
+        summary.ads = { campaigns_processed: targetCampaigns.length, ads_total: adsTotal, errors: adsErr };
+        console.log(`✅ [marketing-full-sync] ads: ${adsTotal} em ${adsOk}/${targetCampaigns.length} campanhas (${adsErr} erros)`);
     } catch (e) {
         summary.errors.push({ step: 'ads', error: e.message });
         console.error(`❌ [marketing-full-sync] ads: ${e.message}`);
     }
 
-    // 4) Import histórico — janela curta no auto-sync (últimos 7 dias) pra não
-    // estourar tempo. Pra puxar 90d, o usuário usa o botão "Importar histórico".
+    // 4) Import histórico (janela configurável)
     try {
-        summary.historical = await MetaHistoricalImportService.importHistorical({ sinceDays: 7 });
+        summary.historical = await MetaHistoricalImportService.importHistorical({ sinceDays: historicalDays });
         console.log(`✅ [marketing-full-sync] histórico: ${summary.historical.inserted} novos, ${summary.historical.duplicates} dup`);
     } catch (e) {
         summary.errors.push({ step: 'historical', error: e.message });
         console.error(`❌ [marketing-full-sync] histórico: ${e.message}`);
     }
 
-    // 5) Reconciliação com CV — best-effort, ignora se CV falhar.
+    // 5) Reconciliação com CV — best-effort
     try {
         summary.reconciliation = await CvReconciliationService.reconcileBatch({
-            limit: 100, channel: 'meta_lead_ads', status: 'historical',
+            limit: reconcileLimit, channel: 'meta_lead_ads', status: 'historical',
         });
         console.log(`✅ [marketing-full-sync] CV-recon: ${summary.reconciliation.matched}/${summary.reconciliation.processed}`);
     } catch (e) {
@@ -114,9 +124,12 @@ async function runFullSync() {
         console.warn(`⚠️  [marketing-full-sync] reconciliação CV (não-fatal): ${e.message}`);
     }
 
-    const tookSec = ((Date.now() - startedAt) / 1000).toFixed(1);
-    console.log(`🏁 [marketing-full-sync] concluído em ${tookSec}s. Erros: ${summary.errors.length}.`);
+    const tookMs = Date.now() - startedAt;
+    summary.duration_ms = tookMs;
+    summary.duration_sec = +(tookMs / 1000).toFixed(1);
+    console.log(`🏁 [marketing-full-sync] concluído em ${summary.duration_sec}s. Erros: ${summary.errors.length}.`);
     fullRunning = false;
+    return summary;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -26,6 +26,8 @@ import feedController from '../controllers/academy/feedController.js';
 import gamificationController from '../controllers/academy/gamificationController.js';
 import onboardingController from '../controllers/academy/onboardingController.js';
 import { externalRequestCode, externalVerifyCode } from '../controllers/academy/authExternalController.js';
+import { generateArticle } from '../services/academy/kbGenerateService.js';
+import db from '../models/sequelize/index.js';
 
 const router = express.Router();
 
@@ -50,6 +52,90 @@ router.get('/users/:id(\\d+)/summary', authenticate, meController.summary);
 router.get('/kb/categories', authenticate, kbController.listCategories);
 router.get('/kb/articles', authenticate, kbController.listArticles);
 router.get('/kb/articles/:categorySlug/:articleSlug', authenticate, kbController.getArticle);
+
+// ── Backlinks ("Mencionado em") ──────────────────────────────────────────────
+// Lista artigos publicados que linkam para este artigo (texto do body contém
+// `/academy/kb/cat/slug`). Útil pra mostrar no rodapé da leitura.
+router.get('/kb/articles/:categorySlug/:articleSlug/backlinks', authenticate, async (req, res) => {
+    try {
+        const { categorySlug, articleSlug } = req.params;
+        const cat = String(categorySlug || '').trim();
+        const sl = String(articleSlug || '').trim();
+        if (!cat || !sl) return res.json({ backlinks: [] });
+
+        const pattern = `%/academy/kb/${encodeURIComponent(cat)}/${encodeURIComponent(sl)}%`;
+        const rows = await db.AcademyArticle.findAll({
+            where: {
+                status: 'PUBLISHED',
+                body: { [db.Sequelize.Op.iLike]: pattern },
+            },
+            attributes: ['slug', 'categorySlug', 'title', 'updatedAt'],
+            order: [['updatedAt', 'DESC']],
+            limit: 50,
+        });
+
+        const backlinks = rows
+            .filter((r) => !(r.categorySlug === cat && r.slug === sl))
+            .map((r) => ({
+                slug: r.slug,
+                categorySlug: r.categorySlug,
+                title: r.title || '',
+                updatedAt: r.updatedAt,
+            }));
+
+        res.json({ backlinks });
+    } catch (err) {
+        console.error('[kb/backlinks] error:', err);
+        res.status(500).json({ error: 'Erro ao buscar menções.' });
+    }
+});
+
+// Gera um trecho curto, sem markdown, para preview no hover de um link
+// interno (`[texto](/academy/kb/cat/slug)`). Ignora o primeiro `# Título`,
+// tira embeds, mantém só a essência textual.
+function makeKbSnippet(body) {
+    if (!body) return '';
+    const NL = String.fromCharCode(10);
+    let s = String(body);
+    const firstNL = s.indexOf(NL);
+    if (firstNL > 0 && /^\s*#\s+/.test(s.slice(0, firstNL))) {
+        s = s.slice(firstNL + 1);
+    }
+    s = s.replace(/!\[[^\]]*\]\([^)]*\)/g, '');         // imagens
+    s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');      // [link](url) → link
+    s = s.replace(/@\[[A-Z_]+:[^\]]+\]/g, '');          // embeds @[X:y]
+    s = s.replace(/^#{1,6}\s+/gm, '');                  // demais headings
+    s = s.replace(/[*_`>~]+/g, '');                     // ênfase / blockquote
+    s = s.replace(/\s+/g, ' ').trim();
+    if (s.length > 220) s = s.slice(0, 220).trim() + '…';
+    return s;
+}
+
+// ── Índice de links de artigos — alimenta o picker "Vincular artigo" no
+// editor e o preview no hover de links internos no TokenRenderer.
+router.get('/kb/link-index', authenticate, async (req, res) => {
+    try {
+        const rows = await db.AcademyArticle.findAll({
+            where: { status: 'PUBLISHED' },
+            attributes: ['slug', 'categorySlug', 'title', 'body', 'aliases', 'updatedAt'],
+            order: [['updatedAt', 'DESC']],
+            limit: 1000,
+        });
+        res.json({
+            results: rows.map((r) => ({
+                slug: r.slug,
+                categorySlug: r.categorySlug,
+                title: r.title || '',
+                snippet: makeKbSnippet(r.body),
+                aliases: Array.isArray(r.aliases) ? r.aliases : [],
+                updatedAt: r.updatedAt,
+            })),
+        });
+    } catch (err) {
+        console.error('[kb/link-index] error:', err);
+        res.status(500).json({ error: 'Erro ao carregar índice de links.' });
+    }
+});
 
 // S4.1: Comentários em artigos
 router.get('/kb/articles/:articleId(\\d+)/comments', authenticate, articleCommentsController.list);
@@ -121,6 +207,35 @@ router.patch('/kb/articles/:id(\\d+)/publish', authenticate, requireInternal, kb
 router.get('/kb/articles/:id(\\d+)/versions', authenticate, requireInternal, kbAdminController.listVersions);
 router.get('/kb/articles/:id(\\d+)/versions/:versionNumber(\\d+)', authenticate, requireInternal, kbAdminController.getVersion);
 router.post('/kb/articles/:id(\\d+)/versions/:versionNumber(\\d+)/restore', authenticate, requireInternal, requireAdmin, kbAdminController.restoreVersion);
+
+// ── Geração de artigos via IA (Gemini) — admin only ───────────────────────────
+// Recebe {topic, context, style, categorySlug} e retorna {title, body,
+// suggestedCategorySlug, model}. NÃO publica nada — só devolve a sugestão
+// para o admin revisar/editar/publicar manualmente.
+router.post('/kb/admin/articles/generate',
+    authenticate, requireInternal, requireAdmin,
+    async (req, res) => {
+        try {
+            const { topic, context, style, categorySlug } = req.body || {};
+            const t = String(topic || '').trim();
+            if (!t) return res.status(400).json({ error: 'topic obrigatório.' });
+            if (t.length > 200) return res.status(400).json({ error: 'topic muito longo (máx. 200).' });
+            const ctx = String(context || '').trim();
+            if (ctx.length > 8000) return res.status(400).json({ error: 'context muito longo (máx. 8000).' });
+
+            const out = await generateArticle({
+                topic: t,
+                context: ctx,
+                style: ['procedimento', 'tutorial', 'faq', 'checklist'].includes(style) ? style : 'procedimento',
+                categorySlug: String(categorySlug || '').trim(),
+            });
+            res.json(out);
+        } catch (err) {
+            console.error('[kbGenerate] error:', err);
+            res.status(500).json({ error: err?.message || 'Erro ao gerar artigo com IA.' });
+        }
+    }
+);
 
 router.get('/tracks-admin', authenticate, requireInternal, requireAdmin, trackAdminController.list);
 router.get('/tracks-admin/:slug', authenticate, requireInternal, requireAdmin, trackAdminController.get);

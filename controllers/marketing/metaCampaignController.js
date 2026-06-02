@@ -7,6 +7,7 @@ import MetaCampaignService from '../../services/marketing/MetaCampaignService.js
 import MetaHistoricalImportService from '../../services/marketing/MetaHistoricalImportService.js';
 import CvReconciliationService from '../../services/marketing/CvReconciliationService.js';
 import MetaAdService from '../../services/marketing/MetaAdService.js';
+import marketingSyncScheduler from '../../scheduler/marketingSyncScheduler.js';
 
 export async function list(req, res) {
     try {
@@ -126,6 +127,29 @@ export async function reconcileHistoricalWithCv(req, res) {
     }
 }
 
+/** Lista TODOS os ads (cache global) — pra view de Anúncios da tela principal. */
+export async function listAllAds(req, res) {
+    try {
+        const ads = await MetaAdService.listAll();
+        return res.json({ ok: true, results: ads });
+    } catch (err) {
+        console.error(`❌ [meta-campaigns] listAllAds: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
+/** Lista os ad sets (conjuntos) de uma campanha. */
+export async function campaignAdSets(req, res) {
+    try {
+        const { id } = req.params;
+        const adsets = await MetaAdService.listAdSetsForCampaign(id);
+        return res.json({ ok: true, results: adsets });
+    } catch (err) {
+        console.error(`❌ [meta-campaigns] campaignAdSets: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
 /** Lista os ads de uma campanha (cache local). */
 export async function campaignAds(req, res) {
     try {
@@ -164,9 +188,39 @@ export async function syncCampaignAds(req, res) {
     }
 }
 
+/**
+ * Sincronização total — roda forms + campanhas + ads + histórico + reconciliação
+ * em sequência. Mesmo fluxo do cron a cada 2h, mas pode ser disparado manualmente
+ * com opções customizadas (janela, todas vs ativas).
+ *
+ * Body opcional:
+ *   sinceDays       — janela de campanhas/ads (default 90)
+ *   historicalDays  — janela do import histórico (default 30 — maior que o cron)
+ *   reconcileLimit  — limite reconciliação CV (default 200)
+ *   adsAllStatuses  — true → sync ads de TODAS campanhas (não só ativas)
+ */
+export async function runFullSync(req, res) {
+    try {
+        const opts = {
+            sinceDays:      Math.min(Math.max(Number(req.body?.sinceDays)      || 90,  1), 365),
+            historicalDays: Math.min(Math.max(Number(req.body?.historicalDays) || 30,  1), 90),
+            reconcileLimit: Math.min(Math.max(Number(req.body?.reconcileLimit) || 200, 0), 1000),
+            adsAllStatuses: req.body?.adsAllStatuses === true,
+        };
+        const result = await marketingSyncScheduler.runFullSync(opts);
+        if (result?.skipped) return res.status(409).json({ ok: false, ...result });
+        return res.json({ ok: true, ...result });
+    } catch (err) {
+        console.error(`❌ [meta-campaigns] runFullSync: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
 export default {
     list, sync, detail, campaignLeads, dailyBreakdown, update,
     importHistoricalLeads, reconcileHistoricalWithCv, reparseExistingLeads,
     migrateMappingsFormToCampaign,
-    campaignAds, syncCampaignAds,
+    campaignAds, syncCampaignAds, listAllAds,
+    campaignAdSets,
+    runFullSync,
 };

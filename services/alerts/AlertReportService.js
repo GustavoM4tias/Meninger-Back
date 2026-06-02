@@ -128,7 +128,8 @@ function buildPreview(result, fallbackTitle) {
  * e percentuais quando aplicável.
  */
 function buildReport(result, ruleName) {
-    const head = `📊 *${ruleName}*\n\n`;
+    // Header: emoji + nome em negrito + separador visual
+    const head = `📊 *${ruleName}*\n━━━━━━━━━━━━━━━\n\n`;
 
     if (!result)                   return head + '_Sem dados retornados._';
     if (typeof result === 'string') return (head + result).slice(0, 3800);
@@ -139,7 +140,7 @@ function buildReport(result, ruleName) {
 
     // ── CHART (group_by) ────────────────────────────────────────────────────
     if (result.type === 'chart' && Array.isArray(result.labels) && Array.isArray(result.data)) {
-        if (result.title) lines.push(`*${result.title}*`);
+        if (result.title) lines.push(`📈 *${result.title}*`);
 
         // Pares label-value, ordenados decrescente
         const pairs = result.labels
@@ -152,26 +153,32 @@ function buildReport(result, ruleName) {
             lines.push('');
             lines.push('_Nenhum registro no período._');
         } else {
-            lines.push(`*Total:* ${fmtNum(total)}`);
+            lines.push('');
+            lines.push(`🔢 *Total:* ${fmtNum(total)}`);
             lines.push('');
             const top = pairs.slice(0, 10);
             for (const p of top) {
-                lines.push(`• *${p.label}*: ${fmtNum(p.value)} _(${pct(p.value, total)}%)_`);
+                lines.push(`▸ *${p.label}*`);
+                lines.push(`   ${fmtNum(p.value)} _(${pct(p.value, total)}%)_`);
             }
-            if (pairs.length > 10) lines.push(`_... e mais ${pairs.length - 10} categorias_`);
+            if (pairs.length > 10) {
+                lines.push('');
+                lines.push(`_... e mais ${pairs.length - 10} categorias_`);
+            }
         }
         return (head + lines.join('\n')).slice(0, 3800);
     }
 
     // ── TABLE ────────────────────────────────────────────────────────────────
     if (result.type === 'table') {
-        if (result.title) lines.push(`*${result.title}*`);
+        if (result.title) lines.push(`📋 *${result.title}*`);
 
         const rows  = Array.isArray(result.rows) ? result.rows : [];
         const cols  = Array.isArray(result.columns) ? result.columns : [];
         const total = result.total ?? rows.length;
 
-        lines.push(`*Total:* ${fmtNum(total)}`);
+        lines.push('');
+        lines.push(`🔢 *Total:* ${fmtNum(total)}`);
         lines.push('');
 
         if (rows.length === 0) {
@@ -194,10 +201,12 @@ function buildReport(result, ruleName) {
                     })
                     .filter(Boolean)
                     .join(' · ');
-                lines.push(meta ? `• *${label}*\n  _${meta}_` : `• ${label}`);
+                lines.push(`▸ *${label}*`);
+                if (meta) lines.push(`   _${meta}_`);
             }
             if (rows.length > showRows.length) {
-                lines.push(`\n_... e mais ${rows.length - showRows.length}_`);
+                lines.push('');
+                lines.push(`_... e mais ${rows.length - showRows.length}_`);
             }
         }
         return (head + lines.join('\n')).slice(0, 3800);
@@ -205,13 +214,17 @@ function buildReport(result, ruleName) {
 
     // ── DETAIL (ex: get_enterprise_detail) ─────────────────────────────────
     if (result.type === 'detail') {
-        if (result.title) lines.push(`*${result.title}*\n`);
+        if (result.title) {
+            lines.push(`📄 *${result.title}*`);
+            lines.push('');
+        }
         const fields = result.fields || [];
         for (const f of fields) {
             const label = f.label || f.key || '';
             const value = f.value;
             if (value === null || value === undefined || value === '') continue;
-            lines.push(`*${label}:* ${value}`);
+            lines.push(`▸ *${label}*`);
+            lines.push(`   ${value}`);
         }
         return (head + lines.join('\n')).slice(0, 3800);
     }
@@ -223,26 +236,32 @@ function buildReport(result, ruleName) {
     const totals = result.totals || result.kpis || result.stats || result.summary_data;
     if (totals && typeof totals === 'object') {
         if (lines.length) lines.push('');
-        lines.push('*Indicadores:*');
+        lines.push('📌 *Indicadores*');
+        lines.push('');
         for (const [k, v] of Object.entries(totals)) {
-            lines.push(`• *${k}:* ${fmtNum(v)}`);
+            lines.push(`▸ *${k}*`);
+            lines.push(`   ${fmtNum(v)}`);
         }
     }
 
     const list = result.items || result.data || result.rows;
     if (Array.isArray(list) && list.length) {
         if (lines.length) lines.push('');
-        lines.push(`*Itens (${Math.min(list.length, 8)} de ${list.length}):*`);
+        lines.push(`📃 *Itens (${Math.min(list.length, 8)} de ${list.length})*`);
+        lines.push('');
         for (const item of list.slice(0, 8)) {
             if (typeof item === 'string' || typeof item === 'number') {
-                lines.push(`• ${item}`);
+                lines.push(`▸ ${item}`);
             } else if (item && typeof item === 'object') {
                 const label = item.name || item.title || item.label || item.nome || '?';
                 const value = item.count ?? item.total ?? item.value ?? item.qtd ?? '';
-                lines.push(`• ${label}${value !== '' ? ` — *${fmtNum(value)}*` : ''}`);
+                lines.push(`▸ *${label}*${value !== '' ? ` — ${fmtNum(value)}` : ''}`);
             }
         }
-        if (list.length > 8) lines.push(`_... e mais ${list.length - 8}_`);
+        if (list.length > 8) {
+            lines.push('');
+            lines.push(`_... e mais ${list.length - 8}_`);
+        }
     }
 
     if (!lines.length) {

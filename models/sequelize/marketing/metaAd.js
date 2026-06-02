@@ -19,6 +19,7 @@ export default (sequelize, DataTypes) => {
     status:       { type: DataTypes.STRING(40) },                      // ACTIVE | PAUSED | ARCHIVED | DELETED
     effective_status: { type: DataTypes.STRING(40) },
     created_time: { type: DataTypes.DATE },
+    updated_time: { type: DataTypes.DATE },          // última modificação na Meta (pause/resume/edit)
 
     // ── Criativo (texto + mídia) ─────────────────────────────────────────────
     creative_id:        { type: DataTypes.STRING(40) },
@@ -26,8 +27,12 @@ export default (sequelize, DataTypes) => {
     creative_title:     { type: DataTypes.STRING(500) },
     creative_body:      { type: DataTypes.TEXT },
     creative_link_url:  { type: DataTypes.STRING(1000) },              // URL pra onde o ad leva
-    creative_image_url: { type: DataTypes.STRING(1000) },
+    creative_image_url: { type: DataTypes.STRING(2000) },
+    creative_image_hash: { type: DataTypes.STRING(60) },
+    creative_image_hashes: { type: DataTypes.JSONB },        // todos os hashes possíveis
     creative_video_id:  { type: DataTypes.STRING(60) },
+    creative_video_url: { type: DataTypes.STRING(2000) },              // URL playable do vídeo
+    creative_video_permalink: { type: DataTypes.STRING(2000) },        // permalink no Facebook (fallback)
     creative_object_type: { type: DataTypes.STRING(40) },              // PHOTO | VIDEO | LINK | STATUS | etc.
 
     // ── Form vinculado (só pra Lead Ads) ─────────────────────────────────────

@@ -53,7 +53,8 @@ async function listCampaignsForAccount({ token, base }, accountId, { since, unti
         access_token: token,
         fields: [
             'id', 'name', 'status', 'effective_status', 'objective', 'buying_type',
-            'start_time', 'stop_time', 'daily_budget', 'lifetime_budget', 'budget_remaining',
+            'start_time', 'stop_time', 'updated_time',
+            'daily_budget', 'lifetime_budget', 'budget_remaining',
             // insights agregados do período (inclui actions pra contagem de leads)
             `insights.time_range({"since":"${since}","until":"${until}"}).fields(spend,impressions,clicks,reach,cpm,cpc,ctr,actions)`,
         ].join(','),
@@ -138,6 +139,7 @@ export async function syncFromMeta({ sinceDays = 90, until = new Date() } = {}) 
                 buying_type:        c.buying_type || null,
                 start_time:         c.start_time ? new Date(c.start_time) : null,
                 stop_time:          c.stop_time ? new Date(c.stop_time) : null,
+                updated_time:       c.updated_time ? new Date(c.updated_time) : null,
                 daily_budget_cents:    c.daily_budget    ? Number(c.daily_budget)    : null,
                 lifetime_budget_cents: c.lifetime_budget ? Number(c.lifetime_budget) : null,
                 budget_remaining_cents: c.budget_remaining ? Number(c.budget_remaining) : null,
@@ -245,7 +247,72 @@ export async function getById(campaignId) {
     const row = await MetaCampaign.findByPk(String(campaignId));
     if (!row) return null;
     const [withStats] = await attachLeadStats([row]);
-    return withStats;
+    return { ...withStats, ...computeExecutiveMetrics(withStats) };
+}
+
+/**
+ * Métricas executivas: pacing, dias, projeção. Calculadas em cima dos campos
+ * que já vêm da Meta (start_time, stop_time, spend, daily_budget_cents).
+ *
+ * Retorna:
+ *   days_running          — dias desde start_time até hoje (max 1)
+ *   days_total            — dias totais previstos (start → stop), null se sem stop
+ *   days_remaining        — dias restantes até stop_time, null se sem stop
+ *   daily_avg_spend       — média de gasto diário no período rodado
+ *   daily_budget          — orçamento diário em R$ (de daily_budget_cents)
+ *   lifetime_budget       — orçamento total previsto
+ *   budget_consumed_pct   — % do lifetime já gasto (null se sem lifetime)
+ *   projected_total_spend — projeção até stop_time (média × dias_total)
+ *   spend_pace            — 'on_track' | 'fast' | 'slow' | null
+ */
+function computeExecutiveMetrics(c) {
+    if (!c) return {};
+    const now = new Date();
+    const start = c.start_time ? new Date(c.start_time) : null;
+    const stop  = c.stop_time  ? new Date(c.stop_time)  : null;
+
+    const msDay = 24 * 60 * 60 * 1000;
+    const daysRunning = start
+        ? Math.max(1, Math.floor((Math.min(now.getTime(), stop?.getTime() || now.getTime()) - start.getTime()) / msDay))
+        : null;
+    const daysTotal     = (start && stop) ? Math.max(1, Math.ceil((stop.getTime() - start.getTime()) / msDay)) : null;
+    const daysRemaining = stop ? Math.max(0, Math.ceil((stop.getTime() - now.getTime()) / msDay)) : null;
+
+    const spend = Number(c.spend) || 0;
+    const dailyAvgSpend = daysRunning ? +(spend / daysRunning).toFixed(2) : null;
+
+    const dailyBudget    = c.daily_budget_cents    ? Number(c.daily_budget_cents) / 100    : null;
+    const lifetimeBudget = c.lifetime_budget_cents ? Number(c.lifetime_budget_cents) / 100 : null;
+
+    const budgetConsumedPct = (lifetimeBudget && lifetimeBudget > 0)
+        ? +((spend / lifetimeBudget) * 100).toFixed(1)
+        : null;
+
+    // Projeção: se tem stop, projeta gastando média atual até o fim.
+    const projectedTotalSpend = (daysTotal && dailyAvgSpend != null)
+        ? +(dailyAvgSpend * daysTotal).toFixed(2)
+        : null;
+
+    // Pace vs budget diário: rodando mais ou menos que o esperado?
+    let spendPace = null;
+    if (dailyBudget && dailyAvgSpend != null) {
+        const ratio = dailyAvgSpend / dailyBudget;
+        if (ratio < 0.7)      spendPace = 'slow';     // gastou <70% do diário
+        else if (ratio > 1.3) spendPace = 'fast';     // gastou >130% do diário
+        else                  spendPace = 'on_track';
+    }
+
+    return {
+        days_running:        daysRunning,
+        days_total:          daysTotal,
+        days_remaining:      daysRemaining,
+        daily_avg_spend:     dailyAvgSpend,
+        daily_budget:        dailyBudget,
+        lifetime_budget:     lifetimeBudget,
+        budget_consumed_pct: budgetConsumedPct,
+        projected_total_spend: projectedTotalSpend,
+        spend_pace:          spendPace,
+    };
 }
 
 /** Leads dessa campanha (Meta). */

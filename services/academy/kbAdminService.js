@@ -91,6 +91,26 @@ function asJsonOrNull(v) {
     throw new Error('payload inválido (deve ser objeto).');
 }
 
+// Apelidos para o auto-link estilo wiki. Tolerante (string solta vira []).
+// Limites: cada apelido até 80 chars, máximo 20 apelidos, deduplica por
+// case-insensitive preservando a forma original do primeiro.
+function normalizeAliases(input) {
+    if (!Array.isArray(input)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const item of input) {
+        const s = String(item ?? '').trim();
+        if (!s) continue;
+        if (s.length > 80) continue;
+        const key = s.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(s);
+        if (out.length >= 20) break;
+    }
+    return out;
+}
+
 async function uniqueSlug({ baseSlug, ignoreId = null }) {
     let slug = baseSlug || 'artigo';
     let i = 1;
@@ -158,7 +178,8 @@ const kbAdminService = {
                 'slug',
                 'categorySlug',
                 'body',
-                'payload', // ✅ novo
+                'payload',
+                'aliases',
                 'status',
                 'createdByUserId',
                 'updatedByUserId',
@@ -169,7 +190,7 @@ const kbAdminService = {
         return article;
     },
 
-    async create({ userId, title, categorySlug, body, payload }) {
+    async create({ userId, title, categorySlug, body, payload, aliases }) {
         const baseSlug = kebab(title);
         const slug = await uniqueSlug({ baseSlug });
 
@@ -178,7 +199,8 @@ const kbAdminService = {
             categorySlug: String(categorySlug).trim(),
             slug,
             body: String(body || ''),
-            payload: asJsonOrNull(payload), // ✅ novo
+            payload: asJsonOrNull(payload),
+            aliases: normalizeAliases(aliases),
             status: 'DRAFT',
             createdByUserId: userId || null,
             updatedByUserId: userId || null,
@@ -187,7 +209,7 @@ const kbAdminService = {
         return article;
     },
 
-    async update(id, { userId, title, categorySlug, body, payload, versionMessage = null }) {
+    async update(id, { userId, title, categorySlug, body, payload, aliases, versionMessage = null }) {
         const article = await db.AcademyArticle.findByPk(id);
         if (!article) throw new Error('Artigo não encontrado.');
 
@@ -198,12 +220,17 @@ const kbAdminService = {
         const nextTitle = String(title).trim();
         const nextBody = String(body || '');
         const nextPayload = asJsonOrNull(payload);
+        // aliases é OPCIONAL — undefined = não alterar; array = atualizar.
+        const nextAliases = aliases === undefined ? undefined : normalizeAliases(aliases);
+        const aliasesChanged = nextAliases !== undefined &&
+            JSON.stringify(nextAliases) !== JSON.stringify(article.aliases || []);
 
         const changed =
             nextCategory !== article.categorySlug ||
             nextTitle !== article.title ||
             nextBody !== (article.body || '') ||
-            JSON.stringify(nextPayload) !== JSON.stringify(article.payload || null);
+            JSON.stringify(nextPayload) !== JSON.stringify(article.payload || null) ||
+            aliasesChanged;
 
         if (changed) {
             await snapshotVersion(article, { userId, message: versionMessage });
@@ -219,14 +246,17 @@ const kbAdminService = {
             nextSlug = await uniqueSlug({ baseSlug, ignoreId: article.id });
         }
 
-        await article.update({
+        const fields = {
             title: nextTitle,
             categorySlug: nextCategory,
             slug: nextSlug,
             body: nextBody,
             payload: nextPayload,
             updatedByUserId: userId || article.updatedByUserId || null,
-        });
+        };
+        if (nextAliases !== undefined) fields.aliases = nextAliases;
+
+        await article.update(fields);
 
         return article;
     },

@@ -151,6 +151,7 @@ import MarketingConfigDefine  from './marketing/marketingConfig.js';
 import MetaLeadFormDefine     from './marketing/metaLeadForm.js';
 import MetaCampaignDefine     from './marketing/metaCampaign.js';
 import MetaAdDefine           from './marketing/metaAd.js';
+import MetaAdSetDefine        from './marketing/metaAdSet.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -310,6 +311,7 @@ db.MarketingConfig  = MarketingConfigDefine(sequelize, DataTypes);
 db.MetaLeadForm     = MetaLeadFormDefine(sequelize, DataTypes);
 db.MetaCampaign     = MetaCampaignDefine(sequelize, DataTypes);
 db.MetaAd           = MetaAdDefine(sequelize, DataTypes);
+db.MetaAdSet        = MetaAdSetDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

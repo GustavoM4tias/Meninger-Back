@@ -46,6 +46,9 @@ import {
     migrateMappingsFormToCampaign,
     campaignAds as listMetaCampaignAds,
     syncCampaignAds as syncMetaCampaignAds,
+    listAllAds as listAllMetaAds,
+    campaignAdSets as listMetaCampaignAdSets,
+    runFullSync as runMetaFullSync,
 } from '../controllers/marketing/metaCampaignController.js';
 
 const router = express.Router();
@@ -102,7 +105,10 @@ router.post('/meta-campaigns/import-historical', importHistoricalMetaLeads);
 router.post('/meta-campaigns/reconcile-cv-batch', reconcileHistoricalWithCv);
 router.post('/meta-campaigns/reparse-existing', reparseMetaLeads);
 router.post('/meta-campaigns/migrate-mappings', migrateMappingsFormToCampaign);
+router.get('/meta-ads', listAllMetaAds);                              // todos os ads (cache)
+router.post('/sync/full', runMetaFullSync);                           // varre tudo manualmente (admin)
 router.get('/meta-campaigns/:id/ads', listMetaCampaignAds);
+router.get('/meta-campaigns/:id/adsets', listMetaCampaignAdSets);
 router.post('/meta-campaigns/:id/ads/sync', syncMetaCampaignAds);
 
 export default router;

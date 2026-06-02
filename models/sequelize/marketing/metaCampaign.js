@@ -19,6 +19,7 @@ export default (sequelize, DataTypes) => {
 
     start_time:      { type: DataTypes.DATE },
     stop_time:       { type: DataTypes.DATE },        // null se não tiver fim definido
+    updated_time:    { type: DataTypes.DATE },        // última modificação na Meta (pause/resume/edit)
 
     // Orçamento — vem em centavos na Marketing API. Mantemos como string pra
     // não perder precisão (BIGINT em alguns casos).
