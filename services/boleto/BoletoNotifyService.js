@@ -166,7 +166,7 @@ function pickEmail(rawEmail) {
 async function sendBoletoEmail({ titular, dadosBoleto, pdfBuffer }) {
     const email = pickEmail(titular?.email);
     if (!email) {
-        return { ok: false, skipped: true, error: 'Titular sem e-mail válido no CV.' };
+        return { ok: false, skipped: true, error: 'Titular sem e-mail válido no CV.', to: null };
     }
     try {
         // Anexa PDF inline quando disponível. Filename amigável usando nosso
@@ -219,6 +219,7 @@ async function sendBoletoWhatsApp({ titular, dadosBoleto, historyId, pdfBuffer =
             ok: false,
             skipped: true,
             error: `Titular sem número válido. Tentados: ${tried}. Esperado formato BR (DDD válido + 8 ou 9 dígitos).`,
+            to: null,
         };
     }
     const phone = picked.phone;
@@ -226,7 +227,7 @@ async function sendBoletoWhatsApp({ titular, dadosBoleto, historyId, pdfBuffer =
 
     const cfg = await WhatsAppConfigService.getConfig({ withSecrets: false });
     if (!cfg?.active) {
-        return { ok: false, skipped: true, error: 'WhatsApp inativo na configuração do Office.' };
+        return { ok: false, skipped: true, error: 'WhatsApp inativo na configuração do Office.', to: phone };
     }
 
     // Persiste a tentativa de saída (mesmo em dry_run / falha) pra ficar no log de mensagens.
@@ -354,12 +355,15 @@ export async function sendBoletoToTitular({ titular, dadosBoleto, historyId = nu
 
     // Guard pra ambiente local: produção e dev podem receber o mesmo webhook
     // do CV; sem essa proteção, o cliente recebe a mesma notificação 2×.
-    // Skip os 2 canais juntos com mensagem clara.
+    // Skip os 2 canais juntos com mensagem clara. Preserva `to` (email/fone
+    // que SERIAM usados) pra mensagem do CV mostrar pro gestor.
     if (isLocalEnvironment()) {
         const reason = skipReasonLocalEnv();
         console.warn(`${tag} ⊘ ${reason}`);
-        const skipped = { ok: false, skipped: true, error: reason };
-        return { email: skipped, whatsapp: skipped };
+        return {
+            email:    { ok: false, skipped: true, error: reason, to: pickEmail(titular?.email) },
+            whatsapp: { ok: false, skipped: true, error: reason, to: picked?.phone || null },
+        };
     }
 
     // Garante buffer: se caller não passou (caso de reenvio), baixa do Supabase.

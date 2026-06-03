@@ -60,6 +60,31 @@ export default (sequelize, DataTypes) => {
             allowNull: true,
             comment: 'ID situação CV para alterar em caso de erro (usa cancelar-reserva)',
         },
+        situacao_pago_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 28,
+            comment: 'ID situação CV quando boleto é detectado como LIQUIDADO no Ecobrança',
+        },
+        situacao_baixado_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 29,
+            comment: 'ID situação CV quando boleto é baixado por devolução (vencido sem pagamento)',
+        },
+        tolerancia_dias_uteis: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 1,
+            comment: 'Dias úteis após vencimento (já considerando fim de semana/feriado) para baixar o boleto. 1 = boleto pago compensa em D+1 útil.',
+        },
+
+        delay_situacao_sucesso_min: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 2,
+            comment: 'Safety threshold (minutos) até o próximo lote Sienge (5/5min). Se faltam menos que isto, pula pro próximo ciclo. Default 2 → delay efetivo varia entre 3 e 7 min, alinhado a múltiplo de 5 + 1 buffer.',
+        },
 
         // ── Controle ───────────────────────────────────────────────────────────
         active: {

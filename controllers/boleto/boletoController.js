@@ -2,6 +2,9 @@
 import db from '../../models/sequelize/index.js';
 import { processBoletoWebhook } from '../../services/boleto/BoletoGenerationService.js';
 import { sendBoletoToTitular, WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANG } from '../../services/boleto/BoletoNotifyService.js';
+import EventLogger from '../../services/boleto/BoletoEventLogger.js';
+import { runDailyCheck } from '../../services/boleto/BoletoPaymentCheckService.js';
+import EcoLock from '../../services/boleto/BoletoEcoLockService.js';
 import { getBoletoTemplateDefinition, TEMPLATE_EXAMPLE_PDF_URL } from '../../services/boleto/boletoWhatsappTemplate.js';
 import axios from 'axios';
 import WhatsAppService from '../../services/whatsapp/WhatsAppService.js';
@@ -74,6 +77,8 @@ export async function updateSettings(req, res) {
             'eco_usuario', 'eco_senha',
             'idserie_ra', 'cv_idtipo_documento',
             'situacao_sucesso_id', 'situacao_erro_id',
+            'situacao_pago_id', 'situacao_baixado_id', 'tolerancia_dias_uteis',
+            'delay_situacao_sucesso_min',
             'active',
         ];
         // Normaliza idserie_ra: aceita string "21,9", array, ou aninhamentos legados.
@@ -125,10 +130,55 @@ export async function updateSettings(req, res) {
 
 export async function listHistory(req, res) {
     try {
-        const { page = 1, limit = 20, status, idreserva } = req.query;
+        const {
+            page = 1,
+            limit = 20,
+            status,             // CSV: 'success,error' ou string única
+            paymentStatus,      // CSV: 'paid,pending'
+            idreserva,
+            empreendimento,     // texto exato (igual ao nome guardado em boleto_history)
+            dateFrom,           // ISO YYYY-MM-DD — filtra created_at >=
+            dateTo,             // ISO YYYY-MM-DD — filtra created_at <= 23:59
+            q,                  // busca livre em titular_nome OR nosso_numero OR seu_numero
+        } = req.query;
+
+        const { Op } = db.Sequelize;
         const where = {};
-        if (status) where.status = status;
+
+        // Status emissão (multi via CSV ou string)
+        if (status) {
+            const arr = String(status).split(',').map(s => s.trim()).filter(Boolean);
+            if (arr.length === 1) where.status = arr[0];
+            else if (arr.length > 1) where.status = { [Op.in]: arr };
+        }
+        // Status pagamento (multi)
+        if (paymentStatus) {
+            const arr = String(paymentStatus).split(',').map(s => s.trim()).filter(Boolean);
+            if (arr.length === 1) where.payment_status = arr[0];
+            else if (arr.length > 1) where.payment_status = { [Op.in]: arr };
+        }
         if (idreserva) where.idreserva = Number(idreserva);
+        if (empreendimento) {
+            // Multi via CSV (ex.: empreendimento=A,B,C)
+            const arr = String(empreendimento).split(',').map(s => s.trim()).filter(Boolean);
+            if (arr.length === 1) where.empreendimento = arr[0];
+            else if (arr.length > 1) where.empreendimento = { [Op.in]: arr };
+        }
+        // Faixa de datas em created_at
+        if (dateFrom || dateTo) {
+            where.created_at = {};
+            if (dateFrom) where.created_at[Op.gte] = new Date(`${dateFrom}T00:00:00`);
+            if (dateTo)   where.created_at[Op.lte] = new Date(`${dateTo}T23:59:59.999`);
+        }
+        // Busca livre — titular, nosso número ou número documento
+        if (q) {
+            const term = `%${String(q).trim()}%`;
+            where[Op.or] = [
+                { titular_nome:  { [Op.iLike]: term } },
+                { nosso_numero:  { [Op.iLike]: term } },
+                { seu_numero:    { [Op.iLike]: term } },
+            ];
+        }
 
         const offset = (Number(page) - 1) * Number(limit);
         const { count, rows } = await db.BoletoHistory.findAndCountAll({
@@ -144,6 +194,36 @@ export async function listHistory(req, res) {
     }
 }
 
+/**
+ * Lista valores distintos pra alimentar selects do filtro (empreendimentos
+ * únicos com pelo menos 1 boleto, e contagens por status).
+ */
+export async function getHistoryFacets(req, res) {
+    try {
+        const { Sequelize } = db;
+        const [empreendimentos] = await db.sequelize.query(`
+            SELECT empreendimento AS name, COUNT(*)::int AS qty
+              FROM boleto_history
+             WHERE empreendimento IS NOT NULL AND empreendimento <> ''
+          GROUP BY empreendimento
+          ORDER BY empreendimento ASC
+        `);
+        const [statusCounts] = await db.sequelize.query(`
+            SELECT status, COUNT(*)::int AS qty FROM boleto_history GROUP BY status
+        `);
+        const [paymentCounts] = await db.sequelize.query(`
+            SELECT payment_status, COUNT(*)::int AS qty FROM boleto_history GROUP BY payment_status
+        `);
+        return res.json({
+            empreendimentos,
+            statusCounts,
+            paymentCounts,
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
 export async function getHistoryItem(req, res) {
     try {
         const item = await db.BoletoHistory.findByPk(req.params.id);
@@ -151,6 +231,65 @@ export async function getHistoryItem(req, res) {
         return res.json(item);
     } catch (err) {
         return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
+ * Lista a timeline de eventos de um boleto (emissão → checks diários →
+ * pago/baixado). Usado pelo modal Timeline no frontend.
+ */
+export async function listHistoryEvents(req, res) {
+    try {
+        const item = await db.BoletoHistory.findByPk(req.params.id);
+        if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
+        const events = await EventLogger.listByHistory(item.id, { limit: 500 });
+        return res.json({
+            history: item,
+            events: events.map(e => e.get({ plain: true })),
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
+ * Força a verificação de pagamento de UM boleto específico AGORA (sem
+ * esperar o scheduler das 8h). Admin only.
+ *
+ * Útil pra: (a) testar a feature, (b) reconfirmar boleto que ficou em
+ * estado suspeito, (c) destravar caso o webhook do CV não bateu.
+ */
+export async function checkPaymentNow(req, res) {
+    try {
+        const item = await db.BoletoHistory.findByPk(req.params.id);
+        if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
+        if (item.status !== 'success') {
+            return res.status(400).json({ error: 'Só é possível verificar pagamento de boletos com emissão bem-sucedida.' });
+        }
+
+        // Tenta adquirir o lock SINCRONAMENTE antes de aceitar a requisição.
+        // Se outra operação está usando o Ecobrança (scheduler ou outro manual),
+        // retorna 409 imediato pro frontend mostrar mensagem clara — em vez de
+        // dizer "disparado" e ignorar silenciosamente.
+        const owner = `check:manual:hist=${item.id}:${new Date().toISOString()}`;
+        const acquired = await EcoLock.acquire(owner, 15);
+        if (!acquired) {
+            const status = await EcoLock.getStatus().catch(() => null);
+            return res.status(409).json({
+                error: 'Outra verificação no Ecobrança já está em andamento. Tente novamente em alguns minutos.',
+                lock: status ? { owner: status.owner, expires_at: status.expires_at } : null,
+            });
+        }
+
+        // Lock adquirido — aceita a requisição e processa em background.
+        res.status(202).json({ scheduled: true, idreserva: item.idreserva, nossoNumero: item.nosso_numero });
+
+        runDailyCheck({ idreservas: [item.idreserva] })
+            .catch(err => console.error(`[BOLETO_CHECK] Manual hist=${item.id} crash: ${err.message}`))
+            .finally(() => EcoLock.release(owner).catch(() => {}));
+    } catch (err) {
+        console.error('[BOLETO_CHECK] Falha disparando check manual:', err.message);
+        if (!res.headersSent) return res.status(500).json({ error: err.message });
     }
 }
 
