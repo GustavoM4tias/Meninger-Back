@@ -1,0 +1,137 @@
+<p style="margin:0 0 8px 0; font-size:18px; color:#0f172a;">Olá, {{titularPrimeiroNome}} 👋</p>
+<p style="margin:0 0 24px 0; font-size:15px; color:#475569;">
+    Segue o boleto referente à sua reserva no empreendimento
+    <strong style="color:#0f172a;">{{empreendimento}}</strong>{{#if unidade}},
+    unidade <strong style="color:#0f172a;">{{unidade}}</strong>{{/if}}.
+    Pague até o vencimento para garantir a sua reserva.
+</p>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; margin:0 0 28px 0; background:#ffffff;">
+    <tr>
+        <td style="background:#f8fafc; padding:24px 28px; border-bottom:1px solid #e2e8f0;">
+            <p style="margin:0 0 6px 0; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#64748b; font-weight:600;">
+                Valor a pagar
+            </p>
+            <p style="margin:0; font-size:32px; font-weight:700; letter-spacing:-0.02em; color:#0f172a;">
+                {{valorFormatado}}
+            </p>
+            <p style="margin:10px 0 0 0; font-size:14px; color:#475569;">
+                Vencimento: <strong style="color:#0f172a; font-weight:600;">{{vencimentoFormatado}}</strong>
+            </p>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding:20px 28px; color:#334155; font-size:14px; line-height:1.6;">
+            <table width="100%" cellspacing="0" cellpadding="6">
+                <tr>
+                    <td style="color:#64748b; width:140px;">Beneficiário</td>
+                    <td style="color:#0f172a; font-weight:600;">Caixa Econômica Federal</td>
+                </tr>
+                <tr>
+                    <td style="color:#64748b;">Nosso número</td>
+                    <td style="color:#0f172a; font-family:'Courier New', monospace;">{{nossoNumero}}</td>
+                </tr>
+                <tr>
+                    <td style="color:#64748b;">Nº documento</td>
+                    <td style="color:#0f172a; font-family:'Courier New', monospace;">{{seuNumero}}</td>
+                </tr>
+                {{#if unidade}}
+                <tr>
+                    <td style="color:#64748b;">Unidade</td>
+                    <td style="color:#0f172a;">{{unidade}}</td>
+                </tr>
+                {{/if}}
+            </table>
+        </td>
+    </tr>
+</table>
+
+<!-- Aviso de PDF em anexo (quando aplicável) -->
+{{#if temAnexo}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="background:#ecfdf5; border:1px solid #a7f3d0; border-radius:10px; margin:0 0 20px 0;">
+    <tr>
+        <td style="padding:14px 18px; color:#065f46; font-size:13px; line-height:1.5;">
+            <strong>📎 PDF em anexo:</strong> este e-mail tem o boleto anexado.
+            Você também pode baixar ou copiar o link abaixo.
+        </td>
+    </tr>
+</table>
+{{/if}}
+
+<!-- Botão grande de download -->
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 20px 0;">
+    <tr>
+        <td align="center">
+            <a href="{{boletoUrl}}" target="_blank"
+                style="display:inline-block; background:#0f172a; color:#ffffff; text-decoration:none;
+                       font-weight:600; font-size:16px; padding:16px 36px; border-radius:10px;
+                       box-shadow:0 4px 6px -1px rgba(15,23,42,0.25);">
+                📄 Baixar boleto em PDF
+            </a>
+        </td>
+    </tr>
+</table>
+
+<!-- Caixa do link com "copiar" decorativo -->
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; margin:0 0 28px 0; background:#ffffff;">
+    <tr>
+        <td style="padding:14px 18px 8px 18px;">
+            <p style="margin:0; font-size:11px; letter-spacing:1.2px; text-transform:uppercase; color:#64748b; font-weight:600;">
+                🔗 Link direto do boleto
+            </p>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding:0 18px 14px 18px;">
+            <table width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
+                <tr>
+                    <td style="padding:12px 14px; font-family:'Courier New', Courier, monospace; font-size:13px; color:#0f172a; word-break:break-all; line-height:1.4;">
+                        <a href="{{boletoUrl}}" target="_blank" style="color:#0f172a; text-decoration:none; user-select:all;">{{boletoUrl}}</a>
+                    </td>
+                    <td valign="middle" align="right" style="padding:8px 8px 8px 0; white-space:nowrap;">
+                        <a href="{{boletoUrl}}" target="_blank"
+                            style="display:inline-block; background:#ffffff; color:#0f172a; text-decoration:none;
+                                   border:1px solid #cbd5e1; font-size:12px; font-weight:600;
+                                   padding:7px 12px; border-radius:6px;">
+                            📋 Copiar
+                        </a>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding:0 18px 14px 18px;">
+            <p style="margin:0; font-size:11px; color:#94a3b8; line-height:1.5;">
+                💡 No celular, <strong>toque e segure o link</strong> e escolha "Copiar".
+                No computador, <strong>clique-direito → Copiar endereço do link</strong>.
+            </p>
+        </td>
+    </tr>
+</table>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="background:#fef3c7; border:1px solid #fde68a; border-radius:10px; margin:0 0 24px 0;">
+    <tr>
+        <td style="padding:16px 20px; color:#78350f; font-size:13px; line-height:1.6;">
+            <strong>⚠️ Atenção:</strong> não é possível receber este boleto após o vencimento.
+            Em caso de atraso, é necessário gerar um novo boleto entrando em contato com o seu corretor
+            ou com nosso atendimento.
+        </td>
+    </tr>
+</table>
+
+<p style="margin:0; font-size:13px; color:#64748b; line-height:1.6;">
+    Se você já efetuou o pagamento, desconsidere este e-mail. O processamento bancário pode levar até 2 dias úteis para ser confirmado.
+</p>
+
+<div class="divider"></div>
+
+<p style="margin:0; font-size:12px; color:#94a3b8; text-align:center; line-height:1.6;">
+    📬 Este é um e-mail automático <strong>somente para envio</strong> de comunicados.<br>
+    Por favor, <strong>não responda a esta mensagem</strong> — respostas a este endereço não são monitoradas.<br>
+    Para qualquer dúvida, fale com o seu corretor ou com o nosso atendimento oficial.
+</p>

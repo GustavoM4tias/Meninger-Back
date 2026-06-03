@@ -49,6 +49,151 @@ async function getAxiosClient() {
     return { client, cfg };
 }
 
+// Cache em memória do app_id (descoberto via debug_token). É imutável pra
+// um access_token dado — só atualiza quando o token muda.
+let _appIdCache = { token: null, appId: null };
+
+/**
+ * Descobre o app_id da Meta app dona do access_token via debug_token.
+ * Necessário pra usar a Resumable Upload API (que é app-scoped, não waba-scoped).
+ */
+async function discoverAppId() {
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: true });
+    if (!cfg?.access_token) throw new CloudApiError('Sem access_token configurado.', { code: 'NO_TOKEN' });
+
+    if (_appIdCache.token === cfg.access_token && _appIdCache.appId) return _appIdCache.appId;
+
+    try {
+        const { data } = await axios.get(`${GRAPH_BASE}/debug_token`, {
+            params: { input_token: cfg.access_token, access_token: cfg.access_token },
+            timeout: 10000,
+        });
+        const appId = data?.data?.app_id;
+        if (!appId) throw new CloudApiError('app_id não retornado pelo debug_token.', { code: 'NO_APP_ID' });
+        _appIdCache = { token: cfg.access_token, appId };
+        return appId;
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            `Falha descobrindo app_id: ${apiErr?.message || err.message}`,
+            { status: err.response?.status, code: apiErr?.code || 'DEBUG_TOKEN_FAILED', details: err.response?.data }
+        );
+    }
+}
+
+/**
+ * Resumable Upload API — usada APENAS pra obter o `header_handle` necessário
+ * na CRIAÇÃO de template com header IMAGE/DOCUMENT/VIDEO. NÃO confundir com
+ * `uploadMessageMedia` (/media), que é pra ENVIO de mensagens.
+ *
+ * Fluxo em 2 passos:
+ *   1. POST /{api}/{app-id}/uploads?file_*  → retorna sessionId ("upload:...")
+ *   2. POST /{api}/{sessionId} com binary body  → retorna `{ h: "header_handle" }`
+ *
+ * @returns {Promise<{ handle: string }>}
+ */
+async function uploadResumableMedia({ buffer, filename, mimeType }) {
+    if (!Buffer.isBuffer(buffer)) throw new CloudApiError('buffer obrigatório (Buffer).', { code: 'NO_BUFFER' });
+    if (!filename) throw new CloudApiError('filename obrigatório.', { code: 'NO_FILENAME' });
+    if (!mimeType) throw new CloudApiError('mimeType obrigatório.', { code: 'NO_MIME' });
+
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: true });
+    if (!cfg?.access_token) throw new CloudApiError('Sem access_token.', { code: 'NO_TOKEN' });
+    const appId = await discoverAppId();
+
+    // Passo 1 — abre a sessão
+    let sessionId;
+    try {
+        const { data } = await axios.post(
+            `${GRAPH_BASE}/${cfg.api_version}/${appId}/uploads`,
+            null,
+            {
+                params: {
+                    file_name: filename,
+                    file_length: buffer.length,
+                    file_type: mimeType,
+                    access_token: cfg.access_token,
+                },
+                timeout: 15000,
+            }
+        );
+        sessionId = data?.id;
+        if (!sessionId) throw new Error('uploads não retornou id de sessão');
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            `Resumable upload (init) falhou: ${apiErr?.message || err.message}`,
+            { status: err.response?.status, code: apiErr?.code || 'UPLOAD_INIT', details: err.response?.data }
+        );
+    }
+
+    // Passo 2 — envia o binário. Atenção: a Meta exige `Authorization: OAuth {token}`
+    // (com prefixo "OAuth", não "Bearer") nesse endpoint específico.
+    try {
+        const { data } = await axios.post(
+            `${GRAPH_BASE}/${cfg.api_version}/${sessionId}`,
+            buffer,
+            {
+                headers: {
+                    Authorization: `OAuth ${cfg.access_token}`,
+                    file_offset: '0',
+                    'Content-Type': mimeType,
+                },
+                timeout: 60000,
+                maxBodyLength: 100 * 1024 * 1024,
+            }
+        );
+        const handle = data?.h;
+        if (!handle) throw new Error('upload binário não retornou handle');
+        return { handle };
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            `Resumable upload (binary) falhou: ${apiErr?.message || err.message}`,
+            { status: err.response?.status, code: apiErr?.code || 'UPLOAD_BIN', details: err.response?.data }
+        );
+    }
+}
+
+/**
+ * Upload de mídia pra ENVIO de mensagem (template ou texto-livre com mídia).
+ * Endpoint diferente do Resumable Upload — esse é phone-scoped.
+ *
+ *   POST /{api}/{phone_number_id}/media  (multipart)
+ *
+ * @returns {Promise<{ id: string }>}
+ */
+async function uploadMessageMedia({ buffer, filename, mimeType }) {
+    if (!Buffer.isBuffer(buffer)) throw new CloudApiError('buffer obrigatório (Buffer).', { code: 'NO_BUFFER' });
+    if (!mimeType) throw new CloudApiError('mimeType obrigatório.', { code: 'NO_MIME' });
+
+    const { client, cfg } = await getAxiosClient();
+
+    // multipart manual com FormData nativo do Node 18+
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', new Blob([buffer], { type: mimeType }), filename || 'file.bin');
+
+    try {
+        // axios não aceita FormData nativo do undici diretamente em alguns casos —
+        // contornamos enviando como body raw e fazendo content-type explícito.
+        const { data } = await client.post(`/${cfg.phone_number_id}/media`, form, {
+            // axios detecta FormData automático em Node 20+; em versões antigas
+            // o header é montado pelo próprio fetch interno.
+        });
+        const id = data?.id;
+        if (!id) throw new Error('upload /media não retornou id');
+        return { id };
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            `Upload /media falhou: ${apiErr?.message || err.message}`,
+            { status: err.response?.status, code: apiErr?.code || 'MEDIA_UPLOAD', details: err.response?.data }
+        );
+    }
+}
+
 /**
  * Envia mensagem template aprovada.
  * @param {object} params
@@ -56,10 +201,11 @@ async function getAxiosClient() {
  * @param {string} params.templateName
  * @param {string} [params.language='pt_BR']
  * @param {string[]} [params.variables=[]] - valores em ordem ({{1}}, {{2}}, ...)
- * @param {object} [params.headerImage]  - { url } (opcional)
+ * @param {object} [params.headerImage]    - { url } (opcional, header IMAGE)
+ * @param {object} [params.headerDocument] - { id } ou { link, filename } pra header DOCUMENT
  * @returns {Promise<{ id: string, raw: object }>}
  */
-async function sendTemplate({ to, templateName, language = 'pt_BR', variables = [], headerImage = null }) {
+async function sendTemplate({ to, templateName, language = 'pt_BR', variables = [], headerImage = null, headerDocument = null }) {
     const phone = normalizePhone(to);
     if (!phone) throw new CloudApiError('Telefone inválido', { code: 'BAD_PHONE' });
     if (!templateName) throw new CloudApiError('templateName é obrigatório', { code: 'NO_TEMPLATE' });
@@ -73,6 +219,14 @@ async function sendTemplate({ to, templateName, language = 'pt_BR', variables = 
             type: 'header',
             parameters: [{ type: 'image', image: { link: headerImage.url } }],
         });
+    }
+    if (headerDocument) {
+        // Aceita `{ id: media_id }` (recomendado, mídia já hospedada na Meta)
+        // ou `{ link, filename }` (URL pública direta — Meta vai baixar do nosso host).
+        const docParam = headerDocument.id
+            ? { type: 'document', document: { id: String(headerDocument.id), filename: headerDocument.filename || undefined } }
+            : { type: 'document', document: { link: headerDocument.link, filename: headerDocument.filename || 'documento.pdf' } };
+        components.push({ type: 'header', parameters: [docParam] });
     }
     if (Array.isArray(variables) && variables.length) {
         components.push({
@@ -230,10 +384,34 @@ async function registerPhoneNumber({ pin }) {
  *        Exemplo: [{ text: 'SIM' }, { text: 'NÃO' }]
  * @returns {Promise<{ id: string, status: string, category: string }>}
  */
-async function createTemplate({ name, category, language = 'pt_BR', body, examples = [], headerText, footerText, buttons = [] }) {
+async function createTemplate({ name, category, language = 'pt_BR', body, examples = [], headerText, headerDocumentHandle, footerText, buttons = [] }) {
     if (!name) throw new CloudApiError('name é obrigatório', { code: 'NO_NAME' });
     if (!category) throw new CloudApiError('category é obrigatório', { code: 'NO_CATEGORY' });
     if (!body) throw new CloudApiError('body é obrigatório', { code: 'NO_BODY' });
+
+    // headerText e headerDocumentHandle são mutuamente exclusivos — Meta
+    // permite apenas um tipo de header por template.
+    if (headerText && headerDocumentHandle) {
+        throw new CloudApiError(
+            'Use headerText OU headerDocumentHandle, não os dois.',
+            { code: 'HEADER_CONFLICT' }
+        );
+    }
+
+    // Restrição da Meta validada empiricamente em 2026-06-02 (error_subcode 2388072):
+    // HEADER TEXT não aceita emoji, asterisco, novas linhas ou caracteres de
+    // formatação. Falhar local com mensagem clara em vez de gastar request.
+    if (headerText) {
+        const banned = /[\n\r*_~`]/.test(headerText) || /\p{Extended_Pictographic}/u.test(headerText);
+        if (banned) {
+            throw new CloudApiError(
+                'HEADER TEXT não pode conter emojis, asteriscos (*), underlines (_), '
+                + 'crases (`), tildes (~) nem novas linhas. Body e Footer aceitam — '
+                + 'mova esses caracteres pra lá ou remova.',
+                { code: 'BAD_HEADER' }
+            );
+        }
+    }
 
     const cfg = await WhatsAppConfigService.getConfig({ withSecrets: true });
     if (!cfg?.access_token) throw new CloudApiError('Sem access_token configurado.', { code: 'NO_TOKEN' });
@@ -243,6 +421,13 @@ async function createTemplate({ name, category, language = 'pt_BR', body, exampl
 
     if (headerText) {
         components.push({ type: 'HEADER', format: 'TEXT', text: headerText });
+    }
+    if (headerDocumentHandle) {
+        components.push({
+            type: 'HEADER',
+            format: 'DOCUMENT',
+            example: { header_handle: [headerDocumentHandle] },
+        });
     }
 
     const bodyComp = { type: 'BODY', text: body };
@@ -422,6 +607,9 @@ export default {
     registerPhoneNumber,
     healthCheck,
     discoverFromToken,
+    discoverAppId,
+    uploadResumableMedia,
+    uploadMessageMedia,
     normalizePhone,
     CloudApiError,
 };

@@ -4,6 +4,7 @@ import apiCv from '../../lib/apiCv.js';
 import { runEcoCobrancaBoleto } from '../../playwright/services/ecocobrancaService.js';
 import { createClient } from '@supabase/supabase-js';
 import { validateTitular, formatTitularErrorsMessage } from './titularValidator.js';
+import { sendBoletoToTitular } from './BoletoNotifyService.js';
 
 const supabase = createClient(
     process.env.SUPABASE_URL,
@@ -46,14 +47,42 @@ function describeCvError(err) {
     return err?.message || 'erro desconhecido';
 }
 
+// Heurística: alguns endpoints do CV respondem HTTP 200 mesmo quando a
+// operação falha logicamente — devolvem `{ sucesso: false, erro: '...' }` ou
+// `{ error: '...' }`. Considera "ok" só quando não há campo de erro explícito
+// e (se vier `sucesso`) ele é truthy.
+function isCvResponseOk(data) {
+    if (data == null) return true; // 204 / corpo vazio = ok
+    if (typeof data !== 'object') return true;
+    if (data.error || data.erro) return false;
+    if ('sucesso' in data) return !!data.sucesso;
+    return true;
+}
+
+function summarizeCvBody(data) {
+    if (data == null) return '<sem corpo>';
+    if (typeof data === 'string') return data.slice(0, 300);
+    try { return JSON.stringify(data).slice(0, 300); } catch { return '<corpo não-serializável>'; }
+}
+
 async function sendCvMessage(idreserva, mensagem) {
+    const tag = `[BOLETO][CV-MSG][reserva ${idreserva}]`;
+    console.log(`${tag} Enviando mensagem (${mensagem.length} chars)...`);
     try {
-        await apiCv.post('/v2/comercial/reservas/mensagens', { idreserva, mensagem });
+        const resp = await apiCv.post('/v2/comercial/reservas/mensagens', { idreserva, mensagem });
+        const body = summarizeCvBody(resp.data);
+        if (!isCvResponseOk(resp.data)) {
+            const detail = resp.data?.error || resp.data?.erro || resp.data?.mensagem || body;
+            console.warn(`${tag} ✗ CV retornou HTTP ${resp.status} mas com erro lógico: ${detail}`);
+            return { ok: false, error: String(detail), httpStatus: resp.status };
+        }
+        console.log(`${tag} ✓ OK (HTTP ${resp.status}) ${body}`);
         return { ok: true };
     } catch (err) {
         const detail = describeCvError(err);
-        console.error(`[BOLETO] Falha ao enviar mensagem na reserva ${idreserva}: ${detail}`);
-        return { ok: false, error: detail };
+        const status = err?.response?.status;
+        console.error(`${tag} ✗ Falha (HTTP ${status || '??'}): ${detail}`);
+        return { ok: false, error: detail, httpStatus: status || null };
     }
 }
 
@@ -62,19 +91,27 @@ async function sendCvMessage(idreserva, mensagem) {
  * Usa o endpoint de alteração de situação do workflow.
  */
 async function alterarSituacaoCv(idreserva, idsituacao) {
+    const tag = `[BOLETO][CV-SITUACAO][reserva ${idreserva}]`;
+    console.log(`${tag} Alterando situação para ${idsituacao}...`);
     try {
-        await apiCv.post('/v1/comercial/reservas/alterar-situacao', {
+        const resp = await apiCv.post('/v1/comercial/reservas/alterar-situacao', {
             idreserva_cv: Number(idreserva),
             idsituacao_destino: Number(idsituacao),
             comentario: 'Alteração automática — Boleto Caixa',
         });
+        const body = summarizeCvBody(resp.data);
+        if (!isCvResponseOk(resp.data)) {
+            const detail = resp.data?.error || resp.data?.erro || resp.data?.mensagem || body;
+            console.warn(`${tag} ✗ CV retornou HTTP ${resp.status} mas com erro lógico: ${detail}`);
+            return { ok: false, error: String(detail), httpStatus: resp.status };
+        }
+        console.log(`${tag} ✓ OK (HTTP ${resp.status}) ${body}`);
         return { ok: true };
     } catch (err) {
         const detail = describeCvError(err);
-        console.error(
-            `[BOLETO] Falha ao alterar situação da reserva ${idreserva} para ${idsituacao}: ${detail}`
-        );
-        return { ok: false, error: detail };
+        const status = err?.response?.status;
+        console.error(`${tag} ✗ Falha (HTTP ${status || '??'}): ${detail}`);
+        return { ok: false, error: detail, httpStatus: status || null };
     }
 }
 
@@ -94,29 +131,58 @@ async function uploadToSupabase(buffer, historyId, idreserva) {
 }
 
 async function attachToCV(idreserva, buffer, settings) {
+    const tag = `[BOLETO][CV-ANEXO][reserva ${idreserva}]`;
     if (!settings.cv_idtipo_documento) {
+        console.warn(`${tag} ⊘ Pulado — cv_idtipo_documento não configurado.`);
         return { ok: false, skipped: true, error: 'cv_idtipo_documento não configurado nas Configurações.' };
     }
+    const idtipo = Number(settings.cv_idtipo_documento);
+    const base64 = buffer.toString('base64');
+    const tamanhoKb = Math.round(base64.length / 1024);
+    console.log(`${tag} Enviando para CV — idtipo=${idtipo}, payload=${tamanhoKb} KB...`);
+
     try {
-        const base64 = buffer.toString('base64');
-        // Endpoint v3 — idreserva vai na URL e os documentos em array no body.
-        // Doc: POST /v3/comercial/reservas/{idreserva}/documentos
-        await apiCv.post(`/v3/comercial/reservas/${Number(idreserva)}/documentos`, {
-            documentos: [
-                {
-                    idtipo: Number(settings.cv_idtipo_documento),
-                    documento_base64: base64,
-                },
-            ],
+        // Endpoint v1 — confirmado funcional na instância da Menin desde o início
+        // do módulo. A doc pública atual lista o equivalente em v3
+        // (`/v3/comercial/reservas/{idreserva}/documentos`) mas esse retorna
+        // HTTP 405 nesse tenant (rota não exposta). NÃO trocar sem testar antes
+        // contra a produção: o v1 anexa, o v3 só responde a OPTIONS.
+        const resp = await apiCv.post('/v1/comercial/reservas/documentos', {
+            idreserva: Number(idreserva),
+            idtipo,
+            documento_base64: base64,
         });
-        return { ok: true };
+        const body = summarizeCvBody(resp.data);
+
+        // O CV retorna `{ sucesso: true }` quando anexa de fato. Em alguns
+        // cenários ele responde 200 mas com `{ error: ... }` ou `{ sucesso: false }`
+        // (ex.: idtipo não permitido pra esse perfil). Tratamos como falha.
+        if (!isCvResponseOk(resp.data)) {
+            const detail = resp.data?.error || resp.data?.erro || resp.data?.mensagem || body;
+            console.warn(`${tag} ✗ CV retornou HTTP ${resp.status} mas com erro lógico: ${detail}`);
+            return { ok: false, error: String(detail), httpStatus: resp.status, cvBody: body };
+        }
+        // Heurística: o CV pode mentir "sucesso" e devolver `id: null` —
+        // confirmado em 2026-06-02 que nessas respostas o documento NÃO é
+        // persistido (validado via curl + GET de documentos da reserva).
+        // Quando o anexo de fato ocorre, `id` vem com o número do registro
+        // (idreservasdocumentos). Tratar id null/ausente como falha.
+        if (resp.data && typeof resp.data === 'object' && 'id' in resp.data
+                && (resp.data.id == null)) {
+            const detail = 'CV retornou sucesso=true mas id=null — documento não foi persistido. '
+                + 'Confirme com o suporte CV se a API de anexo está habilitada para a conta '
+                + '(possível: limite de storage estourado ou rota desativada no tenant).';
+            console.warn(`${tag} ✗ CV mentiu sucesso (id=null). Resposta: ${body}`);
+            return { ok: false, error: detail, httpStatus: resp.status, cvBody: body };
+        }
+        console.log(`${tag} ✓ Documento anexado (HTTP ${resp.status}) ${body}`);
+        return { ok: true, httpStatus: resp.status, cvBody: body };
     } catch (err) {
         const detail = describeCvError(err);
         const status = err?.response?.status;
-        console.error(
-            `[BOLETO] Falha ao anexar boleto na reserva ${idreserva} (HTTP ${status || '??'}): ${detail}`
-        );
-        return { ok: false, error: detail, httpStatus: status || null };
+        const body = summarizeCvBody(err?.response?.data);
+        console.error(`${tag} ✗ Falha (HTTP ${status || '??'}): ${detail} — body: ${body}`);
+        return { ok: false, error: detail, httpStatus: status || null, cvBody: body };
     }
 }
 
@@ -302,6 +368,42 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         hoje.setHours(0, 0, 0, 0);
         const vencDate = new Date(vencimento + 'T00:00:00');
 
+        // Janela máxima D+10 corridos — boleto de ato não pode ter vencimento
+        // muito distante (limite definido pelo financeiro). Validado depois do
+        // check de passado pra dar mensagem específica em cada caso.
+        const limiteMaximo = new Date(hoje);
+        limiteMaximo.setDate(limiteMaximo.getDate() + 10);
+
+        if (vencDate > limiteMaximo) {
+            const limiteStr = formatDate(limiteMaximo.toISOString().slice(0, 10));
+            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} excede o limite máximo de 10 dias.\nO vencimento deve ser entre hoje e ${limiteStr}.`;
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+
+            let situacaoAlterada = false;
+            if (settings.situacao_erro_id) {
+                situacaoAlterada = pushWarn(
+                    await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
+                    'cv_situacao',
+                );
+            }
+
+            await history.update({
+                status: 'error',
+                error_message: `Vencimento ${formatDate(vencimento)} excede limite D+10 (máx. ${limiteStr}).`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                valor: valorEmitir,
+                valor_original: valorOriginal,
+                comissao_percentual_aplicada: comissaoPercentualAplicada,
+                vencimento,
+                cv_mensagem_enviada: msgOk,
+                cv_situacao_alterada: situacaoAlterada,
+                warnings: warnings.length ? warnings : null,
+            });
+            return;
+        }
+
         if (vencDate < hoje) {
             const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} está no passado.\nSomente vencimentos a partir de hoje são aceitos.`;
             const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
@@ -404,6 +506,38 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
             'cv_anexo',
         );
 
+        // ── 8.5. Envia boleto ao titular (email + WhatsApp) ───────────────────
+        // Independente do anexo no CV: mesmo se o CV falhar em registrar o
+        // documento, o cliente ainda recebe o link do PDF via canais próprios.
+        // Passa o pdfBuffer pra anexar direto (email) e enviar no header do
+        // template (WhatsApp) sem precisar baixar do Supabase de novo.
+        const envio = await sendBoletoToTitular({
+            titular,
+            dadosBoleto: {
+                empreendimento: unidade.empreendimento,
+                unidade: unidade.unidade || unidade.bloco || '',
+                valor: valorEmitir,
+                vencimento,
+                nossoNumero,
+                seuNumero,
+                boletoUrl: supabaseUrl,
+            },
+            historyId: history.id,
+            pdfBuffer: boletoBuffer,
+        });
+        if (!envio.email.ok && !envio.email.skipped) {
+            warnings.push({
+                etapa: 'cliente_email',
+                erro: envio.email.error || 'falha desconhecida',
+            });
+        }
+        if (!envio.whatsapp.ok && !envio.whatsapp.skipped) {
+            warnings.push({
+                etapa: 'cliente_whatsapp',
+                erro: envio.whatsapp.error || 'falha desconhecida',
+            });
+        }
+
         // ── 9. Altera situação para "em processamento/emitido" ────────────────
         let situacaoAlteradaSucesso = false;
         if (settings.situacao_sucesso_id) {
@@ -434,24 +568,39 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         const msgSucessoOk = pushWarn(await sendCvMessage(idreserva, msgSucesso), 'cv_mensagem');
 
         // Boleto foi emitido — status segue 'success' mesmo com warnings de
-        // etapas pós-emissão (anexo/situação/mensagem). O frontend mostra os
-        // avisos via `warnings` pra o admin agir.
+        // etapas pós-emissão (anexo/situação/mensagem/envio cliente). O frontend
+        // mostra os avisos via `warnings` pra o admin agir.
         await history.update({
             status: 'success',
             cv_mensagem_enviada: msgSucessoOk,
             cv_documento_anexado: documentoAnexado,
             cv_situacao_alterada: situacaoAlteradaSucesso,
+            cliente_email_enviado: envio.email.ok,
+            cliente_whatsapp_enviado: envio.whatsapp.ok,
+            cliente_envio_em: new Date(),
             warnings: warnings.length ? warnings : null,
         });
 
-        if (warnings.length) {
-            console.warn(
-                `[BOLETO] Reserva ${idreserva} emitida com ${warnings.length} aviso(s) pós-emissão: `
-                + warnings.map(w => `${w.etapa}=${w.erro}`).join(' | ')
-            );
-        } else {
-            console.log(`[BOLETO] Reserva ${idreserva} processada com sucesso.`);
-        }
+        // Resumo final explícito — sempre loga cada etapa CV + envio cliente,
+        // mesmo quando tudo deu certo. Facilita auditoria sem filtrar log.
+        const erroDe = (etapa) => warnings.find(w => w.etapa === etapa)?.erro || '';
+        const stepEnvio = (res, etapa) => {
+            if (res.ok) return '✓';
+            if (res.skipped) return '⊘';
+            return '✗';
+        };
+        console.log(
+            `[BOLETO] Reserva ${idreserva} — Resumo:\n`
+            + `  ✓ Boleto emitido no Ecobrança (Nosso Nº ${nossoNumero})\n`
+            + `  ${supabaseUrl ? '✓' : '✗'} PDF salvo no Supabase\n`
+            + `  ${documentoAnexado ? '✓' : '✗'} Anexo no CV${documentoAnexado ? '' : ` — ${erroDe('cv_anexo') || 'falhou'}`}\n`
+            + `  ${settings.situacao_sucesso_id
+                ? (situacaoAlteradaSucesso ? '✓' : '✗') + ' Situação alterada para ' + settings.situacao_sucesso_id + (situacaoAlteradaSucesso ? '' : ` — ${erroDe('cv_situacao') || 'falhou'}`)
+                : '⊘ Alteração de situação pulada (situacao_sucesso_id não configurado)'}\n`
+            + `  ${msgSucessoOk ? '✓' : '✗'} Mensagem enviada na reserva${msgSucessoOk ? '' : ` — ${erroDe('cv_mensagem') || 'falhou'}`}\n`
+            + `  ${stepEnvio(envio.email, 'cliente_email')} E-mail ao titular${envio.email.ok ? ` (${envio.email.to})` : (envio.email.skipped ? ` — ${envio.email.error}` : ` — ${envio.email.error}`)}\n`
+            + `  ${stepEnvio(envio.whatsapp, 'cliente_whatsapp')} WhatsApp ao titular${envio.whatsapp.ok ? ` (${envio.whatsapp.to})` : (envio.whatsapp.skipped ? ` — ${envio.whatsapp.error}` : ` — ${envio.whatsapp.error}`)}`
+        );
 
     } catch (err) {
         console.error(`[BOLETO] Erro no processamento da reserva ${idreserva}:`, err.message);

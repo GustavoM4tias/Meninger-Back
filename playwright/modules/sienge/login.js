@@ -16,6 +16,11 @@ export async function siengeLogin(credentials = {}) {
 
     const { browser, context, page } = await createPage();
 
+    // Qualquer exception daqui pra frente deve fechar o browser antes de
+    // propagar — caso contrário a janela fica órfã (processo Chromium zumbi).
+    // O outer try/catch fecha browser e re-lança; o inner try/catch original
+    // (do botão "Entrar com Sienge ID") fica intocado.
+    try {
     log("LOGIN", "Acessando página inicial...");
     await page.goto("https://menin.sienge.com.br/sienge/");
 
@@ -118,4 +123,11 @@ export async function siengeLogin(credentials = {}) {
 
     success("LOGIN", "Login realizado com sucesso!");
     return { browser, context, page };
+    } catch (err) {
+        // Fecha browser antes de propagar pra evitar processo órfão.
+        // `.catch(() => {})` no close preserva o erro original.
+        log("LOGIN", `❌ Falha — fechando browser. Motivo: ${err.message}`);
+        await browser.close().catch(() => {});
+        throw err;
+    }
 }

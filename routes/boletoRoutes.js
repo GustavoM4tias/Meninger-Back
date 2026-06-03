@@ -10,10 +10,13 @@ import {
     listHistory,
     getHistoryItem,
     retryHistoryItem,
+    resendBoletoToTitular,
     listComissionRules,
     createComissionRule,
     updateComissionRule,
     deleteComissionRule,
+    getWhatsappTemplateStatus,
+    createBoletoWhatsappTemplate,
 } from '../controllers/boleto/boletoController.js';
 
 const router = express.Router();
@@ -34,9 +37,14 @@ router.post('/comission-rules', authenticate, requireAdmin, createComissionRule)
 router.patch('/comission-rules/:id', authenticate, requireAdmin, updateComissionRule);
 router.delete('/comission-rules/:id', authenticate, requireAdmin, deleteComissionRule);
 
+// ── WhatsApp Template (admin) ─────────────────────────────────────────────────
+router.get('/whatsapp-template', authenticate, requireAdmin, getWhatsappTemplateStatus);
+router.post('/whatsapp-template/sync', authenticate, requireAdmin, createBoletoWhatsappTemplate);
+
 // ── Histórico — usuário autenticado ───────────────────────────────────────────
 router.get('/history', authenticate, listHistory);
 router.get('/history/:id', authenticate, getHistoryItem);
 router.post('/history/:id/retry', authenticate, requireAdmin, retryHistoryItem);
+router.post('/history/:id/resend', authenticate, requireAdmin, resendBoletoToTitular);
 
 export default router;

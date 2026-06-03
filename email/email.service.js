@@ -47,10 +47,18 @@ for (const f of fs.readdirSync(PARTIALS_DIR)) {
 }
 
 // layout base helper
-function wrapWithLayout(html, { title = 'Notificação', previewText = '' } = {}) {
+// `headerLight=true` renderiza o partial `headerLight` (fundo claro, logo
+// preta sem filtro) em vez do header padrão. Útil pra emails transacionais
+// que vão pro cliente final (não pra equipe interna).
+function wrapWithLayout(html, { title = 'Notificação', previewText = '', headerLight = false } = {}) {
     const layoutSrc = fs.readFileSync(path.join(LAYOUTS_DIR, 'base.hbs'), 'utf-8');
     const layoutTpl = Handlebars.compile(layoutSrc);
-    return layoutTpl({ title, previewText, content: new Handlebars.SafeString(html) });
+    return layoutTpl({
+        title,
+        previewText,
+        headerLight,
+        content: new Handlebars.SafeString(html),
+    });
 }
 
 // mapa de assunto e preview por tipo
@@ -115,6 +123,12 @@ const META = {
         preview: (d) => d.resumoPreview || 'Resumo e ações gerados por IA',
         file: 'meeting.report.hbs',
     },
+    'boleto.caixa': {
+        subject: (d) => `Boleto disponível — ${d.empreendimento || 'Sua reserva'} (venc. ${d.vencimentoFormatado || ''})`,
+        preview: (d) => `Valor ${d.valorFormatado || ''} • Vencimento ${d.vencimentoFormatado || ''}`,
+        file: 'boleto.caixa.hbs',
+        headerLight: true,    // cliente externo — usa header claro com logo preta
+    },
 };
 
 function compileTemplateOnce(file) {
@@ -143,6 +157,7 @@ export async function sendEmail(type, to, data = {}, options = {}) {
     const html = wrapWithLayout(innerHtml, {
         title: cfg.subject(data),
         previewText: cfg.preview(data),
+        headerLight: !!cfg.headerLight,
     });
 
     const mailOptions = {
