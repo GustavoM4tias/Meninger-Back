@@ -17,6 +17,51 @@ import { Op } from 'sequelize';
 const ECO_LOCK_MAX_WAIT_MS = 4 * 60 * 1000;
 const ECO_LOCK_POLL_MS = 5000;
 
+/**
+ * Calcula o próximo target sem persistir nada — usado pra preview na mensagem
+ * CV (informa pro gestor quando a etapa vai mudar).
+ */
+function previewSituacaoTarget(settings) {
+    const safetyMin = Number(settings?.delay_situacao_sucesso_min) || 2;
+    return computeSituacaoTarget(new Date(), safetyMin);
+}
+
+/**
+ * Linha pra anexar nas mensagens de erro/sucesso explicando ao gestor
+ * que a etapa CV vai mudar automaticamente após o lote do Sienge processar.
+ */
+function linhaAvisoMudancaEtapa(settings, situacaoIdAlvo, nomeAmigavel = 'a próxima etapa') {
+    if (!situacaoIdAlvo) return '';
+    const target = previewSituacaoTarget(settings);
+    const horario = target.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const diffMin = Math.max(1, Math.round((target.getTime() - Date.now()) / 60000));
+    return `\n\n🕒 A etapa será atualizada automaticamente para ${nomeAmigavel} em ~${diffMin} min (~${horario}), após o próximo lote do Sienge processar este cliente.`;
+}
+
+/**
+ * Agenda mudança de situação CV no histórico (sem chamar a API agora).
+ * O scheduler `boletoSituacaoApplyScheduler` aplica quando madura.
+ *
+ * IMPORTANTE: usado pra TODOS os caminhos (sucesso E erros). Mudar a etapa
+ * imediatamente após receber o webhook faz o lote do Sienge (5/5 min) perder
+ * o cliente — mesmo nos casos de erro a venda existe e precisa do ERP.
+ *
+ * @param {BoletoHistory} history  - registro a ser atualizado
+ * @param {number} idSituacao      - ID da situação CV a aplicar
+ * @param {object} settings        - boleto_settings (pra safetyMin)
+ * @returns {Promise<Date>}        - timestamp em que a aplicação vai rolar
+ */
+async function agendarSituacaoCv(history, idSituacao, settings) {
+    const safetyMin = Number(settings?.delay_situacao_sucesso_min) || 2;
+    const target = computeSituacaoTarget(new Date(), safetyMin);
+    await history.update({
+        situacao_pendente_id: Number(idSituacao),
+        situacao_pendente_em: target,
+        situacao_pendente_aplicada: false,
+    });
+    return target;
+}
+
 async function acquireEcoLockWithWait(owner, ttlMin = 5) {
     const startedAt = Date.now();
     while (true) {
@@ -291,15 +336,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 '',
                 'Parcelas encontradas:',
                 `• ${detalhe}`,
-            ].join('\n');
+            ].join('\n') + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
             const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
-            let situacaoAlterada = false;
-            if (settings.situacao_erro_id) {
-                situacaoAlterada = pushWarn(
-                    await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
-                    'cv_situacao',
-                );
-            }
             await history.update({
                 status: 'error',
                 error_message: `Múltiplas parcelas de entrada detectadas (${seriesEncontradas.length}).`,
@@ -307,9 +345,11 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 empreendimento: unidade?.empreendimento,
                 idpessoa_cv: titular?.idpessoa_cv,
                 cv_mensagem_enviada: msgOk,
-                cv_situacao_alterada: situacaoAlterada,
                 warnings: warnings.length ? warnings : null,
             });
+            if (settings.situacao_erro_id) {
+                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
+            }
             return;
         }
 
@@ -326,16 +366,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 `[BOLETO] Titular com divergências (${titularCheck.errors.length}): `
                 + titularCheck.errors.map(e => `${e.campo}=${e.motivo}`).join('; ')
             );
-            const msg = formatTitularErrorsMessage(titularCheck.errors);
+            const msg = formatTitularErrorsMessage(titularCheck.errors)
+                + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
             const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
-
-            let situacaoAlterada = false;
-            if (settings.situacao_erro_id) {
-                situacaoAlterada = pushWarn(
-                    await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
-                    'cv_situacao',
-                );
-            }
 
             const resumoErro = `Divergência nos dados do titular: ${titularCheck.errors.map(e => e.campo).join(', ')}.`;
             await history.update({
@@ -347,9 +380,11 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 valor: parseFloat(serie.valor),
                 vencimento: serie.vencimento,
                 cv_mensagem_enviada: msgOk,
-                cv_situacao_alterada: situacaoAlterada,
                 warnings: warnings.length ? warnings : null,
             });
+            if (settings.situacao_erro_id) {
+                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
+            }
             return;
         }
 
@@ -511,16 +546,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
 
         if (vencDate > limiteMaximo) {
             const limiteStr = formatDate(limiteMaximo.toISOString().slice(0, 10));
-            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} excede o limite máximo de 10 dias.\nO vencimento deve ser entre hoje e ${limiteStr}.`;
+            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} excede o limite máximo de 10 dias.\nO vencimento deve ser entre hoje e ${limiteStr}.`
+                + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
             const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
-
-            let situacaoAlterada = false;
-            if (settings.situacao_erro_id) {
-                situacaoAlterada = pushWarn(
-                    await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
-                    'cv_situacao',
-                );
-            }
 
             await history.update({
                 status: 'error',
@@ -533,23 +561,18 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 comissao_percentual_aplicada: comissaoPercentualAplicada,
                 vencimento,
                 cv_mensagem_enviada: msgOk,
-                cv_situacao_alterada: situacaoAlterada,
                 warnings: warnings.length ? warnings : null,
             });
+            if (settings.situacao_erro_id) {
+                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
+            }
             return;
         }
 
         if (vencDate < hoje) {
-            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} está no passado.\nSomente vencimentos a partir de hoje são aceitos.`;
+            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} está no passado.\nSomente vencimentos a partir de hoje são aceitos.`
+                + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
             const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
-
-            let situacaoAlterada = false;
-            if (settings.situacao_erro_id) {
-                situacaoAlterada = pushWarn(
-                    await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
-                    'cv_situacao',
-                );
-            }
 
             await history.update({
                 status: 'error',
@@ -562,9 +585,11 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 comissao_percentual_aplicada: comissaoPercentualAplicada,
                 vencimento,
                 cv_mensagem_enviada: msgOk,
-                cv_situacao_alterada: situacaoAlterada,
                 warnings: warnings.length ? warnings : null,
             });
+            if (settings.situacao_erro_id) {
+                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
+            }
             return;
         }
 
@@ -763,16 +788,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         // O `boletoSituacaoApplyScheduler` (cron 1 min) processa quando madura.
         let situacaoAgendadaPara = null;
         if (settings.situacao_sucesso_id) {
-            // `delay_situacao_sucesso_min` agora representa o SAFETY THRESHOLD
-            // (default 2): se faltam menos que isto pro próximo lote Sienge,
-            // pula pro seguinte. Delay efetivo varia entre 3-7 min.
-            const safetyMin = Number(settings.delay_situacao_sucesso_min) || 2;
-            situacaoAgendadaPara = computeSituacaoTarget(new Date(), safetyMin);
-            await history.update({
-                situacao_pendente_id: Number(settings.situacao_sucesso_id),
-                situacao_pendente_em: situacaoAgendadaPara,
-                situacao_pendente_aplicada: false,
-            });
+            situacaoAgendadaPara = await agendarSituacaoCv(history, settings.situacao_sucesso_id, settings);
             await EventLogger.log({
                 historyId: history.id, idreserva,
                 type: 'cv_situation_scheduled', severity: 'info',
@@ -780,7 +796,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 data: {
                     situacaoId: settings.situacao_sucesso_id,
                     agendadaPara: situacaoAgendadaPara,
-                    safetyMin,
+                    safetyMin: Number(settings.delay_situacao_sucesso_min) || 2,
                 },
             });
             console.log(`[BOLETO] Situação CV ${settings.situacao_sucesso_id} agendada pra ${situacaoAgendadaPara.toISOString()} (mantém cliente em "Envio Sienge" pra o lote capturar).`);
@@ -893,23 +909,18 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
     } catch (err) {
         console.error(`[BOLETO] Erro no processamento da reserva ${idreserva}:`, err.message);
 
-        const msgErro = `❌ Falha na emissão do boleto:\n${err.message}`;
+        const msgErro = `❌ Falha na emissão do boleto:\n${err.message}`
+            + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
         const msgOk = pushWarn(await sendCvMessage(idreserva, msgErro), 'cv_mensagem');
-
-        let situacaoAlterada = false;
-        if (settings.situacao_erro_id) {
-            situacaoAlterada = pushWarn(
-                await alterarSituacaoCv(idreserva, settings.situacao_erro_id),
-                'cv_situacao',
-            );
-        }
 
         await history.update({
             status: 'error',
             error_message: err.message,
             cv_mensagem_enviada: msgOk,
-            cv_situacao_alterada: situacaoAlterada,
             warnings: warnings.length ? warnings : null,
         }).catch(() => {});
+        if (settings.situacao_erro_id) {
+            await agendarSituacaoCv(history, settings.situacao_erro_id, settings).catch(() => {});
+        }
     }
 }
