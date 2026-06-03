@@ -8,7 +8,10 @@ import {
     getSettings,
     updateSettings,
     listHistory,
+    getHistoryFacets,
     getHistoryItem,
+    listHistoryEvents,
+    checkPaymentNow,
     retryHistoryItem,
     resendBoletoToTitular,
     listComissionRules,
@@ -43,8 +46,11 @@ router.post('/whatsapp-template/sync', authenticate, requireAdmin, createBoletoW
 
 // ── Histórico — usuário autenticado ───────────────────────────────────────────
 router.get('/history', authenticate, listHistory);
+router.get('/history-facets', authenticate, getHistoryFacets);
 router.get('/history/:id', authenticate, getHistoryItem);
+router.get('/history/:id/events', authenticate, listHistoryEvents);
 router.post('/history/:id/retry', authenticate, requireAdmin, retryHistoryItem);
 router.post('/history/:id/resend', authenticate, requireAdmin, resendBoletoToTitular);
+router.post('/history/:id/check-payment', authenticate, requireAdmin, checkPaymentNow);
 
 export default router;

@@ -5,6 +5,27 @@ import { runEcoCobrancaBoleto } from '../../playwright/services/ecocobrancaServi
 import { createClient } from '@supabase/supabase-js';
 import { validateTitular, formatTitularErrorsMessage } from './titularValidator.js';
 import { sendBoletoToTitular } from './BoletoNotifyService.js';
+import EventLogger from './BoletoEventLogger.js';
+import EcoLock from './BoletoEcoLockService.js';
+import { computeSituacaoTarget } from '../../lib/cvLoteTiming.js';
+import { Op } from 'sequelize';
+
+// Tempo máximo de espera no lock Ecobrança antes de desistir (em ms).
+// Emissão chega por webhook do CV, que aceita timeout longo (300s no apiCv).
+// Aguardar até 4 min ainda fica dentro do timeout do CV e cobre 1 ciclo do
+// scheduler de check (que dura ~30s normalmente).
+const ECO_LOCK_MAX_WAIT_MS = 4 * 60 * 1000;
+const ECO_LOCK_POLL_MS = 5000;
+
+async function acquireEcoLockWithWait(owner, ttlMin = 5) {
+    const startedAt = Date.now();
+    while (true) {
+        const got = await EcoLock.acquire(owner, ttlMin);
+        if (got) return true;
+        if (Date.now() - startedAt > ECO_LOCK_MAX_WAIT_MS) return false;
+        await new Promise(r => setTimeout(r, ECO_LOCK_POLL_MS));
+    }
+}
 
 const supabase = createClient(
     process.env.SUPABASE_URL,
@@ -362,6 +383,120 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         // Substitui o valor da série pelo valor a emitir (mantém referência ao original).
         serie.valor = valorEmitir;
 
+        // ── 2c. DECISÃO DE RE-TRIGGER ─────────────────────────────────────────
+        // O CV pode disparar o webhook múltiplas vezes pra mesma reserva:
+        //   - Quando a 1ª tentativa de envio ao Sienge falhou e ele volta pra etapa
+        //   - Quando alguém muda a condição financeira e re-aciona o gatilho
+        //
+        // Regra:
+        //   - Existe boleto válido pendente (status=success, payment_status=pending)?
+        //     ├─ Sim + mesmas condições → IGNORAR (mantém status='ignorado',
+        //     │                            posta msg no CV, NÃO muda situação)
+        //     └─ Sim + condições diferentes → SUBSTITUIR (baixa antigo no Ecobrança
+        //                                     e emite novo no mesmo fluxo)
+        //   - Não existe → EMITE normalmente
+        const vencimentoStr = String(serie.vencimento).slice(0, 10); // YYYY-MM-DD
+        const boletoPendentePrevio = await db.BoletoHistory.findOne({
+            where: {
+                idreserva,
+                status: 'success',
+                payment_status: 'pending',
+                ignorado: false,
+                id: { [Op.ne]: history.id }, // ignora o registro recém criado nesta rodada
+            },
+            order: [['created_at', 'DESC']],
+        });
+
+        let baixaPreviaNossoNumero = null;
+
+        if (boletoPendentePrevio) {
+            // Compara valor (2 casas) e vencimento (YYYY-MM-DD).
+            const sameValor = Number(boletoPendentePrevio.valor).toFixed(2)
+                            === Number(valorEmitir).toFixed(2);
+            const sameVenc  = String(boletoPendentePrevio.vencimento).slice(0, 10) === vencimentoStr;
+
+            if (sameValor && sameVenc) {
+                // ── IGNORAR ──
+                console.log(`[BOLETO] Reserva ${idreserva}: boleto pendente #${boletoPendentePrevio.id} `
+                    + `já existe com mesmas condições (R$ ${valorEmitir} / ${vencimentoStr}). Ignorando este gatilho.`);
+
+                const msgIgnore = [
+                    'ℹ️ Boleto já emitido — nenhuma ação tomada.',
+                    '',
+                    `Detectamos que já existe boleto pendente para esta reserva com as mesmas condições:`,
+                    `  💰 Valor: ${formatCurrency(valorEmitir)}`,
+                    `  📅 Vencimento: ${formatDate(vencimentoStr)}`,
+                    `  🔢 Nosso Número: ${boletoPendentePrevio.nosso_numero || '(não registrado)'}`,
+                    '',
+                    'Provavelmente o lote do Sienge falhou e o CV reagendou o envio. Mantemos o cliente nesta etapa pra que o próximo lote tente novamente.',
+                ].join('\n');
+                const msgIgnOk = pushWarn(await sendCvMessage(idreserva, msgIgnore), 'cv_mensagem');
+
+                await EventLogger.log({
+                    historyId: history.id, idreserva,
+                    type: 'ignored_duplicate', severity: 'info',
+                    message: `Gatilho ignorado — boleto #${boletoPendentePrevio.id} já cobre estas condições.`,
+                    data: {
+                        previousHistoryId: boletoPendentePrevio.id,
+                        nossoNumero: boletoPendentePrevio.nosso_numero,
+                        valor: valorEmitir,
+                        vencimento: vencimentoStr,
+                    },
+                });
+
+                await history.update({
+                    status: 'success',          // não foi erro — só não fizemos nada
+                    ignorado: true,
+                    substitui_id: boletoPendentePrevio.id,
+                    titular_nome: titular?.nome,
+                    empreendimento: unidade?.empreendimento,
+                    idpessoa_cv: titular?.idpessoa_cv,
+                    valor: valorEmitir,
+                    valor_original: valorOriginal,
+                    comissao_percentual_aplicada: comissaoPercentualAplicada,
+                    vencimento: vencimentoStr,
+                    cv_mensagem_enviada: msgIgnOk,
+                    cv_situacao_alterada: false,   // NÃO mudou situação — deixa o lote tentar de novo
+                    warnings: warnings.length ? warnings : null,
+                });
+                return;
+            }
+
+            // ── SUBSTITUIR ──
+            // Condições diferentes — baixa o antigo no Ecobrança e emite novo.
+            console.log(`[BOLETO] Reserva ${idreserva}: boleto pendente #${boletoPendentePrevio.id} `
+                + `tem condições diferentes (antigo: R$ ${boletoPendentePrevio.valor} / ${boletoPendentePrevio.vencimento}, `
+                + `novo: R$ ${valorEmitir} / ${vencimentoStr}). Baixando antigo e emitindo novo.`);
+
+            if (!boletoPendentePrevio.nosso_numero) {
+                throw new Error(
+                    `Boleto pendente #${boletoPendentePrevio.id} sem nosso_numero registrado — não é possível fazer baixa automática. Resolver manualmente no Ecobrança.`
+                );
+            }
+            baixaPreviaNossoNumero = boletoPendentePrevio.nosso_numero;
+
+            await EventLogger.log({
+                historyId: history.id, idreserva,
+                type: 'replace_initiated', severity: 'warning',
+                message: `Condições alteradas — vou baixar boleto #${boletoPendentePrevio.id} e emitir novo.`,
+                data: {
+                    previousHistoryId: boletoPendentePrevio.id,
+                    previousNossoNumero: boletoPendentePrevio.nosso_numero,
+                    previousValor: Number(boletoPendentePrevio.valor),
+                    previousVencimento: boletoPendentePrevio.vencimento,
+                    newValor: valorEmitir,
+                    newVencimento: vencimentoStr,
+                },
+            });
+
+            // Marca a referência no novo history; o `payment_status='cancelled'`
+            // + `substituido_por_id` do antigo é setado APÓS confirmação da baixa
+            // (no caminho de sucesso da emissão, mais abaixo).
+            await history.update({
+                substitui_id: boletoPendentePrevio.id,
+            });
+        }
+
         // ── 3. Valida vencimento (deve ser >= hoje) ───────────────────────────
         const vencimento = serie.vencimento;
         const hoje = new Date();
@@ -469,25 +604,70 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         const nossoNumeroCalculado = `11000000${titular.idpessoa_cv}${sufixo}`;
         console.log(`[BOLETO] Nosso Número calculado: ${nossoNumeroCalculado} (seq: ${boletosAnteriores})`);
 
-        // ── 7. Executa automação Ecobrança via Playwright ──────────────────
-        console.log(`[BOLETO] Iniciando Playwright Ecobrança...`);
-        const { boletoBuffer, nossoNumero, seuNumero } = await runEcoCobrancaBoleto({
-            credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
-            cnpj_empresa: cnpjEmpresa,
-            idpessoa_cv: titular.idpessoa_cv,
-            nossoNumero: nossoNumeroCalculado,
-            vencimento,
-            valor: serie.valor,
-            nome: titular.nome,
-            documento: titular.documento,
-            endereco: titular.endereco,
-            numero: titular.numero,
-            complemento: titular.complemento || '',
-            bairro: titular.bairro,
-            cep: titular.cep,
-            cidade: titular.cidade,
-            estado: titular.estado,
-        });
+        // ── 7. Executa automação Ecobrança via Playwright (com lock) ──────────
+        // O lock serializa o acesso à conta Ecobrança entre emissão e scheduler
+        // de payment check. Em colisão, esperamos até ECO_LOCK_MAX_WAIT_MS antes
+        // de abortar pra não duplicar sessões na conta da Caixa.
+        const ecoOwner = `emit:hist=${history.id}:reserva=${idreserva}:${new Date().toISOString()}`;
+        const lockAcquired = await acquireEcoLockWithWait(ecoOwner, 5);
+        if (!lockAcquired) {
+            throw new Error(
+                'Lock do Ecobrança ocupado por mais de 4 min (outro processo em andamento). '
+                + 'O CV deve reagendar o webhook automaticamente — aguarde o próximo ciclo.'
+            );
+        }
+
+        let boletoBuffer, nossoNumero, seuNumero, baixaPrevia;
+        try {
+            console.log(`[BOLETO] Iniciando Playwright Ecobrança${baixaPreviaNossoNumero ? ` (com baixa prévia ${baixaPreviaNossoNumero})` : ''}...`);
+            const ecoResult = await runEcoCobrancaBoleto({
+                credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
+                cnpj_empresa: cnpjEmpresa,
+                idpessoa_cv: titular.idpessoa_cv,
+                nossoNumero: nossoNumeroCalculado,
+                vencimento,
+                valor: serie.valor,
+                nome: titular.nome,
+                documento: titular.documento,
+                endereco: titular.endereco,
+                numero: titular.numero,
+                complemento: titular.complemento || '',
+                bairro: titular.bairro,
+                cep: titular.cep,
+                cidade: titular.cidade,
+                estado: titular.estado,
+                baixaPreviaNossoNumero,    // opcional: se preenchido, baixa antes de emitir
+            });
+            boletoBuffer = ecoResult.boletoBuffer;
+            nossoNumero  = ecoResult.nossoNumero;
+            seuNumero    = ecoResult.seuNumero;
+            baixaPrevia  = ecoResult.baixaPrevia;
+        } finally {
+            // Sempre libera o lock — emite OK, falha ou exceção.
+            await EcoLock.release(ecoOwner).catch(() => {});
+        }
+
+        // ── 7.5. Pós-baixa: atualiza histórico do boleto antigo (se foi substituído) ─
+        if (boletoPendentePrevio && baixaPrevia?.baixaConfirmada) {
+            await boletoPendentePrevio.update({
+                payment_status: 'cancelled',
+                cancelled_at: new Date(),
+                substituido_por_id: history.id,
+                last_check_situation: 'BAIXADO (substituído)',
+            });
+            await EventLogger.log({
+                historyId: boletoPendentePrevio.id, idreserva,
+                type: 'baixa_confirmed', severity: 'success',
+                message: `Boleto baixado por substituição — gerado novo boleto #${history.id} com condições atualizadas.`,
+                data: {
+                    novoHistoryId: history.id,
+                    novoValor: valorEmitir,
+                    novoVencimento: vencimentoStr,
+                    mensagemBaixa: baixaPrevia.mensagemBaixa,
+                },
+            });
+            console.log(`[BOLETO] Boleto antigo #${boletoPendentePrevio.id} marcado como cancelled (substituído pelo #${history.id}).`);
+        }
 
         // ── 7. Upload para Supabase ───────────────────────────────────────────
         const { path: supabasePath, url: supabaseUrl } = await uploadToSupabase(
@@ -500,11 +680,30 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
             seu_numero: seuNumero,
         });
 
+        // Eventos: emissão + upload — base da timeline.
+        await EventLogger.log({
+            historyId: history.id, idreserva, type: 'emitted', severity: 'success',
+            message: `Boleto emitido no Ecobrança Caixa — Nosso Nº ${nossoNumero}`,
+            data: { nossoNumero, seuNumero, valor: valorEmitir, vencimento, cnpj_empresa: cnpjEmpresa },
+        });
+        await EventLogger.log({
+            historyId: history.id, idreserva, type: 'pdf_saved', severity: 'success',
+            message: `PDF salvo no Supabase (${Math.round(boletoBuffer.length / 1024)} KB)`,
+            data: { supabaseUrl },
+        });
+
         // ── 8. Anexa boleto na reserva do CV ──────────────────────────────────
-        const documentoAnexado = pushWarn(
-            await attachToCV(idreserva, boletoBuffer, settings),
-            'cv_anexo',
-        );
+        const anexoResult = await attachToCV(idreserva, boletoBuffer, settings);
+        const documentoAnexado = pushWarn(anexoResult, 'cv_anexo');
+        await EventLogger.log({
+            historyId: history.id, idreserva,
+            type: documentoAnexado ? 'cv_attached' : 'cv_attach_failed',
+            severity: documentoAnexado ? 'success' : (anexoResult.skipped ? 'warning' : 'error'),
+            message: documentoAnexado
+                ? `Documento anexado no CV (idtipo ${settings.cv_idtipo_documento})`
+                : `Anexo no CV falhou: ${anexoResult.error || 'desconhecido'}`,
+            data: { httpStatus: anexoResult.httpStatus, cvBody: anexoResult.cvBody },
+        });
 
         // ── 8.5. Envia boleto ao titular (email + WhatsApp) ───────────────────
         // Independente do anexo no CV: mesmo se o CV falhar em registrar o
@@ -537,35 +736,130 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 erro: envio.whatsapp.error || 'falha desconhecida',
             });
         }
+        await EventLogger.log({
+            historyId: history.id, idreserva,
+            type: envio.email.ok ? 'client_email' : 'client_email_skipped',
+            severity: envio.email.ok ? 'success' : (envio.email.skipped ? 'warning' : 'error'),
+            message: envio.email.ok
+                ? `E-mail enviado para ${envio.email.to}`
+                : `E-mail não enviado${envio.email.to ? ` (${envio.email.to})` : ''}: ${envio.email.error}`,
+            data: { to: envio.email.to, hasAttachment: envio.email.hasAttachment },
+        });
+        await EventLogger.log({
+            historyId: history.id, idreserva,
+            type: envio.whatsapp.ok ? 'client_whatsapp' : 'client_whatsapp_skipped',
+            severity: envio.whatsapp.ok ? 'success' : (envio.whatsapp.skipped ? 'warning' : 'error'),
+            message: envio.whatsapp.ok
+                ? `WhatsApp enviado para +${envio.whatsapp.to}`
+                : `WhatsApp não enviado${envio.whatsapp.to ? ` (+${envio.whatsapp.to})` : ''}: ${envio.whatsapp.error}`,
+            data: { to: envio.whatsapp.to, wamid: envio.whatsapp.wamid },
+        });
 
-        // ── 9. Altera situação para "em processamento/emitido" ────────────────
-        let situacaoAlteradaSucesso = false;
+        // ── 9. Agenda alteração de situação ──────────────────────────────────
+        // ⚠️ NÃO mudamos a situação imediatamente — a etapa "Envio Sienge" é o
+        // gatilho do lote (5/5 min) que envia o cliente pro ERP. Se mudássemos
+        // antes do lote rodar, o cliente nunca seria enviado. Gravamos o ID
+        // alvo + instante alinhado ao próximo múltiplo de 5 min + buffer.
+        // O `boletoSituacaoApplyScheduler` (cron 1 min) processa quando madura.
+        let situacaoAgendadaPara = null;
         if (settings.situacao_sucesso_id) {
-            situacaoAlteradaSucesso = pushWarn(
-                await alterarSituacaoCv(idreserva, settings.situacao_sucesso_id),
-                'cv_situacao',
-            );
+            // `delay_situacao_sucesso_min` agora representa o SAFETY THRESHOLD
+            // (default 2): se faltam menos que isto pro próximo lote Sienge,
+            // pula pro seguinte. Delay efetivo varia entre 3-7 min.
+            const safetyMin = Number(settings.delay_situacao_sucesso_min) || 2;
+            situacaoAgendadaPara = computeSituacaoTarget(new Date(), safetyMin);
+            await history.update({
+                situacao_pendente_id: Number(settings.situacao_sucesso_id),
+                situacao_pendente_em: situacaoAgendadaPara,
+                situacao_pendente_aplicada: false,
+            });
+            await EventLogger.log({
+                historyId: history.id, idreserva,
+                type: 'cv_situation_scheduled', severity: 'info',
+                message: `Situação CV ${settings.situacao_sucesso_id} agendada pra ${situacaoAgendadaPara.toLocaleString('pt-BR')} (delay alinhado ao lote Sienge).`,
+                data: {
+                    situacaoId: settings.situacao_sucesso_id,
+                    agendadaPara: situacaoAgendadaPara,
+                    safetyMin,
+                },
+            });
+            console.log(`[BOLETO] Situação CV ${settings.situacao_sucesso_id} agendada pra ${situacaoAgendadaPara.toISOString()} (mantém cliente em "Envio Sienge" pra o lote capturar).`);
         }
+        // Compatibilidade com o resto do código que usa `situacaoAlteradaSucesso`:
+        // false aqui porque a aplicação será assíncrona (scheduler). Não tem
+        // como saber se vai dar certo agora — o evento `cv_situation` será
+        // gravado quando o scheduler aplicar.
+        const situacaoAlteradaSucesso = false;
 
         // ── 10. Envia mensagem de sucesso com resumo completo do boleto ────────
         const linhaValor = comissaoPercentualAplicada != null
             ? `💰 Valor: ${formatCurrency(valorEmitir)} (${comissaoPercentualAplicada}% de ${formatCurrency(valorOriginal)} — comissão embutida deduzida)`
             : `💰 Valor: ${formatCurrency(valorEmitir)}`;
 
+        // Checklist de notificações com destinatário concreto pra gestor ver
+        // na timeline da reserva exatamente o que aconteceu em cada canal.
+        const warnDe = (etapa) => warnings.find(w => w.etapa === etapa);
+        const anexoWarn = warnDe('cv_anexo');
+        const situacaoWarn = warnDe('cv_situacao');
+
+        const linhaAnexo = documentoAnexado
+            ? '✅ Anexo no CV'
+            : (anexoWarn?.skipped
+                ? `⊘ Anexo no CV pulado: ${anexoWarn.erro}`
+                : `❌ Anexo no CV: ${anexoWarn?.erro || 'falhou'}`);
+
+        const linhaSituacao = !settings.situacao_sucesso_id
+            ? '⊘ Situação não alterada (situacao_sucesso_id não configurado)'
+            : situacaoAgendadaPara
+                ? `🕒 Situação ${settings.situacao_sucesso_id} agendada para ${situacaoAgendadaPara.toLocaleString('pt-BR')} (mantém cliente em "Envio Sienge" para o lote do ERP capturar)`
+                : `❌ Situação no CV: ${situacaoWarn?.erro || 'falhou'}`;
+
+        const linhaEmail = envio.email.ok
+            ? `✅ E-mail enviado para ${envio.email.to}`
+            : (envio.email.skipped
+                ? `⊘ E-mail${envio.email.to ? ` (${envio.email.to})` : ''} pulado: ${envio.email.error}`
+                : `❌ E-mail${envio.email.to ? ` (${envio.email.to})` : ''}: ${envio.email.error}`);
+
+        const linhaWpp = envio.whatsapp.ok
+            ? `✅ WhatsApp enviado para +${envio.whatsapp.to}`
+            : (envio.whatsapp.skipped
+                ? `⊘ WhatsApp${envio.whatsapp.to ? ` (+${envio.whatsapp.to})` : ''} pulado: ${envio.whatsapp.error}`
+                : `❌ WhatsApp${envio.whatsapp.to ? ` (+${envio.whatsapp.to})` : ''}: ${envio.whatsapp.error}`);
+
+        // Helper pra log do servidor (mesmas linhas, sem refazer)
+        const erroDeEtapa = (etapa) => warnDe(etapa)?.erro || '';
+
         const msgSucesso = [
             '✅ Boleto Caixa emitido com sucesso!',
             '',
             `📋 Empreendimento: ${unidade.empreendimento}`,
+            `🏠 Unidade: ${unidade.unidade || unidade.bloco || '-'}`,
             `👤 Titular: ${titular.nome}`,
             `🪪 CPF/CNPJ: ${titular.documento}`,
             linhaValor,
             `📅 Vencimento: ${formatDate(vencimento)}`,
             `🔢 Nosso Número: ${nossoNumero}`,
             `📄 Nº Documento: ${seuNumero}`,
-            supabaseUrl ? `🔗 Boleto: ${supabaseUrl}` : null,
+            '',
+            '📡 Notificações:',
+            `  ${linhaAnexo}`,
+            `  ${linhaSituacao}`,
+            `  ${linhaEmail}`,
+            `  ${linhaWpp}`,
+            '',
+            supabaseUrl ? `🔗 Link do boleto: ${supabaseUrl}` : null,
         ].filter(Boolean).join('\n');
 
-        const msgSucessoOk = pushWarn(await sendCvMessage(idreserva, msgSucesso), 'cv_mensagem');
+        const msgSucessoResult = await sendCvMessage(idreserva, msgSucesso);
+        const msgSucessoOk = pushWarn(msgSucessoResult, 'cv_mensagem');
+        await EventLogger.log({
+            historyId: history.id, idreserva,
+            type: msgSucessoOk ? 'cv_message_sent' : 'cv_message_failed',
+            severity: msgSucessoOk ? 'success' : 'error',
+            message: msgSucessoOk
+                ? `Mensagem de resumo postada na timeline da reserva (${msgSucesso.length} chars)`
+                : `Falha postando mensagem de resumo: ${msgSucessoResult.error || 'desconhecido'}`,
+        });
 
         // Boleto foi emitido — status segue 'success' mesmo com warnings de
         // etapas pós-emissão (anexo/situação/mensagem/envio cliente). O frontend
@@ -582,24 +876,18 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         });
 
         // Resumo final explícito — sempre loga cada etapa CV + envio cliente,
-        // mesmo quando tudo deu certo. Facilita auditoria sem filtrar log.
-        const erroDe = (etapa) => warnings.find(w => w.etapa === etapa)?.erro || '';
-        const stepEnvio = (res, etapa) => {
-            if (res.ok) return '✓';
-            if (res.skipped) return '⊘';
-            return '✗';
-        };
+        // mesmo quando tudo deu certo. Espelha a mensagem enviada no CV
+        // (mesma estrutura, mesmas linhas) pra facilitar auditoria cruzada
+        // entre log do servidor e timeline da reserva.
         console.log(
             `[BOLETO] Reserva ${idreserva} — Resumo:\n`
             + `  ✓ Boleto emitido no Ecobrança (Nosso Nº ${nossoNumero})\n`
-            + `  ${supabaseUrl ? '✓' : '✗'} PDF salvo no Supabase\n`
-            + `  ${documentoAnexado ? '✓' : '✗'} Anexo no CV${documentoAnexado ? '' : ` — ${erroDe('cv_anexo') || 'falhou'}`}\n`
-            + `  ${settings.situacao_sucesso_id
-                ? (situacaoAlteradaSucesso ? '✓' : '✗') + ' Situação alterada para ' + settings.situacao_sucesso_id + (situacaoAlteradaSucesso ? '' : ` — ${erroDe('cv_situacao') || 'falhou'}`)
-                : '⊘ Alteração de situação pulada (situacao_sucesso_id não configurado)'}\n`
-            + `  ${msgSucessoOk ? '✓' : '✗'} Mensagem enviada na reserva${msgSucessoOk ? '' : ` — ${erroDe('cv_mensagem') || 'falhou'}`}\n`
-            + `  ${stepEnvio(envio.email, 'cliente_email')} E-mail ao titular${envio.email.ok ? ` (${envio.email.to})` : (envio.email.skipped ? ` — ${envio.email.error}` : ` — ${envio.email.error}`)}\n`
-            + `  ${stepEnvio(envio.whatsapp, 'cliente_whatsapp')} WhatsApp ao titular${envio.whatsapp.ok ? ` (${envio.whatsapp.to})` : (envio.whatsapp.skipped ? ` — ${envio.whatsapp.error}` : ` — ${envio.whatsapp.error}`)}`
+            + `  ${supabaseUrl ? '✓' : '✗'} PDF salvo no Supabase${supabaseUrl ? `\n     ${supabaseUrl}` : ''}\n`
+            + `  ${linhaAnexo}\n`
+            + `  ${linhaSituacao}\n`
+            + `  ${msgSucessoOk ? '✅' : '❌'} Mensagem enviada na reserva${msgSucessoOk ? '' : ` — ${erroDeEtapa('cv_mensagem') || 'falhou'}`}\n`
+            + `  ${linhaEmail}\n`
+            + `  ${linhaWpp}`
         );
 
     } catch (err) {

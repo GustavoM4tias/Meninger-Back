@@ -77,6 +77,83 @@ export default (sequelize, DataTypes) => {
         cliente_whatsapp_enviado: { type: DataTypes.BOOLEAN, defaultValue: false },
         cliente_envio_em:         { type: DataTypes.DATE,    allowNull: true },
 
+        // ── Mudança de situação CV com delay (lote Sienge roda 5/5 min) ──────
+        // Após emissão, NÃO mudamos a situação CV imediatamente — senão o lote
+        // do Sienge não captura o cliente. Gravamos o ID alvo e o instante de
+        // aplicação; scheduler dedicado processa quando o tempo chega.
+        situacao_pendente_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            comment: 'ID da situação CV a ser aplicada após o delay (ex.: situacao_sucesso_id).',
+        },
+        situacao_pendente_em: {
+            type: DataTypes.DATE,
+            allowNull: true,
+            comment: 'Timestamp UTC quando a situação será aplicada pelo scheduler.',
+        },
+        situacao_pendente_aplicada: {
+            type: DataTypes.BOOLEAN,
+            defaultValue: false,
+            allowNull: false,
+            comment: 'True após o scheduler ter aplicado a situação (idempotência).',
+        },
+
+        // ── Re-trigger / ignorar / baixa+reemitir ────────────────────────────
+        // Quando o CV dispara o webhook novamente pra mesma reserva (típico
+        // quando a 1ª tentativa de envio ao Sienge falhou), checamos se já
+        // existe boleto válido com mesmas condições — se sim, ignoramos.
+        ignorado: {
+            type: DataTypes.BOOLEAN,
+            defaultValue: false,
+            allowNull: false,
+            comment: 'True quando este registro foi criado mas o processamento foi pulado por já existir boleto válido.',
+        },
+        substituido_por_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            comment: 'ID do boleto_history que substituiu este (em caso de mudança de condições com baixa+reemissão).',
+        },
+        substitui_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            comment: 'ID do boleto_history anterior que este registro substitui (baixou + reemitiu).',
+        },
+
+        // ── Acompanhamento de pagamento/baixa (scheduler diário) ──────────────
+        // Estado consolidado do título no Ecobrança. Diferente de `status`
+        // (que reflete a emissão), o `payment_status` reflete o ciclo de vida
+        // do boleto no banco:
+        //   pending    = recém emitido, ainda dentro do prazo de pagamento
+        //   paid       = LIQUIDADO no Ecobrança, situação CV avançada
+        //   cancelled  = baixado por devolução (vencido sem pagamento)
+        //   error      = falha persistente na consulta/baixa
+        payment_status: {
+            type: DataTypes.STRING(20),
+            defaultValue: 'pending',
+            allowNull: false,
+            comment: 'pending | paid | cancelled | error',
+        },
+        last_checked_at: {
+            type: DataTypes.DATE,
+            allowNull: true,
+            comment: 'Quando o scheduler conferiu o Ecobrança pela última vez.',
+        },
+        last_check_situation: {
+            type: DataTypes.STRING(80),
+            allowNull: true,
+            comment: 'Texto bruto da situação Ecobrança no último check (EM ABERTO, LIQUIDADO, ...).',
+        },
+        paid_at: {
+            type: DataTypes.DATE,
+            allowNull: true,
+            comment: 'Quando o boleto foi detectado como LIQUIDADO.',
+        },
+        cancelled_at: {
+            type: DataTypes.DATE,
+            allowNull: true,
+            comment: 'Quando o boleto foi baixado por devolução.',
+        },
+
         // ── Avisos por etapa (anexo CV, mensagem CV, alteração situação) ──────
         // JSON serializado em TEXT — etapas que falham silenciosamente são
         // empurradas aqui pra aparecerem no log do frontend. Formato:

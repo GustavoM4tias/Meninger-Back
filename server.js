@@ -55,6 +55,8 @@ import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.j
 import cvExtrasScheduler from './scheduler/cvExtrasScheduler.js';
 import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateScheduler.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
+import boletoPaymentCheckScheduler from './scheduler/boletoPaymentCheckScheduler.js';
+import boletoSituacaoApplyScheduler from './scheduler/boletoSituacaoApplyScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import billsAutoSyncScheduler from './scheduler/billsAutoSyncScheduler.js';
 import marketingDispatchScheduler from './scheduler/marketingDispatchScheduler.js';
@@ -220,6 +222,8 @@ async function bootServer() {
   if (process.env.ENABLE_CV_EXTRAS_SCHEDULE !== 'false') cvExtrasScheduler.start(); // ativo por padrão
   conditionAutoGenerateScheduler.start(); // auto-geração de fichas + polling de assinaturas
   boletoCleanupScheduler.start();         // remove boletos expirados do Supabase
+  boletoPaymentCheckScheduler.start();    // 8h: verifica pagamento/baixa de boletos no Ecobrança
+  boletoSituacaoApplyScheduler.start();   // 1min: aplica situações CV agendadas (delay lote Sienge)
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
   if (process.env.ENABLE_BILLS_AUTO_SYNC === 'true') billsAutoSyncScheduler.start();
   eventReminderScheduler.start();         // lembretes de evento (D-1) via NotificationService
