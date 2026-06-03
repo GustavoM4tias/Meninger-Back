@@ -123,6 +123,9 @@ import BoletoSettingsDefine from './boleto/boletoSettings.js';
 import BoletoHistoryDefine from './boleto/boletoHistory.js';
 import BoletoComissionRuleDefine from './boleto/boletoComissionRule.js';
 
+// Encurtador de URL genérico
+import ShortLinkDefine from './shortLink.js';
+
 // OfficeAI Chat
 import ChatSessionDefine from './chatSession.js';
 import ChatMessageDefine from './chatMessage.js';
@@ -282,6 +285,9 @@ db.McmvImportLog               = McmvImportLogDefine(sequelize, DataTypes);
 db.BoletoSettings      = BoletoSettingsDefine(sequelize, DataTypes);
 db.BoletoHistory       = BoletoHistoryDefine(sequelize, DataTypes);
 db.BoletoComissionRule = BoletoComissionRuleDefine(sequelize, DataTypes);
+
+// Encurtador de URL
+db.ShortLink           = ShortLinkDefine(sequelize, DataTypes);
 
 // OfficeAI Chat
 db.ChatSession  = ChatSessionDefine(sequelize, DataTypes);

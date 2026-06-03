@@ -1,6 +1,12 @@
 // controllers/boleto/boletoController.js
 import db from '../../models/sequelize/index.js';
 import { processBoletoWebhook } from '../../services/boleto/BoletoGenerationService.js';
+import { sendBoletoToTitular, WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANG } from '../../services/boleto/BoletoNotifyService.js';
+import { getBoletoTemplateDefinition, TEMPLATE_EXAMPLE_PDF_URL } from '../../services/boleto/boletoWhatsappTemplate.js';
+import axios from 'axios';
+import WhatsAppService from '../../services/whatsapp/WhatsAppService.js';
+import WhatsAppTemplateService from '../../services/whatsapp/WhatsAppTemplateService.js';
+import apiCv from '../../lib/apiCv.js';
 
 // ── Webhook ───────────────────────────────────────────────────────────────────
 
@@ -149,6 +155,66 @@ export async function getHistoryItem(req, res) {
 }
 
 /**
+ * Reenvia o boleto pro titular (email + WhatsApp) sem regerar o PDF.
+ * Usa o PDF já salvo no Supabase. Atualiza os flags `cliente_*` no histórico.
+ *
+ * Útil quando o cliente perdeu o e-mail, mudou de número, ou o envio inicial
+ * falhou e a config foi corrigida (ex.: template WhatsApp aprovado depois).
+ */
+export async function resendBoletoToTitular(req, res) {
+    try {
+        const item = await db.BoletoHistory.findByPk(req.params.id);
+        if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
+        if (!item.boleto_supabase_url) {
+            return res.status(400).json({
+                error: 'Este registro não tem PDF disponível. Use "Reprocessar" pra regenerar o boleto.',
+            });
+        }
+        // Busca dados atualizados do titular no CV — endereço/celular/email podem ter mudado.
+        let titular = null;
+        try {
+            const reservaResp = await apiCv.get(`/v1/comercial/reservas/${item.idreserva}`);
+            titular = reservaResp.data?.[item.idreserva]?.titular || null;
+        } catch (err) {
+            console.warn(`[BOLETO_RESEND] Falha buscando titular ${item.idreserva}: ${err.message}`);
+        }
+        if (!titular) {
+            return res.status(400).json({
+                error: 'Não foi possível buscar os dados do titular no CV. Tente novamente.',
+            });
+        }
+
+        const envio = await sendBoletoToTitular({
+            titular,
+            dadosBoleto: {
+                empreendimento: item.empreendimento,
+                unidade: '',
+                valor: item.valor,
+                vencimento: item.vencimento,
+                nossoNumero: item.nosso_numero,
+                seuNumero: item.seu_numero,
+                boletoUrl: item.boleto_supabase_url,
+            },
+            historyId: item.id,
+        });
+
+        await item.update({
+            cliente_email_enviado: envio.email.ok || item.cliente_email_enviado,
+            cliente_whatsapp_enviado: envio.whatsapp.ok || item.cliente_whatsapp_enviado,
+            cliente_envio_em: new Date(),
+        });
+
+        return res.json({
+            email: envio.email,
+            whatsapp: envio.whatsapp,
+        });
+    } catch (err) {
+        console.error('[BOLETO_RESEND] Erro:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
  * Re-dispara o processamento para uma reserva (admin only).
  * Útil quando a configuração foi corrigida e o admin quer reprocessar
  * uma reserva que falhou anteriormente.
@@ -240,5 +306,100 @@ export async function deleteComissionRule(req, res) {
         return res.json({ deleted: true });
     } catch (err) {
         return res.status(500).json({ error: err.message });
+    }
+}
+
+// ── WhatsApp Template (admin) ─────────────────────────────────────────────────
+
+/**
+ * Retorna o status local do template WhatsApp do boleto.
+ * Útil pra UI saber se precisa exibir botão "Criar template" ou "Tudo OK".
+ */
+export async function getWhatsappTemplateStatus(req, res) {
+    try {
+        const local = await WhatsAppTemplateService.findApproved(
+            WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANG,
+        );
+        return res.json({
+            name: WHATSAPP_TEMPLATE_NAME,
+            language: WHATSAPP_TEMPLATE_LANG,
+            approved_locally: !!local,
+            definition: getBoletoTemplateDefinition(),
+            status: local?.status || null,
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
+ * Cria o template `boleto_caixa_ato_v1` na Meta e sincroniza com o cache local.
+ * Idempotente: se já existir, captura o erro e ainda dispara sync.
+ *
+ * Após este endpoint retornar, o template entra em IN_REVIEW na Meta —
+ * leva geralmente entre alguns minutos e algumas horas pra APPROVED.
+ * Reenvios após aprovação não precisam refazer este passo.
+ */
+export async function createBoletoWhatsappTemplate(req, res) {
+    try {
+        const def = getBoletoTemplateDefinition();
+
+        // Template v2 usa HEADER DOCUMENT — Meta exige `header_handle` no
+        // example, que vem do Resumable Upload de um PDF real.
+        console.log(`[BOLETO_TPL] Baixando PDF de exemplo de ${TEMPLATE_EXAMPLE_PDF_URL}...`);
+        const pdfResp = await axios.get(TEMPLATE_EXAMPLE_PDF_URL, {
+            responseType: 'arraybuffer',
+            timeout: 30000,
+        });
+        const pdfBuffer = Buffer.from(pdfResp.data);
+        console.log(`[BOLETO_TPL] PDF baixado (${Math.round(pdfBuffer.length / 1024)} KB), iniciando upload resumable...`);
+
+        const { handle } = await WhatsAppService.uploadResumableMedia({
+            buffer: pdfBuffer,
+            filename: 'boleto-exemplo.pdf',
+            mimeType: 'application/pdf',
+        });
+        console.log(`[BOLETO_TPL] Handle obtido: ${handle.slice(0, 20)}...`);
+
+        let metaResp = null;
+        let alreadyExists = false;
+        try {
+            metaResp = await WhatsAppService.createTemplate({
+                ...def,
+                headerDocumentHandle: handle,
+            });
+        } catch (err) {
+            // 100 = "name and language already exists" — não é erro real
+            if (err?.code === 100 || /already exists/i.test(err?.message || '')) {
+                alreadyExists = true;
+            } else {
+                throw err;
+            }
+        }
+
+        // sync local com a Meta pra refletir status APPROVED/PENDING/REJECTED
+        let synced = null;
+        try {
+            synced = await WhatsAppTemplateService.syncFromMeta();
+        } catch (err) {
+            console.warn('[BOLETO_TPL] syncFromMeta falhou:', err.message);
+        }
+
+        return res.json({
+            created: !alreadyExists,
+            already_existed: alreadyExists,
+            meta_response: metaResp,
+            synced_count: synced?.upserted ?? null,
+            note: alreadyExists
+                ? 'Template já existia na Meta — sincronização local executada.'
+                : 'Template enviado pra Meta. Status em revisão (IN_REVIEW). Pode levar de minutos a algumas horas pra APPROVED.',
+        });
+    } catch (err) {
+        const detail = err?.details || err?.message || 'falha desconhecida';
+        console.error('[BOLETO_TPL] Falha criando template:', detail);
+        return res.status(400).json({
+            error: err?.message || String(err),
+            details: err?.details || null,
+        });
     }
 }

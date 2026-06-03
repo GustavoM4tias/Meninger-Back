@@ -10,6 +10,7 @@ export const EmailType = {
     AUTH_ACADEMY_CODE: 'auth.academy.code',
     AUTH_PASSWORD_RESET: 'auth.password.reset',
     MEETING_REPORT: 'meeting.report',
+    BOLETO_CAIXA: 'boleto.caixa',
 };
 
 // Contratos mínimos de dados por tipo (JSDoc p/ intellisense)

@@ -26,6 +26,7 @@ import signatureRoutes from './routes/signatureRoutes.js';
 import signatureDocumentRoutes from './routes/signatureDocumentRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
+import shortLinkRoutes from './routes/shortLinkRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
 import academyChatRoutes from './routes/academyChatRoutes.js';
@@ -62,6 +63,7 @@ import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
 import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
+import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import { startAcademyDeadlineScheduler } from './scheduler/academyDeadlineScheduler.js';
@@ -123,6 +125,9 @@ app.use('/api/signatures', signatureRoutes);
 app.use('/api/signature-documents', signatureDocumentRoutes);
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
+// Encurtador de URL público — rota fora de /api por elegância.
+// Cliente que recebeu link curto via WhatsApp acessa `${host}/s/{slug}` e cai aqui.
+app.use('/s', shortLinkRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
 app.use('/api/academy-chat', academyChatRoutes);
@@ -193,6 +198,11 @@ async function bootServer() {
   await ensureMarketingCaptureSchema();
 
   await seedInitialTypes();
+
+  // Provisiona template WhatsApp do boleto na Meta se faltar — assim em caso
+  // de perda/recriação da conta Meta o sistema se auto-recupera. Idempotente.
+  ensureBoletoWhatsappTemplate().catch(err =>
+      console.warn('⚠️  ensureBoletoWhatsappTemplate falhou:', err.message));
 
   if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') contractValidatorScheduler.start();
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractSiengeScheduler.start();

@@ -22,7 +22,7 @@
         <div style="display:none;max-height:0;overflow:hidden;">{{previewText}}</div>
         
         <div class="main">
-            {{> header }}
+            {{#if headerLight}}{{> headerLight }}{{else}}{{> header }}{{/if}}
             <div class="content">
                 {{{content}}}
             </div>

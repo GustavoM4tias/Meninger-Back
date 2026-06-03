@@ -70,6 +70,13 @@ export default (sequelize, DataTypes) => {
         cv_situacao_alterada: { type: DataTypes.BOOLEAN, defaultValue: false },
         cv_documento_anexado: { type: DataTypes.BOOLEAN, defaultValue: false },
 
+        // ── Envio ao titular (cliente externo) ────────────────────────────────
+        // true quando email/WhatsApp foram enviados com sucesso pro titular da
+        // reserva. Usado pelo botão "Reenviar" pra mostrar se vale tentar de novo.
+        cliente_email_enviado:    { type: DataTypes.BOOLEAN, defaultValue: false },
+        cliente_whatsapp_enviado: { type: DataTypes.BOOLEAN, defaultValue: false },
+        cliente_envio_em:         { type: DataTypes.DATE,    allowNull: true },
+
         // ── Avisos por etapa (anexo CV, mensagem CV, alteração situação) ──────
         // JSON serializado em TEXT — etapas que falham silenciosamente são
         // empurradas aqui pra aparecerem no log do frontend. Formato:
