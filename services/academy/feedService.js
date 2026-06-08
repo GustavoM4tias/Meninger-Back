@@ -16,7 +16,7 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import followService from './followService.js';
-import { resolveAudienceForUser, audienceWhere } from './audience.js';
+import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
 
 const HORIZON_DAYS = 30;
 const PER_SOURCE_LIMIT = 20;
@@ -42,8 +42,8 @@ const feedService = {
         }
 
         const since = horizonDate();
-        const audience = await resolveAudienceForUser(uid);
-        const audWhere = audienceWhere(audience);
+        const tokens = await resolveUserTokens(uid);
+        const audWhere = audiencesWhereLiteral(tokens);
 
         // 1) follows do user
         const follows = await db.AcademyFollow.findAll({
@@ -59,17 +59,16 @@ const feedService = {
         const events = [];
 
         // ─── 2) Artigos novos (publicados em categorias seguidas OU recentes na audience do user)
-        const articleWhere = {
-            status: 'PUBLISHED',
-            updatedAt: { [Op.gte]: since },
-            ...audWhere,
-        };
+        const articleAndConds = [
+            { status: 'PUBLISHED', updatedAt: { [Op.gte]: since } },
+            audWhere,
+        ];
         // Se user segue categorias, prioriza-as. Se não, mostra recentes (geral).
         if (followedCategories.length) {
-            articleWhere.categorySlug = { [Op.in]: followedCategories };
+            articleAndConds.push({ categorySlug: { [Op.in]: followedCategories } });
         }
         const newArticles = await db.AcademyArticle.findAll({
-            where: articleWhere,
+            where: { [Op.and]: articleAndConds },
             attributes: ['id', 'title', 'slug', 'categorySlug', 'createdByUserId', 'updatedAt', 'createdAt'],
             order: [['updatedAt', 'DESC']],
             limit: PER_SOURCE_LIMIT,
@@ -103,7 +102,7 @@ const feedService = {
             const topicIds = [...new Set(newPosts.map(p => Number(p.topicId)))];
             const topics = topicIds.length
                 ? await db.AcademyTopic.findAll({
-                    where: { id: { [Op.in]: topicIds }, ...audWhere },
+                    where: { [Op.and]: [{ id: { [Op.in]: topicIds } }, audWhere] },
                     attributes: ['id', 'title'],
                     raw: true,
                 })
@@ -203,10 +202,14 @@ const feedService = {
             // 5a) artigos publicados por eles
             const theirArticles = await db.AcademyArticle.findAll({
                 where: {
-                    createdByUserId: { [Op.in]: followedUsers },
-                    status: 'PUBLISHED',
-                    updatedAt: { [Op.gte]: since },
-                    ...audWhere,
+                    [Op.and]: [
+                        {
+                            createdByUserId: { [Op.in]: followedUsers },
+                            status: 'PUBLISHED',
+                            updatedAt: { [Op.gte]: since },
+                        },
+                        audWhere,
+                    ],
                 },
                 attributes: ['id', 'title', 'slug', 'categorySlug', 'createdByUserId', 'updatedAt'],
                 order: [['updatedAt', 'DESC']],
@@ -229,9 +232,13 @@ const feedService = {
             // 5b) tópicos criados por eles
             const theirTopics = await db.AcademyTopic.findAll({
                 where: {
-                    createdByUserId: { [Op.in]: followedUsers },
-                    createdAt: { [Op.gte]: since },
-                    ...audWhere,
+                    [Op.and]: [
+                        {
+                            createdByUserId: { [Op.in]: followedUsers },
+                            createdAt: { [Op.gte]: since },
+                        },
+                        audWhere,
+                    ],
                 },
                 attributes: ['id', 'title', 'type', 'categorySlug', 'createdByUserId', 'createdAt'],
                 order: [['createdAt', 'DESC']],

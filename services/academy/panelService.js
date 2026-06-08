@@ -1,20 +1,14 @@
+import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
+import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
 
 const DEFAULT_LIMIT = 6;
 
-function normalizeAudience(audience) {
-    const allowed = new Set(['BOTH', 'GESTOR_ONLY', 'ADM_ONLY']);
-    return allowed.has(audience) ? audience : 'BOTH';
-}
-
 const panelService = {
-    async getSummary({ userId, audience }) {
-        const finalAudience = normalizeAudience(audience);
-
+    async getSummary({ userId }) {
         // Se modelos ainda não existem, devolve payload consistente
         if (!db.AcademyArticle || !db.AcademyTopic || !db.AcademyUserTrackProgress) {
             return {
-                audience: finalAudience,
                 kbUpdates: [],
                 openQuestions: [],
                 tracksInProgress: [],
@@ -22,13 +16,13 @@ const panelService = {
             };
         }
 
+        const tokens = await resolveUserTokens(userId);
+        const audWhere = audiencesWhereLiteral(tokens);
+
         // 1) KB updates
         const kbUpdates = await db.AcademyArticle.findAll({
             where: {
-                status: 'PUBLISHED',
-                ...(finalAudience === 'BOTH'
-                    ? { audience: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] }
-                    : { audience: ['BOTH', finalAudience] }),
+                [Op.and]: [{ status: 'PUBLISHED' }, audWhere],
             },
             attributes: ['id', 'title', 'slug', 'categorySlug', 'updatedAt'],
             order: [['updatedAt', 'DESC']],
@@ -38,12 +32,10 @@ const panelService = {
         // 2) Open questions
         const openQuestions = await db.AcademyTopic.findAll({
             where: {
-                type: 'QUESTION',
-                status: 'OPEN',
-                acceptedPostId: null,
-                ...(finalAudience === 'BOTH'
-                    ? { audience: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] }
-                    : { audience: ['BOTH', finalAudience] }),
+                [Op.and]: [
+                    { type: 'QUESTION', status: 'OPEN', acceptedPostId: null },
+                    audWhere,
+                ],
             },
             attributes: ['id', 'title', 'tags', 'createdAt'],
             order: [['createdAt', 'DESC']],
@@ -63,10 +55,7 @@ const panelService = {
         // 4) Highlights (fixos)
         const highlights = await db.AcademyHighlight.findAll({
             where: {
-                active: true,
-                ...(finalAudience === 'BOTH'
-                    ? { audience: ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'] }
-                    : { audience: ['BOTH', finalAudience] }),
+                [Op.and]: [{ active: true }, audiencesWhereLiteral(tokens)],
             },
             attributes: ['title', 'type', 'target', 'priority'],
             order: [['priority', 'ASC']],
@@ -74,7 +63,7 @@ const panelService = {
         });
 
         return {
-            audience: finalAudience,
+            tokens,
             kbUpdates,
             openQuestions,
             tracksInProgress,

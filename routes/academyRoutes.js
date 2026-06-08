@@ -27,7 +27,14 @@ import gamificationController from '../controllers/academy/gamificationControlle
 import onboardingController from '../controllers/academy/onboardingController.js';
 import { externalRequestCode, externalVerifyCode } from '../controllers/academy/authExternalController.js';
 import { generateArticle } from '../services/academy/kbGenerateService.js';
+import { resolveUserTokens, audiencesWhereLiteral } from '../services/academy/audience.js';
 import db from '../models/sequelize/index.js';
+
+function resolveAcademyUserId(req) {
+    if (req.user?.id) return req.user.id;
+    const headerId = Number(req.headers['x-user-id']);
+    return Number.isFinite(headerId) && headerId > 0 ? headerId : null;
+}
 
 const router = express.Router();
 
@@ -63,11 +70,16 @@ router.get('/kb/articles/:categorySlug/:articleSlug/backlinks', authenticate, as
         const sl = String(articleSlug || '').trim();
         if (!cat || !sl) return res.json({ backlinks: [] });
 
+        // 🔒 Audience: o user só vê backlinks de artigos que ele próprio pode abrir.
+        const tokens = await resolveUserTokens(resolveAcademyUserId(req));
+
         const pattern = `%/academy/kb/${encodeURIComponent(cat)}/${encodeURIComponent(sl)}%`;
         const rows = await db.AcademyArticle.findAll({
             where: {
-                status: 'PUBLISHED',
-                body: { [db.Sequelize.Op.iLike]: pattern },
+                [db.Sequelize.Op.and]: [
+                    { status: 'PUBLISHED', body: { [db.Sequelize.Op.iLike]: pattern } },
+                    audiencesWhereLiteral(tokens),
+                ],
             },
             attributes: ['slug', 'categorySlug', 'title', 'updatedAt'],
             order: [['updatedAt', 'DESC']],
@@ -115,8 +127,17 @@ function makeKbSnippet(body) {
 // editor e o preview no hover de links internos no TokenRenderer.
 router.get('/kb/link-index', authenticate, async (req, res) => {
     try {
+        // 🔒 O índice de links no editor/preview só deve mostrar artigos que o
+        // user pode efetivamente abrir. Caso contrário, vazaríamos títulos.
+        const tokens = await resolveUserTokens(resolveAcademyUserId(req));
+
         const rows = await db.AcademyArticle.findAll({
-            where: { status: 'PUBLISHED' },
+            where: {
+                [db.Sequelize.Op.and]: [
+                    { status: 'PUBLISHED' },
+                    audiencesWhereLiteral(tokens),
+                ],
+            },
             attributes: ['slug', 'categorySlug', 'title', 'body', 'aliases', 'updatedAt'],
             order: [['updatedAt', 'DESC']],
             limit: 1000,

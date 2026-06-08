@@ -12,7 +12,9 @@ export default (sequelize, DataTypes) => {
         // TRACK: "gestao-comercial"
         target: { type: DataTypes.STRING, allowNull: false },
 
-        audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'BOTH' },
+        audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'BOTH' }, // legacy
+        // Multi-audience: set de tokens (INTERNAL | GESTOR | ADMIN | BROKER | REALESTATE | CORRESPONDENT).
+        audiences: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
 
         priority: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 10 },
 

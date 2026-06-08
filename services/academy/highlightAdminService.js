@@ -1,5 +1,6 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
+import { normalizeAudiences, deriveLegacyAudience, DEFAULT_AUDIENCES } from './audience.js';
 
 function normStr(v) {
     return String(v ?? '').trim();
@@ -12,28 +13,27 @@ function normalizeType(v) {
     return t;
 }
 
-function normalizeAudience(v) {
-    const a = String(v || '').toUpperCase().trim();
-    return ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'].includes(a) ? a : 'BOTH';
-}
-
 function normalizePriority(v) {
     const n = Number(v);
     if (!Number.isFinite(n)) return 10;
     return Math.max(1, Math.min(999, Math.round(n)));
 }
 
+function resolveAudiencesForWrite(input) {
+    const arr = normalizeAudiences(input);
+    return arr.length ? arr : DEFAULT_AUDIENCES.slice();
+}
+
 const highlightAdminService = {
-    async list({ active, audience, type } = {}) {
+    async list({ active, type } = {}) {
         const where = {};
         if (active === true || active === 'true') where.active = true;
         if (active === false || active === 'false') where.active = false;
-        if (audience) where.audience = normalizeAudience(audience);
         if (type) where.type = normalizeType(type);
 
         const rows = await db.AcademyHighlight.findAll({
             where,
-            attributes: ['id', 'title', 'type', 'target', 'audience', 'priority', 'active', 'createdAt', 'updatedAt'],
+            attributes: ['id', 'title', 'type', 'target', 'audience', 'audiences', 'priority', 'active', 'createdAt', 'updatedAt'],
             order: [['priority', 'ASC'], ['updatedAt', 'DESC']],
         });
 
@@ -54,12 +54,13 @@ const highlightAdminService = {
         const target = normStr(payload?.target);
         if (!target) throw new Error('target é obrigatório (URL para LINK, slug para ARTICLE/TRACK, id para TOPIC).');
 
-        const audience = normalizeAudience(payload?.audience);
+        const audiences = resolveAudiencesForWrite(payload?.audiences);
+        const audience = deriveLegacyAudience(audiences);
         const priority = normalizePriority(payload?.priority ?? 10);
         const active = payload?.active === false ? false : true;
 
         const created = await db.AcademyHighlight.create({
-            title, type, target, audience, priority, active,
+            title, type, target, audience, audiences, priority, active,
         });
 
         return { highlight: created.toJSON() };
@@ -80,7 +81,11 @@ const highlightAdminService = {
             if (!target) throw new Error('target é obrigatório.');
             row.target = target;
         }
-        if (payload?.audience !== undefined) row.audience = normalizeAudience(payload.audience);
+        if (payload?.audiences !== undefined) {
+            const audiences = resolveAudiencesForWrite(payload.audiences);
+            row.audiences = audiences;
+            row.audience = deriveLegacyAudience(audiences);
+        }
         if (payload?.priority !== undefined) row.priority = normalizePriority(payload.priority);
         if (payload?.active !== undefined) row.active = !!payload.active;
 

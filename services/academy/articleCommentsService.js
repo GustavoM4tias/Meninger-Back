@@ -14,7 +14,7 @@ import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 import mentionsService from './mentionsService.js';
 import gamificationService from './gamificationService.js';
-import { resolveAudienceForUser, audienceWhere } from './audience.js';
+import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
 
 function pickUser(u) {
     if (!u) return null;
@@ -30,13 +30,15 @@ function ensureBody(body) {
 
 async function findArticleOr404(articleId, { userId = null } = {}) {
     // 🔒 Audience check: user só vê/comenta artigos da sua audience.
-    const audience = await resolveAudienceForUser(userId);
+    const tokens = await resolveUserTokens(userId);
     const article = await db.AcademyArticle.findOne({
         where: {
-            id: Number(articleId),
-            ...audienceWhere(audience),
+            [Op.and]: [
+                { id: Number(articleId) },
+                audiencesWhereLiteral(tokens),
+            ],
         },
-        attributes: ['id', 'slug', 'title', 'categorySlug', 'createdByUserId', 'status', 'audience'],
+        attributes: ['id', 'slug', 'title', 'categorySlug', 'createdByUserId', 'status', 'audience', 'audiences'],
         raw: true,
     });
     if (!article) throw new Error('Artigo não encontrado.');

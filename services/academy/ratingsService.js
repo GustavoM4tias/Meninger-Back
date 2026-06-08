@@ -5,7 +5,7 @@
 
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-import { resolveAudienceForUser, audienceWhere } from './audience.js';
+import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
 import gamificationService from './gamificationService.js';
 
 const TARGET_TYPES = ['ARTICLE', 'TRACK'];
@@ -30,19 +30,29 @@ function normalizeStars(v) {
 
 async function validateTarget(type, ref, { userId = null } = {}) {
     // 🔒 Audience check: usuário só pode ratar o que enxerga.
-    const audience = await resolveAudienceForUser(userId);
-    const audWhere = audienceWhere(audience);
+    const tokens = await resolveUserTokens(userId);
+    const audWhere = audiencesWhereLiteral(tokens);
 
     if (type === 'ARTICLE') {
         if (!/^\d+$/.test(ref)) throw new Error('ARTICLE alvo deve ser id numérico.');
         const a = await db.AcademyArticle.findOne({
-            where: { id: Number(ref), status: 'PUBLISHED', ...audWhere },
+            where: {
+                [Op.and]: [
+                    { id: Number(ref), status: 'PUBLISHED' },
+                    audWhere,
+                ],
+            },
             attributes: ['id'],
         });
         if (!a) throw new Error('Artigo não encontrado.');
     } else if (type === 'TRACK') {
         const t = await db.AcademyTrack.findOne({
-            where: { slug: ref, status: 'PUBLISHED', ...audWhere },
+            where: {
+                [Op.and]: [
+                    { slug: ref, status: 'PUBLISHED' },
+                    audWhere,
+                ],
+            },
             attributes: ['id'],
         });
         if (!t) throw new Error('Trilha não encontrada.');

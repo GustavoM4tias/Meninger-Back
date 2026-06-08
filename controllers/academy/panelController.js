@@ -1,5 +1,4 @@
 import panelService from '../../services/academy/panelService.js';
-import { resolveAudienceForUser } from '../../services/academy/audience.js';
 
 function resolveUserId(req) {
     // Preferência: auth middleware injeta req.user
@@ -10,7 +9,7 @@ function resolveUserId(req) {
     const parsed = Number(headerId);
     if (!Number.isNaN(parsed) && parsed > 0) return parsed;
 
-    // Se não houver user, retorna null (painel “genérico”)
+    // Se não houver user, retorna null (painel "genérico")
     return null;
 }
 
@@ -18,9 +17,7 @@ const panelController = {
     async getSummary(req, res) {
         try {
             const userId = resolveUserId(req);
-            // 🔒 audience derivada do user (ignora ?audience= do cliente)
-            const audience = await resolveAudienceForUser(userId);
-            const data = await panelService.getSummary({ userId, audience });
+            const data = await panelService.getSummary({ userId });
             return res.json(data);
         } catch (err) {
             console.error('[academy.panel.summary]', err);

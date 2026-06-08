@@ -2,7 +2,10 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
-import { normalizeAudience as _audNorm, audienceWhere as _audWhere, resolveAudienceForUser } from './audience.js';
+import {
+    resolveUserTokens,
+    audiencesWhereLiteral,
+} from './audience.js';
 import certificateService from './certificateService.js';
 import questionBankService from './questionBankService.js';
 import prerequisiteService from './prerequisiteService.js';
@@ -24,10 +27,6 @@ function toUpper(v, fallback = '') {
 function toBool(v) {
   return v === true || v === 1 || v === '1' || v === 'true';
 }
-
-// Reexpõe com o nome local para evitar mudanças no resto do arquivo.
-const normalizeAudience = _audNorm;
-const audienceWhere = _audWhere;
 
 function normalizeTrackStatus(percent) {
   const p = Number(percent || 0);
@@ -218,14 +217,6 @@ function scoreQuiz({ payload, answers }) {
   return { totalQuestions, correctCount, allCorrect, scorePercent, perQuestion };
 }
 
-// resolveUserAudience legado mantido para chamadas internas que já têm userCtx pronto.
-// Usa fallback síncrono; quando temos só userId, usar resolveAudienceForUser (helper).
-function resolveUserAudience(userCtx) {
-  if (!userCtx) return 'BOTH';
-  if (userCtx.role === 'admin') return 'ADM_ONLY';
-  return 'BOTH';
-}
-
 async function getUserContext(userId) {
   if (!userId) return null;
 
@@ -289,12 +280,17 @@ function isAllowedByAssignmentsRows(assignmentsForSlug, userCtx) {
 }
 
 const trackService = {
-  async listTracks({ audience = 'BOTH', userId = null } = {}) {
-    const a = normalizeAudience(audience);
+  async listTracks({ userId = null } = {}) {
+    const tokens = await resolveUserTokens(userId);
 
     const rows = await db.AcademyTrack.findAll({
-      where: { status: 'PUBLISHED', ...audienceWhere(a) },
-      attributes: ['slug', 'title', 'description', 'audience', 'updatedAt'],
+      where: {
+        [Op.and]: [
+          { status: 'PUBLISHED' },
+          audiencesWhereLiteral(tokens),
+        ],
+      },
+      attributes: ['slug', 'title', 'description', 'audience', 'audiences', 'updatedAt'],
       order: [['updatedAt', 'DESC']],
     });
 
@@ -360,11 +356,11 @@ const trackService = {
     return { results };
   },
 
-  async getTrack({ slug, audience = 'BOTH', userId = null } = {}) {
-    const a = normalizeAudience(audience);
+  async getTrack({ slug, userId = null } = {}) {
     const trackSlug = String(slug || '').trim();
     if (!trackSlug) return null;
 
+    const tokens = await resolveUserTokens(userId);
     const userCtx = await getUserContext(userId);
 
     const assigns = await db.AcademyTrackAssignment.findAll({
@@ -376,8 +372,13 @@ const trackService = {
     if (!isAllowedByAssignmentsRows(assigns, userCtx)) return null;
 
     const track = await db.AcademyTrack.findOne({
-      where: { slug: trackSlug, status: 'PUBLISHED', ...audienceWhere(a) },
-      attributes: ['id', 'slug', 'title', 'description', 'audience', 'updatedAt'],
+      where: {
+        [Op.and]: [
+          { slug: trackSlug, status: 'PUBLISHED' },
+          audiencesWhereLiteral(tokens),
+        ],
+      },
+      attributes: ['id', 'slug', 'title', 'description', 'audience', 'audiences', 'updatedAt'],
     });
     if (!track) return null;
 
@@ -697,10 +698,7 @@ const trackService = {
     });
     const priorPercent = Number(priorRow?.progressPercent ?? 0);
 
-    // Resolve audience real do user (não confia em valor fixo 'BOTH').
-    const userCtx = await getUserContext(uid);
-    const effectiveAudience = resolveUserAudience(userCtx);
-    const detail = await this.getTrack({ slug, audience: effectiveAudience, userId: uid });
+    const detail = await this.getTrack({ slug, userId: uid });
     const percent = Number(detail?.progressPercent ?? 0);
     const status = normalizeTrackStatus(percent);
 
@@ -876,10 +874,7 @@ const trackService = {
       submittedAt: new Date(),
     });
 
-    // Resolve audience real do user para refresh do detail.
-    const userCtx = await getUserContext(uid);
-    const effectiveAudience = resolveUserAudience(userCtx);
-    const detail = await this.getTrack({ slug, audience: effectiveAudience, userId: uid });
+    const detail = await this.getTrack({ slug, userId: uid });
 
     return {
       ok: true,

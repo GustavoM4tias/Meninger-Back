@@ -5,7 +5,7 @@
 // autenticado pode usar. Não há dados sensíveis aqui — só estudos.
 //
 // Princípios:
-//   - SEMPRE filtra por audience do user (resolveAudienceForUser).
+//   - SEMPRE filtra por tokens do user (resolveUserTokens).
 //   - SEMPRE filtra resultados pelos assignments do user (não vaza track
 //     atribuída a outro perfil).
 //   - NÃO inclui correctIndexes de quiz (sempre stripado).
@@ -14,7 +14,7 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
-import { resolveAudienceForUser, audienceWhere } from '../academy/audience.js';
+import { resolveUserTokens, audiencesWhereLiteral } from '../academy/audience.js';
 import gamificationService from '../academy/gamificationService.js';
 
 const MAX_RESULTS = 20;
@@ -38,19 +38,21 @@ registerTool({
         const categorySlug = args?.categorySlug ? String(args.categorySlug).trim() : null;
         if (!q) return { result: { results: [], message: 'Forneça um termo de busca.' } };
 
-        const audience = await resolveAudienceForUser(user.id);
-        const where = {
-            status: 'PUBLISHED',
-            ...audienceWhere(audience),
-            [Op.or]: [
-                { title: { [Op.iLike]: `%${q}%` } },
-                { body: { [Op.iLike]: `%${q}%` } },
-            ],
-        };
-        if (categorySlug) where.categorySlug = categorySlug;
+        const tokens = await resolveUserTokens(user.id);
+        const andClauses = [
+            { status: 'PUBLISHED' },
+            audiencesWhereLiteral(tokens),
+            {
+                [Op.or]: [
+                    { title: { [Op.iLike]: `%${q}%` } },
+                    { body: { [Op.iLike]: `%${q}%` } },
+                ],
+            },
+        ];
+        if (categorySlug) andClauses.push({ categorySlug });
 
         const rows = await db.AcademyArticle.findAll({
-            where,
+            where: { [Op.and]: andClauses },
             attributes: ['id', 'title', 'slug', 'categorySlug', 'updatedAt'],
             order: [['updatedAt', 'DESC']],
             limit: MAX_RESULTS,
@@ -68,7 +70,7 @@ registerTool({
             },
             resultCount: rows.length,
             resultIds: rows.map(r => r.id),
-            filtersApplied: { audience, categorySlug },
+            filtersApplied: { tokens, categorySlug },
         };
     },
 });
@@ -87,11 +89,10 @@ registerTool({
     contexts: ['ACADEMY', 'OFFICE'],
     async handler(user, args) {
         const onlyMandatory = args?.onlyMandatory === true;
-        const audience = await resolveAudienceForUser(user.id);
 
         // Reusa trackService.listTracks (que já cobre tudo: audience + assignments + lock)
         const trackService = (await import('../academy/trackService.js')).default;
-        const data = await trackService.listTracks({ audience, userId: user.id });
+        const data = await trackService.listTracks({ userId: user.id });
         let results = data?.results || [];
 
         if (onlyMandatory) {
@@ -125,7 +126,7 @@ registerTool({
                 })),
             },
             resultCount: results.length,
-            filtersApplied: { audience, onlyMandatory },
+            filtersApplied: { onlyMandatory },
         };
     },
 });
@@ -141,9 +142,8 @@ registerTool({
     requiredPermissions: [],
     contexts: ['ACADEMY', 'OFFICE'],
     async handler(user) {
-        const audience = await resolveAudienceForUser(user.id);
         const trackService = (await import('../academy/trackService.js')).default;
-        const data = await trackService.listTracks({ audience, userId: user.id });
+        const data = await trackService.listTracks({ userId: user.id });
         const tracks = data?.results || [];
 
         // Mandatory + dueAt mais próximo
@@ -233,11 +233,13 @@ registerTool({
     requiredPermissions: [],
     contexts: ['ACADEMY', 'OFFICE'],
     async handler(user) {
-        const audience = await resolveAudienceForUser(user.id);
+        const tokens = await resolveUserTokens(user.id);
 
         // Categorias REAIS da KB — derivadas dos artigos publicados na audience.
         const articleRows = await db.AcademyArticle.findAll({
-            where: { status: 'PUBLISHED', ...audienceWhere(audience) },
+            where: {
+                [Op.and]: [{ status: 'PUBLISHED' }, audiencesWhereLiteral(tokens)],
+            },
             attributes: ['categorySlug'],
             raw: true,
         });
@@ -258,7 +260,7 @@ registerTool({
 
         // Trilhas visíveis ao usuário (trackService cobre audience + assignments).
         const trackService = (await import('../academy/trackService.js')).default;
-        const data = await trackService.listTracks({ audience, userId: user.id });
+        const data = await trackService.listTracks({ userId: user.id });
         const tracks = (data?.results || []).slice(0, MAX_RESULTS).map(t => ({
             title: t.title,
             slug: t.slug,
@@ -282,7 +284,7 @@ registerTool({
                     : 'Estas são as categorias e trilhas REAIS disponíveis. Use somente estes itens — não invente outros.',
             },
             resultCount: categories.length + tracks.length,
-            filtersApplied: { audience },
+            filtersApplied: { tokens },
         };
     },
 });

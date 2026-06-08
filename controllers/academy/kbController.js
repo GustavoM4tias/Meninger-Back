@@ -1,5 +1,4 @@
 import kbService from '../../services/academy/kbService.js';
-import { resolveAudienceForUser } from '../../services/academy/audience.js';
 
 function resolveUserId(req) {
     if (req.user?.id) return req.user.id;
@@ -10,9 +9,7 @@ function resolveUserId(req) {
 const kbController = {
     async listCategories(req, res) {
         try {
-            // 🔒 audience derivada do user no servidor (ignora ?audience= do cliente)
-            const audience = await resolveAudienceForUser(resolveUserId(req));
-            const data = await kbService.listCategories({ audience });
+            const data = await kbService.listCategories({ userId: resolveUserId(req) });
             return res.json(data);
         } catch (err) {
             console.error('[academy.kb.categories]', err);
@@ -29,17 +26,12 @@ const kbController = {
                 page = '1',
                 pageSize = '20',
 
-                // ✅ novo
                 mode = '',            // '' | 'admin'
                 status = '',          // '' | 'DRAFT' | 'PUBLISHED'
             } = req.query;
 
-            // 🔒 audience derivada do user no servidor (ignora ?audience= do cliente)
-            const audience = await resolveAudienceForUser(resolveUserId(req));
-
-            // 🔒 Modo admin só para internos+admin. Status só faz efeito em modo admin
-            // (em modo padrão o service força status=PUBLISHED, então ignorar status
-            // aqui não vaza nada — apenas evita 403 ruidoso para o aluno comum).
+            // 🔒 Modo admin só para internos+admin. O service já força tokens do
+            // user e status=PUBLISHED em modo padrão — nada vaza para o aluno.
             const wantsAdminMode = String(mode || '').toLowerCase() === 'admin';
             if (wantsAdminMode) {
                 const isInternal = String(req.user?.auth_provider || 'INTERNAL').toUpperCase() === 'INTERNAL';
@@ -52,7 +44,7 @@ const kbController = {
             const data = await kbService.listArticles({
                 q: (q || search || ''),
                 categorySlug,
-                audience,
+                userId: resolveUserId(req),
                 page: Number(page) || 1,
                 pageSize: Number(pageSize) || 20,
                 mode: wantsAdminMode ? 'admin' : '',
@@ -69,10 +61,11 @@ const kbController = {
     async getArticle(req, res) {
         try {
             const { categorySlug, articleSlug } = req.params;
-            // 🔒 audience derivada do user no servidor (ignora ?audience= do cliente)
-            const audience = await resolveAudienceForUser(resolveUserId(req));
-
-            const data = await kbService.getArticle({ categorySlug, articleSlug, audience });
+            const data = await kbService.getArticle({
+                categorySlug,
+                articleSlug,
+                userId: resolveUserId(req),
+            });
             if (!data) return res.status(404).json({ message: 'Artigo não encontrado.' });
             return res.json(data);
         } catch (err) {

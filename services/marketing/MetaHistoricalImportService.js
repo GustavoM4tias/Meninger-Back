@@ -95,6 +95,18 @@ async function insertHistoricalLead({ leadgenId, graphLead, mapping }) {
     const platform = String(graphLead.platform || '').toLowerCase();
     const cvOrigemDefault = (platform === 'ig' || platform === 'instagram') ? 'IG' : 'FB';
 
+    // Fallback: /{form_id}/leads nem sempre devolve campaign_id (lead orgânico,
+    // campanha excluída, lead de teste). Quando há ad_id, resolvemos pela cache
+    // local MetaAd que tem campaign_id como FK lógica.
+    let resolvedCampaignId = graphLead.campaign_id != null ? String(graphLead.campaign_id) : null;
+    const adId = graphLead.ad_id != null ? String(graphLead.ad_id) : null;
+    if (!resolvedCampaignId && adId && db.MetaAd) {
+        try {
+            const ad = await db.MetaAd.findByPk(adId, { attributes: ['campaign_id'] });
+            if (ad?.campaign_id) resolvedCampaignId = String(ad.campaign_id);
+        } catch { /* silencioso — backfill manual cobre o resto */ }
+    }
+
     // Aplica mapping local se existir (mídia, empreendimentos, etc.) — mesmo
     // sendo histórico, é útil pra cruzamento posterior com CV.
     const binding = { cv_origem: cvOrigemDefault };
@@ -120,8 +132,8 @@ async function insertHistoricalLead({ leadgenId, graphLead, mapping }) {
 
         meta_leadgen_id:  String(leadgenId),
         meta_form_id:     graphLead.form_id != null ? String(graphLead.form_id) : null,
-        meta_campaign_id: graphLead.campaign_id != null ? String(graphLead.campaign_id) : null,
-        meta_ad_id:       graphLead.ad_id != null ? String(graphLead.ad_id) : null,
+        meta_campaign_id: resolvedCampaignId,
+        meta_ad_id:       adId,
 
         bound_empreendimentos: binding.bound_empreendimentos || null,
         midia_slug:            binding.midia_slug || null,

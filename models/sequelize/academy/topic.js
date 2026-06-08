@@ -8,7 +8,9 @@ export default (sequelize, DataTypes) => {
         // OPEN | CLOSED
         status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'OPEN' },
 
-        audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'BOTH' },
+        audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'BOTH' }, // legacy
+        // Multi-audience: set de tokens (INTERNAL | GESTOR | ADMIN | BROKER | REALESTATE | CORRESPONDENT).
+        audiences: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
 
         // categoria fixa via select (slug)
         categorySlug: { type: DataTypes.STRING, allowNull: false, defaultValue: 'geral' },

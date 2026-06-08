@@ -1,6 +1,5 @@
 import communityService from '../../services/academy/communityService.js';
 import { COMMUNITY_CATEGORIES } from '../../services/academy/communityService.js';
-import { resolveAudienceForUser } from '../../services/academy/audience.js';
 
 function resolveUserId(req) {
     if (req.user?.id) return req.user.id;
@@ -10,9 +9,6 @@ function resolveUserId(req) {
 }
 
 function isAdmin(req) {
-    // ajuste conforme seu auth atual:
-    // - se já existe req.user.isAdmin use isso
-    // - ou role === 'ADMIN'
     if (req.user?.isAdmin === true) return true;
 
     const role = String(req.user?.role || '').toUpperCase();
@@ -33,9 +29,6 @@ const communityController = {
                 pageSize = '20',
             } = req.query;
 
-            // 🔒 audience derivada do user no servidor
-            const audience = await resolveAudienceForUser(resolveUserId(req));
-
             const p = Number(page);
             const ps = Number(pageSize);
 
@@ -43,7 +36,7 @@ const communityController = {
                 type,
                 q,
                 status,
-                audience,
+                userId: resolveUserId(req),
                 page: Number.isFinite(p) && p > 0 ? p : 1,
                 pageSize: Number.isFinite(ps) && ps > 0 ? ps : 20,
             });
@@ -58,11 +51,18 @@ const communityController = {
     async createTopic(req, res) {
         try {
             const userId = resolveUserId(req);
-            const data = await communityService.createTopic({ userId, payload: req.body });
+            if (!userId) return res.status(401).json({ message: 'Não autenticado.' });
+
+            const data = await communityService.createTopic({
+                userId,
+                isAdmin: isAdmin(req),
+                payload: req.body,
+            });
             return res.status(201).json(data);
         } catch (err) {
             console.error('[academy.community.createTopic]', err);
-            return res.status(400).json({ message: err.message || 'Erro ao criar tópico.' });
+            const status = err.statusCode || 400;
+            return res.status(status).json({ message: err.message || 'Erro ao criar tópico.' });
         }
     },
 
@@ -70,14 +70,12 @@ const communityController = {
         try {
             const id = Number(req.params.id);
             const userId = resolveUserId(req);
-            // 🔒 audience derivada do user
-            const audience = await resolveAudienceForUser(userId);
 
             if (!Number.isFinite(id) || id <= 0) {
                 return res.status(400).json({ message: 'ID inválido.' });
             }
 
-            const data = await communityService.getTopic({ id, audience, userId });
+            const data = await communityService.getTopic({ id, userId });
             if (!data) return res.status(404).json({ message: 'Tópico não encontrado.' });
 
             return res.json(data);
@@ -85,11 +83,13 @@ const communityController = {
             console.error('[academy.community.getTopic]', err);
             return res.status(500).json({ message: 'Erro ao carregar tópico.' });
         }
-    }, // ✅ vírgula aqui
+    },
 
     async createPost(req, res) {
         try {
             const userId = resolveUserId(req);
+            if (!userId) return res.status(401).json({ message: 'Não autenticado.' });
+
             const topicId = Number(req.params.id);
 
             if (!Number.isFinite(topicId) || topicId <= 0) {
@@ -165,9 +165,6 @@ const communityController = {
 
             const { q = '', status = '', page = '1', pageSize = '20' } = req.query;
 
-            // 🔒 audience derivada do user
-            const audience = await resolveAudienceForUser(userId);
-
             const p = Number(page);
             const ps = Number(pageSize);
 
@@ -175,7 +172,6 @@ const communityController = {
                 userId,
                 q,
                 status,
-                audience,
                 page: Number.isFinite(p) && p > 0 ? p : 1,
                 pageSize: Number.isFinite(ps) && ps > 0 ? ps : 20,
             });
@@ -250,9 +246,7 @@ const communityController = {
 
     async getMeta(req, res) {
         try {
-            // 🔒 audience derivada do user
-            const audience = await resolveAudienceForUser(resolveUserId(req));
-            const data = await communityService.getMeta({ audience });
+            const data = await communityService.getMeta({ userId: resolveUserId(req) });
             return res.json(data);
         } catch (err) {
             console.error('[academy.community.getMeta]', err);

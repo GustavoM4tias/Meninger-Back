@@ -21,6 +21,7 @@ import MetaCampaignService     from '../services/marketing/MetaCampaignService.j
 import MetaAdService           from '../services/marketing/MetaAdService.js';
 import MetaHistoricalImportService from '../services/marketing/MetaHistoricalImportService.js';
 import CvReconciliationService from '../services/marketing/CvReconciliationService.js';
+import LeadCampaignBackfillService from '../services/marketing/LeadCampaignBackfillService.js';
 
 const FULL_CRON  = process.env.MARKETING_FULL_SYNC_CRON  || '20 6-18/2 * * *';
 const LIGHT_CRON = process.env.MARKETING_LIGHT_SYNC_CRON || '*/15 * * * *';
@@ -58,7 +59,7 @@ async function runFullSync(opts = {}) {
 
     const summary = {
         forms: null, campaigns: null, ads: null,
-        historical: null, reconciliation: null, errors: [],
+        backfill: null, historical: null, reconciliation: null, errors: [],
     };
 
     // 1) Forms (Meta Lead Forms)
@@ -104,7 +105,19 @@ async function runFullSync(opts = {}) {
         console.error(`❌ [marketing-full-sync] ads: ${e.message}`);
     }
 
-    // 4) Import histórico (janela configurável)
+    // 4) Backfill ad → campaign (resolve históricos antigos com ad_id sem campaign_id,
+    //    aproveitando o cache MetaAd que acabou de ser sincronizado no passo 3).
+    try {
+        summary.backfill = await LeadCampaignBackfillService.backfillCampaignsFromAds({ limit: 2000 });
+        if (summary.backfill.scanned > 0) {
+            console.log(`✅ [marketing-full-sync] backfill: ${summary.backfill.updated} resolvidos, ${summary.backfill.unresolved} sem ad em cache`);
+        }
+    } catch (e) {
+        summary.errors.push({ step: 'backfill', error: e.message });
+        console.warn(`⚠️  [marketing-full-sync] backfill (não-fatal): ${e.message}`);
+    }
+
+    // 5) Import histórico (janela configurável) — já usa lookup ad→campaign no insert
     try {
         summary.historical = await MetaHistoricalImportService.importHistorical({ sinceDays: historicalDays });
         console.log(`✅ [marketing-full-sync] histórico: ${summary.historical.inserted} novos, ${summary.historical.duplicates} dup`);
@@ -113,7 +126,7 @@ async function runFullSync(opts = {}) {
         console.error(`❌ [marketing-full-sync] histórico: ${e.message}`);
     }
 
-    // 5) Reconciliação com CV — best-effort
+    // 6) Reconciliação com CV — best-effort
     try {
         summary.reconciliation = await CvReconciliationService.reconcileBatch({
             limit: reconcileLimit, channel: 'meta_lead_ads', status: 'historical',
