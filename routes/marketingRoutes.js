@@ -10,7 +10,7 @@ import requireAdmin from '../middlewares/requireAdmin.js';
 import {
     listInboundLeads, getInboundLead, routeInboundLead,
     redispatchInboundLead, markSpam, unmarkSpam, captureHealth,
-    listCvEnterprises, reconcileWithCv,
+    listCvEnterprises, reconcileWithCv, backfillCampaignFromAd,
 } from '../controllers/marketing/inboundLeadController.js';
 import {
     listLeadForms, createLeadForm, updateLeadForm,
@@ -76,6 +76,7 @@ router.post('/inbound-leads/:id/redispatch', redispatchInboundLead);
 router.post('/inbound-leads/:id/mark-spam', markSpam);
 router.post('/inbound-leads/:id/unmark-spam', unmarkSpam);
 router.post('/inbound-leads/:id/reconcile-cv', reconcileWithCv);
+router.post('/inbound-leads/backfill-campaign', backfillCampaignFromAd);
 
 // Formulários de captação (internos — LPs do site)
 router.get('/lead-forms', listLeadForms);

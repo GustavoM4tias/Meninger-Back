@@ -3,7 +3,9 @@ export default (sequelize, DataTypes) => {
         slug: { type: DataTypes.STRING, allowNull: false, unique: true },
         title: { type: DataTypes.STRING, allowNull: false },
         description: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
-        audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'BOTH' }, // BOTH | GESTOR_ONLY | ADM_ONLY
+        audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'BOTH' }, // legacy — compat
+        // Multi-audience: set de tokens (INTERNAL | GESTOR | ADMIN | BROKER | REALESTATE | CORRESPONDENT).
+        audiences: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'PUBLISHED' }, // DRAFT | PUBLISHED
 
         // S3.5: recertificação periódica. Se preenchido, scheduler mensal expira

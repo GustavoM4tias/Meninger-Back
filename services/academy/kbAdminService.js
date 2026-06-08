@@ -3,29 +3,39 @@ import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 import gamificationService from './gamificationService.js';
+import {
+    normalizeAudiences,
+    deriveLegacyAudience,
+    resolveUserTokens,
+    DEFAULT_AUDIENCES,
+} from './audience.js';
 
-// Resolve usuários que devem ser notificados por audience.
-// BOTH       → todos os ativos
-// GESTOR_ONLY→ gestores (heurística atual: role==='admin' OR position contains 'gestor/gerente/diretor')
-// ADM_ONLY   → apenas role==='admin'
-async function resolveAudienceUserIds(audience) {
-    const a = String(audience || 'BOTH').toUpperCase();
-    const where = { status: true };
+/**
+ * Resolve usuários que devem ser notificados pelo conjunto de audiences do
+ * artigo. Aplica a mesma lógica de `resolveUserTokens(user)` mas em lote:
+ * varre usuários ativos e mantém apenas os que TÊM tokens que cruzam com o
+ * `audiences` do artigo. Como o cruzamento é por interseção, o admin sempre
+ * recebe (ele tem todos os tokens).
+ */
+async function resolveAudienceUserIds(audiences) {
+    const targetSet = new Set(normalizeAudiences(audiences));
+    if (!targetSet.size) return [];
 
-    if (a === 'ADM_ONLY') {
-        where.role = 'admin';
-    } else if (a === 'GESTOR_ONLY') {
-        where[Op.or] = [
-            { role: 'admin' },
-            { position: { [Op.iLike]: '%gestor%' } },
-            { position: { [Op.iLike]: '%gerente%' } },
-            { position: { [Op.iLike]: '%diretor%' } },
-        ];
+    const users = await db.User.findAll({
+        where: { status: true },
+        attributes: ['id'],
+        raw: true,
+    });
+
+    const matchedIds = [];
+    // Sequencial mas leve: resolveUserTokens faz 1 query por user. Para volumes
+    // grandes, otimizar com lookup de role/position/auth_provider em batch.
+    for (const u of users) {
+        // eslint-disable-next-line no-await-in-loop
+        const tokens = await resolveUserTokens(u.id);
+        if (tokens.some(t => targetSet.has(t))) matchedIds.push(Number(u.id));
     }
-    // BOTH: sem filtro adicional
-
-    const users = await db.User.findAll({ where, attributes: ['id'], raw: true });
-    return users.map(u => Number(u.id));
+    return matchedIds;
 }
 
 // S2.4: cria snapshot da versão ATUAL antes de qualquer mudança no artigo.
@@ -53,7 +63,8 @@ async function snapshotVersion(article, { userId, message = null } = {}) {
 async function notifyArticlePublished(article) {
     try {
         if (!article || article.status !== 'PUBLISHED') return;
-        const userIds = await resolveAudienceUserIds(article.audience);
+        // Notifica TODOS os usuários cujo tokens cruzam com as audiences do artigo.
+        const userIds = await resolveAudienceUserIds(article.audiences);
         if (!userIds.length) return;
 
         await NotificationService.notify({
@@ -75,7 +86,7 @@ function kebab(s) {
         .trim()
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\p{M}/gu, '')
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/(^-|-$)/g, '');
 }
@@ -109,6 +120,11 @@ function normalizeAliases(input) {
         if (out.length >= 20) break;
     }
     return out;
+}
+
+function resolveAudiencesForWrite(input) {
+    const arr = normalizeAudiences(input);
+    return arr.length ? arr : DEFAULT_AUDIENCES.slice();
 }
 
 async function uniqueSlug({ baseSlug, ignoreId = null }) {
@@ -157,6 +173,7 @@ const kbAdminService = {
                 'slug',
                 'categorySlug',
                 'status',
+                'audiences',
                 'createdByUserId',
                 'updatedByUserId',
                 'createdAt',
@@ -180,6 +197,8 @@ const kbAdminService = {
                 'body',
                 'payload',
                 'aliases',
+                'audiences',
+                'audience',
                 'status',
                 'createdByUserId',
                 'updatedByUserId',
@@ -190,9 +209,11 @@ const kbAdminService = {
         return article;
     },
 
-    async create({ userId, title, categorySlug, body, payload, aliases }) {
+    async create({ userId, title, categorySlug, body, payload, aliases, audiences }) {
         const baseSlug = kebab(title);
         const slug = await uniqueSlug({ baseSlug });
+
+        const aud = resolveAudiencesForWrite(audiences);
 
         const article = await db.AcademyArticle.create({
             title: String(title).trim(),
@@ -201,6 +222,8 @@ const kbAdminService = {
             body: String(body || ''),
             payload: asJsonOrNull(payload),
             aliases: normalizeAliases(aliases),
+            audiences: aud,
+            audience: deriveLegacyAudience(aud),
             status: 'DRAFT',
             createdByUserId: userId || null,
             updatedByUserId: userId || null,
@@ -209,7 +232,7 @@ const kbAdminService = {
         return article;
     },
 
-    async update(id, { userId, title, categorySlug, body, payload, aliases, versionMessage = null }) {
+    async update(id, { userId, title, categorySlug, body, payload, aliases, audiences, versionMessage = null }) {
         const article = await db.AcademyArticle.findByPk(id);
         if (!article) throw new Error('Artigo não encontrado.');
 
@@ -225,12 +248,17 @@ const kbAdminService = {
         const aliasesChanged = nextAliases !== undefined &&
             JSON.stringify(nextAliases) !== JSON.stringify(article.aliases || []);
 
+        const nextAudiences = audiences === undefined ? undefined : resolveAudiencesForWrite(audiences);
+        const audiencesChanged = nextAudiences !== undefined &&
+            JSON.stringify(nextAudiences) !== JSON.stringify(article.audiences || []);
+
         const changed =
             nextCategory !== article.categorySlug ||
             nextTitle !== article.title ||
             nextBody !== (article.body || '') ||
             JSON.stringify(nextPayload) !== JSON.stringify(article.payload || null) ||
-            aliasesChanged;
+            aliasesChanged ||
+            audiencesChanged;
 
         if (changed) {
             await snapshotVersion(article, { userId, message: versionMessage });
@@ -255,6 +283,10 @@ const kbAdminService = {
             updatedByUserId: userId || article.updatedByUserId || null,
         };
         if (nextAliases !== undefined) fields.aliases = nextAliases;
+        if (nextAudiences !== undefined) {
+            fields.audiences = nextAudiences;
+            fields.audience = deriveLegacyAudience(nextAudiences);
+        }
 
         await article.update(fields);
 

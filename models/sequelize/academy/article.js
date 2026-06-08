@@ -12,6 +12,12 @@ export default (sequelize, DataTypes) => {
         // Ex.: para "Nota Fiscal de Serviço", aliases = ["NFS", "NFS-e"].
         aliases: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
 
+        // Multi-audience — set de tokens dos públicos que podem ver o artigo.
+        // Tokens: INTERNAL | GESTOR | ADMIN | BROKER | REALESTATE | CORRESPONDENT.
+        // O enum legacy `audience` segue aqui apenas para compat — todas as
+        // queries de leitura passam a usar este campo (audiences ?| ARRAY[...]).
+        audiences: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+
         createdByUserId: { type: DataTypes.INTEGER, allowNull: true },
         updatedByUserId: { type: DataTypes.INTEGER, allowNull: true },
     }, {

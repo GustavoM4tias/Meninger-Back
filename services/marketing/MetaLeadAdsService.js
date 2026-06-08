@@ -283,7 +283,25 @@ async function processOneLead(value) {
     const attribution = {};
     let mappingSource = null;
 
-    const campaignId = graphLead.campaign_id != null ? String(graphLead.campaign_id) : null;
+    let campaignId = graphLead.campaign_id != null ? String(graphLead.campaign_id) : null;
+    const adId = value.ad_id != null
+        ? String(value.ad_id)
+        : (graphLead.ad_id != null ? String(graphLead.ad_id) : null);
+
+    // Fallback: a Meta nem sempre devolve campaign_id (lead orgânico, campanha
+    // antiga, lead de teste). Se o ad_id veio, resolvemos via cache local de
+    // MetaAd — que tem campaign_id como FK lógica das campanhas sincronizadas.
+    if (!campaignId && adId) {
+        try {
+            const ad = await db.MetaAd.findByPk(adId, { attributes: ['campaign_id'] });
+            if (ad?.campaign_id) {
+                campaignId = String(ad.campaign_id);
+                console.log(`🔗 [marketing-capture] campaign_id resolvido via ad ${adId} → ${campaignId} (lead ${leadgenId}).`);
+            }
+        } catch (e) {
+            console.warn(`⚠️  [marketing-capture] falha ao resolver campaign_id pelo ad ${adId}: ${e.message}`);
+        }
+    }
 
     // 1) Tenta mapping da campanha
     if (campaignId) {
@@ -353,8 +371,8 @@ async function processOneLead(value) {
             leadgen_id:  String(leadgenId),
             form_id:     formId,
             page_id:     value.page_id != null ? String(value.page_id) : null,
-            ad_id:       value.ad_id != null ? String(value.ad_id) : (graphLead.ad_id != null ? String(graphLead.ad_id) : null),
-            campaign_id: graphLead.campaign_id != null ? String(graphLead.campaign_id) : null,
+            ad_id:       adId,
+            campaign_id: campaignId,           // já pode ter sido resolvido via fallback ad→campanha
         },
         rawPayload: { webhook: value, graph: graphLead },
     });

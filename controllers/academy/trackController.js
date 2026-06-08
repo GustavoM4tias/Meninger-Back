@@ -1,6 +1,5 @@
 import trackService from '../../services/academy/trackService.js';
 import videoWatchService from '../../services/academy/videoWatchService.js';
-import { resolveAudienceForUser } from '../../services/academy/audience.js';
 
 function resolveUserId(req) {
     if (req.user?.id) return req.user.id;
@@ -12,9 +11,7 @@ const trackController = {
     async listTracks(req, res) {
         try {
             const userId = resolveUserId(req);
-            // 🔒 audience derivada do user
-            const audience = await resolveAudienceForUser(userId);
-            const data = await trackService.listTracks({ audience, userId });
+            const data = await trackService.listTracks({ userId });
             return res.json(data);
         } catch (err) {
             console.error('[academy.tracks.list]', err);
@@ -26,10 +23,8 @@ const trackController = {
         try {
             const { slug } = req.params;
             const userId = resolveUserId(req);
-            // 🔒 audience derivada do user
-            const audience = await resolveAudienceForUser(userId);
 
-            const data = await trackService.getTrack({ slug, audience, userId });
+            const data = await trackService.getTrack({ slug, userId });
             if (!data) return res.status(404).json({ message: 'Trilha não encontrada.' });
 
             return res.json(data);

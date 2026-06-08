@@ -1,5 +1,6 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
+import { normalizeAudiences, deriveLegacyAudience, DEFAULT_AUDIENCES } from './audience.js';
 
 function normStr(v) {
   return String(v ?? '').trim();
@@ -13,7 +14,7 @@ function toUpper(v, fallback = '') {
 function slugify(input) {
   return normStr(input)
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\p{M}/gu, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '')
@@ -58,13 +59,6 @@ function normalizeStatus(v) {
   return ['DRAFT', 'PUBLISHED'].includes(s) ? s : 'DRAFT';
 }
 
-// Mantido por compatibilidade (se você ainda tem coluna audience).
-// Se não tiver, nada aqui quebra (só não use).
-function normalizeAudience(v) {
-  const s = toUpper(v, 'BOTH');
-  return ['BOTH', 'GESTOR_ONLY', 'ADM_ONLY'].includes(s) ? s : 'BOTH';
-}
-
 function normalizeItemType(v) {
   const t = toUpper(v, 'TASK');
   const allowed = ['TEXT', 'VIDEO', 'QUIZ', 'ARTICLE', 'COMMUNITY_TOPIC', 'LINK', 'TASK', 'FORM'];
@@ -76,6 +70,11 @@ function asJsonOrNull(v) {
   if (v === null || v === undefined) return null;
   if (typeof v === 'object') return v;
   throw new Error('payload inválido (deve ser objeto).');
+}
+
+function resolveAudiencesForWrite(input) {
+  const arr = normalizeAudiences(input);
+  return arr.length ? arr : DEFAULT_AUDIENCES.slice();
 }
 
 async function nextOrderIndex(trackId) {
@@ -106,20 +105,54 @@ async function getItems(trackId) {
   return items.map((i) => i.toJSON());
 }
 
+// ⚠️ SEGURANÇA: garante que o artigo referenciado pelo item ARTICLE
+// cobre TODAS as audiences da trilha. Caso contrário, um usuário visando
+// a trilha não consegue abrir o artigo (ou pior: nem pode ver, mas vê o
+// link). Lança erro 400 com a lista de tokens faltantes.
+async function assertArticleCoversTrack({ track, item }) {
+  if (!item || String(item.type || '').toUpperCase() !== 'ARTICLE') return;
+
+  const target = normStr(item.target);
+  if (!target) return; // sem target, não há o que validar (UI deve impedir)
+
+  // target esperado: "kb/<category>/<slug>" — mas aceitamos só <slug> também.
+  let slug = target;
+  if (target.includes('/')) {
+    const parts = target.split('/').filter(Boolean);
+    slug = parts[parts.length - 1];
+  }
+
+  const article = await db.AcademyArticle.findOne({
+    where: { slug },
+    attributes: ['id', 'title', 'audiences'],
+    raw: true,
+  });
+  if (!article) {
+    throw new Error(`Artigo "${slug}" não encontrado para validar audiences do item.`);
+  }
+
+  const trackAudiences = normalizeAudiences(track.audiences);
+  const articleAudiences = new Set(normalizeAudiences(article.audiences));
+
+  const missing = trackAudiences.filter(a => !articleAudiences.has(a));
+  if (missing.length) {
+    throw new Error(
+      `O artigo "${article.title}" não cobre o público da trilha (faltando: ${missing.join(', ')}). ` +
+      `Edite o artigo e habilite esses públicos antes de vinculá-lo a esta trilha.`
+    );
+  }
+}
+
 const trackAdminService = {
   // Admin list
-  async list({ audience = 'BOTH', status = '' } = {}) {
+  async list({ status = '' } = {}) {
     const where = {};
     const s = toUpper(status, '');
     if (s) where.status = normalizeStatus(s);
 
-    // Se você ainda usa audience no banco
-    const a = normalizeAudience(audience);
-    if (a) where.audience = a;
-
     const rows = await db.AcademyTrack.findAll({
       where,
-      attributes: ['id', 'slug', 'title', 'description', 'status', 'audience', 'updatedAt', 'createdAt'],
+      attributes: ['id', 'slug', 'title', 'description', 'status', 'audience', 'audiences', 'updatedAt', 'createdAt'],
       order: [['updatedAt', 'DESC']],
     });
 
@@ -150,8 +183,8 @@ const trackAdminService = {
     const description = normStr(payload?.description);
     const status = normalizeStatus(payload?.status || 'DRAFT');
 
-    // audience opcional
-    const audience = normalizeAudience(payload?.audience || 'BOTH');
+    const audiences = resolveAudiencesForWrite(payload?.audiences);
+    const audience = deriveLegacyAudience(audiences);
 
     const typedSlug = normStr(payload?.slug);
     const base = slugify(typedSlug || title);
@@ -163,6 +196,7 @@ const trackAdminService = {
       description,
       status,
       audience,
+      audiences,
     });
 
     return { track: created.toJSON() };
@@ -176,14 +210,33 @@ const trackAdminService = {
 
     const description = payload?.description !== undefined ? normStr(payload?.description) : undefined;
     const status = payload?.status !== undefined ? normalizeStatus(payload?.status) : undefined;
-    const audience = payload?.audience !== undefined ? normalizeAudience(payload?.audience) : undefined;
 
     if (title !== undefined) track.title = title;
     if (description !== undefined) track.description = description;
     if (status !== undefined) track.status = status;
-    if (audience !== undefined) track.audience = audience;
+
+    if (payload?.audiences !== undefined) {
+      const audiences = resolveAudiencesForWrite(payload.audiences);
+      track.audiences = audiences;
+      track.audience = deriveLegacyAudience(audiences);
+    }
 
     await track.save();
+
+    // 🔒 Se o admin restringiu as audiences da trilha, revalida cada ARTICLE item:
+    //    cada artigo precisa cobrir todas as audiences (novas) da trilha.
+    if (payload?.audiences !== undefined) {
+      const items = await db.AcademyTrackItem.findAll({
+        where: { trackId: track.id, type: 'ARTICLE' },
+        attributes: ['id', 'type', 'target', 'title'],
+        raw: true,
+      });
+      for (const it of items) {
+        // eslint-disable-next-line no-await-in-loop
+        await assertArticleCoversTrack({ track, item: it });
+      }
+    }
+
     return { track: track.toJSON() };
   },
 
@@ -213,6 +266,11 @@ const trackAdminService = {
       payload?.orderIndex !== undefined
         ? Math.max(1, Number(payload?.orderIndex || 1))
         : await nextOrderIndex(track.id);
+
+    // 🔒 Valida cobertura ANTES de criar — evita item órfão sem visibilidade.
+    if (type === 'ARTICLE') {
+      await assertArticleCoversTrack({ track, item: { type, target } });
+    }
 
     const created = await db.AcademyTrackItem.create({
       trackId: track.id,
@@ -263,6 +321,11 @@ const trackAdminService = {
 
     if (payload?.orderIndex !== undefined) {
       item.orderIndex = Math.max(1, Number(payload.orderIndex || 1));
+    }
+
+    // 🔒 Se passou a ser ARTICLE OU o target/type mudou, revalida cobertura.
+    if (String(item.type || '').toUpperCase() === 'ARTICLE') {
+      await assertArticleCoversTrack({ track, item: item.toJSON() });
     }
 
     await item.save();

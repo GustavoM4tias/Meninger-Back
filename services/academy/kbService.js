@@ -1,6 +1,6 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-import { normalizeAudience, audienceWhere } from './audience.js';
+import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
 
 function normalizeMode(mode) {
     return String(mode || '').toLowerCase() === 'admin' ? 'admin' : '';
@@ -12,13 +12,15 @@ function normalizeStatus(status) {
 }
 
 const kbService = {
-    async listCategories({ audience }) {
-        const finalAudience = normalizeAudience(audience);
+    async listCategories({ userId }) {
+        const tokens = await resolveUserTokens(userId);
 
         const rows = await db.AcademyArticle.findAll({
             where: {
-                status: 'PUBLISHED',
-                ...audienceWhere(finalAudience),
+                [Op.and]: [
+                    { status: 'PUBLISHED' },
+                    audiencesWhereLiteral(tokens),
+                ],
             },
             attributes: ['categorySlug'],
             group: ['category_slug'],
@@ -40,28 +42,32 @@ const kbService = {
         return { categories };
     },
 
-    async listArticles({ q, categorySlug, audience, page, pageSize, mode, status }) {
-        const finalAudience = normalizeAudience(audience);
+    async listArticles({ q, categorySlug, userId, page, pageSize, mode, status }) {
+        const tokens = await resolveUserTokens(userId);
         const finalMode = normalizeMode(mode);
         const finalStatus = normalizeStatus(status);
 
-        const where = { ...audienceWhere(finalAudience) };
+        const andClauses = [audiencesWhereLiteral(tokens)];
 
         if (finalMode !== 'admin') {
-            where.status = 'PUBLISHED';
-        } else {
-            if (finalStatus) where.status = finalStatus;
+            andClauses.push({ status: 'PUBLISHED' });
+        } else if (finalStatus) {
+            andClauses.push({ status: finalStatus });
         }
 
-        if (categorySlug) where.categorySlug = categorySlug;
+        if (categorySlug) andClauses.push({ categorySlug });
 
         if (q && String(q).trim()) {
             const like = `%${String(q).trim()}%`;
-            where[Op.or] = [
-                { title: { [Op.iLike]: like } },
-                { body: { [Op.iLike]: like } },
-            ];
+            andClauses.push({
+                [Op.or]: [
+                    { title: { [Op.iLike]: like } },
+                    { body: { [Op.iLike]: like } },
+                ],
+            });
         }
+
+        const where = { [Op.and]: andClauses };
 
         const safePage = Math.max(1, Number(page) || 1);
         const safePageSize = Math.min(100, Math.max(1, Number(pageSize) || 20));
@@ -77,12 +83,11 @@ const kbService = {
                 'slug',
                 'categorySlug',
                 'status',
+                'audiences',
                 'createdByUserId',
                 'updatedByUserId',
                 'updatedAt',
                 'createdAt',
-                // ❗ normalmente não precisa listar payload aqui (list)
-                // 'payload',
             ],
             include: [
                 { model: User, as: 'createdBy', attributes: ['id', 'username', 'email'], required: false },
@@ -101,17 +106,19 @@ const kbService = {
         };
     },
 
-    async getArticle({ categorySlug, articleSlug, audience }) {
-        const finalAudience = normalizeAudience(audience);
+    async getArticle({ categorySlug, articleSlug, userId }) {
+        const tokens = await resolveUserTokens(userId);
 
         const User = db.User || db.Users;
 
         const row = await db.AcademyArticle.findOne({
             where: {
-                status: 'PUBLISHED',
-                categorySlug,
-                slug: articleSlug,
-                ...audienceWhere(finalAudience),
+                [Op.and]: [
+                    { status: 'PUBLISHED' },
+                    { categorySlug },
+                    { slug: articleSlug },
+                    audiencesWhereLiteral(tokens),
+                ],
             },
             attributes: [
                 'id',
@@ -120,6 +127,7 @@ const kbService = {
                 'categorySlug',
                 'body',
                 'payload',
+                'audiences',
                 'createdByUserId',
                 'updatedByUserId',
                 'createdAt',

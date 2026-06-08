@@ -44,7 +44,7 @@ const kbAdminController = {
         try {
             const userId = resolveUserId(req);
 
-            const { title, categorySlug, body, payload = null, aliases } = req.body || {};
+            const { title, categorySlug, body, payload = null, aliases, audiences } = req.body || {};
 
             if (!String(title || '').trim()) return res.status(400).json({ message: 'Título é obrigatório.' });
             if (!String(categorySlug || '').trim()) return res.status(400).json({ message: 'Categoria é obrigatória.' });
@@ -58,6 +58,7 @@ const kbAdminController = {
                 body,
                 payload,
                 aliases,
+                audiences,
             });
 
             return res.json({ article });
@@ -72,7 +73,7 @@ const kbAdminController = {
             const userId = resolveUserId(req);
 
             const id = Number(req.params.id);
-            const { title, categorySlug, body, payload = null, aliases } = req.body || {};
+            const { title, categorySlug, body, payload = null, aliases, audiences } = req.body || {};
 
             if (!id) return res.status(400).json({ message: 'ID inválido.' });
             if (!String(title || '').trim()) return res.status(400).json({ message: 'Título é obrigatório.' });
@@ -87,6 +88,7 @@ const kbAdminController = {
                 body,
                 payload,
                 aliases, // OPCIONAL: undefined deixa intacto.
+                audiences, // OPCIONAL: undefined deixa intacto.
                 versionMessage: req.body?.versionMessage || null,
             });
 

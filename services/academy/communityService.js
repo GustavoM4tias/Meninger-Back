@@ -2,7 +2,13 @@ import { Op, fn, col } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
-import { normalizeAudience, audienceWhere } from './audience.js';
+import {
+    resolveUserTokens,
+    audiencesWhereLiteral,
+    normalizeAudiences,
+    deriveLegacyAudience,
+    DEFAULT_AUDIENCES,
+} from './audience.js';
 import mentionsService from './mentionsService.js';
 import gamificationService from './gamificationService.js';
 
@@ -24,9 +30,9 @@ async function topicIdsParticipatedByUser(userId) {
         .filter(n => Number.isFinite(n) && n > 0);
 }
 
-async function countsByType(where) {
+async function countsByType(whereAnd) {
     const rows = await db.AcademyTopic.findAll({
-        where,
+        where: { [Op.and]: whereAnd },
         attributes: ['type', [fn('COUNT', col('id')), 'count']],
         group: ['type'],
         raw: true,
@@ -88,6 +94,27 @@ function pickUser(u) {
 }
 
 /**
+ * Reduz os audiences pedidos pelo usuário à interseção com o que ele
+ * próprio pode ver. Evita que um BROKER crie tópico restrito a INTERNAL,
+ * por exemplo. Admin passa direto.
+ */
+function clampAudiencesToUserTokens(requestedAudiences, userTokens, { isAdmin = false } = {}) {
+    const normalized = normalizeAudiences(requestedAudiences);
+    if (isAdmin) {
+        if (normalized.length) return normalized;
+        // admin sem escolha explícita → padrão público amplo
+        return DEFAULT_AUDIENCES.slice();
+    }
+    const userSet = new Set(userTokens || []);
+    const allowed = normalized.filter(a => userSet.has(a));
+    if (allowed.length) return allowed;
+    // sem audiences válidas → fica com os tokens do próprio user
+    // (o tópico só vai aparecer para gente do mesmo perfil — o que é o esperado
+    // para um "post da minha turma" sem escolha explícita)
+    return (userTokens || []).slice();
+}
+
+/**
  * Categorias fixas por tipo
  * - Mantém no backend para:
  *   1) validar create/update
@@ -125,21 +152,21 @@ function categoryAllowed(type, categorySlug) {
 }
 
 const communityService = {
-    async listTopics({ type, q, status, audience, page, pageSize }) {
-        const finalAudience = normalizeAudience(audience);
+    async listTopics({ type, q, status, userId, page, pageSize }) {
+        const tokens = await resolveUserTokens(userId);
         const finalType = normalizeType(type);
         const finalStatus = status ? normalizeStatus(status) : undefined;
 
-        const where = {
-            ...audienceWhere(finalAudience),
-            ...(finalStatus ? { status: finalStatus } : {}),
-            ...(finalType ? { type: finalType } : {}),
-        };
+        const andClauses = [audiencesWhereLiteral(tokens)];
+        if (finalStatus) andClauses.push({ status: finalStatus });
+        if (finalType) andClauses.push({ type: finalType });
 
         if (q && String(q).trim()) {
             const like = `%${String(q).trim()}%`;
-            where[Op.or] = [{ title: { [Op.iLike]: like } }];
+            andClauses.push({ [Op.or]: [{ title: { [Op.iLike]: like } }] });
         }
+
+        const where = { [Op.and]: andClauses };
 
         const offset = (Math.max(1, page) - 1) * Math.max(1, pageSize);
 
@@ -151,6 +178,7 @@ const communityService = {
                 'type',
                 'status',
                 'audience',
+                'audiences',
                 'categorySlug',
                 'tags',
                 'acceptedPostId',
@@ -178,10 +206,18 @@ const communityService = {
         return { page, pageSize, total: count, results };
     },
 
-    async createTopic({ userId, payload }) {
+    async createTopic({ userId, isAdmin = false, payload }) {
         const title = String(payload?.title || '').trim();
         const type = normalizeType(payload?.type || 'QUESTION') || 'QUESTION';
-        const audience = normalizeAudience(payload?.audience || 'BOTH');
+
+        // tokens do próprio user — usados para "clampar" a escolha de audiences.
+        const userTokens = await resolveUserTokens(userId);
+        if (!isAdmin && !userTokens.length) {
+            forbid('Usuário sem permissão para postar.');
+        }
+
+        const audiences = clampAudiencesToUserTokens(payload?.audiences, userTokens, { isAdmin });
+        const legacyAudience = deriveLegacyAudience(audiences);
 
         const categorySlug = String(payload?.categorySlug || 'geral').trim() || 'geral';
         if (!categoryAllowed(type, categorySlug)) {
@@ -199,7 +235,8 @@ const communityService = {
             title,
             type,
             status: 'OPEN',
-            audience,
+            audience: legacyAudience,
+            audiences,
             categorySlug,
             tags,
             createdByUserId: userId,
@@ -240,20 +277,26 @@ const communityService = {
         return { topic, firstPost };
     },
 
-    async getTopic({ id, audience, userId = null }) {
-        const finalAudience = normalizeAudience(audience);
+    async getTopic({ id, userId = null }) {
+        const tokens = await resolveUserTokens(userId);
 
         const topicId = Number(id);
         if (!Number.isFinite(topicId) || topicId <= 0) return null;
 
         const topic = await db.AcademyTopic.findOne({
-            where: { id: topicId, ...audienceWhere(finalAudience) },
+            where: {
+                [Op.and]: [
+                    { id: topicId },
+                    audiencesWhereLiteral(tokens),
+                ],
+            },
             attributes: [
                 'id',
                 'title',
                 'type',
                 'status',
                 'audience',
+                'audiences',
                 'categorySlug',
                 'tags',
                 'acceptedPostId',
@@ -331,8 +374,24 @@ const communityService = {
 
         if (!body) throw new Error('Resposta é obrigatória.');
 
-        const topic = await db.AcademyTopic.findByPk(topicId);
-        if (!topic) throw new Error('Tópico não existe.');
+        // ⚠️ Segurança: o usuário só pode postar em tópicos cuja audience ele
+        // próprio enxerga. Filtramos pelo tokens do user antes de aceitar a
+        // criação do post — assim um externo não responde em tópico interno
+        // mesmo que conheça o ID.
+        const tokens = await resolveUserTokens(userId);
+        const topic = await db.AcademyTopic.findOne({
+            where: {
+                [Op.and]: [
+                    { id: Number(topicId) },
+                    audiencesWhereLiteral(tokens),
+                ],
+            },
+        });
+        if (!topic) {
+            const e = new Error('Tópico não encontrado ou sem acesso.');
+            e.statusCode = 404;
+            throw e;
+        }
         if (topic.status !== 'OPEN') throw new Error('Tópico está fechado.');
 
         const post = await db.AcademyPost.create({
@@ -457,15 +516,15 @@ const communityService = {
         return { ok: true };
     },
 
-    async getMeta({ audience }) {
-        const finalAudience = normalizeAudience(audience);
-        const counts = await countsByType({
-            ...audienceWhere(finalAudience),
-            status: 'OPEN',
-        });
+    async getMeta({ userId }) {
+        const tokens = await resolveUserTokens(userId);
+        const counts = await countsByType([
+            audiencesWhereLiteral(tokens),
+            { status: 'OPEN' },
+        ]);
 
         return {
-            audience: finalAudience,
+            tokens,
             categories: COMMUNITY_CATEGORIES,
             types: [
                 { key: 'questions', label: 'Dúvidas', value: 'QUESTION', count: counts.questions },
@@ -484,6 +543,22 @@ const communityService = {
 
         const post = await db.AcademyPost.findByPk(pid);
         if (!post) throw new Error('Post não encontrado.');
+
+        // ⚠️ Segurança: o user só pode votar em post de tópico que ele acessa.
+        const tokens = await resolveUserTokens(uid);
+        const topic = await db.AcademyTopic.findOne({
+            where: {
+                [Op.and]: [
+                    { id: Number(post.topicId) },
+                    audiencesWhereLiteral(tokens),
+                ],
+            },
+        });
+        if (!topic) {
+            const e = new Error('Post não encontrado.');
+            e.statusCode = 404;
+            throw e;
+        }
 
         // upvote do próprio post: rejeita (regra simples).
         if (Number(post.createdByUserId) === uid) {
@@ -535,27 +610,30 @@ const communityService = {
         return { ok: true, upvoted: false, upvotes };
     },
 
-    async listMyTopics({ userId, q, status, audience, page, pageSize }) {
-        const finalAudience = normalizeAudience(audience);
+    async listMyTopics({ userId, q, status, page, pageSize }) {
+        const tokens = await resolveUserTokens(userId);
         const finalStatus = status ? normalizeStatus(status) : undefined;
 
-        const where = {
-            ...audienceWhere(finalAudience),
-            createdByUserId: Number(userId),
-            ...(finalStatus ? { status: finalStatus } : {}),
-        };
+        const andClauses = [
+            audiencesWhereLiteral(tokens),
+            { createdByUserId: Number(userId) },
+        ];
+        if (finalStatus) andClauses.push({ status: finalStatus });
 
         if (q && String(q).trim()) {
             const like = `%${String(q).trim()}%`;
-            where[Op.or] = [{ title: { [Op.iLike]: like } }];
+            andClauses.push({ [Op.or]: [{ title: { [Op.iLike]: like } }] });
         }
+
+        const where = { [Op.and]: andClauses };
 
         const offset = (Math.max(1, page) - 1) * Math.max(1, pageSize);
 
         const { rows, count } = await db.AcademyTopic.findAndCountAll({
             where,
             attributes: [
-                'id', 'title', 'type', 'status', 'audience', 'categorySlug', 'tags', 'acceptedPostId',
+                'id', 'title', 'type', 'status', 'audience', 'audiences', 'categorySlug',
+                'tags', 'acceptedPostId',
                 'createdByUserId', 'updatedByUserId', 'createdAt', 'updatedAt',
             ],
             order: [['createdAt', 'DESC']],

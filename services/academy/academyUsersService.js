@@ -1,6 +1,6 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-import { normalizeAudience, audienceWhere } from './audience.js';
+import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
 
 function safePage(n) {
     const v = Number(n);
@@ -17,9 +17,11 @@ function computeScore({ published = 0, answersPosted = 0, topicsCreated = 0, com
 }
 
 const academyUsersService = {
-    // reusa o seu meService mas sem depender do request
-    async getUserSummary({ userId, audience }) {
-        const finalAudience = normalizeAudience(audience);
+    // O perfil público de um user: estatísticas filtradas pelos tokens
+    // do VIEWER (não do alvo). Isso evita vazar contagens de tópicos restritos.
+    async getUserSummary({ userId, viewerUserId = null }) {
+        const tokens = await resolveUserTokens(viewerUserId);
+        const audWhere = audiencesWhereLiteral(tokens);
 
         const user = await db.User.findByPk(userId, {
             attributes: ['id', 'username', 'email', 'position', 'city', 'createdAt'],
@@ -33,7 +35,9 @@ const academyUsersService = {
         ]);
 
         const [topicsCreated, answersPosted] = await Promise.all([
-            db.AcademyTopic.count({ where: { createdByUserId: userId, ...audienceWhere(finalAudience) } }),
+            db.AcademyTopic.count({
+                where: { [Op.and]: [{ createdByUserId: userId }, audWhere] },
+            }),
             db.AcademyPost.count({ where: { createdByUserId: userId, type: 'ANSWER' } }),
         ]);
 
@@ -51,7 +55,12 @@ const academyUsersService = {
         const slugs = [...new Set(trackRows.map(r => r.trackSlug).filter(Boolean))];
         const trackDefs = slugs.length
             ? await db.AcademyTrack.findAll({
-                where: { slug: { [Op.in]: slugs }, status: 'PUBLISHED', ...audienceWhere(finalAudience) },
+                where: {
+                    [Op.and]: [
+                        { slug: { [Op.in]: slugs }, status: 'PUBLISHED' },
+                        audWhere,
+                    ],
+                },
                 attributes: ['slug', 'title'],
                 raw: true,
             })
@@ -74,7 +83,7 @@ const academyUsersService = {
         });
 
         return {
-            audience: finalAudience,
+            tokens,
             user: user.toJSON(),
             kb: { drafts: kbDrafts, published: kbPublished, total: kbDrafts + kbPublished },
             community: { topicsCreated, answersPosted },
@@ -83,8 +92,9 @@ const academyUsersService = {
         };
     },
 
-    async rank({ q, page, pageSize, audience, scopeType = null, scopeValue = null } = {}) {
-        const finalAudience = normalizeAudience(audience);
+    async rank({ q, page, pageSize, viewerUserId = null, scopeType = null, scopeValue = null } = {}) {
+        const tokens = await resolveUserTokens(viewerUserId);
+        const audWhere = audiencesWhereLiteral(tokens);
 
         const p = safePage(page);
         const ps = safePageSize(pageSize);
@@ -159,7 +169,12 @@ const academyUsersService = {
                     raw: true,
                 }),
                 db.AcademyTopic.findAll({
-                    where: { createdByUserId: { [Op.in]: userIds }, ...audienceWhere(finalAudience) },
+                    where: {
+                        [Op.and]: [
+                            { createdByUserId: { [Op.in]: userIds } },
+                            audWhere,
+                        ],
+                    },
                     attributes: ['createdByUserId', [db.Sequelize.fn('COUNT', db.Sequelize.col('id')), 'count']],
                     group: ['created_by_user_id'],
                     raw: true,
