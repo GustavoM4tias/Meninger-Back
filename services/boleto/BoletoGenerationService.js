@@ -318,9 +318,35 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         );
 
         if (seriesEncontradas.length === 0) {
-            throw new Error(
-                `Nenhuma série de entrada encontrada na reserva. IDs configurados: [${idseriesAlvo.join(', ')}].`
-            );
+            // Reserva entrou em "Envio Sienge" mas NÃO TEM nenhuma parcela com as
+            // séries configuradas pra emissão de Ato. Não é erro do nosso lado —
+            // simplesmente não cabe boleto. Decisão deliberada:
+            //   • NÃO chamar agendarSituacaoCv → reserva PERMANECE em Envio Sienge,
+            //     deixando o fluxo Sienge prosseguir normalmente.
+            //   • Postar mensagem informativa na reserva pro gestor saber que o
+            //     fluxo de boleto foi pulado (e por quê).
+            //   • Marcar history como 'skipped' (status próprio) — distinto de
+            //     'error' na UI/KPIs, deixando claro que foi skip controlado.
+            console.log(`[BOLETO] Reserva ${idreserva} sem série de Ato — pulando fluxo, mantendo situação atual.`);
+            const msg = [
+                'ℹ️ Fluxo de boleto não acionado — reserva sem parcela de série de Ato.',
+                '',
+                `IDs de série configurados pra Ato: [${idseriesAlvo.join(', ')}].`,
+                'Esta reserva não possui parcela com essas séries, então o boleto não foi emitido.',
+                '',
+                'A reserva PERMANECE na situação atual — nenhuma mudança de etapa foi feita.',
+            ].join('\n');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+            await history.update({
+                status: 'skipped',
+                error_message: `Sem série de Ato (IDs configurados: [${idseriesAlvo.join(', ')}]) — fluxo ignorado, situação CV mantida.`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                cv_mensagem_enviada: msgOk,
+                warnings: warnings.length ? warnings : null,
+            });
+            return;
         }
 
         // Regra: somente 1 parcela de entrada é permitida por reserva
@@ -388,30 +414,34 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
             return;
         }
 
-        // ── 2b. Aplica regra de comissão embutida (se houver para o empreendimento) ─
+        // ── 2b. Carrega regra do empreendimento (% comissão + override de dias) ──
+        // Regra é única (ou nenhuma) por empreendimento. Mesmo bloco usa pra:
+        //   - aplicar percentual_boleto sobre valor da série
+        //   - pegar max_dias_vencimento (override do setting geral)
+        const empreendimentoRule = unidade?.idempreendimento_cv
+            ? await db.BoletoComissionRule.findOne({
+                where: {
+                    idempreendimento_cv: Number(unidade.idempreendimento_cv),
+                    active: true,
+                },
+            })
+            : null;
+
         const valorOriginal = parseFloat(serie.valor);
         let valorEmitir = valorOriginal;
         let comissaoPercentualAplicada = null;
         let comissaoRuleId = null;
 
-        if (unidade?.idempreendimento_cv) {
-            const rule = await db.BoletoComissionRule.findOne({
-                where: {
-                    idempreendimento_cv: Number(unidade.idempreendimento_cv),
-                    active: true,
-                },
-            });
-            if (rule) {
-                const pct = parseFloat(rule.percentual_boleto);
-                if (Number.isFinite(pct) && pct >= 0 && pct < 100) {
-                    valorEmitir = Number((valorOriginal * (pct / 100)).toFixed(2));
-                    comissaoPercentualAplicada = pct;
-                    comissaoRuleId = rule.id;
-                    console.log(
-                        `[BOLETO] Regra de comissão aplicada (empreendimento ${unidade.idempreendimento_cv}): `
-                        + `${pct}% de ${formatCurrency(valorOriginal)} = ${formatCurrency(valorEmitir)}`
-                    );
-                }
+        if (empreendimentoRule) {
+            const pct = parseFloat(empreendimentoRule.percentual_boleto);
+            if (Number.isFinite(pct) && pct >= 0 && pct < 100) {
+                valorEmitir = Number((valorOriginal * (pct / 100)).toFixed(2));
+                comissaoPercentualAplicada = pct;
+                comissaoRuleId = empreendimentoRule.id;
+                console.log(
+                    `[BOLETO] Regra de comissão aplicada (empreendimento ${unidade.idempreendimento_cv}): `
+                    + `${pct}% de ${formatCurrency(valorOriginal)} = ${formatCurrency(valorEmitir)}`
+                );
             }
         }
 
@@ -538,21 +568,30 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         hoje.setHours(0, 0, 0, 0);
         const vencDate = new Date(vencimento + 'T00:00:00');
 
-        // Janela máxima D+10 corridos — boleto de ato não pode ter vencimento
-        // muito distante (limite definido pelo financeiro). Validado depois do
-        // check de passado pra dar mensagem específica em cada caso.
+        // Janela máxima D+N corridos — boleto de ato não pode ter vencimento
+        // muito distante. Configurável em 2 níveis:
+        //   1. Override por empreendimento: boleto_comission_rules.max_dias_vencimento
+        //   2. Default geral:                boleto_settings.max_dias_vencimento (default 10)
+        const maxDias = Number(
+            empreendimentoRule?.max_dias_vencimento
+            ?? settings.max_dias_vencimento
+            ?? 10
+        );
         const limiteMaximo = new Date(hoje);
-        limiteMaximo.setDate(limiteMaximo.getDate() + 10);
+        limiteMaximo.setDate(limiteMaximo.getDate() + maxDias);
 
         if (vencDate > limiteMaximo) {
             const limiteStr = formatDate(limiteMaximo.toISOString().slice(0, 10));
-            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} excede o limite máximo de 10 dias.\nO vencimento deve ser entre hoje e ${limiteStr}.`
+            const origemConfig = empreendimentoRule?.max_dias_vencimento != null
+                ? `regra do empreendimento (${empreendimentoRule.max_dias_vencimento} dias)`
+                : `padrão do sistema (${maxDias} dias)`;
+            const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} excede o limite máximo de ${maxDias} dias.\nO vencimento deve ser entre hoje e ${limiteStr}.\n(Limite vindo de: ${origemConfig})`
                 + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
             const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
 
             await history.update({
                 status: 'error',
-                error_message: `Vencimento ${formatDate(vencimento)} excede limite D+10 (máx. ${limiteStr}).`,
+                error_message: `Vencimento ${formatDate(vencimento)} excede limite D+${maxDias} (máx. ${limiteStr}).`,
                 titular_nome: titular?.nome,
                 empreendimento: unidade?.empreendimento,
                 idpessoa_cv: titular?.idpessoa_cv,

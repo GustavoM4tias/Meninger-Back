@@ -160,12 +160,24 @@ const ratingsService = {
     },
 
     /**
-     * Lista pública de reviews (com comentário) para um target.
-     * Não inclui ratings sem comentário (puro estrela).
+     * Lista reviews (com comentário) para um target.
+     *
+     * Para ARTICLE, as justificativas são PRIVADAS: só o autor do artigo e
+     * admins podem ver. Qualquer outro requester recebe lista vazia (defesa em
+     * profundidade — o front usa o endpoint dedicado de justificativas).
+     * Para TRACK, segue público.
      */
-    async listReviews({ targetType, targetRef, page = 1, pageSize = 20 }) {
+    async listReviews({ targetType, targetRef, page = 1, pageSize = 20, requesterUserId = null, isAdmin = false }) {
         const type = normalizeType(targetType);
         const ref = normalizeRef(targetRef);
+
+        if (type === 'ARTICLE') {
+            const article = await db.AcademyArticle.findByPk(Number(ref), { attributes: ['id', 'createdByUserId'] });
+            const isAuthor = !!article && Number(article.createdByUserId) === Number(requesterUserId);
+            if (!isAdmin && !isAuthor) {
+                return { page: 1, pageSize: Number(pageSize) || 20, total: 0, results: [] };
+            }
+        }
 
         const safePage = Math.max(1, Number(page) || 1);
         const safePageSize = Math.min(100, Math.max(1, Number(pageSize) || 20));
@@ -196,6 +208,59 @@ const ratingsService = {
                 return j;
             }),
         };
+    },
+
+    /**
+     * Justificativas (comentários) das notas de um ARTIGO — visíveis APENAS
+     * para o autor do artigo e admins. Inclui id do rating (pro admin remover)
+     * e quem avaliou.
+     */
+    async listArticleJustifications({ articleId, requesterUserId, isAdmin = false }) {
+        const id = Number(articleId);
+        if (!Number.isFinite(id) || id <= 0) throw new Error('Artigo inválido.');
+
+        const article = await db.AcademyArticle.findByPk(id, { attributes: ['id', 'createdByUserId'] });
+        if (!article) throw new Error('Artigo não encontrado.');
+
+        const isAuthor = Number(article.createdByUserId) === Number(requesterUserId);
+        if (!isAdmin && !isAuthor) {
+            const err = new Error('Apenas o autor do artigo ou um administrador podem ver as justificativas.');
+            err.status = 403;
+            throw err;
+        }
+
+        const rows = await db.AcademyRating.findAll({
+            where: {
+                targetType: 'ARTICLE',
+                targetRef: String(id),
+                comment: { [Op.ne]: null },
+            },
+            attributes: ['id', 'userId', 'stars', 'comment', 'updatedAt', 'createdAt'],
+            include: db.User ? [
+                { model: db.User, as: 'user', attributes: ['id', 'username'], required: false },
+            ] : [],
+            order: [['updatedAt', 'DESC']],
+        });
+
+        return {
+            canModerate: !!isAdmin,
+            results: rows.map(r => {
+                const j = r.toJSON();
+                if (j.user) j.user = { id: j.user.id, username: j.user.username };
+                return j;
+            }),
+        };
+    },
+
+    /**
+     * Remoção de uma avaliação por id — uso ADMIN (gate na rota).
+     * Remove a nota inteira (estrelas + justificativa).
+     */
+    async adminRemoveById({ ratingId }) {
+        const id = Number(ratingId);
+        if (!Number.isFinite(id) || id <= 0) throw new Error('Avaliação inválida.');
+        const deleted = await db.AcademyRating.destroy({ where: { id } });
+        return { removed: deleted > 0 };
     },
 
     // Bulk: para uma lista de targets, devolve {avg, total} de cada.

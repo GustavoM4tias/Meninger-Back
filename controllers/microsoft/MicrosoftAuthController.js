@@ -1,8 +1,22 @@
 // controllers/microsoft/MicrosoftAuthController.js
+import crypto from 'crypto';
 import microsoftAuthService from '../../services/microsoft/MicrosoftAuthService.js';
 import db from '../../models/sequelize/index.js';
+import { issueRefreshToken } from '../../services/auth/refreshTokenService.js';
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+// ── Código de login de uso único (evita expor o JWT na URL do callback) ──────
+// O callback redireciona com ?code=<opaco>; o frontend troca esse code por
+// { token, refreshToken } via POST /auth/exchange. TTL curto, consumo único.
+const loginCodeStore = new Map(); // code → { userId, isNew, expiresAt }
+const LOGIN_CODE_TTL_MS = 60 * 1000;
+setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of loginCodeStore.entries()) {
+        if (v.expiresAt < now) loginCodeStore.delete(k);
+    }
+}, 60 * 1000);
 
 export default class MicrosoftAuthController {
 
@@ -51,21 +65,50 @@ export default class MicrosoftAuthController {
             // 3. Localiza ou cria o usuário na plataforma
             const { user, isNew } = await microsoftAuthService.findOrCreateUser(msProfile, tokens);
 
-            // 4. Gera JWT da plataforma (igual ao login interno)
-            const platformToken = microsoftAuthService.generatePlatformToken(user);
-
-            // 5. Redireciona para o frontend com o token
-            const params = new URLSearchParams({
-                token: platformToken,
-                isNew: String(isNew),
+            // 4. Gera um código de uso único e redireciona SEM expor o JWT na
+            //    URL. O frontend troca esse code por { token, refreshToken }.
+            const oneTimeCode = crypto.randomBytes(32).toString('hex');
+            loginCodeStore.set(oneTimeCode, {
+                userId: user.id,
+                isNew,
+                expiresAt: Date.now() + LOGIN_CODE_TTL_MS,
             });
 
             console.log(`✅ [Microsoft] Login concluído para user ${user.id} (isNew=${isNew})`);
-            return res.redirect(`${FRONTEND_URL}/microsoft/callback?${params}`);
+            return res.redirect(`${FRONTEND_URL}/microsoft/callback?code=${oneTimeCode}`);
 
         } catch (err) {
             console.error('❌ [Microsoft] Erro no callback:', err?.response?.data || err.message);
             return res.redirect(`${FRONTEND_URL}/microsoft/callback?error=auth_failed`);
+        }
+    };
+
+    // ── POST /api/microsoft/auth/exchange ────────────────────────────────────
+    // Troca o código de uso único (recebido na URL do callback) pelo par de
+    // tokens da plataforma. O JWT nunca trafega na URL.
+    exchange = async (req, res) => {
+        try {
+            const { code } = req.body || {};
+            const entry = code ? loginCodeStore.get(code) : null;
+
+            if (!entry || entry.expiresAt < Date.now()) {
+                if (code) loginCodeStore.delete(code);
+                return res.status(401).json({ success: false, error: 'Código de login inválido ou expirado.' });
+            }
+            loginCodeStore.delete(code); // uso único
+
+            const user = await db.User.findByPk(entry.userId);
+            if (!user || user.status === false) {
+                return res.status(401).json({ success: false, error: 'Usuário inválido/inativo.' });
+            }
+
+            const token = microsoftAuthService.generatePlatformToken(user);
+            const refreshToken = await issueRefreshToken(user.id, req);
+
+            return res.json({ success: true, data: { token, refreshToken, isNew: entry.isNew } });
+        } catch (err) {
+            console.error('❌ [Microsoft] exchange error:', err.message);
+            return res.status(500).json({ success: false, error: 'Erro ao concluir login Microsoft.' });
         }
     };
 

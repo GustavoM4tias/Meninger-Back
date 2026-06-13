@@ -189,3 +189,64 @@ export function deriveLegacyAudience(audiences) {
 // ── Para writes: o admin define audiences manualmente; se não informou,
 // assumimos "todo mundo, exceto admin-only" como padrão seguro de inclusão.
 export const DEFAULT_AUDIENCES = ['INTERNAL', 'GESTOR', 'BROKER', 'REALESTATE', 'CORRESPONDENT'];
+
+// ──────────────────────────────────────────────────────────────────────
+// CAMADA DE VISIBILIDADE — 4 classes (modelo simplificado, 2026-06)
+//
+// Cada MATERIAL curado (artigo, trilha, highlight) é exatamente UMA de:
+//   INTERNAL → interno Office          → tokens ['INTERNAL','GESTOR']
+//   EXTERNAL → externo (corretor, imobiliária, correspondente)
+//                                       → tokens ['BROKER','REALESTATE','CORRESPONDENT']
+//   BOTH     → ambos                    → união dos dois sets
+//   ADMIN    → somente administradores  → tokens ['ADMIN']
+//
+// A classe NÃO substitui o mecanismo de tokens (filtros `?|` continuam a
+// fonte de verdade nos reads) — ela CANONICALIZA o que se grava: todo write
+// passa a armazenar um dos 4 sets acima. Divisão por cargo virá depois.
+// Tópicos da comunidade (user-generated) ficam FORA da canonicalização:
+// continuam clampados aos tokens do criador.
+// ──────────────────────────────────────────────────────────────────────
+
+export const VISIBILITY_VALUES = ['INTERNAL', 'EXTERNAL', 'BOTH', 'ADMIN'];
+
+export const VISIBILITY_LABELS = {
+    INTERNAL: 'Interno (Office)',
+    EXTERNAL: 'Externo (corretores, imobiliárias e correspondentes)',
+    BOTH: 'Ambos (interno + externo)',
+    ADMIN: 'Somente administradores',
+};
+
+const INTERNAL_TOKENS = ['INTERNAL', 'GESTOR'];
+const EXTERNAL_TOKENS = ['BROKER', 'REALESTATE', 'CORRESPONDENT'];
+
+export function normalizeVisibility(v) {
+    const s = String(v || '').toUpperCase().trim();
+    return VISIBILITY_VALUES.includes(s) ? s : '';
+}
+
+/** Classe → set canônico de tokens (o que vai gravado em `audiences`). */
+export function visibilityToAudiences(visibility) {
+    const v = normalizeVisibility(visibility);
+    if (v === 'EXTERNAL') return EXTERNAL_TOKENS.slice();
+    if (v === 'BOTH') return [...INTERNAL_TOKENS, ...EXTERNAL_TOKENS];
+    if (v === 'ADMIN') return ['ADMIN'];
+    // INTERNAL e default: interno é o padrão SEGURO — nunca vaza p/ externo.
+    return INTERNAL_TOKENS.slice();
+}
+
+/** Set de tokens (qualquer combinação histórica) → classe. */
+export function deriveVisibility(audiences) {
+    const a = normalizeAudiences(audiences);
+    const hasInt = a.some((t) => INTERNAL_TOKENS.includes(t));
+    const hasExt = a.some((t) => EXTERNAL_TOKENS.includes(t));
+    if (hasInt && hasExt) return 'BOTH';
+    if (hasInt) return 'INTERNAL';
+    if (hasExt) return 'EXTERNAL';
+    // Só ADMIN — ou vazio (invisível): rotulamos como o mais restrito.
+    return 'ADMIN';
+}
+
+/** Qualquer set histórico → set canônico equivalente (uma das 4 classes). */
+export function canonicalizeAudiences(input) {
+    return visibilityToAudiences(deriveVisibility(input));
+}

@@ -11,10 +11,41 @@ function normalizeStatus(status) {
     return (s === 'DRAFT' || s === 'PUBLISHED') ? s : '';
 }
 
+// Rótulos amigáveis (com acento) para categorias/subcategorias conhecidas.
+// Slugs fora do mapa caem no humanize. Mesma ideia do TOKEN_LABELS.
+const KB_LABELS = {
+    // categorias
+    'comercial': 'Comercial',
+    'construtor-de-vendas': 'Construtor de Vendas',
+    // subcategorias Comercial
+    'cartorio': 'Cartório',
+    'caixa-economica': 'Caixa Econômica',
+    'assinatura-e-certificacao': 'Assinatura e Certificação',
+    // subcategorias Construtor de Vendas
+    'leads': 'Leads',
+    'portal-do-cliente': 'Portal do Cliente',
+    // Gestor
+    'painel-do-gestor': 'Painel do Gestor',
+};
+
+const CONNECTORS = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
+
+function humanizeSlug(slug) {
+    return String(slug || '')
+        .split('-')
+        .map((s, i) => (i > 0 && CONNECTORS.has(s)) ? s : s.charAt(0).toUpperCase() + s.slice(1))
+        .join(' ');
+}
+
+function kbLabel(slug) {
+    return KB_LABELS[slug] || humanizeSlug(slug);
+}
+
 const kbService = {
     async listCategories({ userId }) {
         const tokens = await resolveUserTokens(userId);
 
+        // Agrupa por (categoria, subcategoria) com contagem, num único GROUP BY.
         const rows = await db.AcademyArticle.findAll({
             where: {
                 [Op.and]: [
@@ -22,27 +53,43 @@ const kbService = {
                     audiencesWhereLiteral(tokens),
                 ],
             },
-            attributes: ['categorySlug'],
-            group: ['category_slug'],
-            order: [['categorySlug', 'ASC']],
+            attributes: [
+                'categorySlug',
+                'subcategorySlug',
+                [db.Sequelize.fn('COUNT', db.Sequelize.col('id')), 'count'],
+            ],
+            group: ['category_slug', 'subcategory_slug'],
             raw: true,
         });
 
-        const categories = rows
-            .map(r => String(r.categorySlug || '').trim())
-            .filter(Boolean)
+        // Monta a árvore categoria → subcategorias.
+        const catMap = new Map();
+        for (const r of rows) {
+            const cat = String(r.categorySlug || '').trim();
+            if (!cat) continue;
+            if (!catMap.has(cat)) catMap.set(cat, { total: 0, subs: new Map() });
+            const entry = catMap.get(cat);
+            const n = Number(r.count) || 0;
+            entry.total += n;
+            const sub = String(r.subcategorySlug || '').trim();
+            if (sub) entry.subs.set(sub, (entry.subs.get(sub) || 0) + n);
+        }
+
+        const categories = [...catMap.keys()]
+            .sort((a, b) => a.localeCompare(b))
             .map(slug => ({
                 slug,
-                name: slug
-                    .split('-')
-                    .map(s => s.charAt(0).toUpperCase() + s.slice(1))
-                    .join(' ')
+                name: kbLabel(slug),
+                count: catMap.get(slug).total,
+                subcategories: [...catMap.get(slug).subs.entries()]
+                    .sort((a, b) => kbLabel(a[0]).localeCompare(kbLabel(b[0])))
+                    .map(([s, count]) => ({ slug: s, name: kbLabel(s), count })),
             }));
 
         return { categories };
     },
 
-    async listArticles({ q, categorySlug, userId, page, pageSize, mode, status }) {
+    async listArticles({ q, categorySlug, subcategorySlug, userId, page, pageSize, mode, status }) {
         const tokens = await resolveUserTokens(userId);
         const finalMode = normalizeMode(mode);
         const finalStatus = normalizeStatus(status);
@@ -56,6 +103,7 @@ const kbService = {
         }
 
         if (categorySlug) andClauses.push({ categorySlug });
+        if (subcategorySlug) andClauses.push({ subcategorySlug });
 
         if (q && String(q).trim()) {
             const like = `%${String(q).trim()}%`;
@@ -82,6 +130,7 @@ const kbService = {
                 'title',
                 'slug',
                 'categorySlug',
+                'subcategorySlug',
                 'status',
                 'audiences',
                 'createdByUserId',

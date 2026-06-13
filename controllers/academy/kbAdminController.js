@@ -11,6 +11,10 @@ function resolveUserId(req) {
     return null;
 }
 
+function isAdminReq(req) {
+    return String(req.user?.role || '').toLowerCase() === 'admin';
+}
+
 const kbAdminController = {
     async listMine(req, res) {
         try {
@@ -44,21 +48,28 @@ const kbAdminController = {
         try {
             const userId = resolveUserId(req);
 
-            const { title, categorySlug, body, payload = null, aliases, audiences } = req.body || {};
+            const { title, categorySlug, subcategorySlug, body, payload = null, aliases, audiences, visibility, editorUserIds } = req.body || {};
 
             if (!String(title || '').trim()) return res.status(400).json({ message: 'Título é obrigatório.' });
             if (!String(categorySlug || '').trim()) return res.status(400).json({ message: 'Categoria é obrigatória.' });
             if (!isKebab(categorySlug)) return res.status(400).json({ message: 'Categoria deve estar em kebab-case.' });
+            if (subcategorySlug && !isKebab(subcategorySlug)) return res.status(400).json({ message: 'Subcategoria deve estar em kebab-case.' });
             if (!String(body || '').trim()) return res.status(400).json({ message: 'Texto é obrigatório.' });
+            if (visibility !== undefined && !['INTERNAL', 'EXTERNAL', 'BOTH', 'ADMIN'].includes(String(visibility).toUpperCase())) {
+                return res.status(400).json({ message: 'Visibilidade inválida (use INTERNAL, EXTERNAL, BOTH ou ADMIN).' });
+            }
 
             const article = await kbAdminService.create({
                 userId,
                 title,
                 categorySlug,
+                subcategorySlug,
                 body,
                 payload,
                 aliases,
+                visibility,
                 audiences,
+                editorUserIds,
             });
 
             return res.json({ article });
@@ -73,29 +84,38 @@ const kbAdminController = {
             const userId = resolveUserId(req);
 
             const id = Number(req.params.id);
-            const { title, categorySlug, body, payload = null, aliases, audiences } = req.body || {};
+            const { title, categorySlug, subcategorySlug, body, payload = null, aliases, audiences, visibility, editorUserIds } = req.body || {};
 
             if (!id) return res.status(400).json({ message: 'ID inválido.' });
             if (!String(title || '').trim()) return res.status(400).json({ message: 'Título é obrigatório.' });
             if (!String(categorySlug || '').trim()) return res.status(400).json({ message: 'Categoria é obrigatória.' });
             if (!isKebab(categorySlug)) return res.status(400).json({ message: 'Categoria deve estar em kebab-case.' });
+            if (subcategorySlug && !isKebab(subcategorySlug)) return res.status(400).json({ message: 'Subcategoria deve estar em kebab-case.' });
             if (!String(body || '').trim()) return res.status(400).json({ message: 'Texto é obrigatório.' });
+            if (visibility !== undefined && !['INTERNAL', 'EXTERNAL', 'BOTH', 'ADMIN'].includes(String(visibility).toUpperCase())) {
+                return res.status(400).json({ message: 'Visibilidade inválida (use INTERNAL, EXTERNAL, BOTH ou ADMIN).' });
+            }
 
             const article = await kbAdminService.update(id, {
                 userId,
+                isAdmin: isAdminReq(req),
                 title,
                 categorySlug,
+                subcategorySlug, // OPCIONAL: undefined deixa intacto; '' limpa.
                 body,
                 payload,
                 aliases, // OPCIONAL: undefined deixa intacto.
-                audiences, // OPCIONAL: undefined deixa intacto.
+                visibility, // OPCIONAL (4 classes): tem prioridade sobre audiences.
+                audiences, // OPCIONAL (legado): canonicalizado p/ uma das 4 classes.
+                editorUserIds, // OPCIONAL: undefined deixa intacto (só autor/admin altera).
                 versionMessage: req.body?.versionMessage || null,
             });
 
             return res.json({ article });
         } catch (e) {
-            console.error('[academy.kbAdmin.update]', e);
-            return res.status(400).json({ message: e.message || 'Erro ao atualizar artigo.' });
+            const status = e?.status || 400;
+            if (status !== 403) console.error('[academy.kbAdmin.update]', e);
+            return res.status(status).json({ message: e.message || 'Erro ao atualizar artigo.' });
         }
     },
 
@@ -108,11 +128,27 @@ const kbAdminController = {
 
             if (!id) return res.status(400).json({ message: 'ID inválido.' });
 
-            const article = await kbAdminService.publish(id, publish, { userId });
+            const article = await kbAdminService.publish(id, publish, { userId, isAdmin: isAdminReq(req) });
             return res.json({ article });
         } catch (e) {
-            console.error('[academy.kbAdmin.publish]', e);
-            return res.status(400).json({ message: e.message || 'Erro ao publicar.' });
+            const status = e?.status || 400;
+            if (status !== 403) console.error('[academy.kbAdmin.publish]', e);
+            return res.status(status).json({ message: e.message || 'Erro ao publicar.' });
+        }
+    },
+
+    // GET /academy/kb/editor-candidates?q=  → usuários internos para o picker
+    // "Quem pode editar". Gate de rota: authenticate + requireInternal.
+    async editorCandidates(req, res) {
+        try {
+            const data = await kbAdminService.searchEditorCandidates({
+                q: req.query?.q || '',
+                excludeUserId: resolveUserId(req),
+            });
+            return res.json(data);
+        } catch (e) {
+            console.error('[academy.kbAdmin.editorCandidates]', e);
+            return res.status(400).json({ message: e.message || 'Erro ao buscar usuários.' });
         }
     },
 

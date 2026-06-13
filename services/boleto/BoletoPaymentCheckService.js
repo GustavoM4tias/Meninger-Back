@@ -216,19 +216,29 @@ export async function runDailyCheck({ idreservas = null } = {}) {
     console.log(`[BOLETO_CHECK] Batch montado: ${empresas.length} empresa(s), ${boletos.length - semCnpj.length} boleto(s).`);
 
     // 5) Roda o batch no Playwright (uma sessão Ecobrança).
-    const { results } = await runEcoBatch({
-        credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
-        empresas,
-        onResult: async (r) => {
-            // Aplica resultado de cada boleto IMEDIATAMENTE (não espera o batch
-            // terminar). Em caso de crash do scheduler, já processamos parte.
-            try {
-                await aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId });
-            } catch (err) {
-                console.error(`[BOLETO_CHECK] aplicarResultado falhou (hist ${r.historyId}): ${err.message}`);
-            }
-        },
-    });
+    //    Envelopado em try/catch — se runEcoBatch crashar no meio (ex.: browser
+    //    morto, exceção fatal no Playwright), os boletos JÁ PROCESSADOS via
+    //    onResult já estão salvos no DB (cada um é aplicado imediato). O resto
+    //    fica pendente pra próxima rodada — não perdemos progresso.
+    let results = [];
+    try {
+        const out = await runEcoBatch({
+            credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
+            empresas,
+            onResult: async (r) => {
+                try {
+                    await aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId });
+                } catch (err) {
+                    console.error(`[BOLETO_CHECK] aplicarResultado falhou (hist ${r.historyId}): ${err.message}`);
+                }
+            },
+        });
+        results = out.results || [];
+    } catch (err) {
+        console.error('[BOLETO_CHECK] Batch Playwright crashou no meio:', err.message);
+        // Não relança — preferimos terminar a rodada com stats parciais a perder
+        // tudo. Os boletos já processados via onResult permanecem salvos.
+    }
 
     const stats = {
         total: boletos.length,
@@ -270,13 +280,21 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
     }
 
     // ── Título não encontrado no Ecobrança ───────────────────────────────────
+    // Agora a consulta usa /consulta_titulo (lista TODOS os títulos, não só
+    // os em aberto). Se mesmo assim não encontrou, é problema real: ou o
+    // nosso número está errado, ou o boleto nunca foi emitido nessa empresa.
+    // Mantém pending pra admin investigar via UI.
     if (r.found === false) {
         await EventLogger.log({
             historyId: history.id, idreserva: history.idreserva, type: 'payment_check_not_found',
-            severity: 'warning',
-            message: `Nosso Número ${history.nosso_numero} não foi encontrado no Ecobrança (talvez já baixado externamente).`,
+            severity: 'error',
+            message: `Nosso Número ${history.nosso_numero} NÃO foi encontrado no Ecobrança (nem em /consulta_titulo). Verifique se o número está correto e se a empresa selecionada é a mesma da emissão.`,
+            data: { rawConsulta: r.raw || null },
         });
-        await history.update(baseUpdate);
+        await history.update({
+            ...baseUpdate,
+            last_check_situation: 'NAO_ENCONTRADO',
+        });
         return;
     }
 
@@ -309,6 +327,40 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
         ].filter(Boolean).join('\n');
         await sendCvMessageSafe(history.idreserva, msg, history.id, 'pago');
         if (situacaoPagoId) await alterarSituacaoCvSafe(history.idreserva, situacaoPagoId, history.id, 'pago');
+        return;
+    }
+
+    // ── BAIXADO/CANCELADO externo (descoberto pela consulta detalhada) ───────
+    // O título está no Ecobrança mas com situação que indica que já foi
+    // resolvido fora do nosso sistema (baixa manual, cancelamento, etc.).
+    // Não precisa baixar de novo — só registra e move pra cancelled.
+    const sit = String(r.situacao || '').toUpperCase();
+    const isJaBaixado = /BAIXAD[OA]|CANCELAD[OA]|DEVOLVID[OA]/i.test(sit);
+    if (isJaBaixado && history.payment_status !== 'cancelled') {
+        await EventLogger.log({
+            historyId: history.id, idreserva: history.idreserva,
+            type: 'baixa_confirmed', severity: 'warning',
+            message: `Boleto já consta como "${sit}" no Ecobrança (baixa externa). Marcando como cancelado no nosso sistema.`,
+            data: { situacao: sit, externalBaixa: true },
+        });
+        await history.update({
+            ...baseUpdate,
+            payment_status: 'cancelled',
+            cancelled_at: new Date(),
+            last_check_situation: sit,
+        });
+        const msg = [
+            '⚠️ Boleto baixado externamente',
+            '',
+            `🔢 Nosso Número: ${history.nosso_numero}`,
+            `🏦 Situação no Ecobrança: ${sit}`,
+            `💰 Valor: R$ ${Number(history.valor || 0).toFixed(2).replace('.', ',')}`,
+            history.vencimento ? `📅 Vencimento: ${formatDateBr(history.vencimento)}` : null,
+            '',
+            'Detectamos que o boleto foi baixado/cancelado diretamente no Ecobrança, fora deste sistema. Marcamos como cancelado no histórico.',
+        ].filter(Boolean).join('\n');
+        await sendCvMessageSafe(history.idreserva, msg, history.id, 'baixado externamente');
+        if (situacaoBaixadoId) await alterarSituacaoCvSafe(history.idreserva, situacaoBaixadoId, history.id, 'baixado externamente');
         return;
     }
 

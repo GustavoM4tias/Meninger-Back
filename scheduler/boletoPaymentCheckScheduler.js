@@ -32,9 +32,12 @@ async function runWithLock() {
     }
 
     const owner = `check:scheduler:${new Date().toISOString()}`;
+    // TTL 2h — suporta rodada com várias centenas de boletos (~20s por boleto +
+    // login/selectCompany por empresa). Como o cron só roda 1x/dia, mesmo que
+    // o lock fique pendurado por engano, ninguém vai conflitar com ele.
     const r = await EcoLock.withLock(owner, async () => {
         return runDailyCheck();
-    }, 30); // TTL 30 min — rodada com muitos boletos pode demorar
+    }, 120);
 
     if (!r.acquired) {
         console.warn('[BOLETO_CHECK_SCHED] Lock Ecobrança ocupado — outra operação em andamento. Pulando rodada.');

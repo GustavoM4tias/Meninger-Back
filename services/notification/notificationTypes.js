@@ -36,6 +36,12 @@ export const NotificationType = {
 
     // Marketing — Captação de Leads
     LEAD_DISPATCH_FAILED:    'lead.dispatch.failed',
+
+    // Bolão da Copa
+    BOLAO_LOCKED:    'bolao.locked',
+    BOLAO_PREMATCH:  'bolao.prematch',
+    BOLAO_GOAL:      'bolao.goal',
+    BOLAO_FULLTIME:  'bolao.fulltime',
 };
 
 export const NOTIFICATION_CATALOG = {
@@ -202,6 +208,46 @@ export const NOTIFICATION_CATALOG = {
         label: 'Nova conquista',
         group: 'Academy',
         description: 'Quando você desbloqueia um novo badge.',
+        emailType: null,
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+
+    // ── Bolão da Copa ───────────────────────────────────────────────────────────
+    // emailType null por ora (só in-app). Para ligar e-mail, criar o template
+    // .hbs correspondente e apontar emailType aqui.
+    [NotificationType.BOLAO_LOCKED]: {
+        label: 'Bolão: palpites travados',
+        group: 'Bolão',
+        description: 'Quando os palpites do bolão são travados e a disputa começa.',
+        emailType: null,
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.BOLAO_PREMATCH]: {
+        label: 'Bolão: jogo começando',
+        group: 'Bolão',
+        description: 'Lembrete pouco antes de um jogo do bolão.',
+        emailType: null,
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.BOLAO_GOAL]: {
+        label: 'Bolão: gol',
+        group: 'Bolão',
+        description: 'Quando sai um gol e o ranking provisório muda.',
+        emailType: null,
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.BOLAO_FULLTIME]: {
+        label: 'Bolão: fim de jogo',
+        group: 'Bolão',
+        description: 'Resultado final, cravadas e novo líder do bolão.',
         emailType: null,
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },

@@ -390,7 +390,7 @@ const trackService = {
       userId: userCtx?.userId ? Number(userCtx.userId) : null,
     });
 
-    const items = await db.AcademyTrackItem.findAll({
+    const itemsRaw = await db.AcademyTrackItem.findAll({
       where: { trackId: track.id },
       attributes: [
         'id',
@@ -405,6 +405,42 @@ const trackService = {
         'required',
       ],
       order: [['orderIndex', 'ASC']],
+    });
+
+    // ⚠️ Defesa em profundidade: items ARTICLE só aparecem se o usuário
+    // realmente pode abrir o artigo de destino. Mesmo com a validação no
+    // save (assertArticleCoversTrack), bugs/edge cases podem deixar um
+    // item órfão — então re-validamos a cada render.
+    const articleSlugsToCheck = [];
+    for (const it of itemsRaw) {
+      if (String(it.type || '').toUpperCase() !== 'ARTICLE') continue;
+      const t = String(it.target || '').trim();
+      if (!t) continue;
+      const slug = t.includes('/') ? t.split('/').filter(Boolean).pop() : t;
+      if (slug) articleSlugsToCheck.push(slug);
+    }
+
+    let visibleArticleSlugs = new Set();
+    if (articleSlugsToCheck.length) {
+      const visibleRows = await db.AcademyArticle.findAll({
+        where: {
+          [Op.and]: [
+            { slug: { [Op.in]: articleSlugsToCheck } },
+            audiencesWhereLiteral(tokens),
+          ],
+        },
+        attributes: ['slug'],
+        raw: true,
+      });
+      visibleArticleSlugs = new Set(visibleRows.map((r) => r.slug));
+    }
+
+    const items = itemsRaw.filter((it) => {
+      if (String(it.type || '').toUpperCase() !== 'ARTICLE') return true;
+      const t = String(it.target || '').trim();
+      if (!t) return true; // sem target — UI já trata
+      const slug = t.includes('/') ? t.split('/').filter(Boolean).pop() : t;
+      return visibleArticleSlugs.has(slug);
     });
 
     // S2.1: Carrega módulos da trilha (se houver) para devolver agrupados.

@@ -78,7 +78,7 @@ export async function updateSettings(req, res) {
             'idserie_ra', 'cv_idtipo_documento',
             'situacao_sucesso_id', 'situacao_erro_id',
             'situacao_pago_id', 'situacao_baixado_id', 'tolerancia_dias_uteis',
-            'delay_situacao_sucesso_min',
+            'delay_situacao_sucesso_min', 'max_dias_vencimento',
             'active',
         ];
         // Normaliza idserie_ra: aceita string "21,9", array, ou aninhamentos legados.
@@ -190,6 +190,128 @@ export async function listHistory(req, res) {
 
         return res.json({ total: count, page: Number(page), limit: Number(limit), rows });
     } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
+ * KPIs agregados do histórico — usa os MESMOS filtros do /history pra que o
+ * topo da tela reflita o conjunto que o usuário está vendo (não a base toda).
+ * Retorna contagens por status de pagamento + valores agregados (R$).
+ */
+export async function getHistoryStats(req, res) {
+    try {
+        const {
+            status, paymentStatus, idreserva, empreendimento, dateFrom, dateTo, q,
+        } = req.query;
+
+        const { Op } = db.Sequelize;
+        const where = {};
+
+        if (status) {
+            const arr = String(status).split(',').map(s => s.trim()).filter(Boolean);
+            if (arr.length === 1) where.status = arr[0];
+            else if (arr.length > 1) where.status = { [Op.in]: arr };
+        }
+        if (paymentStatus) {
+            const arr = String(paymentStatus).split(',').map(s => s.trim()).filter(Boolean);
+            if (arr.length === 1) where.payment_status = arr[0];
+            else if (arr.length > 1) where.payment_status = { [Op.in]: arr };
+        }
+        if (idreserva) where.idreserva = Number(idreserva);
+        if (empreendimento) {
+            const arr = String(empreendimento).split(',').map(s => s.trim()).filter(Boolean);
+            if (arr.length === 1) where.empreendimento = arr[0];
+            else if (arr.length > 1) where.empreendimento = { [Op.in]: arr };
+        }
+        if (dateFrom || dateTo) {
+            where.created_at = {};
+            if (dateFrom) where.created_at[Op.gte] = new Date(`${dateFrom}T00:00:00`);
+            if (dateTo)   where.created_at[Op.lte] = new Date(`${dateTo}T23:59:59.999`);
+        }
+        if (q) {
+            const term = `%${String(q).trim()}%`;
+            where[Op.or] = [
+                { titular_nome:  { [Op.iLike]: term } },
+                { nosso_numero:  { [Op.iLike]: term } },
+                { seu_numero:    { [Op.iLike]: term } },
+            ];
+        }
+
+        // 1 query: agrupa por status de emissão + pagamento e soma valor.
+        // Sequelize aggregations: fazemos via raw findAll com group.
+        const rows = await db.BoletoHistory.findAll({
+            where,
+            attributes: [
+                'status',
+                'payment_status',
+                [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'qty'],
+                [db.sequelize.fn('COALESCE', db.sequelize.fn('SUM', db.sequelize.col('valor')), 0), 'sum_valor'],
+            ],
+            group: ['status', 'payment_status'],
+            raw: true,
+        });
+
+        // Normaliza buckets — facilita o frontend não precisar buscar.
+        const stats = {
+            total: { qty: 0, valor: 0 },
+            emitidos: { qty: 0, valor: 0 },     // status='success'
+            processing: { qty: 0, valor: 0 },
+            errors: { qty: 0, valor: 0 },       // status='error'
+            skipped: { qty: 0, valor: 0 },      // status='skipped' (sem série de Ato)
+            paid: { qty: 0, valor: 0 },         // emitidos + paid
+            pending: { qty: 0, valor: 0 },      // emitidos + pending
+            cancelled: { qty: 0, valor: 0 },    // emitidos + cancelled (baixado)
+            checkErrors: { qty: 0, valor: 0 },  // emitidos + payment_status=error
+        };
+
+        for (const r of rows) {
+            const qty = Number(r.qty) || 0;
+            const valor = Number(r.sum_valor) || 0;
+            stats.total.qty += qty;
+            stats.total.valor += valor;
+
+            if (r.status === 'success') {
+                stats.emitidos.qty += qty;
+                stats.emitidos.valor += valor;
+                if (r.payment_status === 'paid') {
+                    stats.paid.qty += qty;
+                    stats.paid.valor += valor;
+                } else if (r.payment_status === 'cancelled') {
+                    stats.cancelled.qty += qty;
+                    stats.cancelled.valor += valor;
+                } else if (r.payment_status === 'error') {
+                    stats.checkErrors.qty += qty;
+                    stats.checkErrors.valor += valor;
+                } else {
+                    // pending (ou null tratado como pending)
+                    stats.pending.qty += qty;
+                    stats.pending.valor += valor;
+                }
+            } else if (r.status === 'error') {
+                stats.errors.qty += qty;
+                stats.errors.valor += valor;
+            } else if (r.status === 'skipped') {
+                stats.skipped.qty += qty;
+                stats.skipped.valor += valor;
+            } else if (r.status === 'processing') {
+                stats.processing.qty += qty;
+                stats.processing.valor += valor;
+            }
+        }
+
+        // % do total de emitidos
+        const pct = (n, d) => d > 0 ? Number(((n / d) * 100).toFixed(1)) : 0;
+        stats.percent = {
+            paid: pct(stats.paid.qty, stats.emitidos.qty),
+            cancelled: pct(stats.cancelled.qty, stats.emitidos.qty),  // taxa de evasão (não pagos baixados)
+            pending: pct(stats.pending.qty, stats.emitidos.qty),
+            errorEmissao: pct(stats.errors.qty, stats.total.qty),
+        };
+
+        return res.json(stats);
+    } catch (err) {
+        console.error('[BOLETO_STATS]', err);
         return res.status(500).json({ error: err.message });
     }
 }
@@ -394,10 +516,21 @@ function parseComissionPayload(body) {
     if (!Number.isFinite(percentual) || percentual < 0 || percentual > 100) {
         throw new Error('percentual_boleto deve ser um número entre 0 e 100.');
     }
+    // max_dias_vencimento: opcional (null = usa default geral). Se preenchido,
+    // tem que ser inteiro positivo entre 1 e 90 (sanity).
+    let maxDias = null;
+    if (body.max_dias_vencimento != null && body.max_dias_vencimento !== '') {
+        const n = Number(body.max_dias_vencimento);
+        if (!Number.isFinite(n) || n < 1 || n > 90) {
+            throw new Error('max_dias_vencimento deve ser inteiro entre 1 e 90 (ou vazio para usar o padrão).');
+        }
+        maxDias = Math.trunc(n);
+    }
     return {
         idempreendimento_cv,
         empreendimento_nome: body.empreendimento_nome || null,
         percentual_boleto: percentual,
+        max_dias_vencimento: maxDias,
         observacao: body.observacao || null,
         active: body.active !== undefined ? Boolean(body.active) : true,
     };

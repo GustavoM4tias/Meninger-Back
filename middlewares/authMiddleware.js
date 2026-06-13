@@ -6,7 +6,7 @@ import db from '../models/sequelize/index.js';
 const authenticate = async (req, res, next) => {
   const token = req.header('Authorization')?.split(' ')[1];
   if (!token) {
-    return res.status(401).json({ success: false, error: 'Acesso negado. Nenhum token fornecido.' });
+    return res.status(401).json({ success: false, code: 'NO_TOKEN', error: 'Acesso negado. Nenhum token fornecido.' });
   }
 
   try {
@@ -18,7 +18,7 @@ const authenticate = async (req, res, next) => {
     });
 
     if (!user || user.status === false) {
-      return res.status(401).json({ success: false, error: 'Usuário inválido/inativo.' });
+      return res.status(401).json({ success: false, code: 'USER_INACTIVE', error: 'Usuário inválido/inativo.' });
     }
 
     // ✅ req.user passa a ser confiável para guards.
@@ -40,7 +40,12 @@ const authenticate = async (req, res, next) => {
 
     next();
   } catch (error) {
-    return res.status(400).json({ success: false, error: 'Token inválido.' });
+    // 401 (não 400) para que o front trate como "sessão inválida" e redirecione
+    // ao login. Distingue expirado de malformado/adulterado.
+    if (error?.name === 'TokenExpiredError') {
+      return res.status(401).json({ success: false, code: 'TOKEN_EXPIRED', error: 'Sessão expirada. Faça login novamente.' });
+    }
+    return res.status(401).json({ success: false, code: 'TOKEN_INVALID', error: 'Token inválido.' });
   }
 };
 

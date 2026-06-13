@@ -86,6 +86,13 @@ export default (sequelize, DataTypes) => {
             comment: 'Safety threshold (minutos) até o próximo lote Sienge (5/5min). Se faltam menos que isto, pula pro próximo ciclo. Default 2 → delay efetivo varia entre 3 e 7 min, alinhado a múltiplo de 5 + 1 buffer.',
         },
 
+        max_dias_vencimento: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 10,
+            comment: 'Dias corridos máximos entre hoje e a data de vencimento do boleto. Vencimento acima → erro "excede limite". Override por empreendimento em boleto_comission_rules.max_dias_vencimento.',
+        },
+
         // ── Controle ───────────────────────────────────────────────────────────
         active: {
             type: DataTypes.BOOLEAN,

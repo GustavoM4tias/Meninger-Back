@@ -3,6 +3,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 dotenv.config();
 import cors from 'cors';
+import helmet from 'helmet';
 import db from './models/sequelize/index.js';
 import authRoutes from './routes/authRoutes.js'; 
 import eventRoutes from './routes/eventRoutes.js';
@@ -37,6 +38,7 @@ import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import alertRoutes from './routes/alertRoutes.js';
+import bolaoRoutes from './routes/bolaoRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -68,12 +70,35 @@ import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
+import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
+import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
 import { startAcademyDeadlineScheduler } from './scheduler/academyDeadlineScheduler.js';
 import { startAcademyRecertifyScheduler } from './scheduler/academyRecertifyScheduler.js';
 import { startAcademyOnboardingScheduler } from './scheduler/academyOnboardingScheduler.js';
 import AlertEngine from './services/alerts/AlertEngine.js';
 
 const app = express();
+
+// ── Segurança base ────────────────────────────────────────────────────────────
+// Falha cedo e alto se o segredo crítico faltar: ele assina os JWT e deriva a
+// chave que cifra as credenciais Sienge. Sem ele, nada disso é seguro.
+if (!process.env.JWT_SECRET) {
+  console.error('❌ FATAL: JWT_SECRET não definido. Configure a variável de ambiente antes de subir o servidor.');
+  process.exit(1);
+}
+
+// Atrás do proxy do Railway/Vercel — confiar no 1º hop para que req.ip seja o IP
+// real do cliente (necessário para rate-limit e logs corretos).
+app.set('trust proxy', 1);
+
+// Headers de segurança. CSP fica desligada por ora (o front roda em domínio
+// separado; uma CSP estrita exige trabalho dedicado), mas o resto entra sem
+// quebrar nada: HSTS, noSniff, anti-clickjacking, referrer-policy, etc.
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginEmbedderPolicy: false,
+}));
 
 // CORS precisa estar no topo, ANTES de qualquer rota
 const corsOptions = {
@@ -137,6 +162,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/marketing', marketingRoutes);
+app.use('/api/bolao', bolaoRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -180,6 +206,11 @@ async function bootServer() {
     ['MetaCampaign', db.MetaCampaign],
     ['MetaAd', db.MetaAd],
     ['MetaAdSet', db.MetaAdSet],
+    // Bolão da Copa (novo módulo em evolução)
+    ['Bolao', db.Bolao],
+    ['BolaoMatch', db.BolaoMatch],
+    ['BolaoParticipant', db.BolaoParticipant],
+    ['BolaoPrediction', db.BolaoPrediction],
   ]) {
     if (!model) continue;
     try {
@@ -232,6 +263,10 @@ async function bootServer() {
   startAcademyOnboardingScheduler();      // aplica regras de onboarding (auto-atribui trilhas)
   if (process.env.ENABLE_MARKETING_CAPTURE !== 'false') marketingDispatchScheduler.start(); // re-tenta despacho de leads ao CV
   marketingSyncScheduler.start(); // sync Meta (forms/campanhas/ads/leads) — full a cada 2h em horário comercial + light 15/15min
+  if (process.env.ENABLE_BOLAO_LIVE !== 'false') bolaoLiveScheduler.start(); // placar ao vivo do bolão (poll ESPN na janela do jogo)
+  if (process.env.SEED_BOLAO_COPA === 'true') {
+    seedBolaoCopa2026().catch(err => console.warn('⚠️  seedBolaoCopa2026 falhou:', err.message));
+  }
   await AlertEngine.boot();               // registra crons das alert_rules salvas
 
   app.listen(PORT, () => {

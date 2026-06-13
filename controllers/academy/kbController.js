@@ -23,6 +23,8 @@ const kbController = {
                 q = '',
                 search = '',          // alias
                 categorySlug = '',
+                subcategorySlug = '', // 2º nível opcional
+                sub = '',             // alias curto (?sub=)
                 page = '1',
                 pageSize = '20',
 
@@ -44,6 +46,7 @@ const kbController = {
             const data = await kbService.listArticles({
                 q: (q || search || ''),
                 categorySlug,
+                subcategorySlug: (subcategorySlug || sub || ''),
                 userId: resolveUserId(req),
                 page: Number(page) || 1,
                 pageSize: Number(pageSize) || 20,
