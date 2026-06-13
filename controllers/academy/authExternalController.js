@@ -1,8 +1,10 @@
 // controllers/academy/authExternalController.js
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import db from '../../models/sequelize/index.js';
 import jwtConfig from '../../config/jwtConfig.js';
+import { issueRefreshToken } from '../../services/auth/refreshTokenService.js';
 import responseHandler from '../../utils/responseHandler.js';
 import { sendEmail } from '../../email/email.service.js';
 import { EmailType } from '../../email/types.js';
@@ -32,7 +34,7 @@ function normalizeKind(kind) {
 }
 
 function genCode6() {
-    return String(Math.floor(100000 + Math.random() * 900000));
+    return String(crypto.randomInt(100000, 1000000));
 }
 
 // resposta neutra (anti enumeração)
@@ -350,7 +352,9 @@ export async function externalVerifyCode(req, res) {
             { expiresIn: jwtConfig.expiresIn }
         );
 
-        return responseHandler.success(res, { token });
+        const refreshToken = await issueRefreshToken(user.id, req);
+
+        return responseHandler.success(res, { token, refreshToken });
     } catch (err) {
         console.error('[auth.external.verify]', err);
         return responseHandler.error(res, 'Erro ao validar código');

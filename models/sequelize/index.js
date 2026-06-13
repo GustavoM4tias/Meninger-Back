@@ -3,6 +3,7 @@ import { Sequelize, DataTypes } from 'sequelize';
 import dotenv from 'dotenv';
 dotenv.config();
 import UserDefine from './user.js';
+import RefreshTokenDefine from './refreshToken.js';
 import PositionDefine from './position.js';
 import UserCityDefine from './userCity.js';
 import DepartmentDefine from './department.js';
@@ -158,6 +159,12 @@ import MetaCampaignDefine     from './marketing/metaCampaign.js';
 import MetaAdDefine           from './marketing/metaAd.js';
 import MetaAdSetDefine        from './marketing/metaAdSet.js';
 
+// Bolão da Copa
+import BolaoDefine            from './bolao/bolao.js';
+import BolaoMatchDefine       from './bolao/bolaoMatch.js';
+import BolaoParticipantDefine from './bolao/bolaoParticipant.js';
+import BolaoPredictionDefine  from './bolao/bolaoPrediction.js';
+
 const env = process.env.NODE_ENV || 'development';
 
 const cfg = config[env];
@@ -168,6 +175,7 @@ const sequelize = new Sequelize(cfg.database, cfg.username, cfg.password, {
 
 const db = {};
 db.User = UserDefine(sequelize, DataTypes);
+db.RefreshToken = RefreshTokenDefine(sequelize, DataTypes);
 db.Position = PositionDefine(sequelize, DataTypes);
 db.UserCity = UserCityDefine(sequelize, DataTypes);
 db.Department = DepartmentDefine(sequelize, DataTypes);
@@ -322,6 +330,12 @@ db.MetaLeadForm     = MetaLeadFormDefine(sequelize, DataTypes);
 db.MetaCampaign     = MetaCampaignDefine(sequelize, DataTypes);
 db.MetaAd           = MetaAdDefine(sequelize, DataTypes);
 db.MetaAdSet        = MetaAdSetDefine(sequelize, DataTypes);
+
+// Bolão da Copa
+db.Bolao            = BolaoDefine(sequelize, DataTypes);
+db.BolaoMatch       = BolaoMatchDefine(sequelize, DataTypes);
+db.BolaoParticipant = BolaoParticipantDefine(sequelize, DataTypes);
+db.BolaoPrediction  = BolaoPredictionDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

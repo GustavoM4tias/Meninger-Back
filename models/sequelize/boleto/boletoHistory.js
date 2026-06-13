@@ -44,8 +44,12 @@ export default (sequelize, DataTypes) => {
         },
 
         // ── Status do processamento ────────────────────────────────────────────
+        // 'skipped' = reserva entrou na situação-gatilho mas não cabia boleto
+        // (sem série de Ato). Não é falha técnica — fluxo deliberadamente pulado
+        // sem mexer na situação CV. Valor adicionado ao tipo enum via
+        // ensureBoletoSchema (ALTER TYPE ... ADD VALUE).
         status: {
-            type: DataTypes.ENUM('processing', 'success', 'error'),
+            type: DataTypes.ENUM('processing', 'success', 'error', 'skipped'),
             defaultValue: 'processing',
             allowNull: false,
         },

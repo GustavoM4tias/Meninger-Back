@@ -79,6 +79,12 @@ export default (sequelize, DataTypes) => {
     // Conta TODOS os disparos do user no dia, somando todas as suas regras.
     // Disparos acima do limite são suprimidos (status='suppressed_daily_limit').
     daily_alert_limit: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 5 },
+
+    // Menções @ no Academy. Se false, o usuário é "protegido": não aparece em
+    // buscas de menção e menções a ele são ignoradas — EXCETO para admins, que
+    // mencionam qualquer um. Default true = todo mundo é mencionável. O admin
+    // marca diretores/protegidos como false quando quiser.
+    mentionable: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
   }, {
     tableName: 'users',
     underscored: true,

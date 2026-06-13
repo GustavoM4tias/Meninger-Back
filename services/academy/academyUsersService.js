@@ -29,9 +29,11 @@ const academyUsersService = {
 
         if (!user) throw new Error('Usuário não encontrado.');
 
+        // 🔒 Contagens de artigos também respeitam a audience do viewer — um
+        // externo não descobre nem o NÚMERO de artigos internos de alguém.
         const [kbDrafts, kbPublished] = await Promise.all([
-            db.AcademyArticle.count({ where: { createdByUserId: userId, status: 'DRAFT' } }),
-            db.AcademyArticle.count({ where: { createdByUserId: userId, status: 'PUBLISHED' } }),
+            db.AcademyArticle.count({ where: { [Op.and]: [{ createdByUserId: userId, status: 'DRAFT' }, audWhere] } }),
+            db.AcademyArticle.count({ where: { [Op.and]: [{ createdByUserId: userId, status: 'PUBLISHED' }, audWhere] } }),
         ]);
 
         const [topicsCreated, answersPosted] = await Promise.all([
@@ -156,14 +158,16 @@ const academyUsersService = {
         // 2) agregações por usuário (em paralelo)
         const [kbPublishedRows, kbDraftRows, topicRows, answerRows, trackCompletedRows, trackInProgressRows] =
             await Promise.all([
+                // 🔒 Mesmo critério dos tópicos: contagens filtradas pela
+                // audience do viewer (externo não vê volume de produção interna).
                 db.AcademyArticle.findAll({
-                    where: { createdByUserId: { [Op.in]: userIds }, status: 'PUBLISHED' },
+                    where: { [Op.and]: [{ createdByUserId: { [Op.in]: userIds }, status: 'PUBLISHED' }, audWhere] },
                     attributes: ['createdByUserId', [db.Sequelize.fn('COUNT', db.Sequelize.col('id')), 'count']],
                     group: ['created_by_user_id'],
                     raw: true,
                 }),
                 db.AcademyArticle.findAll({
-                    where: { createdByUserId: { [Op.in]: userIds }, status: 'DRAFT' },
+                    where: { [Op.and]: [{ createdByUserId: { [Op.in]: userIds }, status: 'DRAFT' }, audWhere] },
                     attributes: ['createdByUserId', [db.Sequelize.fn('COUNT', db.Sequelize.col('id')), 'count']],
                     group: ['created_by_user_id'],
                     raw: true,

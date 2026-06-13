@@ -1,11 +1,13 @@
 // api/controllers/authController.js
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import db from '../models/sequelize/index.js';
 import jwtConfig from '../config/jwtConfig.js';
 import responseHandler from '../utils/responseHandler.js';
 import { sendEmail } from '../email/email.service.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
+import { issueRefreshToken, rotateRefreshToken, revokeRefreshToken } from '../services/auth/refreshTokenService.js';
 
 const { User, Position, UserCity } = db;
 const { Op } = db.Sequelize;
@@ -15,7 +17,7 @@ const PASSWORD_RESET_RESEND_SEC = Number(process.env.PASSWORD_RESET_RESEND_SEC |
 const PASSWORD_RESET_MAX_ATTEMPTS = Number(process.env.PASSWORD_RESET_MAX_ATTEMPTS || 5);
 
 function genCode6() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(crypto.randomInt(100000, 1000000));
 }
 
 function neutralResetResponse(res) {
@@ -42,19 +44,16 @@ function generateSecurePassword() {
   const special = '!@#$%*_-+=';
   const all = upper + lower + digits + special;
 
-  const password = [
-    upper[Math.floor(Math.random() * upper.length)],
-    lower[Math.floor(Math.random() * lower.length)],
-    digits[Math.floor(Math.random() * digits.length)],
-    special[Math.floor(Math.random() * special.length)],
-  ];
+  const pick = (set) => set[crypto.randomInt(0, set.length)];
+
+  const password = [pick(upper), pick(lower), pick(digits), pick(special)];
 
   for (let i = 4; i < 12; i++) {
-    password.push(all[Math.floor(Math.random() * all.length)]);
+    password.push(pick(all));
   }
 
   for (let i = password.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = crypto.randomInt(0, i + 1);
     [password[i], password[j]] = [password[j], password[i]];
   }
 
@@ -117,16 +116,16 @@ export const loginUser = async (req, res) => {
     const user = await User.findOne({ where: { email } });
 
     if (!user) {
-      return responseHandler.error(res, 'Usuário não encontrado');
+      return responseHandler.error(res, 'Usuário não encontrado', 401);
     }
 
     if (!user.status) {
-      return responseHandler.error(res, 'Conta inativa. Entre em contato com o administrador.');
+      return responseHandler.error(res, 'Conta inativa. Entre em contato com o administrador.', 403);
     }
 
     const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
-      return responseHandler.error(res, 'Senha incorreta');
+      return responseHandler.error(res, 'Senha incorreta', 401);
     }
 
     user.last_login = new Date();
@@ -140,7 +139,9 @@ export const loginUser = async (req, res) => {
       auth_provider: user.auth_provider,
     }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
 
-    return responseHandler.success(res, { token });
+    const refreshToken = await issueRefreshToken(user.id, req);
+
+    return responseHandler.success(res, { token, refreshToken });
   } catch (error) {
     console.error('Erro no login:', error);
     return responseHandler.error(res, error);
@@ -493,6 +494,8 @@ export const identifyFace = async (req, res) => {
       role: best.user.role,
     }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
 
+    const refreshToken = await issueRefreshToken(best.user.id, req);
+
     best.user.last_login = new Date();
     await best.user.save();
 
@@ -500,6 +503,7 @@ export const identifyFace = async (req, res) => {
       success: true,
       data: {
         token,
+        refreshToken,
         user: { id: best.user.id, email: best.user.email, username: best.user.username },
         meta: { dist: best.dist, threshold: userThreshold },
       },
@@ -801,4 +805,52 @@ export const getUserById = async (req, res) => {
   } catch (error) {
     return responseHandler.error(res, error);
   }
+};
+
+// ── Refresh / Logout de sessão ────────────────────────────────────────────────
+
+/**
+ * POST /api/auth/refresh  (público)
+ * Troca um refresh token válido por um novo par (access + refresh rotacionado).
+ */
+export const refreshSession = async (req, res) => {
+  try {
+    const rotated = await rotateRefreshToken(req.body?.refreshToken, req);
+    if (!rotated) {
+      return res.status(401).json({ success: false, code: 'REFRESH_INVALID', error: 'Sessão expirada. Faça login novamente.' });
+    }
+
+    const user = await User.findByPk(rotated.userId, {
+      attributes: ['id', 'position', 'city', 'role', 'auth_provider', 'status'],
+    });
+    if (!user || user.status === false) {
+      return res.status(401).json({ success: false, code: 'USER_INACTIVE', error: 'Usuário inválido/inativo.' });
+    }
+
+    const token = jwt.sign({
+      id: user.id,
+      position: user.position,
+      city: user.city,
+      role: user.role,
+      auth_provider: user.auth_provider,
+    }, jwtConfig.secret, { expiresIn: jwtConfig.expiresIn });
+
+    return responseHandler.success(res, { token, refreshToken: rotated.refreshToken });
+  } catch (error) {
+    console.error('[refreshSession] erro:', error);
+    return res.status(401).json({ success: false, code: 'REFRESH_INVALID', error: 'Sessão expirada. Faça login novamente.' });
+  }
+};
+
+/**
+ * POST /api/auth/logout  (público)
+ * Revoga o refresh token apresentado. Best-effort, idempotente.
+ */
+export const logoutSession = async (req, res) => {
+  try {
+    await revokeRefreshToken(req.body?.refreshToken);
+  } catch (error) {
+    console.error('[logoutSession] erro:', error);
+  }
+  return responseHandler.success(res, { message: 'Sessão encerrada.' });
 };

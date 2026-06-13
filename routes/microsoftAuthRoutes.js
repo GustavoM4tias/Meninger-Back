@@ -18,6 +18,7 @@ const teamsController = MicrosoftTeamsController;
 // ── Auth: Públicas ────────────────────────────────────────────────────────────
 router.get('/auth/login', authController.login);
 router.get('/auth/callback', authController.callback);
+router.post('/auth/exchange', authController.exchange);
 
 // ── Auth: Autenticadas ────────────────────────────────────────────────────────
 router.get('/auth/status', authenticate, authController.status);

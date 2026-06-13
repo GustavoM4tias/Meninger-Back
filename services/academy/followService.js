@@ -6,6 +6,7 @@
 
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
+import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
 
 const TARGET_TYPES = ['USER', 'TRACK', 'TOPIC', 'CATEGORY'];
 
@@ -21,17 +22,28 @@ function normalizeRef(ref) {
     return s;
 }
 
-async function validateTarget(type, ref) {
+// 🔒 Valida o alvo DENTRO da audience do seguidor: trilha/tópico fora do
+// público dele responde "não encontrada" — sem confirmar existência de
+// conteúdo restrito por sondagem de ids/slugs.
+async function validateTarget(type, ref, followerUserId) {
     if (type === 'USER') {
         if (!/^\d+$/.test(ref)) throw new Error('USER alvo deve ser userId numérico.');
         const u = await db.User.findByPk(Number(ref), { attributes: ['id'] });
         if (!u) throw new Error('Usuário não encontrado.');
     } else if (type === 'TRACK') {
-        const t = await db.AcademyTrack.findOne({ where: { slug: ref }, attributes: ['id'] });
+        const tokens = await resolveUserTokens(followerUserId);
+        const t = await db.AcademyTrack.findOne({
+            where: { [Op.and]: [{ slug: ref }, audiencesWhereLiteral(tokens)] },
+            attributes: ['id'],
+        });
         if (!t) throw new Error('Trilha não encontrada.');
     } else if (type === 'TOPIC') {
         if (!/^\d+$/.test(ref)) throw new Error('TOPIC alvo deve ser id numérico.');
-        const t = await db.AcademyTopic.findByPk(Number(ref), { attributes: ['id'] });
+        const tokens = await resolveUserTokens(followerUserId);
+        const t = await db.AcademyTopic.findOne({
+            where: { [Op.and]: [{ id: Number(ref) }, audiencesWhereLiteral(tokens)] },
+            attributes: ['id'],
+        });
         if (!t) throw new Error('Tópico não encontrado.');
     } else if (type === 'CATEGORY') {
         // category é livre — KB ou Community. Sem validação estrita.
@@ -51,7 +63,7 @@ const followService = {
             throw new Error('Você não pode seguir a si mesmo.');
         }
 
-        await validateTarget(type, ref);
+        await validateTarget(type, ref, uid);
 
         try {
             const created = await db.AcademyFollow.create({

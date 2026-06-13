@@ -1,6 +1,6 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-import { normalizeAudiences, deriveLegacyAudience, DEFAULT_AUDIENCES } from './audience.js';
+import { normalizeAudiences, deriveLegacyAudience, visibilityToAudiences, canonicalizeAudiences } from './audience.js';
 
 function normStr(v) {
   return String(v ?? '').trim();
@@ -72,9 +72,12 @@ function asJsonOrNull(v) {
   throw new Error('payload inválido (deve ser objeto).');
 }
 
+// Modelo de 4 classes: qualquer set recebido é canonicalizado para
+// INTERNO | EXTERNO | AMBOS | ADMIN. Sem nada → INTERNO (padrão seguro).
 function resolveAudiencesForWrite(input) {
   const arr = normalizeAudiences(input);
-  return arr.length ? arr : DEFAULT_AUDIENCES.slice();
+  if (!arr.length) return visibilityToAudiences('INTERNAL');
+  return canonicalizeAudiences(arr);
 }
 
 async function nextOrderIndex(trackId) {

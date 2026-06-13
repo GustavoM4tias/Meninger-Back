@@ -36,6 +36,12 @@ import {
     setRecurring,
     purgeEnterprise,
 } from '../controllers/sienge/billsAutoSyncController.js';
+import {
+    getFilters as inadimplenciaFilters,
+    getDashboard as inadimplenciaDashboard,
+    getDetail as inadimplenciaDetail,
+    exportCsv as inadimplenciaExport,
+} from '../controllers/sienge/inadimplenciaController.js';
 
 
 const router = express.Router();
@@ -74,6 +80,13 @@ router.post('/bills/auto-sync/run-now', authenticate, runAutoSyncNow);
 router.post('/bills/auto-sync/recurring', authenticate, setRecurring);
 router.post('/bills/auto-sync/purge', authenticate, purgeEnterprise);
 router.get('/bills/sync-log', authenticate, listSyncLog);
+
+// ── Inadimplência (admin-only) — lê do backup diário do Sienge (sie214801) ────
+// Gate de admin é aplicado dentro do controller (req.user.role).
+router.get('/inadimplencia/filters', authenticate, inadimplenciaFilters);
+router.get('/inadimplencia/detail',  authenticate, inadimplenciaDetail);
+router.get('/inadimplencia/export',  authenticate, inadimplenciaExport);
+router.get('/inadimplencia',         authenticate, inadimplenciaDashboard);
 
 router.post("/awards/nfse", authenticate, upload.single("file"), uploadNfseAward);
 router.post("/awards/nfse/bulk", authenticate, upload.single("file"), bulkAttachNfse);

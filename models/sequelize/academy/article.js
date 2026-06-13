@@ -3,6 +3,8 @@ export default (sequelize, DataTypes) => {
         title: { type: DataTypes.STRING, allowNull: false },
         slug: { type: DataTypes.STRING, allowNull: false, unique: true },
         categorySlug: { type: DataTypes.STRING, allowNull: false },
+        // Subcategoria opcional (2º nível da KB): Comercial > Cartório > artigo.
+        subcategorySlug: { type: DataTypes.STRING, allowNull: true },
         audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'BOTH' },
         status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'DRAFT' },
         body: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
@@ -18,6 +20,11 @@ export default (sequelize, DataTypes) => {
         // queries de leitura passam a usar este campo (audiences ?| ARRAY[...]).
         audiences: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
 
+        // IDs de usuários internos que PODEM editar este artigo (além do autor).
+        // O autor (createdByUserId) e admins sempre podem editar, independente
+        // desta lista. Selecionado no editor ao criar/editar.
+        editorUserIds: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+
         createdByUserId: { type: DataTypes.INTEGER, allowNull: true },
         updatedByUserId: { type: DataTypes.INTEGER, allowNull: true },
     }, {
@@ -27,6 +34,7 @@ export default (sequelize, DataTypes) => {
         indexes: [
             { fields: ['slug'], unique: true },
             { fields: ['category_slug'] },
+            { fields: ['subcategory_slug'] },
             { fields: ['audience'] },
             { fields: ['status'] },
             { fields: ['created_by_user_id'] },

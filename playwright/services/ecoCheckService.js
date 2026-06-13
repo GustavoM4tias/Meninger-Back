@@ -18,7 +18,7 @@
 
 import { ecoLogin } from '../modules/ecocobranca/login.js';
 import { selectCompany } from '../modules/ecocobranca/selectCompany.js';
-import { consultarTitulo, baixarTitulo } from '../modules/ecocobranca/consultaBaixaTitulo.js';
+import { consultarTituloDetalhado, baixarTitulo } from '../modules/ecocobranca/consultaBaixaTitulo.js';
 import { log, success, error } from '../core/logger.js';
 
 /**
@@ -63,12 +63,39 @@ export async function runEcoBatch({ credentials, empresas = [], onResult = null 
                 const b = boletosDaEmpresa[j];
                 const tag = `[boleto ${j + 1}/${boletosDaEmpresa.length} hist=${b.historyId} nosso=${b.nossoNumero}]`;
                 try {
-                    const op = (b.acao === 'baixar') ? baixarTitulo : consultarTitulo;
-                    const r = await op(page, b.nossoNumero);
-                    const final = { ...b, ok: true, ...r };
+                    // ── ETAPA 1: sempre consulta detalhada (via /consulta_titulo) ──
+                    // Diferente da tela /baixa_titulo, a /consulta_titulo mostra
+                    // TODOS os títulos com situação real (EM ABERTO, LIQUIDADO,
+                    // BAIXADO, CANCELADO, etc.). Isso permite decidir se vale
+                    // a pena ir pra /baixa_titulo ou se já resolvemos com a
+                    // consulta (boleto pago, baixado externamente, etc.).
+                    //
+                    // Passamos `cnpj_empresa` pra o auto-retry funcionar: se o
+                    // Ecobrança perder a sessão (redirect pra acesso_bemVindo),
+                    // o módulo refaz selectCompany sozinho e tenta de novo.
+                    const consulta = await consultarTituloDetalhado(page, b.nossoNumero, {
+                        cnpj_empresa: emp.cnpj_empresa,
+                    });
+                    let final = { ...b, ok: true, ...consulta };
+
+                    // ── ETAPA 2: baixar se necessário ──
+                    // Só vai pra /baixa_titulo se: ação=baixar E está EM ABERTO.
+                    // Outras situações são resolvidas pelo aplicarResultado sem
+                    // precisar baixar (LIQUIDADO → paid; BAIXADO → cancelled).
+                    const sit = String(consulta.situacao || '').toUpperCase();
+                    if (b.acao === 'baixar' && consulta.found && sit === 'EM ABERTO') {
+                        const baixa = await baixarTitulo(page, b.nossoNumero, {
+                            cnpj_empresa: emp.cnpj_empresa,
+                        });
+                        final = { ...final, ...baixa };
+                    }
+
                     results.push(final);
                     if (onResult) await onResult(final).catch(() => {});
-                    success('ECO_CHECK', `${tag} ${b.acao} → situacao="${r.situacao || '(não encontrado)'}"${r.baixaConfirmada ? ' • BAIXA OK' : ''}`);
+                    const summary = final.baixaConfirmada
+                        ? `BAIXA OK (era "${sit}")`
+                        : `situação="${consulta.situacao || '(não encontrado)'}"`;
+                    success('ECO_CHECK', `${tag} ${b.acao} → ${summary}`);
                 } catch (err) {
                     const final = { ...b, ok: false, error: err?.message || String(err) };
                     results.push(final);

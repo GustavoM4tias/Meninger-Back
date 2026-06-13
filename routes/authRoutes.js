@@ -15,17 +15,25 @@ import {
   getSiengeCredentials,
   saveSiengeCredentials,
   adminResetUserPassword,
+  refreshSession,
+  logoutSession,
 } from '../controllers/authController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import { authorizeByRole } from '../middlewares/permissionMiddleware.js';
+import { loginLimiter, passwordResetLimiter } from '../middlewares/rateLimiters.js';
 
 const router = express.Router();
 
 router.post('/register', authenticate, authorizeByRole(['admin']), registerUser);
-router.post('/login', loginUser);
+router.post('/login', loginLimiter, loginUser);
 
-router.post('/forgot-password/request', requestPasswordReset);
-router.post('/forgot-password/reset', resetPassword);
+// Sessão: refresh rotaciona o par de tokens; logout revoga o refresh token.
+// Ambas públicas — o access token pode já estar expirado.
+router.post('/refresh', refreshSession);
+router.post('/logout', logoutSession);
+
+router.post('/forgot-password/request', passwordResetLimiter, requestPasswordReset);
+router.post('/forgot-password/reset', passwordResetLimiter, resetPassword);
 router.put('/user/password', authenticate, changePassword);
 
 router.get('/user', authenticate, getUserInfo);
@@ -40,6 +48,6 @@ router.get('/users', authenticate, authorizeByRole(['admin']), getAllUsers);
 router.put('/users', authenticate, authorizeByRole(['admin']), updateUser);
 router.post('/users/:id/reset-password', authenticate, authorizeByRole(['admin']), adminResetUserPassword);
 router.post('/face/enroll', authenticate, enrollFace);
-router.post('/face/identify', identifyFace);
+router.post('/face/identify', loginLimiter, identifyFace);
 
 export default router;

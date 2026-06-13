@@ -3,9 +3,8 @@ import trackAdminService from '../../services/academy/trackAdminService.js';
 const trackAdminController = {
   async list(req, res) {
     try {
-      const audience = req.query.audience || 'BOTH';
       const status = req.query.status || ''; // '' | DRAFT | PUBLISHED
-      return res.json(await trackAdminService.list({ audience, status }));
+      return res.json(await trackAdminService.list({ status }));
     } catch (err) {
       console.error('[academy.tracksAdmin.list]', err);
       return res.status(400).json({ message: err.message || 'Erro ao listar trilhas (admin).' });

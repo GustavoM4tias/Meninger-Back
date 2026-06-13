@@ -58,6 +58,21 @@ router.get('/users/:id(\\d+)/summary', authenticate, meController.summary);
 
 router.get('/kb/categories', authenticate, kbController.listCategories);
 router.get('/kb/articles', authenticate, kbController.listArticles);
+
+// S4.1: Comentários — PRECISAM vir ANTES da rota genérica :categorySlug/:articleSlug.
+// Caso contrário, `/kb/articles/9/comments` casa na genérica como
+// {categorySlug:'9', articleSlug:'comments'} (mesmo nº de segmentos) e cai no
+// getArticle → 404. Aqui o `:articleId(\d+)` + literal `comments` vence primeiro;
+// um artigo real (`/kb/articles/comercial/conf01`) não casa e segue pra genérica.
+router.get('/kb/articles/:articleId(\\d+)/comments', authenticate, articleCommentsController.list);
+router.post('/kb/articles/:articleId(\\d+)/comments', authenticate, articleCommentsController.create);
+router.patch('/kb/comments/:commentId(\\d+)', authenticate, articleCommentsController.update);
+router.delete('/kb/comments/:commentId(\\d+)', authenticate, articleCommentsController.remove);
+
+// S2.4: lista de versões — MESMA armadilha: `/kb/articles/9/versions` tem 4 segmentos
+// e casaria na rota genérica abaixo. Fica aqui, antes dela. (requireInternal mantido.)
+router.get('/kb/articles/:id(\\d+)/versions', authenticate, requireInternal, kbAdminController.listVersions);
+
 router.get('/kb/articles/:categorySlug/:articleSlug', authenticate, kbController.getArticle);
 
 // ── Backlinks ("Mencionado em") ──────────────────────────────────────────────
@@ -158,12 +173,6 @@ router.get('/kb/link-index', authenticate, async (req, res) => {
     }
 });
 
-// S4.1: Comentários em artigos
-router.get('/kb/articles/:articleId(\\d+)/comments', authenticate, articleCommentsController.list);
-router.post('/kb/articles/:articleId(\\d+)/comments', authenticate, articleCommentsController.create);
-router.patch('/kb/comments/:commentId(\\d+)', authenticate, articleCommentsController.update);
-router.delete('/kb/comments/:commentId(\\d+)', authenticate, articleCommentsController.remove);
-
 // S4.2: Ratings 5★ (polimórfico ARTICLE | TRACK)
 router.get('/ratings', authenticate, ratingsController.stats);
 router.get('/ratings/reviews', authenticate, ratingsController.listReviews);
@@ -172,12 +181,14 @@ router.delete('/ratings', authenticate, ratingsController.removeMine);
 
 router.get('/community/topics', authenticate, communityController.listTopics);
 router.post('/community/topics', authenticate, communityController.createTopic);
+// `/my` PRECISA vir antes de `/:id` — senão `/community/topics/my` casa como
+// {id:'my'} e cai no getTopic (lista "Meus tópicos" quebrava).
+router.get('/community/topics/my', authenticate, communityController.listMyTopics);
 router.get('/community/topics/:id', authenticate, communityController.getTopic);
 router.post('/community/topics/:id/posts', authenticate, communityController.createPost);
 router.patch('/community/topics/:id/accept/:postId', authenticate, communityController.acceptPost);
 router.patch('/community/topics/:id/close', authenticate, communityController.closeTopic);
 router.patch('/community/topics/:id/reopen', authenticate, communityController.reopenTopic);
-router.get('/community/topics/my', authenticate, communityController.listMyTopics);
 
 // S4.4: Follow polimórfico (USER | TRACK | TOPIC | CATEGORY)
 router.post('/follow', authenticate, followController.follow);
@@ -219,13 +230,17 @@ router.post('/tracks/:slug/quiz', authenticate, trackController.submitQuiz);
 // ========= INTERNAL ADMIN ONLY =========
 // ✅ aqui sim entra requireInternal + requireAdmin
 router.get('/kb/articles/my', authenticate, requireInternal, kbAdminController.listMine);
+// Picker "Quem pode editar" — usuários internos. Antes da rota :id pra não colidir.
+router.get('/kb/editor-candidates', authenticate, requireInternal, kbAdminController.editorCandidates);
 router.get('/kb/articles/:id(\\d+)', authenticate, requireInternal, kbAdminController.getById);
 router.post('/kb/articles', authenticate, requireInternal, kbAdminController.create);
 router.patch('/kb/articles/:id(\\d+)', authenticate, requireInternal, kbAdminController.update);
 router.patch('/kb/articles/:id(\\d+)/publish', authenticate, requireInternal, kbAdminController.publish);
 
-// S2.4: versionamento de artigos
-router.get('/kb/articles/:id(\\d+)/versions', authenticate, requireInternal, kbAdminController.listVersions);
+// Justificativas das notas do artigo — só autor do artigo + admin (checado no service).
+router.get('/kb/articles/:id(\\d+)/ratings/justifications', authenticate, requireInternal, ratingsController.articleJustifications);
+
+// S2.4: versionamento de artigos (a LISTA fica lá em cima, antes da rota genérica).
 router.get('/kb/articles/:id(\\d+)/versions/:versionNumber(\\d+)', authenticate, requireInternal, kbAdminController.getVersion);
 router.post('/kb/articles/:id(\\d+)/versions/:versionNumber(\\d+)/restore', authenticate, requireInternal, requireAdmin, kbAdminController.restoreVersion);
 
@@ -309,6 +324,9 @@ router.get('/admin/users', authenticate, requireInternal, requireAdmin, academyA
 
 // Certificado: revogar (admin)
 router.delete('/admin/cert/:code', authenticate, requireInternal, requireAdmin, certificateController.revoke);
+
+// Avaliações: remover uma nota/justificativa (admin)
+router.delete('/admin/ratings/:id(\\d+)', authenticate, requireInternal, requireAdmin, ratingsController.adminRemove);
 
 // Highlights admin
 router.get('/admin/highlights', authenticate, requireInternal, requireAdmin, highlightAdminController.list);

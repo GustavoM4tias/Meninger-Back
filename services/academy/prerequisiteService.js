@@ -11,8 +11,16 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
+import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
 
 const POLICIES = ['STRICT', 'LENIENT'];
+
+// Entrada de blockedBy para pré-requisito FORA da audience do user: o bloqueio
+// é real, mas título/slug não vazam (admin pode ter configurado pré-req
+// cruzando públicos — ex.: trilha externa exigindo trilha interna).
+function maskedBlockedBy(policy, userProgressPercent = 0) {
+    return { slug: null, title: 'Conteúdo restrito', policy, userProgressPercent, restricted: true };
+}
 
 function normalizePolicy(p) {
     const v = String(p || 'STRICT').toUpperCase();
@@ -144,10 +152,10 @@ const prerequisiteService = {
 
         const uid = Number(userId);
         if (!Number.isFinite(uid) || uid <= 0) {
-            // Sem user logado: trata como locked (sem progresso → bloqueia tudo)
+            // Sem user logado: trata como locked, sem vazar slug/título.
             return {
                 locked: true,
-                blockedBy: prereqs.map(p => ({ slug: p.requiredTrackSlug, policy: p.policy })),
+                blockedBy: prereqs.map(p => maskedBlockedBy(p.policy)),
             };
         }
 
@@ -159,8 +167,11 @@ const prerequisiteService = {
         });
         const progressBySlug = new Map(progress.map(p => [p.trackSlug, p]));
 
+        // 🔒 Título/slug só aparecem se a trilha pré-requisito está na audience
+        // do user — fora dela, a entrada é mascarada.
+        const tokens = await resolveUserTokens(uid);
         const tracks = await db.AcademyTrack.findAll({
-            where: { slug: { [Op.in]: requiredSlugs } },
+            where: { [Op.and]: [{ slug: { [Op.in]: requiredSlugs } }, audiencesWhereLiteral(tokens)] },
             attributes: ['slug', 'title'],
             raw: true,
         });
@@ -174,12 +185,10 @@ const prerequisiteService = {
                 ? percent >= 100
                 : percent > 0;
             if (!ok) {
-                blockedBy.push({
-                    slug: p.requiredTrackSlug,
-                    title: titleBySlug[p.requiredTrackSlug] || p.requiredTrackSlug,
-                    policy: p.policy,
-                    userProgressPercent: percent,
-                });
+                const title = titleBySlug[p.requiredTrackSlug];
+                blockedBy.push(title
+                    ? { slug: p.requiredTrackSlug, title, policy: p.policy, userProgressPercent: percent }
+                    : maskedBlockedBy(p.policy, percent));
             }
         }
 
@@ -217,8 +226,10 @@ const prerequisiteService = {
             for (const r of rows) progressBySlug.set(r.trackSlug, Number(r.progressPercent || 0));
         }
 
+        // 🔒 Mesmo critério do getLockState: título/slug só dentro da audience.
+        const tokens = await resolveUserTokens(uid);
         const tracks = await db.AcademyTrack.findAll({
-            where: { slug: { [Op.in]: allRequiredSlugs } },
+            where: { [Op.and]: [{ slug: { [Op.in]: allRequiredSlugs } }, audiencesWhereLiteral(tokens)] },
             attributes: ['slug', 'title'],
             raw: true,
         });
@@ -230,12 +241,10 @@ const prerequisiteService = {
             if (!ok) {
                 const state = out.get(p.trackSlug);
                 state.locked = true;
-                state.blockedBy.push({
-                    slug: p.requiredTrackSlug,
-                    title: titleBySlug[p.requiredTrackSlug] || p.requiredTrackSlug,
-                    policy: p.policy,
-                    userProgressPercent: percent,
-                });
+                const title = titleBySlug[p.requiredTrackSlug];
+                state.blockedBy.push(title
+                    ? { slug: p.requiredTrackSlug, title, policy: p.policy, userProgressPercent: percent }
+                    : maskedBlockedBy(p.policy, percent));
             }
         }
 
@@ -276,9 +285,16 @@ const prerequisiteService = {
 
             if (!unlockedNow.length) return;
 
-            // Pega títulos para notificação
+            // Pega títulos para notificação — só de trilhas dentro da audience
+            // do user (não notifica desbloqueio de trilha que ele nem pode ver).
+            const tokens = await resolveUserTokens(uid);
             const tracks = await db.AcademyTrack.findAll({
-                where: { slug: { [Op.in]: unlockedNow }, status: 'PUBLISHED' },
+                where: {
+                    [Op.and]: [
+                        { slug: { [Op.in]: unlockedNow }, status: 'PUBLISHED' },
+                        audiencesWhereLiteral(tokens),
+                    ],
+                },
                 attributes: ['slug', 'title'],
                 raw: true,
             });

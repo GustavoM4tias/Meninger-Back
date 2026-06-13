@@ -7,7 +7,10 @@ import {
     normalizeAudiences,
     deriveLegacyAudience,
     resolveUserTokens,
-    DEFAULT_AUDIENCES,
+    normalizeVisibility,
+    visibilityToAudiences,
+    canonicalizeAudiences,
+    deriveVisibility,
 } from './audience.js';
 
 /**
@@ -122,9 +125,47 @@ function normalizeAliases(input) {
     return out;
 }
 
-function resolveAudiencesForWrite(input) {
+// Modelo de 4 classes: `visibility` (INTERNAL|EXTERNAL|BOTH|ADMIN) tem
+// prioridade; um array `audiences` legado é canonicalizado para uma das 4
+// classes. Sem nada informado → INTERNO (padrão seguro: nunca vaza p/ externo).
+function resolveAudiencesForWrite(input, visibility) {
+    const vis = normalizeVisibility(visibility);
+    if (vis) return visibilityToAudiences(vis);
     const arr = normalizeAudiences(input);
-    return arr.length ? arr : DEFAULT_AUDIENCES.slice();
+    if (!arr.length) return visibilityToAudiences('INTERNAL');
+    return canonicalizeAudiences(arr);
+}
+
+// Normaliza a lista de editores: ids inteiros positivos, únicos, máx. 50.
+function normalizeEditorUserIds(input) {
+    if (!Array.isArray(input)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const item of input) {
+        const n = Number(item);
+        if (!Number.isInteger(n) || n <= 0) continue;
+        if (seen.has(n)) continue;
+        seen.add(n);
+        out.push(n);
+        if (out.length >= 50) break;
+    }
+    return out;
+}
+
+// Pode editar? Admin OU autor OU consta em editorUserIds.
+function canEditArticle(article, userId, isAdmin) {
+    if (isAdmin) return true;
+    const uid = Number(userId);
+    if (!uid) return false;
+    if (Number(article.createdByUserId) === uid) return true;
+    const editors = Array.isArray(article.editorUserIds) ? article.editorUserIds.map(Number) : [];
+    return editors.includes(uid);
+}
+
+function forbidden(message) {
+    const err = new Error(message);
+    err.status = 403;
+    return err;
 }
 
 async function uniqueSlug({ baseSlug, ignoreId = null }) {
@@ -172,6 +213,7 @@ const kbAdminService = {
                 'title',
                 'slug',
                 'categorySlug',
+                'subcategorySlug',
                 'status',
                 'audiences',
                 'createdByUserId',
@@ -194,11 +236,13 @@ const kbAdminService = {
                 'title',
                 'slug',
                 'categorySlug',
+                'subcategorySlug',
                 'body',
                 'payload',
                 'aliases',
                 'audiences',
                 'audience',
+                'editorUserIds',
                 'status',
                 'createdByUserId',
                 'updatedByUserId',
@@ -206,24 +250,42 @@ const kbAdminService = {
                 'updatedAt',
             ],
         });
-        return article;
+        if (!article) return article;
+
+        // Resolve os editores para o picker do editor (id + username + cargo).
+        const ids = normalizeEditorUserIds(article.editorUserIds);
+        let editors = [];
+        if (ids.length) {
+            editors = await db.User.findAll({
+                where: { id: { [Op.in]: ids } },
+                attributes: ['id', 'username', 'position'],
+                raw: true,
+            });
+        }
+        const json = article.toJSON();
+        json.editorUserIds = ids;
+        json.editors = editors;
+        json.visibility = deriveVisibility(json.audiences); // classe derivada p/ o editor
+        return json;
     },
 
-    async create({ userId, title, categorySlug, body, payload, aliases, audiences }) {
+    async create({ userId, title, categorySlug, body, payload, aliases, audiences, visibility, editorUserIds, subcategorySlug }) {
         const baseSlug = kebab(title);
         const slug = await uniqueSlug({ baseSlug });
 
-        const aud = resolveAudiencesForWrite(audiences);
+        const aud = resolveAudiencesForWrite(audiences, visibility);
 
         const article = await db.AcademyArticle.create({
             title: String(title).trim(),
             categorySlug: String(categorySlug).trim(),
+            subcategorySlug: subcategorySlug ? kebab(subcategorySlug) : null,
             slug,
             body: String(body || ''),
             payload: asJsonOrNull(payload),
             aliases: normalizeAliases(aliases),
             audiences: aud,
             audience: deriveLegacyAudience(aud),
+            editorUserIds: normalizeEditorUserIds(editorUserIds),
             status: 'DRAFT',
             createdByUserId: userId || null,
             updatedByUserId: userId || null,
@@ -232,9 +294,49 @@ const kbAdminService = {
         return article;
     },
 
-    async update(id, { userId, title, categorySlug, body, payload, aliases, audiences, versionMessage = null }) {
+    // Candidatos a editor: usuários INTERNOS ativos (externos não editam KB).
+    async searchEditorCandidates({ q = '', excludeUserId = null } = {}) {
+        const term = String(q || '').trim();
+        const where = {
+            status: true,
+            external_kind: { [Op.is]: null },
+            auth_provider: { [Op.ne]: 'CVCRM' },
+        };
+        if (excludeUserId) where.id = { [Op.ne]: Number(excludeUserId) };
+        if (term) {
+            where[Op.or] = [
+                { username: { [Op.iLike]: `%${term}%` } },
+                { email: { [Op.iLike]: `%${term}%` } },
+                { position: { [Op.iLike]: `%${term}%` } },
+            ];
+        }
+        const rows = await db.User.findAll({
+            where,
+            attributes: ['id', 'username', 'position'],
+            order: [['username', 'ASC']],
+            limit: 20,
+            raw: true,
+        });
+        return { results: rows };
+    },
+
+    async update(id, { userId, title, categorySlug, body, payload, aliases, audiences, visibility, editorUserIds, subcategorySlug, isAdmin = false, versionMessage = null }) {
         const article = await db.AcademyArticle.findByPk(id);
         if (!article) throw new Error('Artigo não encontrado.');
+
+        // 🔒 Permissão de edição: admin OU autor OU editor selecionado.
+        if (!canEditArticle(article, userId, isAdmin)) {
+            throw forbidden('Você não tem permissão para editar este artigo.');
+        }
+
+        // editorUserIds é OPCIONAL — undefined = não alterar. Apenas o autor e
+        // admins podem REDEFINIR a lista de editores (um editor não promove outros).
+        const canManageEditors = isAdmin || Number(article.createdByUserId) === Number(userId);
+        const nextEditorIds = (editorUserIds === undefined || !canManageEditors)
+            ? undefined
+            : normalizeEditorUserIds(editorUserIds);
+        const editorsChanged = nextEditorIds !== undefined &&
+            JSON.stringify(nextEditorIds) !== JSON.stringify(normalizeEditorUserIds(article.editorUserIds));
 
         // S2.4: detecta se algo MATERIAL mudou — se sim, snapshot da versão atual
         // ANTES de aplicar o update. Mudanças irrelevantes (re-save sem alteração)
@@ -248,9 +350,19 @@ const kbAdminService = {
         const aliasesChanged = nextAliases !== undefined &&
             JSON.stringify(nextAliases) !== JSON.stringify(article.aliases || []);
 
-        const nextAudiences = audiences === undefined ? undefined : resolveAudiencesForWrite(audiences);
+        // visibility (4 classes) OU audiences (legado) disparam a troca de público;
+        // ambos ausentes = não alterar.
+        const wantsAudienceChange = visibility !== undefined || audiences !== undefined;
+        const nextAudiences = wantsAudienceChange ? resolveAudiencesForWrite(audiences, visibility) : undefined;
         const audiencesChanged = nextAudiences !== undefined &&
             JSON.stringify(nextAudiences) !== JSON.stringify(article.audiences || []);
+
+        // subcategoria é OPCIONAL — undefined = não alterar; '' = limpar.
+        const nextSubcategory = subcategorySlug === undefined
+            ? undefined
+            : (subcategorySlug ? kebab(subcategorySlug) : null);
+        const subcategoryChanged = nextSubcategory !== undefined &&
+            nextSubcategory !== (article.subcategorySlug || null);
 
         const changed =
             nextCategory !== article.categorySlug ||
@@ -258,7 +370,9 @@ const kbAdminService = {
             nextBody !== (article.body || '') ||
             JSON.stringify(nextPayload) !== JSON.stringify(article.payload || null) ||
             aliasesChanged ||
-            audiencesChanged;
+            audiencesChanged ||
+            subcategoryChanged ||
+            editorsChanged;
 
         if (changed) {
             await snapshotVersion(article, { userId, message: versionMessage });
@@ -287,6 +401,8 @@ const kbAdminService = {
             fields.audiences = nextAudiences;
             fields.audience = deriveLegacyAudience(nextAudiences);
         }
+        if (nextEditorIds !== undefined) fields.editorUserIds = nextEditorIds;
+        if (nextSubcategory !== undefined) fields.subcategorySlug = nextSubcategory;
 
         await article.update(fields);
 
@@ -342,9 +458,14 @@ const kbAdminService = {
         return article;
     },
 
-    async publish(id, publish, { userId } = {}) {
+    async publish(id, publish, { userId, isAdmin = false } = {}) {
         const article = await db.AcademyArticle.findByPk(id);
         if (!article) throw new Error('Artigo não encontrado.');
+
+        // 🔒 Mesma regra da edição: admin OU autor OU editor selecionado.
+        if (!canEditArticle(article, userId, isAdmin)) {
+            throw forbidden('Você não tem permissão para publicar/despublicar este artigo.');
+        }
 
         const wasPublished = article.status === 'PUBLISHED';
 

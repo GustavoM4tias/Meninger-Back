@@ -26,6 +26,12 @@ export default (sequelize, DataTypes) => {
             comment: 'Percentual do valor da série que vai para o boleto (0–100). Ex.: 20 = boleto recebe 20% do valor da série.',
         },
 
+        max_dias_vencimento: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            comment: 'Override do limite de dias corridos pro vencimento (override do boleto_settings.max_dias_vencimento). null = usa o default geral.',
+        },
+
         observacao: {
             type: DataTypes.TEXT,
             allowNull: true,
