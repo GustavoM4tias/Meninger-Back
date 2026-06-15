@@ -135,6 +135,13 @@ import ChatMessageDefine from './chatMessage.js';
 import UserAIMemoryDefine from './userAIMemory.js';
 import ChatFeedbackDefine from './chatFeedback.js';
 
+// Cérebro da Eme (Brain Studio) — config DB-driven do assistente
+import EmePromptBlockDefine   from './eme/promptBlock.js';
+import EmeGlossaryTermDefine  from './eme/glossaryTerm.js';
+import EmeReportDefine        from './eme/report.js';
+import EmeSettingDefine       from './eme/setting.js';
+import EmeConfigVersionDefine from './eme/configVersion.js';
+
 // Notificações
 import NotificationDefine from './notification.js';
 import NotificationPreferenceDefine from './notificationPreference.js';
@@ -306,6 +313,13 @@ db.ChatSession  = ChatSessionDefine(sequelize, DataTypes);
 db.ChatMessage  = ChatMessageDefine(sequelize, DataTypes);
 db.UserAIMemory = UserAIMemoryDefine(sequelize, DataTypes);
 db.ChatFeedback = ChatFeedbackDefine(sequelize, DataTypes);
+
+// Cérebro da Eme (Brain Studio)
+db.EmePromptBlock   = EmePromptBlockDefine(sequelize, DataTypes);
+db.EmeGlossaryTerm  = EmeGlossaryTermDefine(sequelize, DataTypes);
+db.EmeReport        = EmeReportDefine(sequelize, DataTypes);
+db.EmeSetting       = EmeSettingDefine(sequelize, DataTypes);
+db.EmeConfigVersion = EmeConfigVersionDefine(sequelize, DataTypes);
 
 // Notificações
 db.Notification           = NotificationDefine(sequelize, DataTypes);

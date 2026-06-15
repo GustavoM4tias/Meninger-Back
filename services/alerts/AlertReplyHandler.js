@@ -138,20 +138,30 @@ async function handleInbound({ fromPhone, body, contextId }) {
     //    Se 0 → ignora (mensagem solta, talvez atendimento).
     //    Se 2+ → ignora também e responde pedindo pra usar Reply (evita confusão).
     if (!pending) {
-        const tail = String(fromPhone || '').replace(/\D/g, '').slice(-9);
-        if (!tail) return false;
+        const digits = String(fromPhone || '').replace(/\D/g, '');
+        if (!digits) return false;
 
-        const candidates = await AlertPendingReply.findAll({
+        // Casamento por telefone TOLERANTE: normaliza o phone salvo pra dígitos
+        // (o cadastro pode ter +, espaços ou traços) e tenta os últimos 9; se não
+        // achar, tenta os últimos 8 — contorna o problema do 9º dígito do celular
+        // BR (a Meta às vezes manda o wa_id com/sem o "9", divergindo do cadastro).
+        // O guard "exatamente 1 pendente ativo" evita falso-positivo.
+        const findByTail = (n) => AlertPendingReply.findAll({
             where: {
-                phone: { [Op.like]: `%${tail}` },
                 state: 'awaiting_reply',
                 expires_at: { [Op.gt]: new Date() },
+                [Op.and]: [db.Sequelize.literal(
+                    `regexp_replace(phone, '[^0-9]', '', 'g') LIKE '%${digits.slice(-n)}'`
+                )],
             },
             order: [['created_at', 'DESC']],
-            limit: 2,
+            limit: 3,
         });
 
-        console.log(`[AlertReply] fallback by phone tail=${tail} → ${candidates.length} candidatos`);
+        let candidates = await findByTail(9);
+        if (candidates.length === 0 && digits.length >= 8) candidates = await findByTail(8);
+
+        console.log(`[AlertReply] fallback by phone …${digits.slice(-9)} → ${candidates.length} candidatos`);
 
         if (candidates.length === 0) return false;
         if (candidates.length > 1) {
@@ -182,7 +192,14 @@ async function handleInbound({ fromPhone, body, contextId }) {
     }
 
     if (verdict === 'yes') {
-        await sendFreeText({ to: fromPhone, body: pending.report_payload, userId: pending.user_id });
+        const sent = await sendFreeText({ to: fromPhone, body: pending.report_payload, userId: pending.user_id });
+        // Só marca como enviado se o envio REALMENTE saiu. Se falhou (ex: janela
+        // 24h vencida, erro da Meta), mantém 'awaiting_reply' pra permitir nova
+        // tentativa — evita o caso "confirmei, não chegou, e não dá pra repetir".
+        if (sent?.status === 'failed') {
+            console.warn(`[AlertReply] envio do relatório FALHOU (pending#${pending.id}) — mantém awaiting_reply p/ retry`);
+            return true;
+        }
         await pending.update({
             state: 'sent',
             confirmed_at: new Date(),
