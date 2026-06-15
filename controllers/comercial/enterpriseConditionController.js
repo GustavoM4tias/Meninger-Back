@@ -13,8 +13,6 @@ const {
     CvEnterpriseUnit,
     CvEnterprisePriceTable,
     CvCorrespondent,
-    SignatureDocument,
-    SignatureDocumentSigner,
     ComercialSettings,
     User,
 } = db;
@@ -33,6 +31,39 @@ function isAdmin(req) {
     return req.user?.role === 'admin';
 }
 
+// ── Permissões das fichas (admin + listas configuráveis em ComercialSettings) ──
+async function getComercialSettings() {
+    let s = await ComercialSettings.findOne({ where: { id: 1 } });
+    if (!s) s = await ComercialSettings.create({ id: 1 });
+    return s;
+}
+
+function userIdInList(req, list) {
+    const uid = Number(req.user?.id);
+    return Array.isArray(list) && list.map(Number).includes(uid);
+}
+
+// Admin sempre pode. Demais usuários precisam estar na lista correspondente.
+async function canEditConditions(req) {
+    if (isAdmin(req)) return true;
+    const s = await getComercialSettings();
+    return userIdInList(req, s.editor_user_ids);
+}
+async function canAuthorizeConditions(req) {
+    if (isAdmin(req)) return true;
+    const s = await getComercialSettings();
+    return userIdInList(req, s.authorizer_user_ids);
+}
+// Visão privilegiada (enxerga qualquer status, como admin): editores e autorizadores.
+async function isPrivilegedViewer(req) {
+    if (isAdmin(req)) return true;
+    const s = await getComercialSettings();
+    return userIdInList(req, s.editor_user_ids) || userIdInList(req, s.authorizer_user_ids);
+}
+
+const EDIT_DENIED = 'Você não tem permissão para editar fichas comerciais.';
+const AUTHORIZE_DENIED = 'Você não tem permissão para autorizar fichas comerciais.';
+
 function addHistory(current = [], action, req, note = null) {
     return [
         ...current,
@@ -48,8 +79,8 @@ function addHistory(current = [], action, req, note = null) {
 
 // Campos a ignorar no diff (controle, timestamps, etc.)
 const DIFF_IGNORE_FIELDS = new Set([
-    'id', 'idempreendimento', 'reference_month', 'status',
-    'submitted_at', 'submitted_by', 'approved_at', 'signature_document_id',
+    'id', 'idempreendimento', 'series_id', 'reference_month', 'status',
+    'submitted_at', 'submitted_by', 'approved_at',
     'unlocked_at', 'unlocked_by', 'approval_history',
     'created_by', 'updated_by', 'createdAt', 'updatedAt',
     'modules', 'campaigns', 'realtors_snapshot', 'cv_documents',
@@ -221,7 +252,7 @@ export const listConditions = async (req, res) => {
         const where = {};
         if (idempreendimento) where.idempreendimento = Number(idempreendimento);
 
-        if (!isAdmin(req)) {
+        if (!(await isPrivilegedViewer(req))) {
             // Usuário comum: apenas approved + closed, e somente empreendimentos da sua cidade
             where.status = { [Op.in]: ['approved', 'closed'] };
             const visibleIds = await getVisibleEnterpriseIdsForUser(req);
@@ -274,31 +305,16 @@ export const getCondition = async (req, res) => {
         });
 
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
-        if (!isAdmin(req)) {
-            // Exceção: o usuário é signatário do SignatureDocument vinculado à ficha?
-            // Se sim, libera leitura mesmo com status pending_approval (precisa ver para assinar).
-            let isAssignedSigner = false;
-            if (condition.status === 'pending_approval' && condition.signature_document_id) {
-                const signerRow = await SignatureDocumentSigner.findOne({
-                    where: {
-                        document_id: condition.signature_document_id,
-                        user_id: req.user?.id,
-                    },
-                    attributes: ['id'],
-                });
-                isAssignedSigner = !!signerRow;
+        const privileged = await isPrivilegedViewer(req);
+        if (!privileged) {
+            // Comum: vê apenas approved + closed
+            if (!['approved', 'closed'].includes(condition.status)) {
+                return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
             }
-
-            if (!isAssignedSigner) {
-                // Comum: vê apenas approved + closed
-                if (!['approved', 'closed'].includes(condition.status)) {
-                    return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
-                }
-                // E só de empreendimentos da sua cidade
-                const visibleIds = await getVisibleEnterpriseIdsForUser(req);
-                if (!visibleIds || !visibleIds.includes(Number(condition.idempreendimento))) {
-                    return res.status(403).json({ error: 'Você não tem acesso a este empreendimento.' });
-                }
+            // E só de empreendimentos da sua cidade
+            const visibleIds = await getVisibleEnterpriseIdsForUser(req);
+            if (!visibleIds || !visibleIds.includes(Number(condition.idempreendimento))) {
+                return res.status(403).json({ error: 'Você não tem acesso a este empreendimento.' });
             }
         }
 
@@ -315,7 +331,7 @@ export const getCondition = async (req, res) => {
         const history = await EnterpriseCondition.findAll({
             where: {
                 idempreendimento: condition.idempreendimento,
-                ...(isAdmin(req) ? {} : { status: { [Op.in]: ['approved', 'closed'] } }),
+                ...(privileged ? {} : { status: { [Op.in]: ['approved', 'closed'] } }),
             },
             attributes: ['id', 'reference_month', 'status'],
             order: [['reference_month', 'DESC']],
@@ -430,7 +446,7 @@ async function generateMonthsRange(idempreendimento, fromMonthStr, toMonthStr, u
 
 export const createCondition = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem criar fichas.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const userId = req.user?.id;
         const { idempreendimento, reference_month, selectedStageIds, display_name, ...rest } = req.body;
@@ -516,8 +532,10 @@ export const createCondition = async (req, res) => {
                     updated_by: userId,
                 }, { transaction: t });
 
-                // Avulso: cria 1 módulo placeholder com o display_name
+                // Avulso: define a própria ficha como cabeça da série (auto-geração mensal)
+                // e cria 1 módulo placeholder com o display_name
                 if (isAvulso) {
+                    await cond.update({ series_id: cond.id }, { transaction: t });
                     await EnterpriseConditionModule.create({
                         condition_id: cond.id,
                         idetapa: null,
@@ -576,7 +594,7 @@ export const createCondition = async (req, res) => {
 
 export const updateCondition = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem editar fichas.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id } = req.params;
         const userId = req.user?.id;
@@ -624,7 +642,7 @@ export const updateCondition = async (req, res) => {
 
 export const submitForApproval = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem enviar fichas para autorização.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id } = req.params;
         const condition = await EnterpriseCondition.findByPk(id, {
@@ -635,82 +653,66 @@ export const submitForApproval = async (req, res) => {
             return res.status(409).json({ error: `Ficha está em "${condition.status}" — só rascunhos podem ser enviados.` });
         }
 
-        // Busca configurações de aprovadores
-        const settings = await ComercialSettings.findOne({ where: { id: 1 } });
-        const approver1Id = settings?.approver_1_id;
-        const approver2Id = settings?.approver_2_id;
-
-        if (!approver1Id && !approver2Id) {
-            return res.status(422).json({ error: 'Nenhum aprovador configurado. Configure os aprovadores em Configurações > Comercial.' });
-        }
-
-        // Cria SignatureDocument com os aprovadores configurados.
-        // original_document_url aponta para o detalhe da ficha no frontend — permite que
-        // o aprovador clique em "Visualizar documento" no modal de assinatura.
-        const enterpriseName = condition.enterprise?.nome || `Empreendimento #${condition.idempreendimento}`;
-        const monthLabel = condition.reference_month?.substring(0, 7);
-        const frontendBase = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
-        const fichaUrl = `${frontendBase}/comercial/conditions/${condition.id}`;
-
-        const signers = [approver1Id, approver2Id].filter(Boolean);
-        const signDoc = await SignatureDocument.create({
-            created_by: req.user?.id,
-            document_name: `Ficha Comercial — ${enterpriseName} — ${monthLabel}`,
-            original_document_url: fichaUrl,
-            status: 'PENDING',
-            required_signers_count: signers.length,
-            signed_signers_count: 0,
-            metadata: { condition_id: condition.id, idempreendimento: condition.idempreendimento, reference_month: monthLabel },
-        });
-
-        for (let i = 0; i < signers.length; i++) {
-            await SignatureDocumentSigner.create({
-                document_id: signDoc.id,
-                user_id: signers[i],
-                requested_by: req.user?.id,
-                sign_order: i + 1,
-                is_required: true,
-                status: 'REQUESTED', // estado inicial — initiateSignerSession transiciona para PENDING ao abrir o modal
-            });
-        }
-
         const newHistory = addHistory(condition.approval_history, 'submitted_for_approval', req);
         await condition.update({
             status: 'pending_approval',
             submitted_at: new Date(),
             submitted_by: req.user?.id,
-            signature_document_id: signDoc.id,
             approval_history: newHistory,
             updated_by: req.user?.id,
         });
 
-        // Notifica cada signatário (in-app + e-mail) — não bloqueia a resposta.
-        // O link in-app aponta para a tela de assinatura com o docId já marcado,
-        // abrindo o modal direto. O e-mail tem CTA pro mesmo destino + um "ver documento"
-        // separado que leva pra ficha em si.
-        const signUrl = `${frontendBase}/tools/signature?tab=pending&docId=${signDoc.id}`;
-        NotificationService.notify({
-            type: NotificationType.SIGNATURE_REQUESTED,
-            recipients: { users: signers },
-            title: `Documento aguardando sua assinatura`,
-            body:  `${enterpriseName} — ${monthLabel}`,
-            link:  `/tools/signature?tab=pending&docId=${signDoc.id}`,
-            importance: 8,
-            data: {
-                signatureDocumentId: signDoc.id,
-                conditionId:         condition.id,
-            },
-            emailData: {
-                documentName:  signDoc.document_name,
-                requesterName: req.user?.username || 'Menin Office',
-                documentUrl:   fichaUrl,    // botão "Visualizar documento" → ficha
-                signUrl:       signUrl,     // botão "Ir para o Menin Office" → tela de assinatura
-            },
-        }).catch(err => console.warn('[submitForApproval] notify failed:', err.message));
+        // Notifica os autorizadores configurados (in-app) — não bloqueia a resposta.
+        const settings = await getComercialSettings();
+        const authorizers = (settings.authorizer_user_ids || []).map(Number).filter(Boolean);
+        if (authorizers.length) {
+            const enterpriseName = condition.enterprise?.nome || condition.display_name || `Ficha #${condition.id}`;
+            const monthLabel = condition.reference_month?.substring(0, 7);
+            NotificationService.notify({
+                type: NotificationType.CONDITION_AUTHORIZATION_REQUESTED,
+                recipients: { users: authorizers },
+                title: 'Ficha aguardando sua autorização',
+                body: `${enterpriseName} — ${monthLabel}`,
+                link: `/comercial/conditions/${condition.id}`,
+                importance: 7,
+                data: { conditionId: condition.id },
+            }).catch(err => console.warn('[submitForApproval] notify failed:', err.message));
+        }
 
-        return res.json({ ok: true, status: 'pending_approval', signatureDocumentId: signDoc.id });
+        return res.json({ ok: true, status: 'pending_approval' });
     } catch (e) {
         console.error('[conditions] submitForApproval:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+// ─── autorizar — pending_approval → approved (autorizador configurado) ────────
+// Basta 1 autorizador (admin ou usuário na lista) para autorizar 100%.
+
+export const authorizeCondition = async (req, res) => {
+    try {
+        if (!(await canAuthorizeConditions(req))) return res.status(403).json({ error: AUTHORIZE_DENIED });
+
+        const { id } = req.params;
+        const condition = await EnterpriseCondition.findByPk(id);
+        if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
+        if (condition.status !== 'pending_approval') {
+            return res.status(409).json({ error: 'Apenas fichas em autorização podem ser autorizadas.' });
+        }
+
+        const newHistory = addHistory(condition.approval_history, 'approved', req, 'Ficha autorizada');
+        // WHERE atômico no status evita corrida entre dois autorizadores simultâneos.
+        const [count] = await EnterpriseCondition.update(
+            { status: 'approved', approved_at: new Date(), approval_history: newHistory, updated_by: req.user?.id },
+            { where: { id: condition.id, status: 'pending_approval' } }
+        );
+        if (!count) {
+            return res.status(409).json({ error: 'A ficha já mudou de status. Recarregue a página.' });
+        }
+
+        return res.json({ ok: true, status: 'approved' });
+    } catch (e) {
+        console.error('[conditions] authorizeCondition:', e);
         return res.status(500).json({ error: e?.message || String(e) });
     }
 };
@@ -719,7 +721,7 @@ export const submitForApproval = async (req, res) => {
 
 export const unlockCondition = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem desbloquear fichas.' });
+        if (!(await canAuthorizeConditions(req))) return res.status(403).json({ error: AUTHORIZE_DENIED });
 
         const { id } = req.params;
         const condition = await EnterpriseCondition.findByPk(id);
@@ -729,18 +731,6 @@ export const unlockCondition = async (req, res) => {
             return res.status(409).json({ error: 'Apenas fichas aprovadas ou encerradas podem ser desbloqueadas.' });
         }
 
-        // Cancela o SignatureDocument anterior e seus assinantes pendentes
-        if (condition.signature_document_id) {
-            await SignatureDocument.update(
-                { status: 'CANCELLED', cancel_reason: 'Ficha desbloqueada pelo administrador.' },
-                { where: { id: condition.signature_document_id } }
-            ).catch(() => { });
-            await SignatureDocumentSigner.update(
-                { status: 'CANCELLED', reason: 'Ficha desbloqueada pelo administrador.' },
-                { where: { document_id: condition.signature_document_id, status: ['REQUESTED', 'PENDING'] } }
-            ).catch(() => { });
-        }
-
         const { note } = req.body;
         const newHistory = addHistory(condition.approval_history, 'unlocked', req, note || null);
 
@@ -748,7 +738,6 @@ export const unlockCondition = async (req, res) => {
             status: 'draft',
             unlocked_at: new Date(),
             unlocked_by: req.user?.id,
-            signature_document_id: null,
             approved_at: null,
             approval_history: newHistory,
             updated_by: req.user?.id,
@@ -765,7 +754,7 @@ export const unlockCondition = async (req, res) => {
 
 export const closeCondition = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem encerrar fichas.' });
+        if (!(await canAuthorizeConditions(req))) return res.status(403).json({ error: AUTHORIZE_DENIED });
 
         const { id } = req.params;
         const { note, confirmation } = req.body || {};
@@ -801,18 +790,6 @@ export const closeCondition = async (req, res) => {
             }
         }
 
-        // Se houver SignatureDocument pendente, cancela
-        if (condition.signature_document_id) {
-            await SignatureDocument.update(
-                { status: 'CANCELLED', cancel_reason: 'Ficha encerrada — empreendimento finalizado.' },
-                { where: { id: condition.signature_document_id } }
-            ).catch(() => {});
-            await SignatureDocumentSigner.update(
-                { status: 'CANCELLED', reason: 'Ficha encerrada — empreendimento finalizado.' },
-                { where: { document_id: condition.signature_document_id, status: ['REQUESTED', 'PENDING'] } }
-            ).catch(() => {});
-        }
-
         const newHistory = addHistory(condition.approval_history, 'closed', req, note || null);
 
         await condition.update({
@@ -832,7 +809,7 @@ export const closeCondition = async (req, res) => {
 
 export const upsertModules = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem editar módulos.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id } = req.params;
         const { modules } = req.body;
@@ -954,7 +931,7 @@ export const upsertModules = async (req, res) => {
 
 export const deleteModule = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem excluir módulos.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id, moduleId } = req.params;
 
@@ -989,7 +966,7 @@ export const deleteModule = async (req, res) => {
 
 export const copyModule = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem copiar módulos.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id, moduleId, sourceId } = req.params;
 
@@ -1026,7 +1003,7 @@ export const copyModule = async (req, res) => {
 
 export const copyModuleFromSource = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem copiar módulos.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id, moduleId, sourceConditionId, sourceModuleId } = req.params;
         const { fields } = req.body; // array de seções a copiar: ['negotiation','operational','campaigns','prices']
@@ -1228,7 +1205,7 @@ export const listModulesForEnterprise = async (req, res) => {
         const { idempreendimento } = req.params;
 
         const where = { idempreendimento: Number(idempreendimento) };
-        if (!isAdmin(req)) where.status = 'approved';
+        if (!(await isPrivilegedViewer(req))) where.status = 'approved';
 
         const conditions = await EnterpriseCondition.findAll({
             where,
@@ -1255,7 +1232,7 @@ export const listModulesForEnterprise = async (req, res) => {
 
 export const upsertCampaigns = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem editar campanhas.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id } = req.params;
         const { campaigns, module_id } = req.body;
@@ -1294,7 +1271,7 @@ export const upsertCampaigns = async (req, res) => {
 
 export const deleteCampaign = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem excluir campanhas.' });
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id, campaignId } = req.params;
         await EnterpriseConditionCampaign.destroy({ where: { id: campaignId, condition_id: id } });
@@ -1427,20 +1404,26 @@ export const listOfficeUsers = async (req, res) => {
 
 export const getSettings = async (req, res) => {
     try {
-        let settings = await ComercialSettings.findOne({
-            where: { id: 1 },
-            include: [
-                { model: User, as: 'approver1', attributes: ['id', 'username', 'email'] },
-                { model: User, as: 'approver2', attributes: ['id', 'username', 'email'] },
-            ],
-        });
+        const settings = await getComercialSettings();
 
-        if (!settings) {
-            // Cria registro singleton vazio na primeira chamada
-            settings = await ComercialSettings.create({ id: 1 });
+        // Resolve nomes dos usuários referenciados nas listas (para exibição no frontend)
+        const ids = [...new Set([
+            ...(settings.editor_user_ids || []),
+            ...(settings.authorizer_user_ids || []),
+        ].map(Number).filter(Boolean))];
+
+        let users = [];
+        if (ids.length && User) {
+            users = await User.findAll({ where: { id: ids }, attributes: ['id', 'username', 'email'] });
         }
 
-        return res.json(settings);
+        return res.json({
+            id: settings.id,
+            editor_user_ids: settings.editor_user_ids || [],
+            authorizer_user_ids: settings.authorizer_user_ids || [],
+            auto_generate_conditions: settings.auto_generate_conditions,
+            users,
+        });
     } catch (e) {
         console.error('[conditions] getSettings:', e);
         return res.status(500).json({ error: e?.message || String(e) });
@@ -1451,14 +1434,13 @@ export const updateSettings = async (req, res) => {
     try {
         if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem alterar configurações.' });
 
-        const { approver_1_id, approver_2_id, auto_generate_conditions } = req.body;
+        const { editor_user_ids, authorizer_user_ids, auto_generate_conditions } = req.body;
+        const sanitizeIds = (v) => Array.isArray(v) ? [...new Set(v.map(Number).filter(Boolean))] : [];
 
-        let settings = await ComercialSettings.findOne({ where: { id: 1 } });
-        if (!settings) settings = await ComercialSettings.create({ id: 1 });
-
+        const settings = await getComercialSettings();
         await settings.update({
-            approver_1_id: approver_1_id || null,
-            approver_2_id: approver_2_id || null,
+            ...(editor_user_ids !== undefined && { editor_user_ids: sanitizeIds(editor_user_ids) }),
+            ...(authorizer_user_ids !== undefined && { authorizer_user_ids: sanitizeIds(authorizer_user_ids) }),
             ...(auto_generate_conditions !== undefined && { auto_generate_conditions }),
             updated_by: req.user?.id,
         });
@@ -1470,11 +1452,31 @@ export const updateSettings = async (req, res) => {
     }
 };
 
+// ─── permissões do usuário atual (frontend usa para exibir/ocultar botões) ────
+
+export const getMyPermissions = async (req, res) => {
+    try {
+        const settings = await getComercialSettings();
+        const admin = isAdmin(req);
+        return res.json({
+            isAdmin: admin,
+            canEdit: admin || userIdInList(req, settings.editor_user_ids),
+            canAuthorize: admin || userIdInList(req, settings.authorizer_user_ids),
+        });
+    } catch (e) {
+        console.error('[conditions] getMyPermissions:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
 // ─── cancelar autorização — pending_approval → draft (admin) ─────────────────
 
 export const cancelApproval = async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem cancelar a autorização.' });
+        // Editores ou autorizadores podem devolver a ficha em autorização para rascunho.
+        if (!(await canEditConditions(req)) && !(await canAuthorizeConditions(req))) {
+            return res.status(403).json({ error: EDIT_DENIED });
+        }
 
         const { id } = req.params;
         const condition = await EnterpriseCondition.findByPk(id);
@@ -1483,27 +1485,13 @@ export const cancelApproval = async (req, res) => {
             return res.status(409).json({ error: 'Apenas fichas em autorização podem ter a autorização cancelada.' });
         }
 
-        if (condition.signature_document_id) {
-            // Cancela o documento
-            await SignatureDocument.update(
-                { status: 'CANCELLED', cancel_reason: req.body?.note || 'Cancelado pelo administrador.' },
-                { where: { id: condition.signature_document_id } }
-            ).catch(() => { });
-            // Cancela todos os assinantes pendentes vinculados ao documento
-            await SignatureDocumentSigner.update(
-                { status: 'CANCELLED', reason: 'Autorização cancelada pelo administrador.' },
-                { where: { document_id: condition.signature_document_id, status: ['REQUESTED', 'PENDING'] } }
-            ).catch(() => { });
-        }
-
         await condition.update({
             status: 'draft',
-            signature_document_id: null,
             approval_history: addHistory(
                 condition.approval_history ?? [],
                 'approval_cancelled',
                 req,
-                req.body?.note || 'Autorização cancelada pelo administrador.'
+                req.body?.note || 'Autorização cancelada.'
             ),
             updated_by: req.user?.id,
         });

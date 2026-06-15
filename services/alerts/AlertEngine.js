@@ -34,6 +34,7 @@ import { NotificationType } from '../notification/notificationTypes.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
+import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
 import AlertReportService from './AlertReportService.js';
 import { toolToRoute } from './toolToRoute.js';
 
@@ -254,6 +255,24 @@ const REPLY_WINDOW_HOURS  = 23; // 1h de margem da janela 24h
 
 // Escolhe o template aprovado de mais alta prioridade. Retorna { name, vars } ou null.
 async function pickApprovedTemplate() {
+    // 1) Preferência configurada no portal (automação 'alert_generic'), se aprovada.
+    //    Casa o nome com a lista conhecida pra herdar o nº de variáveis; se for um
+    //    template custom (futuro builder), assume 2 vars. Falha → cai no fallback.
+    try {
+        const auto = await WhatsAppAutomationService.getByKey('alert_generic');
+        if (auto?.enabled && auto.templateName) {
+            const lang = auto.templateLanguage || ALERT_TEMPLATE_LANG;
+            const tpl = await WhatsAppTemplateService.findApproved(auto.templateName, lang);
+            if (tpl) {
+                const known = ALERT_TEMPLATES.find(t => t.name === auto.templateName);
+                return known || { name: auto.templateName, vars: 2 };
+            }
+        }
+    } catch (e) {
+        console.warn('[AlertEngine] automação alert_generic indisponível — fallback:', e?.message);
+    }
+
+    // 2) Fallback: chain hardcoded (v2 → v1).
     for (const t of ALERT_TEMPLATES) {
         const tpl = await WhatsAppTemplateService.findApproved(t.name, ALERT_TEMPLATE_LANG);
         if (tpl) return t;

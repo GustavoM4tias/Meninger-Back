@@ -21,6 +21,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
+import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
 
 const { AlertPendingReply, WhatsappMessage } = db;
 
@@ -181,23 +182,37 @@ async function handleInbound({ fromPhone, body, contextId }) {
     const verdict = classify(body);
     console.log(`[AlertReply] pending#${pending.id} rule="${pending.rule_name}" verdict=${verdict}`);
 
+    // Ações de resposta CONFIGURÁVEIS (automação 'alert_generic' no portal).
+    // Fallback ao comportamento atual: yes → manda o relatório; no → cancela.
+    const automation = await WhatsAppAutomationService.getByKey('alert_generic').catch(() => null);
+    const actions = automation?.replyActions || { yes: { type: 'send_report' }, no: { type: 'cancel' } };
+
     if (verdict === 'no') {
+        const act = actions.no || { type: 'cancel' };
         await pending.update({ state: 'cancelled', confirmed_at: new Date() });
-        await sendFreeText({
-            to: fromPhone,
-            body: `Tudo bem, descartei o relatório de *${pending.rule_name}*. Você ainda receberá os próximos disparos no horário programado.`,
-            userId: pending.user_id,
-        });
+        if (act.type !== 'none') {
+            await sendFreeText({
+                to: fromPhone,
+                body: act.text || `Tudo bem, descartei o relatório de *${pending.rule_name}*. Você ainda receberá os próximos disparos no horário programado.`,
+                userId: pending.user_id,
+            });
+        }
         return true;
     }
 
     if (verdict === 'yes') {
-        const sent = await sendFreeText({ to: fromPhone, body: pending.report_payload, userId: pending.user_id });
-        // Só marca como enviado se o envio REALMENTE saiu. Se falhou (ex: janela
-        // 24h vencida, erro da Meta), mantém 'awaiting_reply' pra permitir nova
-        // tentativa — evita o caso "confirmei, não chegou, e não dá pra repetir".
+        const act = actions.yes || { type: 'send_report' };
+        if (act.type === 'none') {
+            await pending.update({ state: 'sent', confirmed_at: new Date(), report_sent_at: new Date() });
+            return true;
+        }
+        // send_text → texto fixo configurado; send_report (default) → relatório já
+        // renderizado no disparo (report_payload).
+        const outBody = act.type === 'send_text' ? (act.text || '') : pending.report_payload;
+        const sent = await sendFreeText({ to: fromPhone, body: outBody, userId: pending.user_id });
+        // Só marca como enviado se o envio REALMENTE saiu (senão mantém pra retry).
         if (sent?.status === 'failed') {
-            console.warn(`[AlertReply] envio do relatório FALHOU (pending#${pending.id}) — mantém awaiting_reply p/ retry`);
+            console.warn(`[AlertReply] envio FALHOU (pending#${pending.id}) — mantém awaiting_reply p/ retry`);
             return true;
         }
         await pending.update({

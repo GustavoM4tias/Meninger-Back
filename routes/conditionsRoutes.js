@@ -10,6 +10,9 @@ router.use(authenticate);
 router.get('/settings', ctrl.getSettings);
 router.put('/settings', ctrl.updateSettings);
 
+// ── Permissões do usuário atual (editar/autorizar) ────────────────────────────
+router.get('/permissions', ctrl.getMyPermissions);
+
 // ── Listagem e criação ────────────────────────────────────────────────────────
 router.get('/', ctrl.listConditions);
 router.post('/', ctrl.createCondition);             // admin only (guard no controller)
@@ -29,9 +32,10 @@ router.get('/:id(\\d+)', ctrl.getCondition);
 router.patch('/:id(\\d+)', ctrl.updateCondition);           // admin only, não-approved
 
 // ── Fluxo de aprovação ────────────────────────────────────────────────────────
-router.post('/:id(\\d+)/submit', ctrl.submitForApproval);         // draft → pending_approval (admin)
-router.post('/:id(\\d+)/cancel-approval', ctrl.cancelApproval);   // pending_approval → draft (admin)
-router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved/closed → draft (admin)
+router.post('/:id(\\d+)/submit', ctrl.submitForApproval);         // draft → pending_approval (editor)
+router.post('/:id(\\d+)/authorize', ctrl.authorizeCondition);     // pending_approval → approved (autorizador)
+router.post('/:id(\\d+)/cancel-approval', ctrl.cancelApproval);   // pending_approval → draft (editor/autorizador)
+router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved/closed → draft (autorizador)
 router.post('/:id(\\d+)/close', ctrl.closeCondition);             // any → closed (admin, dupla validação)
 router.post('/:id(\\d+)/publish', ctrl.publishCondition);         // legado → alias de /submit
 

@@ -4,7 +4,6 @@ import { getContracts, listEnterprises, listCompanies, clearCache, getDistratos 
 import authenticate from '../middlewares/authMiddleware.js';
 import bulkDataController from '../controllers/sienge/bulkDataController.js';
 import BillsController from '../controllers/sienge/billsController.js';
-import { uploadNfseAward, getAwards, updateAward, registerSales, attachNfseToAward, bulkAttachNfse, clearNfseFromAwards, deleteAward, deleteAwards } from "../controllers/sienge/awardController.js";
 import {
     createLaunch, listLaunches, getLaunch, updateLaunch,
     advanceStage, cancelLaunch, markPaid,
@@ -88,15 +87,6 @@ router.get('/inadimplencia/detail',  authenticate, inadimplenciaDetail);
 router.get('/inadimplencia/export',  authenticate, inadimplenciaExport);
 router.get('/inadimplencia',         authenticate, inadimplenciaDashboard);
 
-router.post("/awards/nfse", authenticate, upload.single("file"), uploadNfseAward);
-router.post("/awards/nfse/bulk", authenticate, upload.single("file"), bulkAttachNfse);
-router.post("/awards/nfse/clear", authenticate, clearNfseFromAwards);
-router.post("/awards/:id/attach-nfse", authenticate, upload.single("file"), attachNfseToAward);
-router.get("/awards", authenticate, getAwards);
-router.put("/awards/:id", authenticate, updateAward);
-router.delete("/awards/:id", authenticate, deleteAward);
-router.post("/awards/delete", authenticate, deleteAwards);
-router.post("/awards/register-sales", authenticate, registerSales);
 
 // ── Guard: Fluxo de pagamento desabilitado neste ambiente ──────────────────────────
 router.use('/payment-flow', (req, res, next) => {
