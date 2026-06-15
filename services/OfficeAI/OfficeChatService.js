@@ -2,7 +2,8 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
-import { buildSystemPrompt } from './systemPrompt.js';
+import { assembleSystemPrompt } from './promptAssembler.js';
+import { getActiveBrain } from './ConfigService.js';
 import { buildAcademyTutorPrompt } from './academyTutorPrompt.js';
 import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
 import { TOOL_DECLARATIONS as COMERCIAL_DECLARATIONS, executeTool as comercialExecuteTool } from './ComercialTools.js';
@@ -28,6 +29,29 @@ async function executeTool(name, args, user) {
   const tool = TOOLS.get(name);
   if (!tool) return { error: `Ferramenta desconhecida: ${name}` };
   return tool.executor(name, args, user);
+}
+
+// Overlay do Cérebro sobre as tools builtin: liga/desliga, sobrescreve a descrição
+// (o que o Gemini lê — controla QUANDO a tool é chamada) e injeta regras de uso por
+// tool no prompt. Sem reports no brain → retorna as declarações intactas (fallback).
+function overlayOfficeTools(declarations, reports) {
+  if (!Array.isArray(reports) || !reports.length) return { declarations, promptRules: '' };
+  const byName = new Map(reports.map(r => [r.name, r]));
+  const out = [];
+  const rules = [];
+  for (const d of declarations) {
+    const r = byName.get(d.name);
+    if (!r) { out.push(d); continue; }
+    if (r.enabled === false) continue; // tool desligada pelo admin
+    out.push(r.description ? { ...d, description: r.description } : d);
+    if (r.promptRules && String(r.promptRules).trim()) {
+      rules.push(`### ${d.name}\n${String(r.promptRules).trim()}`);
+    }
+  }
+  const promptRules = rules.length
+    ? `\n\n## Regras de relatórios (configuradas pelo admin)\n${rules.join('\n\n')}`
+    : '';
+  return { declarations: out, promptRules };
 }
 
 // E4: audit log das tool calls do Office. NÃO altera a execução — só registra
@@ -89,16 +113,21 @@ function getGeminiClient(keyIndex = null) {
 function parseList(env) {
   return (env || '').split(',').map(m => m.trim()).filter(Boolean);
 }
-function getFastModels() {
+function getFastModels(settings = null) {
+  // Override do cérebro (settings.model_pools.fast) tem prioridade; senão env/default.
+  const fromDb = settings?.model_pools?.fast;
+  if (Array.isArray(fromDb) && fromDb.length) return fromDb;
   const fast = parseList(process.env.GEMINI_FAST_MODELS);
   if (fast.length) return fast;
   return parseList(process.env.GEMINI_MODELS) || ['gemini-2.5-flash'];
 }
-function getSmartModels() {
+function getSmartModels(settings = null) {
+  const fromDb = settings?.model_pools?.smart;
+  if (Array.isArray(fromDb) && fromDb.length) return fromDb;
   const smart = parseList(process.env.GEMINI_SMART_MODELS);
   if (smart.length) return smart;
   // Default: pro com fallback para flash se pro indisponível
-  return ['gemini-2.5-pro', ...getFastModels()];
+  return ['gemini-2.5-pro', ...getFastModels(settings)];
 }
 
 /**
@@ -106,7 +135,7 @@ function getSmartModels() {
  * Critério conservador: usa smart só quando há sinais claros de complexidade,
  * para preservar coerência sem custo extra na maioria das interações.
  */
-function selectModelPool(userMessage) {
+function selectModelPool(userMessage, extraKeywords = []) {
   const original = userMessage || '';
   const text = original.toLowerCase();
 
@@ -138,7 +167,11 @@ function selectModelPool(userMessage) {
     'qual o melhor', 'qual a melhor', 'mais eficient', 'oportunidade',
     'avalia', 'explica em detalh', 'projet', 'cenário',
   ];
-  if (SMART_KEYWORDS.some(kw => text.includes(kw))) return 'smart';
+  // Palavras extras vindas do cérebro (settings.escalation_keywords) são ADITIVAS —
+  // só ampliam o conjunto, nunca removem as embutidas (preserva comportamento).
+  const extraKw = Array.isArray(extraKeywords) ? extraKeywords.map(k => String(k).toLowerCase()).filter(Boolean) : [];
+  const allKeywords = extraKw.length ? SMART_KEYWORDS.concat(extraKw) : SMART_KEYWORDS;
+  if (allKeywords.some(kw => text.includes(kw))) return 'smart';
 
   // Sinal 4: múltiplas restrições combinadas
   if (/\b(e também|além disso|ao mesmo tempo)\b/.test(text)) return 'smart';
@@ -385,6 +418,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   let systemPrompt;
   let activeDeclarations;
   let lastBridge = null; // usado depois pela detecção de alucinação (só Office)
+  let activeSettings = {}; // settings do cérebro ativo (model_pools/escalation_keywords) — {} = fallback
 
   if (isAcademy) {
     // ACADEMY: tutor de estudos. Tools do ToolRegistry (AcademyTools).
@@ -400,7 +434,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   } else {
     // OFFICE: comportamento idêntico ao histórico — zero regressão.
     const enterprises = await loadAccessibleEnterprises(fullUser);
-    systemPrompt = buildSystemPrompt(fullUser, enterprises);
+    // Cérebro da Eme (DB-driven). Sem versão publicada → assembleSystemPrompt cai
+    // em buildSystemPrompt (comportamento histórico intacto / zero regressão).
+    const brain = await getActiveBrain();
+    systemPrompt = assembleSystemPrompt(brain, fullUser, enterprises, 'OFFICE');
+    activeSettings = brain?.settings || {};
     // Anexa contexto de bridge (IDs/filtros da última consulta) ao SYSTEM
     // instruction — não ao histórico — para evitar que o modelo replique o bloco.
     lastBridge = await getLastBridgeContext(session.id);
@@ -421,7 +459,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         `seu texto só comenta o destaque principal.\n` +
         `- Evite frases longas com subordinadas — fluxo natural de voz.`;
     }
-    activeDeclarations = TOOL_DECLARATIONS;
+    // Overlay do cérebro sobre as tools (liga/desliga, descrição, regras de uso).
+    // Sem brain/reports → declarações idênticas ao código (zero regressão).
+    const toolOverlay = overlayOfficeTools(TOOL_DECLARATIONS, brain?.reports);
+    activeDeclarations = toolOverlay.declarations;
+    if (toolOverlay.promptRules) systemPrompt += toolOverlay.promptRules;
   }
   const history = await buildHistory(session.id);
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
@@ -446,8 +488,8 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // ACADEMY: força 'smart' (Gemini Pro) — segue muito melhor a regra de só
   // responder com dados vindos de ferramenta, evitando o tutor alucinar conteúdo.
   // Voz → SEMPRE flash (latência manda). Academy → smart. Resto → heurística.
-  const pool = isAcademy ? 'smart' : (viaVoice ? 'fast' : selectModelPool(userMessage));
-  const modelList = pool === 'smart' ? getSmartModels() : getFastModels();
+  const pool = isAcademy ? 'smart' : (viaVoice ? 'fast' : selectModelPool(userMessage, activeSettings.escalation_keywords || []));
+  const modelList = pool === 'smart' ? getSmartModels(activeSettings) : getFastModels(activeSettings);
   let geminiModel = modelList[0];
 
   // Tenta cada modelo + cada chave em ordem — fallback automático em 503/429/401/500.
@@ -1128,7 +1170,7 @@ function summarizeForGemini(result) {
   return summary;
 }
 
-async function loadAccessibleEnterprises(user) {
+export async function loadAccessibleEnterprises(user) {
   const { QueryTypes } = await import('sequelize');
   const isAdmin = user.role === 'admin';
   const sql = isAdmin

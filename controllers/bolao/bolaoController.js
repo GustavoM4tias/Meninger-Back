@@ -139,20 +139,45 @@ export async function postLive(req, res) {
   }
 }
 
-// POST /api/bolao/participants  { name, subtitle?, user_id? }  (admin)
+// POST /api/bolao/participants  { user_id }  (admin) — adiciona um usuário do
+// sistema como participante (nome/cargo vêm do cadastro real). Aceita { name } só
+// como fallback para um avulso.
 export async function postParticipant(req, res) {
   try {
     const bolao = await resolveBolao(req);
     if (!bolao) return res.status(404).json({ error: 'Bolão não encontrado.' });
-    const { name, subtitle, user_id } = req.body || {};
-    if (!name || !String(name).trim()) return res.status(400).json({ error: 'name é obrigatório.' });
+    let { name, subtitle, user_id } = req.body || {};
+    user_id = user_id || null;
+
+    if (user_id) {
+      const dup = await db.BolaoParticipant.findOne({ where: { bolao_id: bolao.id, user_id } });
+      if (dup) return res.json({ ok: true, already: true, participant: { id: dup.id, display_name: dup.display_name } });
+      const u = await db.User.findByPk(user_id, { attributes: ['id', 'username', 'position', 'city'] });
+      if (u) { name = u.username; subtitle = u.position || u.city || null; }
+    }
+
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Informe um usuário (user_id) válido ou um nome.' });
+
     const participant = await db.BolaoParticipant.create({
       bolao_id: bolao.id,
       display_name: String(name).trim(),
       subtitle: subtitle ? String(subtitle).trim() : null,
-      user_id: user_id || null,
+      user_id,
     });
     return res.json({ ok: true, participant: { id: participant.id, display_name: participant.display_name } });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// DELETE /api/bolao/participants/:id  (admin) — remove participante + seus palpites.
+export async function deleteParticipant(req, res) {
+  try {
+    const part = await db.BolaoParticipant.findByPk(req.params.id);
+    if (!part) return res.status(404).json({ error: 'Participante não encontrado.' });
+    await db.BolaoPrediction.destroy({ where: { participant_id: part.id } });
+    await part.destroy();
+    return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -187,6 +212,19 @@ export async function postPredictions(req, res) {
     }
     for (const mid of touched) await scoreMatchAndPersist(mid);
     return res.json({ ok: true, updated });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// POST /api/bolao/predictions/clear  (admin) — apaga TODOS os palpites do bolão.
+// Mantém participantes e jogos; o admin recadastra manualmente.
+export async function clearPredictions(req, res) {
+  try {
+    const bolao = await resolveBolao(req);
+    if (!bolao) return res.status(404).json({ error: 'Bolão não encontrado.' });
+    const deleted = await db.BolaoPrediction.destroy({ where: { bolao_id: bolao.id } });
+    return res.json({ ok: true, deleted });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

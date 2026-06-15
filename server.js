@@ -30,6 +30,7 @@ import boletoRoutes from './routes/boletoRoutes.js';
 import shortLinkRoutes from './routes/shortLinkRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
+import officeBrainRoutes from './routes/officeBrainRoutes.js';
 import academyChatRoutes from './routes/academyChatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
@@ -66,6 +67,7 @@ import marketingSyncScheduler     from './scheduler/marketingSyncScheduler.js';
 import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
 import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
+import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
@@ -157,6 +159,7 @@ app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/s', shortLinkRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
+app.use('/api/office-brain', officeBrainRoutes);
 app.use('/api/academy-chat', academyChatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
@@ -229,6 +232,7 @@ async function bootServer() {
   await ensureBoletoSchema();
   await ensureAcademyPostSync();
   await ensureMarketingCaptureSchema();
+  await ensureEmeBrainSchema();
 
   await seedInitialTypes();
 

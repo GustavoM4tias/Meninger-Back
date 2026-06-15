@@ -1,20 +1,25 @@
 // services/sienge/inadimplenciaService.js
 //
-// Inadimplência de clientes — lê do backup diário do Sienge (sie214801) e
-// reproduz FIELMENTE a query do BI da Danielle (títulos atrasados em aberto +
-// recebidos em atraso + pagos parcialmente com saldo), com UMA diferença
-// intencional aprovada pelo usuário:
+// Inadimplência de clientes — lê do backup diário do Sienge (sie214801).
+// Baseada na query do BI da Danielle, mas com a contagem CORRIGIDA: uma linha
+// por título+parcela (não por baixa), com o saldo corrigido em aberto.
 //
-//   • dias_em_atraso e valor_juros são travados em 0 (GREATEST(...,0)).
-//     A query original gera juros negativo em pagamento parcial feito antes do
-//     vencimento; aqui isso vira 0.
+// Por que não é cópia literal do BI:
+//   A query original junta ecrcbaixa linha-a-linha. Uma parcela paga em N baixas
+//   parciais virava N linhas, cada uma carregando ~o saldo corrigido inteiro →
+//   o "Valor Atual" inflava ~8× (ex.: parcela contada como R$ 16,4 mi). Aqui
+//   agregamos as baixas por parcela, replicando a semântica do BI:
+//     • saldo_em_aberto = valor_corrigido − Σ(baixas PARCIAIS 'P')
+//       (igual ao BI: baixas totais 'T' NÃO abatem o saldo corrigido)
+//     • entram: títulos em aberto (sem baixa) e parcelas com baixa parcial;
+//       parcela só-quitada (só 'T', sem parcial) NÃO entra (saldo zero no BI)
+//     • dias_em_atraso = hoje − vencimento_original (atraso real), travado em 0
+//     • juros/multa sobre o saldo em aberto; juros nunca negativo (GREATEST 0)
+//   Também deduplicamos os joins de unidade/conta (que também multiplicavam).
 //
-// Tudo o mais é idêntico ao BI: filtros rígidos (empresa 35 fora, lista de CCs
-// excluídos, títulos excluídos, tipo_condicao/tipo_documento/conta/tipo_baixa) e
-// a correção monetária via ecadindexhist.
-//
-// A consulta roda ao vivo no backup (sem tabela de sync). Resultado fica em cache
-// de memória por ~10 min, pois a fonte só muda 1×/dia (após o restore).
+// Mantém fiéis ao BI: correção monetária (ecadindexhist), janela de vencimento,
+// empresa 35 fora, lista de CCs excluídos, títulos excluídos, e os filtros de
+// tipo_documento/tipo_condicao/conta.
 
 import { siengeQuery } from '../../lib/siengeReadDb.js';
 
@@ -31,12 +36,11 @@ const EXCLUDED_TITULOS = [
   17355, 17353, 19213, 20322, 20621,
   20509, 20517, 20518,
 ];
-const ALLOWED_TIPO_BAIXA   = ['Aberto', 'Recebimento', 'Distrato', 'Reparcelamento', 'Pago Parcialmente'];
 const BLOCKED_TIPO_CONDICAO = ['LC', 'RF', 'SB', 'SE', 'TX', 'VM'];
 const ALLOWED_TIPO_DOCUMENTO = ['ADTO', 'AVC', 'CT', 'TX'];
 const ALLOWED_CONTA = ['10101', '10102', '10103', '10104', '10116', '1011101', '10112', '10113', '10212', '11301', '11701', '21402'];
 
-const DEFAULT_START = '2020-01-01'; // mesma âncora do BI
+const DEFAULT_START = '2020-01-01';
 
 // Whitelist de ordenação do detalhe (evita SQL injection no ORDER BY)
 const SORTABLE = {
@@ -81,10 +85,10 @@ function normalizeFilters(raw = {}) {
 }
 
 /**
- * Monta o prefixo WITH base/dados/grouped com os filtros bindados.
- * `grouped` é exatamente o resultado final do BI (snake_case + clamp).
+ * Monta o prefixo WITH baixa_agg/base/dados com os filtros bindados.
+ * `dados` = uma linha por título+parcela em aberto (aberto ou parcial com saldo).
  */
-function buildCte(filters, p, { materializeGrouped = false } = {}) {
+function buildCte(filters, p, { materializeDados = false } = {}) {
   const pStart = p.add(filters.startDate);
   const pEnd   = p.add(filters.endDate); // pode ser null → COALESCE p/ CURRENT_DATE
 
@@ -93,32 +97,52 @@ function buildCte(filters, p, { materializeGrouped = false } = {}) {
   if (filters.empresas.length)        baseExtra += `\n      AND g.cdempresaview = ANY(${p.add(filters.empresas)}::int[])`;
   if (filters.empreendimentos.length) baseExtra += `\n      AND h.cdempreendview = ANY(${p.add(filters.empreendimentos)}::int[])`;
 
-  // filtros opcionais no nível agrupado
-  let groupedExtra = '';
-  if (filters.situacoes.length) groupedExtra += `\n      AND situacao = ANY(${p.add(filters.situacoes)}::text[])`;
+  // filtros opcionais no nível dados (situação computada + busca)
+  let dadosExtra = '';
+  if (filters.situacoes.length) dadosExtra += `\n    AND situacao = ANY(${p.add(filters.situacoes)}::text[])`;
   if (filters.search) {
     const like = p.add('%' + filters.search + '%');
-    groupedExtra += `\n      AND (CAST(nutitulo AS text) LIKE ${like} OR CAST(cod_cliente AS text) LIKE ${like} OR COALESCE(unidade,'') ILIKE ${like})`;
+    dadosExtra += `\n    AND (CAST(nutitulo AS text) LIKE ${like} OR CAST(cod_cliente AS text) LIKE ${like} OR COALESCE(unidade,'') ILIKE ${like})`;
   }
 
   return `
-WITH base AS MATERIALIZED (
+WITH baixa_agg AS (
+  -- Agrega as baixas por parcela (1 linha por baixa -> 1 por parcela). Igual ao
+  -- BI: só baixas PARCIAIS ('P') abatem o saldo corrigido; baixas totais ('T')
+  -- não são subtraídas (parcela só com 'T' = quitada, fica de fora).
+  SELECT nutitulo, nuparcela,
+    SUM(vlrecto) FILTER (WHERE flparcialtotal = 'P')  AS pago_parcial,
+    MAX(dtrecto) FILTER (WHERE flparcialtotal = 'P')  AS ult_dtrecto,
+    bool_or(flparcialtotal = 'P')                     AS tem_parcial
+  FROM ecrcbaixa
+  GROUP BY nutitulo, nuparcela
+),
+base AS MATERIALIZED (
   SELECT
     a.nutitulo, a.nuparcela, a.dtvencto, a.vloriginal, a.cdtipocondicao, a.cdopercobranca,
     b.dtemissao, b.flinadimplente, b.fljudicie, b.cdcliente, b.cddocumento,
-    c.dtrecto, c.vlrecto, c.cdtipobaixa, c.flparcialtotal,
-    d.cdconta, e.nuunidade, f.detipobaixa, g.cdempresaview, h.cdempreendview,
-    GREATEST(
-      CASE WHEN c.dtrecto IS NULL THEN CURRENT_DATE - a.dtvencto - 1
-           ELSE c.dtrecto - a.dtvencto - 1 END, 0
-    ) AS dias_em_atraso,
-    (((j.vlindexador / i.vlindexador) - 1) * a.vloriginal) + a.vloriginal AS valor_atual
+    bg.pago_parcial, bg.ult_dtrecto,
+    COALESCE(bg.tem_parcial, false) AS tem_parcial,
+    (bg.nutitulo IS NULL)          AS sem_baixa,
+    d.cdconta, e.nuunidade, g.cdempresaview, h.cdempreendview,
+    GREATEST(CURRENT_DATE - a.dtvencto - 1, 0) AS dias_em_atraso,
+    (((j.vlindexador / i.vlindexador) - 1) * a.vloriginal) + a.vloriginal AS corrigido
   FROM ecrcparcela a
-  LEFT JOIN ecrctitulo  b ON b.nutitulo = a.nutitulo
-  LEFT JOIN ecrcbaixa   c ON c.nutitulo = a.nutitulo AND c.nuparcela = a.nuparcela
-  LEFT JOIN ecrcapropfin d ON d.nutitulo = a.nutitulo
-  LEFT JOIN ecrcunidade  e ON e.nutitulo = a.nutitulo
-  LEFT JOIN ecadtipobaixa f ON f.cdtipobaixa = c.cdtipobaixa
+  LEFT JOIN ecrctitulo b ON b.nutitulo = a.nutitulo
+  LEFT JOIN baixa_agg  bg ON bg.nutitulo = a.nutitulo AND bg.nuparcela = a.nuparcela
+  -- conta: pega UMA conta permitida do título (dedup do ecrcapropfin + filtro de conta do BI)
+  LEFT JOIN LATERAL (
+    SELECT ap.cdconta FROM ecrcapropfin ap
+    WHERE ap.nutitulo = a.nutitulo AND TRIM(ap.cdconta) IN (${sqlStrList(ALLOWED_CONTA)})
+    LIMIT 1
+  ) d ON true
+  -- unidade/empreend: pega UMA unidade do título (dedup do ecrcunidade)
+  LEFT JOIN LATERAL (
+    SELECT un.nuunidade, un.cdempreend FROM ecrcunidade un
+    WHERE un.nutitulo = a.nutitulo
+    ORDER BY un.nuunidade
+    LIMIT 1
+  ) e ON true
   INNER JOIN ecadempresa  g ON g.cdempresa = b.cdempresa
   INNER JOIN ecadempreend h ON h.cdempreend = e.cdempreend
   LEFT JOIN ecadindexhist i ON a.cdindexador = i.cdindexador AND a.dtbase = i.dtindexador
@@ -130,95 +154,49 @@ WITH base AS MATERIALIZED (
     AND g.cdempresaview <> 35
     AND h.cdempreendview NOT IN (${sqlIntList(EXCLUDED_CCS)})${baseExtra}
 ),
-dados AS (
-  -- Em aberto / recebidos em atraso
+dados_all AS (
   SELECT
-    b.nutitulo,
-    b.nuunidade        AS unidade,
-    b.dtemissao        AS data_emissao,
-    b.dtvencto         AS data_vencimento,
-    COALESCE(b.dtrecto, CURRENT_DATE) AS data_baixa,
-    b.dtrecto          AS data_pagamento,
-    COALESCE(b.detipobaixa, 'Aberto') AS tipo_baixa,
-    b.nuparcela,
-    b.cdconta          AS conta,
-    CASE WHEN b.flinadimplente='C' THEN 'Cobrança'
-         WHEN b.flinadimplente='N' THEN 'Normal'
-         WHEN b.fljudicie='S'      THEN 'Sub-judicie'
+    nutitulo, nuparcela,
+    nuunidade        AS unidade,
+    dtemissao        AS data_emissao,
+    dtvencto         AS data_vencimento,
+    ult_dtrecto      AS data_pagamento,
+    CASE WHEN sem_baixa THEN 'Aberto' ELSE 'Pago Parcialmente' END AS tipo_baixa,
+    cdconta          AS conta,
+    CASE WHEN flinadimplente='C' THEN 'Cobrança'
+         WHEN flinadimplente='N' THEN 'Normal'
+         WHEN fljudicie='S'      THEN 'Sub-judicie'
          ELSE 'Inadimplente' END AS situacao,
-    b.cdcliente        AS cod_cliente,
-    b.cddocumento      AS tipo_documento,
-    b.cdtipocondicao   AS tipo_condicao,
-    b.cdempreendview   AS centro_de_custo,
-    b.cdopercobranca   AS cod_portador,
-    b.vloriginal       AS valor_original,
-    b.vlrecto          AS valor_baixado,
-    CASE WHEN b.flparcialtotal IS NULL THEN b.valor_atual
-         WHEN b.flparcialtotal='P'     THEN b.valor_atual
-         ELSE NULL END AS valor_atual,
-    b.dias_em_atraso,
-    b.cdempresaview    AS empresa,
-    CASE WHEN b.dtrecto IS NULL THEN b.valor_atual * 0.02 ELSE NULL END AS valor_multa,
-    CASE WHEN b.dtrecto IS NULL
-         THEN GREATEST(((b.valor_atual * 0.02) + b.valor_atual) * (0.0003333333 * b.dias_em_atraso), 0)
-         ELSE NULL END AS valor_juros
-  FROM base b
-  WHERE (b.dtrecto > b.dtvencto OR b.dtrecto IS NULL)
-    AND NOT (b.flinadimplente = 'S')
-    AND (b.flparcialtotal = 'T' OR b.flparcialtotal IS NULL)
-
-  UNION ALL
-
-  -- Pagos parcialmente (saldo em aberto)
-  SELECT
-    b.nutitulo,
-    b.nuunidade,
-    b.dtemissao,
-    b.dtrecto          AS data_vencimento,
-    CURRENT_DATE       AS data_baixa,
-    NULL::date         AS data_pagamento,
-    'Pago Parcialmente' AS tipo_baixa,
-    b.nuparcela,
-    b.cdconta,
-    CASE WHEN b.flinadimplente='C' THEN 'Cobrança'
-         WHEN b.flinadimplente='N' THEN 'Normal'
-         WHEN b.fljudicie='S'      THEN 'Sub-judicie'
-         ELSE 'Inadimplente' END,
-    b.cdcliente,
-    b.cddocumento,
-    b.cdtipocondicao,
-    b.cdempreendview,
-    b.cdopercobranca,
-    0                  AS valor_original,
-    b.vlrecto,
-    b.valor_atual - b.vlrecto AS valor_atual,
-    b.dias_em_atraso,
-    b.cdempresaview,
-    (b.valor_atual - b.vlrecto) * 0.02 AS valor_multa,
-    GREATEST((((b.valor_atual - b.vlrecto) * 0.02) + (b.valor_atual - b.vlrecto)) * (0.0003333333 * b.dias_em_atraso), 0) AS valor_juros
-  FROM base b
-  WHERE b.flparcialtotal = 'P'
-),
-grouped AS ${materializeGrouped ? 'MATERIALIZED ' : ''}(
-  SELECT
-    nutitulo, unidade, data_emissao, data_vencimento, data_baixa, data_pagamento, tipo_baixa,
-    nuparcela, conta, situacao, cod_cliente, tipo_documento, tipo_condicao, centro_de_custo,
-    cod_portador, dias_em_atraso, empresa,
-    SUM(valor_original) AS valor_original,
-    SUM(valor_baixado)  AS valor_baixado,
-    SUM(valor_atual)    AS valor_atual,
-    SUM(valor_multa)    AS valor_multa,
-    SUM(valor_juros)    AS valor_juros
-  FROM dados
-  WHERE tipo_baixa IN (${sqlStrList(ALLOWED_TIPO_BAIXA)})
+    cdcliente        AS cod_cliente,
+    cddocumento      AS tipo_documento,
+    cdtipocondicao   AS tipo_condicao,
+    cdempreendview   AS centro_de_custo,
+    cdopercobranca   AS cod_portador,
+    vloriginal       AS valor_original,
+    COALESCE(pago_parcial, 0) AS valor_baixado,
+    (corrigido - COALESCE(pago_parcial, 0)) AS valor_atual,
+    dias_em_atraso,
+    cdempresaview    AS empresa,
+    (corrigido - COALESCE(pago_parcial, 0)) * 0.02 AS valor_multa,
+    GREATEST(
+      (((corrigido - COALESCE(pago_parcial, 0)) * 0.02) + (corrigido - COALESCE(pago_parcial, 0)))
+        * (0.0003333333 * dias_em_atraso), 0
+    ) AS valor_juros
+  FROM base
+  WHERE
+    -- aberto (sem baixa) OU com baixa parcial; só-quitada ('T' sem parcial) fica de fora
+    (sem_baixa OR tem_parcial)
+    AND NOT (sem_baixa AND flinadimplente = 'S')      -- exclusão do BI p/ títulos em aberto
+    AND cdconta IS NOT NULL                            -- só títulos com conta permitida (filtro de conta do BI)
+    AND (corrigido - COALESCE(pago_parcial, 0)) > 0    -- saldo corrigido em aberto
     AND nutitulo NOT IN (${sqlIntList(EXCLUDED_TITULOS)})
-    AND TRIM(tipo_condicao) NOT IN (${sqlStrList(BLOCKED_TIPO_CONDICAO)})
-    AND TRIM(tipo_documento) IN (${sqlStrList(ALLOWED_TIPO_DOCUMENTO)})
-    AND TRIM(conta) IN (${sqlStrList(ALLOWED_CONTA)})${groupedExtra}
-  GROUP BY
-    nutitulo, unidade, data_emissao, data_vencimento, data_baixa, data_pagamento, tipo_baixa,
-    nuparcela, conta, situacao, cod_cliente, tipo_documento, tipo_condicao, centro_de_custo,
-    cod_portador, dias_em_atraso, empresa
+    AND TRIM(cddocumento) IN (${sqlStrList(ALLOWED_TIPO_DOCUMENTO)})
+    AND TRIM(cdtipocondicao) NOT IN (${sqlStrList(BLOCKED_TIPO_CONDICAO)})
+),
+dados AS ${materializeDados ? 'MATERIALIZED ' : ''}(
+  -- filtros opcionais (situação/busca) sobre os aliases já calculados
+  SELECT * FROM dados_all
+  WHERE 1=1${dadosExtra}
 )`;
 }
 
@@ -234,7 +212,6 @@ function cacheGet(key) {
 }
 function cacheSet(key, value) {
   _cache.set(key, { at: Date.now(), value });
-  // limpeza preguiçosa para não crescer sem limite
   if (_cache.size > 200) {
     for (const [k, v] of _cache) if (Date.now() - v.at >= TTL_MS) _cache.delete(k);
   }
@@ -278,7 +255,7 @@ export async function getDashboard(rawFilters, { refresh = false } = {}) {
   }
 
   const p = makeParams();
-  const cte = buildCte(filters, p, { materializeGrouped: true });
+  const cte = buildCte(filters, p, { materializeDados: true });
 
   const sql = `${cte}
 SELECT json_build_object(
@@ -291,7 +268,7 @@ SELECT json_build_object(
      'titulos',       COUNT(DISTINCT nutitulo),
      'clientes',      COUNT(DISTINCT cod_cliente),
      'parcelas',      COUNT(*)
-   ) FROM grouped),
+   ) FROM dados),
   'aging', (SELECT COALESCE(json_agg(json_build_object(
        'bucket', bucket, 'valor', valor, 'parcelas', parcelas, 'titulos', titulos
      ) ORDER BY ord), '[]'::json) FROM (
@@ -307,17 +284,17 @@ SELECT json_build_object(
            CASE WHEN dias_em_atraso<=30 THEN '0-30' WHEN dias_em_atraso<=60 THEN '31-60'
                 WHEN dias_em_atraso<=90 THEN '61-90' WHEN dias_em_atraso<=180 THEN '91-180'
                 WHEN dias_em_atraso<=360 THEN '181-360' ELSE '360+' END AS bucket
-         FROM grouped
+         FROM dados
        ) z GROUP BY ord, bucket
      ) ag),
   'byEmpresa', (SELECT COALESCE(json_agg(json_build_object(
        'empresa', empresa, 'valor', valor, 'titulos', titulos) ORDER BY valor DESC NULLS LAST), '[]'::json) FROM (
        SELECT empresa, COALESCE(ROUND(SUM(valor_atual), 2), 0) AS valor, COUNT(DISTINCT nutitulo) AS titulos
-       FROM grouped GROUP BY empresa) be),
+       FROM dados GROUP BY empresa) be),
   'byEmpreendimento', (SELECT COALESCE(json_agg(json_build_object(
        'cc', cc, 'valor', valor, 'titulos', titulos) ORDER BY valor DESC NULLS LAST), '[]'::json) FROM (
        SELECT centro_de_custo AS cc, COALESCE(ROUND(SUM(valor_atual), 2), 0) AS valor, COUNT(DISTINCT nutitulo) AS titulos
-       FROM grouped GROUP BY centro_de_custo) bcc)
+       FROM dados GROUP BY centro_de_custo) bcc)
 ) AS payload`;
 
   const { rows } = await siengeQuery(sql, p.values);
@@ -327,7 +304,7 @@ SELECT json_build_object(
   return cacheSet(key, payload);
 }
 
-/** Detalhe paginado (uma linha por título+parcela, igual ao BI). */
+/** Detalhe paginado (uma linha por título+parcela). */
 export async function getDetail(rawFilters, { page = 1, pageSize = 100, sort = 'valor_atual', dir = 'desc' } = {}) {
   const filters = normalizeFilters(rawFilters);
   const sortCol = SORTABLE[sort] || 'valor_atual';
@@ -340,7 +317,7 @@ export async function getDetail(rawFilters, { page = 1, pageSize = 100, sort = '
   if (cached) return cached;
 
   const p = makeParams();
-  const cte = buildCte(filters, p, { materializeGrouped: true });
+  const cte = buildCte(filters, p, { materializeDados: true });
 
   const sql = `${cte}
 SELECT
@@ -353,7 +330,7 @@ SELECT
   ROUND(valor_multa, 2)    AS valor_multa,
   ROUND(valor_juros, 2)    AS valor_juros,
   COUNT(*) OVER() AS _total
-FROM grouped
+FROM dados
 ORDER BY ${sortCol} ${sortDir} NULLS LAST, nutitulo, nuparcela
 LIMIT ${lim} OFFSET ${off}`;
 
@@ -372,7 +349,7 @@ LIMIT ${lim} OFFSET ${off}`;
 export async function getAllRows(rawFilters) {
   const filters = normalizeFilters(rawFilters);
   const p = makeParams();
-  const cte = buildCte(filters, p, { materializeGrouped: false });
+  const cte = buildCte(filters, p, { materializeDados: false });
   const sql = `${cte}
 SELECT
   nutitulo, nuparcela, unidade, data_emissao, data_vencimento, data_pagamento,
@@ -383,7 +360,7 @@ SELECT
   ROUND(valor_atual, 2)    AS valor_atual,
   ROUND(valor_multa, 2)    AS valor_multa,
   ROUND(valor_juros, 2)    AS valor_juros
-FROM grouped
+FROM dados
 ORDER BY valor_atual DESC NULLS LAST, nutitulo, nuparcela`;
   const { rows } = await siengeQuery(sql, p.values);
   return rows;

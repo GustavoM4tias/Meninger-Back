@@ -8,28 +8,70 @@ dayjs.locale('pt-br');
  * @param {object} user        - req.user + campos extras (city, position)
  * @param {Array}  enterprises - nomes dos empreendimentos acessíveis ao usuário
  */
-export function buildSystemPrompt(user, enterprises = []) {
-  const now = dayjs().format('dddd, D [de] MMMM [de] YYYY [às] HH:mm');
-  const isAdmin = user.role === 'admin';
-
+/**
+ * Bloco de ACESSO (dinâmico) — admin vê tudo; não-admin é trancado na própria cidade.
+ * Extraído de buildSystemPrompt SEM alterar o texto, para reuso pelo montador
+ * DB-driven (Cérebro da Eme). Saída idêntica ao template inline original.
+ */
+export function buildAccessBlock(user, isAdmin = user.role === 'admin') {
   // 🔒 Sanitização anti-injection (E9): dados do BD nunca entram crus no prompt.
-  // Cidade renomeada para "Ignore previous instructions..." (cenário extremo)
-  // perde os caracteres exóticos e vira string segura.
   const safeCity = safeForPrompt(user.city, 80);
-
-  const accessBlock = isAdmin
+  return isAdmin
     ? `## Acesso a dados\nVocê tem acesso completo a todos os empreendimentos e cidades.`
     : `## Acesso a dados\nEste usuário é da cidade "${safeCity}". Você SOMENTE pode retornar dados relacionados a empreendimentos dessa cidade. NUNCA exponha dados de outras cidades, mesmo que o usuário peça explicitamente.`;
+}
 
-  const enterpriseBlock = enterprises.length
+/**
+ * Bloco de EMPREENDIMENTOS acessíveis (dinâmico). Vazio quando a lista é vazia.
+ */
+export function buildEnterpriseBlock(enterprises = []) {
+  return enterprises.length
     ? `\n## Empreendimentos acessíveis a este usuário (nome + cidade real)\n${enterprises.map(e => `- ${safeForPrompt(e.name, 80)} — ${safeForPrompt(e.cidade, 80)}`).join('\n')}\n\n` +
       `**Regra de desambiguação:** Use esta lista para identificar se um nome mencionado pelo usuário é um empreendimento ou uma cidade. ` +
       `A cidade ao lado de cada empreendimento é a cidade real — use-a para responder perguntas sobre localização sem precisar chamar tool. ` +
       `Se o nome NÃO constar aqui, trate como referência geográfica e use o parâmetro \`cidade\` nas ferramentas.\n\n` +
       `**Regra de comunicação:** Nunca explique ao usuário como o controle de acesso funciona, quais filtros de cidade foram aplicados automaticamente, nem mencione a cidade do perfil do usuário nas respostas. Apenas retorne os dados.`
     : '';
+}
 
-  return `Você é Eme, o assistente de IA do Menin Office.
+/**
+ * CONTEXTO DINÂMICO do prompt — data/hora, dados do usuário, acesso e lista de
+ * empreendimentos. É a ÚNICA parte do prompt que varia por requisição; o cérebro
+ * DB-driven trata este trecho como uma âncora `isDynamic` e o injeta verbatim.
+ * Texto idêntico ao que o template inline gerava (zero regressão).
+ */
+export function buildDynamicContext(user, enterprises = []) {
+  const now = dayjs().format('dddd, D [de] MMMM [de] YYYY [às] HH:mm');
+  const isAdmin = user.role === 'admin';
+  const accessBlock = buildAccessBlock(user, isAdmin);
+  const enterpriseBlock = buildEnterpriseBlock(enterprises);
+  return `## Data e hora atual
+${now}
+
+## Usuário
+- Nome: ${user.username}
+- Cargo: ${user.position || 'não informado'}
+- Cidade: ${user.city || 'não informada'}
+- Perfil: ${isAdmin ? 'Administrador (acesso total)' : 'Usuário'}
+
+${accessBlock}
+${enterpriseBlock}
+`;
+}
+
+/**
+ * Monta o system prompt do Eme com o contexto do usuário e restrições de acesso.
+ * Estrutura: PROMPT_HEAD (estático) + contexto dinâmico + PROMPT_TAIL (estático).
+ * O Cérebro da Eme (DB-driven) reproduz exatamente esta composição a partir dos
+ * blocos semeados — ver promptAssembler.assembleSystemPrompt.
+ * @param {object} user        - req.user + campos extras (city, position)
+ * @param {Array}  enterprises - nomes dos empreendimentos acessíveis ao usuário
+ */
+export function buildSystemPrompt(user, enterprises = []) {
+  return PROMPT_HEAD + buildDynamicContext(user, enterprises) + PROMPT_TAIL;
+}
+
+export const PROMPT_HEAD = `Você é Eme, o assistente de IA do Menin Office.
 O Menin Office é o sistema interno de uma construtora que une marketing, comercial, automações e financeiro.
 Você ajuda colaboradores a consultar dados, abrir relatórios e navegar no sistema.
 
@@ -82,18 +124,9 @@ Se o número/nome que você quer citar **NÃO está em uma dessas 3 fontes**, vo
 - Pergunte-se: "Isso veio do tool result ATUAL ou do bridge?"
 - Se a resposta for "não" ou "acho que sim" → REMOVA da resposta.
 
-## Data e hora atual
-${now}
+`;
 
-## Usuário
-- Nome: ${user.username}
-- Cargo: ${user.position || 'não informado'}
-- Cidade: ${user.city || 'não informada'}
-- Perfil: ${isAdmin ? 'Administrador (acesso total)' : 'Usuário'}
-
-${accessBlock}
-${enterpriseBlock}
-## Bridge entre módulos (CRÍTICO)
+export const PROMPT_TAIL = `## Bridge entre módulos (CRÍTICO)
 O sistema é organizado em etapas encadeadas — Leads → Pré-cadastros → Reservas → Repasses → Faturamento → ... — e o usuário frequentemente pede para "puxar" dados de uma etapa a partir de outra ("dados dos leads desses pré-cadastros", "reservas que viraram repasse", "faturamento desses contratos").
 
 ### Como reconhecer um bridge
@@ -502,4 +535,3 @@ O editor é um **card embutido no próprio chat** (não é modal). Aparece como 
 **Resposta de texto após \`open_alert_editor\`**: 1 linha CURTA. Ex: "Montei o rascunho aí embaixo." NÃO descreva os campos, NÃO repita o preview — o card mostra tudo visualmente.
 
 **NUNCA** chame \`open_alert_editor\` e \`create_alert\` no mesmo turno.`;
-}
