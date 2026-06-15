@@ -12,6 +12,10 @@ export default (sequelize, DataTypes) => {
     default_marketing_pct: { type: DataTypes.DECIMAL(6, 2), allowNull: false, defaultValue: 0 },
     default_commission_pct: { type: DataTypes.DECIMAL(6, 2), allowNull: false, defaultValue: 0 },
     total_units: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null, },
+    // Custo Loja (R$) — valor monetário da loja física do empreendimento, cadastrado
+    // por centro de custo. Default 0; preenchido só no CC que tem loja. Entra no
+    // pool de orçamento de marketing da Viabilidade. Ver memória [[project_viability]].
+    custo_loja: { type: DataTypes.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
     manual_city: { type: DataTypes.STRING(120), allowNull: true },
   }, {
     tableName: 'sales_projection_enterprises',

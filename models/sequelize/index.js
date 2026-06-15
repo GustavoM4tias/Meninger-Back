@@ -40,6 +40,10 @@ import SalesProjectionLineDefine from './projection/salesProjectionLine.js';
 import SalesProjectionLogDefine from './projection/salesProjectionLog.js';
 import SalesProjectionEnterpriseDefine from './projection/salesProjectionEnterprise.js';
 
+// Viabilidade de Marketing — config admin
+import ViabilityMarketingDepartmentDefine from './viability/marketingDepartment.js';
+import ViabilityEnterpriseSettingsDefine from './viability/enterpriseSettings.js';
+
 // ... imports existentes
 import CvEnterpriseDefine from './cv/enterprise.js';
 import CvEnterpriseStageDefine from './cv/enterpriseStage.js';
@@ -55,9 +59,6 @@ import hiddenDashboardEnterpriseDefine from './hiddenDashboardEnterprise.js';
 import stageCommissionRuleDefine from './stageCommissionRule.js';
 import trSatelliteEnterpriseDefine from './trSatelliteEnterprise.js';
 
-import SiengeAwardDefine from './sienge/award.js';
-import SiengeAwardLinkDefine from './sienge/awardLink.js';
-import SiengeAwardLogDefine from './sienge/awardLog.js';
 import PaymentLaunchDefine from './sienge/paymentLaunch.js';
 import LaunchTypeConfigDefine from './sienge/launchTypeConfig.js';
 import SiengeBackupLogDefine from './sienge/backupLog.js';
@@ -100,9 +101,6 @@ import InPersonMeetingDefine from './inPersonMeeting.js';
 import BucketUploadHistoryDefine from './tools/bucketUploadHistory.js';
 import UserPermissionDefine from './userPermission.js';
 import PermissionProfileDefine from './permissionProfile.js';
-import SignatureDefine from './signature.js';
-import SignatureDocumentDefine from './signatureDocument.js';
-import SignatureDocumentSignerDefine from './signatureDocumentSigner.js';
 
 // CV extras
 import CvEnterprisePriceTableDefine from './cv/enterprisePriceTable.js';
@@ -150,6 +148,8 @@ import NotificationPreferenceDefine from './notificationPreference.js';
 import WhatsappConfigDefine from './whatsapp/whatsappConfig.js';
 import WhatsappTemplateDefine from './whatsapp/whatsappTemplate.js';
 import WhatsappMessageDefine from './whatsapp/whatsappMessage.js';
+import WhatsappAutomationDefine from './whatsapp/whatsappAutomation.js';
+import WhatsappAutomationRunDefine from './whatsapp/whatsappAutomationRun.js';
 
 // Alertas (gerenciados via Eme AI)
 import AlertRuleDefine         from './alerts/alertRule.js';
@@ -219,6 +219,10 @@ db.SalesProjectionLine = SalesProjectionLineDefine(sequelize, DataTypes);
 db.SalesProjectionLog = SalesProjectionLogDefine(sequelize, DataTypes);
 db.SalesProjectionEnterprise = SalesProjectionEnterpriseDefine(sequelize, DataTypes);
 
+// Viabilidade de Marketing — config admin
+db.ViabilityMarketingDepartment = ViabilityMarketingDepartmentDefine(sequelize, DataTypes);
+db.ViabilityEnterpriseSettings = ViabilityEnterpriseSettingsDefine(sequelize, DataTypes);
+
 // ... modelos já existentes
 db.CvEnterprise = CvEnterpriseDefine(sequelize, DataTypes);
 db.CvEnterpriseStage = CvEnterpriseStageDefine(sequelize, DataTypes);
@@ -234,9 +238,6 @@ db.HiddenDashboardEnterprise = hiddenDashboardEnterpriseDefine(sequelize, DataTy
 db.StageCommissionRule = stageCommissionRuleDefine(sequelize, DataTypes);
 db.TrSatelliteEnterprise = trSatelliteEnterpriseDefine(sequelize, DataTypes);
 
-db.Award = SiengeAwardDefine(sequelize, DataTypes);
-db.AwardLink = SiengeAwardLinkDefine(sequelize, DataTypes);
-db.AwardLog = SiengeAwardLogDefine(sequelize, DataTypes);
 db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);
 db.LaunchTypeConfig = LaunchTypeConfigDefine(sequelize, DataTypes);
 db.SiengeBackupLog = SiengeBackupLogDefine(sequelize, DataTypes);
@@ -279,9 +280,6 @@ db.InPersonMeeting   = InPersonMeetingDefine(sequelize, DataTypes);
 db.BucketUploadHistory = BucketUploadHistoryDefine(sequelize, DataTypes);
 db.UserPermission = UserPermissionDefine(sequelize, DataTypes);
 db.PermissionProfile = PermissionProfileDefine(sequelize, DataTypes);
-db.Signature = SignatureDefine(sequelize, DataTypes);
-db.SignatureDocument       = SignatureDocumentDefine(sequelize, DataTypes);
-db.SignatureDocumentSigner = SignatureDocumentSignerDefine(sequelize, DataTypes);
 
 // CV extras
 db.CvEnterprisePriceTable = CvEnterprisePriceTableDefine(sequelize, DataTypes);
@@ -329,6 +327,8 @@ db.NotificationPreference = NotificationPreferenceDefine(sequelize, DataTypes);
 db.WhatsappConfig   = WhatsappConfigDefine(sequelize, DataTypes);
 db.WhatsappTemplate = WhatsappTemplateDefine(sequelize, DataTypes);
 db.WhatsappMessage  = WhatsappMessageDefine(sequelize, DataTypes);
+db.WhatsappAutomation    = WhatsappAutomationDefine(sequelize, DataTypes);
+db.WhatsappAutomationRun = WhatsappAutomationRunDefine(sequelize, DataTypes);
 
 // Alertas
 db.AlertRule         = AlertRuleDefine(sequelize, DataTypes);

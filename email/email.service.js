@@ -98,11 +98,6 @@ const META = {
         preview: (d) => d.preview || '',
         file: 'generic.notification.hbs',
     },
-    'signature.requested': {
-        subject: (d) => `📝 Documento aguardando assinatura: ${d.documentName || ''}`,
-        preview: (d) => `Solicitado por ${d.requesterName || 'Menin Office'}`,
-        file: 'signature.requested.hbs',
-    },
     'auth.academy.code': {
         subject: () => `Seu código de acesso`,
         preview: () => `Use o código para entrar no Academy`,

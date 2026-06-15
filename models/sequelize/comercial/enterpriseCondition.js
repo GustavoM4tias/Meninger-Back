@@ -7,6 +7,9 @@ export default (sequelize, DataTypes) => {
         // Nesse caso, display_name identifica a ficha.
         idempreendimento: { type: DataTypes.INTEGER, allowNull: true },
         display_name: { type: DataTypes.STRING(200), allowNull: true }, // usado quando idempreendimento é null
+        // Linhagem das fichas avulsas (idempreendimento null): agrupa a mesma "série"
+        // mês a mês para a auto-geração. Null para fichas com empreendimento (usam idempreendimento).
+        series_id: { type: DataTypes.INTEGER, allowNull: true },
         reference_month: { type: DataTypes.DATEONLY, allowNull: false }, // '2026-04-01'
         status: {
             type: DataTypes.ENUM('draft', 'pending_approval', 'approved', 'closed'),
@@ -18,7 +21,6 @@ export default (sequelize, DataTypes) => {
         submitted_at:          { type: DataTypes.DATE, allowNull: true },
         submitted_by:          { type: DataTypes.INTEGER, allowNull: true },   // user.id
         approved_at:           { type: DataTypes.DATE, allowNull: true },
-        signature_document_id: { type: DataTypes.INTEGER, allowNull: true },   // FK SignatureDocument.id
         unlocked_at:           { type: DataTypes.DATE, allowNull: true },
         unlocked_by:           { type: DataTypes.INTEGER, allowNull: true },   // user.id
         // Histórico completo de eventos: [{action, user_id, username, at, note}]

@@ -263,6 +263,7 @@ SELECT
   COALESCE(d.default_avg_price,0) AS default_avg_price,
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
+  COALESCE(d.custo_loja,0) AS custo_loja,
   d.total_units,
   d.manual_city
 FROM pairs_in_view p
@@ -319,6 +320,7 @@ SELECT
   COALESCE(d.default_avg_price,0) AS default_avg_price,
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
+  COALESCE(d.custo_loja,0) AS custo_loja,
   d.total_units,
   d.manual_city
 FROM pairs p
@@ -362,6 +364,7 @@ SELECT
   COALESCE(d.default_avg_price,0) AS default_avg_price,
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
+  COALESCE(d.custo_loja,0) AS custo_loja,
   d.total_units,
   d.manual_city
 FROM pairs_in_view p
@@ -427,6 +430,7 @@ SELECT
   COALESCE(d.default_avg_price,0) AS default_avg_price,
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
+  COALESCE(d.custo_loja,0) AS custo_loja,
   d.total_units,
   d.manual_city
 FROM pairs p
@@ -596,6 +600,7 @@ export async function cloneProjection(req, res) {
           default_marketing_pct: Number(d.default_marketing_pct || 0),
           default_commission_pct: Number(d.default_commission_pct || 0),
           total_units: d.total_units ?? null,
+          custo_loja: Number(d.custo_loja || 0),
           manual_city: d.manual_city ?? null,
         })),
         { transaction: trx }
@@ -779,6 +784,7 @@ export async function getProjectionDetail(req, res) {
             'default_marketing_pct',
             'default_commission_pct',
             'total_units',
+            'custo_loja',
           ],
           order: [['enterprise_key', 'ASC'], ['alias_id', 'ASC']],
         });
@@ -920,7 +926,7 @@ export async function getProjectionDetail(req, res) {
            d.enterprise_key, d.erp_id, d.alias_id,
            d.default_avg_price, d.enterprise_name_cache,
            d.default_marketing_pct, d.default_commission_pct,
-           d.total_units
+           d.total_units, COALESCE(d.custo_loja,0) AS custo_loja
          FROM sales_projection_enterprises d
          JOIN allowed a ON a.erp_id = d.erp_id
          WHERE d.projection_id = :pid
@@ -1143,6 +1149,7 @@ export async function upsertProjectionDefaults(req, res) {
         default_marketing_pct: Number(i.default_marketing_pct ?? 0),
         default_commission_pct: Number(i.default_commission_pct ?? 0),
         total_units,
+        custo_loja: Number(i.custo_loja ?? i.custoLoja ?? 0),
         manual_city,
       });
     }
@@ -1158,6 +1165,7 @@ export async function upsertProjectionDefaults(req, res) {
         'default_marketing_pct',
         'default_commission_pct',
         'total_units',
+        'custo_loja',
         'manual_city',
         'updated_at',
       ],

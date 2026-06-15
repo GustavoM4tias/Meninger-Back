@@ -20,8 +20,10 @@ export const NotificationType = {
     EVENT_REMINDER:          'event.reminder',
     SUPPORT_OPENED:          'support.opened',
     SUPPORT_UPDATED:         'support.updated',
-    SIGNATURE_REQUESTED:     'signature.requested',
     GENERIC:                 'generic',
+
+    // Fichas Comerciais
+    CONDITION_AUTHORIZATION_REQUESTED: 'condition.authorization.requested',
 
     // Academy
     ACADEMY_TOPIC_REPLIED:   'academy.topic.replied',
@@ -101,13 +103,13 @@ export const NOTIFICATION_CATALOG = {
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },
-    [NotificationType.SIGNATURE_REQUESTED]: {
-        label: 'Documento aguardando assinatura',
-        group: 'Assinatura Digital',
-        description: 'Quando um documento é enviado para você assinar (ex.: ficha comercial enviada para autorização).',
-        emailType: 'signature.requested',
+    [NotificationType.CONDITION_AUTHORIZATION_REQUESTED]: {
+        label: 'Ficha comercial aguardando autorização',
+        group: 'Comercial',
+        description: 'Quando uma ficha comercial é enviada para autorização e você é um dos autorizadores configurados.',
+        emailType: null,
         whatsapp: null,
-        defaults: { inapp: true, email: true, whatsapp: false },
+        defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
     },
     [NotificationType.GENERIC]: {

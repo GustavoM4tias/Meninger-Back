@@ -4,14 +4,15 @@ export default (sequelize, DataTypes) => {
     const ComercialSettings = sequelize.define('ComercialSettings', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
 
-        // ── Aprovadores das Fichas Comerciais ─────────────────────────────────
-        // IDs de usuários do office (User.id) responsáveis por assinar/aprovar
-        approver_1_id: { type: DataTypes.INTEGER, allowNull: true },
-        approver_2_id: { type: DataTypes.INTEGER, allowNull: true },
+        // ── Permissões das Fichas Comerciais ──────────────────────────────────
+        // Arrays de User.id (office) autorizados a editar / autorizar fichas.
+        // Admins SEMPRE podem editar e autorizar, independentemente destas listas.
+        editor_user_ids:     { type: DataTypes.JSONB, defaultValue: [] },
+        authorizer_user_ids: { type: DataTypes.JSONB, defaultValue: [] },
 
         // ── Auto-geração mensal ───────────────────────────────────────────────
-        // Se true, todo dia 1 gera automaticamente fichas em rascunho para cada
-        // empreendimento que tenha uma ficha aprovada no mês anterior
+        // Se true, todo dia 1 gera automaticamente a ficha do mês para cada série
+        // ativa (com ou sem CV), herdando da última ficha não-encerrada.
         auto_generate_conditions: { type: DataTypes.BOOLEAN, defaultValue: true },
 
         updated_by: { type: DataTypes.INTEGER, allowNull: true },
@@ -20,11 +21,6 @@ export default (sequelize, DataTypes) => {
         underscored: true,
         timestamps: true,
     });
-
-    ComercialSettings.associate = (db) => {
-        ComercialSettings.belongsTo(db.User, { foreignKey: 'approver_1_id', as: 'approver1' });
-        ComercialSettings.belongsTo(db.User, { foreignKey: 'approver_2_id', as: 'approver2' });
-    };
 
     return ComercialSettings;
 };

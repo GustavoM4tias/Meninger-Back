@@ -23,14 +23,13 @@ import academyRoutes from './routes/academyRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import bucketUploadRoutes from './routes/bucketUploadRoutes.js';
 import permissionRoutes from './routes/permissionRoutes.js';
-import signatureRoutes from './routes/signatureRoutes.js';
-import signatureDocumentRoutes from './routes/signatureDocumentRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
 import shortLinkRoutes from './routes/shortLinkRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
 import officeBrainRoutes from './routes/officeBrainRoutes.js';
+import whatsappAutomationRoutes from './routes/whatsappAutomationRoutes.js';
 import academyChatRoutes from './routes/academyChatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
@@ -68,9 +67,12 @@ import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
 import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
+import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
+import { ensureViabilitySchema } from './lib/ensureViabilitySchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
+import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
 import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
@@ -150,8 +152,6 @@ app.use('/api/academy', academyRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/bucket-upload', bucketUploadRoutes);
 app.use('/api/permissions', permissionRoutes);
-app.use('/api/signatures', signatureRoutes);
-app.use('/api/signature-documents', signatureDocumentRoutes);
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
 // Encurtador de URL público — rota fora de /api por elegância.
@@ -160,6 +160,7 @@ app.use('/s', shortLinkRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
 app.use('/api/office-brain', officeBrainRoutes);
+app.use('/api/whatsapp-automations', whatsappAutomationRoutes);
 app.use('/api/academy-chat', academyChatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
@@ -214,6 +215,8 @@ async function bootServer() {
     ['BolaoMatch', db.BolaoMatch],
     ['BolaoParticipant', db.BolaoParticipant],
     ['BolaoPrediction', db.BolaoPrediction],
+    // Viabilidade de Marketing — campo Custo Loja novo em sales_projection_enterprises
+    ['SalesProjectionEnterprise', db.SalesProjectionEnterprise],
   ]) {
     if (!model) continue;
     try {
@@ -233,6 +236,9 @@ async function bootServer() {
   await ensureAcademyPostSync();
   await ensureMarketingCaptureSchema();
   await ensureEmeBrainSchema();
+  await ensureWhatsappAutomationSchema();
+  await ensureViabilitySchema();
+  await ensureComercialConditionsSchema();
 
   await seedInitialTypes();
 
@@ -255,7 +261,7 @@ async function bootServer() {
   supabaseKeepAliveScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
   if (process.env.ENABLE_CV_EXTRAS_SCHEDULE !== 'false') cvExtrasScheduler.start(); // ativo por padrão
-  conditionAutoGenerateScheduler.start(); // auto-geração de fichas + polling de assinaturas
+  conditionAutoGenerateScheduler.start(); // auto-geração mensal de fichas (com e sem CV)
   boletoCleanupScheduler.start();         // remove boletos expirados do Supabase
   boletoPaymentCheckScheduler.start();    // 8h: verifica pagamento/baixa de boletos no Ecobrança
   boletoSituacaoApplyScheduler.start();   // 1min: aplica situações CV agendadas (delay lote Sienge)
