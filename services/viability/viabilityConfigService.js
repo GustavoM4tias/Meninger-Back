@@ -1,11 +1,13 @@
 // services/viability/viabilityConfigService.js
 //
 // Config admin da Viabilidade de Marketing:
-//  - quais departamentos contam como "marketing" (global + exceções por empreendimento)
-//  - quantas unidades bloqueadas considerar disponíveis (por empreendimento, padrão 0)
+//  - quais departamentos contam como "marketing" (global + exceções por empresa Sienge)
+//  - quantas unidades bloqueadas considerar disponíveis (por empresa, padrão 0)
 //
-// O resolver buildMarketingResolver() é o que o motor de cálculo (Fase 3) usa para
-// decidir se uma despesa conta como marketing e quantas bloqueadas liberar.
+// A config "por empresa" é chaveada por company_id (empresa Sienge = empreendimento),
+// que é a unidade de agrupamento do relatório. O resolver buildMarketingResolver() é
+// o que o motor de cálculo usa para decidir se uma despesa conta como marketing e
+// quantas bloqueadas liberar.
 
 import db from '../../models/sequelize/index.js';
 
@@ -49,23 +51,25 @@ export async function setMarketingDepartment(name, isMarketing, updatedBy) {
     return { department_name, is_marketing: !!isMarketing };
 }
 
-/* ====================== Configuração por empreendimento ====================== */
+/* ============== Configuração por empresa Sienge (company_id) ============== */
 
 export async function listEnterpriseSettings() {
     const rows = await ViabilityEnterpriseSettings.findAll();
     return rows.map((r) => r.toJSON());
 }
 
-export async function getEnterpriseSettings(enterpriseKey) {
-    const row = await ViabilityEnterpriseSettings.findByPk(String(enterpriseKey));
+export async function getEnterpriseSettings(companyId) {
+    const id = Number(companyId);
+    if (!Number.isFinite(id)) return null;
+    const row = await ViabilityEnterpriseSettings.findByPk(id);
     return row ? row.toJSON() : null;
 }
 
-export async function setEnterpriseSettings(enterpriseKey, { blockedConsideredAvailable, marketingDeptOverrides } = {}, updatedBy) {
-    const enterprise_key = String(enterpriseKey || '').trim();
-    if (!enterprise_key) throw new Error('enterprise_key é obrigatório.');
+export async function setEnterpriseSettings(companyId, { blockedConsideredAvailable, marketingDeptOverrides } = {}, updatedBy) {
+    const company_id = Number(companyId);
+    if (!Number.isFinite(company_id)) throw new Error('company_id inválido.');
 
-    const payload = { enterprise_key, updated_by: updatedBy || null };
+    const payload = { company_id, updated_by: updatedBy || null };
     if (blockedConsideredAvailable !== undefined) {
         payload.blocked_considered_available = Math.max(0, parseInt(blockedConsideredAvailable, 10) || 0);
     }
@@ -74,15 +78,15 @@ export async function setEnterpriseSettings(enterpriseKey, { blockedConsideredAv
     }
 
     await ViabilityEnterpriseSettings.upsert(payload);
-    return getEnterpriseSettings(enterprise_key);
+    return getEnterpriseSettings(company_id);
 }
 
-/* ============================ Resolver (Fase 3) ============================ */
+/* ============================ Resolver (motor) ============================ */
 
 /**
  * Carrega config global + overrides numa passada e devolve helpers síncronos:
- *  - isMarketing(deptName, enterpriseKey): boolean
- *  - blockedConsideredAvailable(enterpriseKey): number (default 0)
+ *  - isMarketing(deptName, companyId): boolean
+ *  - blockedConsideredAvailable(companyId): number (default 0)
  *  - hasAnyMarketingConfig: se existe ao menos 1 depto global marcado como marketing
  */
 export async function buildMarketingResolver() {
@@ -99,27 +103,27 @@ export async function buildMarketingResolver() {
         if (v) anyMarketing = true;
     }
 
-    const overridesByEnt = new Map(); // enterprise_key -> Map(norm(name) -> bool)
-    const blockedByEnt = new Map();   // enterprise_key -> number
+    const overridesByCompany = new Map(); // company_id -> Map(norm(name) -> bool)
+    const blockedByCompany = new Map();   // company_id -> number
     for (const r of entRows) {
-        const key = String(r.enterprise_key);
+        const key = Number(r.company_id);
         const ov = r.marketing_dept_overrides || {};
         const m = new Map();
         for (const [k, val] of Object.entries(ov)) m.set(norm(k), !!val);
-        overridesByEnt.set(key, m);
-        blockedByEnt.set(key, Math.max(0, Number(r.blocked_considered_available || 0)));
+        overridesByCompany.set(key, m);
+        blockedByCompany.set(key, Math.max(0, Number(r.blocked_considered_available || 0)));
     }
 
-    function isMarketing(deptName, enterpriseKey) {
+    function isMarketing(deptName, companyId) {
         const key = norm(deptName);
         if (!key) return false;
-        const ov = overridesByEnt.get(String(enterpriseKey));
+        const ov = overridesByCompany.get(Number(companyId));
         if (ov && ov.has(key)) return ov.get(key);
         return globalMap.get(key) === true;
     }
 
-    function blockedConsideredAvailable(enterpriseKey) {
-        return blockedByEnt.get(String(enterpriseKey)) || 0;
+    function blockedConsideredAvailable(companyId) {
+        return blockedByCompany.get(Number(companyId)) || 0;
     }
 
     return { isMarketing, blockedConsideredAvailable, hasAnyMarketingConfig: anyMarketing };

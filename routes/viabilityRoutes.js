@@ -25,6 +25,6 @@ router.get('/admin/marketing-departments', authenticate, requireAdmin, getMarket
 router.put('/admin/marketing-departments', authenticate, requireAdmin, putMarketingDepartment);
 // Configuração por empreendimento (bloqueadas consideradas disponíveis + overrides de depto)
 router.get('/admin/enterprise-settings', authenticate, requireAdmin, getEnterpriseSettings);
-router.put('/admin/enterprise-settings/:enterpriseKey', authenticate, requireAdmin, putEnterpriseSettings);
+router.put('/admin/enterprise-settings/:companyId', authenticate, requireAdmin, putEnterpriseSettings);
 
 export default router;
