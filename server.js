@@ -39,6 +39,7 @@ import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import alertRoutes from './routes/alertRoutes.js';
 import bolaoRoutes from './routes/bolaoRoutes.js';
+import bolaoPublicRoutes from './routes/bolaoPublicRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
@@ -76,6 +77,7 @@ import { ensureComercialConditionsSchema } from './lib/ensureComercialConditions
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
 import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
+import seedBolaoPublico from './services/bolao/seedBolaoPublico.js';
 import { startAcademyDeadlineScheduler } from './scheduler/academyDeadlineScheduler.js';
 import { startAcademyRecertifyScheduler } from './scheduler/academyRecertifyScheduler.js';
 import { startAcademyOnboardingScheduler } from './scheduler/academyOnboardingScheduler.js';
@@ -104,6 +106,15 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 
+// Bolão da torcida — endpoints PÚBLICOS (menin.com.br/bolao). Montado ANTES do
+// CORS global de propósito: a página pública pode rodar em QUALQUER domínio
+// (apex menin.com.br, etc.), que não está na lista de origens do corsOptions.
+// O router traz seu próprio cors({ origin: true }), então ele responde o
+// preflight OPTIONS com o Access-Control-Allow-Origin correto. Se ficasse depois
+// do cors global, o preflight de um POST application/json seria barrado (204 sem
+// ACAO) antes de chegar aqui. Traz parser próprio e nunca exige token.
+app.use('/api/bolao/public', bolaoPublicRoutes);
+
 // CORS precisa estar no topo, ANTES de qualquer rota
 const corsOptions = {
   origin: [
@@ -113,6 +124,7 @@ const corsOptions = {
     'https://meninger.vercel.app',
     'https://office.menin.com.br',
     'https://lp.menin.com.br',
+    'https://bolao-menin.vercel.app',
     'https://academy.menin.com.br'
   ],
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // 👈 adicione PATCH
@@ -276,6 +288,9 @@ async function bootServer() {
   if (process.env.ENABLE_BOLAO_LIVE !== 'false') bolaoLiveScheduler.start(); // placar ao vivo do bolão (poll ESPN na janela do jogo)
   if (process.env.SEED_BOLAO_COPA === 'true') {
     seedBolaoCopa2026().catch(err => console.warn('⚠️  seedBolaoCopa2026 falhou:', err.message));
+  }
+  if (process.env.SEED_BOLAO_PUBLICO === 'true') {
+    seedBolaoPublico().catch(err => console.warn('⚠️  seedBolaoPublico falhou:', err.message));
   }
   await AlertEngine.boot();               // registra crons das alert_rules salvas
 
