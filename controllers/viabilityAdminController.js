@@ -49,10 +49,10 @@ export async function getEnterpriseSettings(req, res) {
 
 export async function putEnterpriseSettings(req, res) {
     try {
-        const { enterpriseKey } = req.params;
+        const { companyId } = req.params;
         const { blocked_considered_available, marketing_dept_overrides } = req.body || {};
         const out = await cfg.setEnterpriseSettings(
-            enterpriseKey,
+            companyId,
             {
                 blockedConsideredAvailable: blocked_considered_available,
                 marketingDeptOverrides: marketing_dept_overrides,

@@ -113,6 +113,31 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ── Conexão webhook ↔ WABA (subscribed_apps) ────────────────────────────────
+// Resolve o caso "a Meta verifica a URL mas não repassa as mensagens": conecta
+// a WABA ao app usando o waba_id + token já salvos. Um clique, sem Graph Explorer.
+router.get('/webhook-status', async (req, res) => {
+  try {
+    const data = await WhatsAppService.getSubscribedApps();
+    const apps = Array.isArray(data?.data) ? data.data : [];
+    res.json({ subscribed: apps.length > 0, apps });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Falha ao verificar a conexão.' });
+  }
+});
+
+router.post('/connect-webhook', async (req, res) => {
+  try {
+    const result = await WhatsAppService.subscribeWaba();
+    const check = await WhatsAppService.getSubscribedApps().catch(() => null);
+    const apps = Array.isArray(check?.data) ? check.data : [];
+    res.json({ ok: true, result, subscribed: apps.length > 0, apps });
+  } catch (err) {
+    console.error('[whatsappAutomations] connect-webhook', err?.message);
+    res.status(400).json({ error: err?.message || 'Falha ao conectar a WABA ao webhook.' });
+  }
+});
+
 // ── Templates (catálogo + criar/submeter à Meta) ────────────────────────────
 router.get('/templates', async (req, res) => {
   try {

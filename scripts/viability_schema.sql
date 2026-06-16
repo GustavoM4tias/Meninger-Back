@@ -17,10 +17,11 @@ CREATE TABLE IF NOT EXISTS viability_marketing_departments (
     updated_at      TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Fase 2 — configuração por empreendimento: bloqueadas consideradas disponíveis (default 0)
--- + exceções de departamento de marketing (JSONB { "<department_name>": true|false }).
+-- Fase 2/3 — configuração por EMPRESA Sienge (company_id): bloqueadas consideradas
+-- disponíveis (default 0) + exceções de departamento de marketing
+-- (JSONB { "<department_name>": true|false }).
 CREATE TABLE IF NOT EXISTS viability_enterprise_settings (
-    enterprise_key               VARCHAR(80) PRIMARY KEY,
+    company_id                   INTEGER PRIMARY KEY,
     blocked_considered_available INTEGER NOT NULL DEFAULT 0,
     marketing_dept_overrides     JSONB,
     updated_by                   VARCHAR(120),

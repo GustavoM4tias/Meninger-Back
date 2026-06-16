@@ -1,7 +1,8 @@
 // models/sequelize/viability/enterpriseSettings.js
 //
-// Configuração por empreendimento (chaveada pelo enterprise_key da projeção — que
-// para CCs ERP é o próprio id do centro de custo):
+// Configuração por EMPRESA Sienge (= empreendimento), chaveada por company_id
+// (enterprise_cities.raw_payload.idCompany). O relatório agrupa os CCs por empresa,
+// então a config de unidades e de departamentos vive nesse nível:
 //  - blocked_considered_available: quantas das unidades que o CV marca como
 //    BLOQUEADAS devem ser consideradas disponíveis para marketing. Padrão 0
 //    (bloqueada NÃO conta). Reservada sempre conta como disponível.
@@ -10,7 +11,7 @@
 // Ver [[project_viability]].
 export default (sequelize, DataTypes) => {
     const ViabilityEnterpriseSettings = sequelize.define('ViabilityEnterpriseSettings', {
-        enterprise_key: { type: DataTypes.STRING(80), primaryKey: true },
+        company_id: { type: DataTypes.INTEGER, primaryKey: true },
         blocked_considered_available: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
         marketing_dept_overrides: { type: DataTypes.JSONB, allowNull: true },
         updated_by: { type: DataTypes.STRING(120), allowNull: true },

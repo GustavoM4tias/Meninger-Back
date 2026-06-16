@@ -598,6 +598,37 @@ async function discoverFromToken({ accessToken, apiVersion = 'v21.0' } = {}) {
     return { user: me, businesses };
 }
 
+// ── Webhook ↔ WABA (subscribed_apps) ─────────────────────────────────────────
+// Conecta a Conta do WhatsApp (WABA) ao app no webhook. Sem isso a Meta verifica
+// a URL mas NÃO repassa as mensagens recebidas (o "SIM" do alerta nunca chega).
+// Usa o waba_id + access_token JÁ salvos (que funcionam pro envio) — então não
+// depende de pegar ID/permissão na mão no Graph Explorer.
+async function getSubscribedApps() {
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: true });
+    if (!cfg?.access_token || !cfg?.waba_id) {
+        throw new CloudApiError('Config incompleta — falta waba_id ou access_token.', { code: 'NO_CONFIG' });
+    }
+    const url = `${GRAPH_BASE}/${cfg.api_version}/${cfg.waba_id}/subscribed_apps`;
+    const { data } = await axios.get(url, {
+        headers: { Authorization: `Bearer ${cfg.access_token}` },
+        timeout: 15000,
+    });
+    return data;
+}
+
+async function subscribeWaba() {
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: true });
+    if (!cfg?.access_token || !cfg?.waba_id) {
+        throw new CloudApiError('Config incompleta — falta waba_id ou access_token.', { code: 'NO_CONFIG' });
+    }
+    const url = `${GRAPH_BASE}/${cfg.api_version}/${cfg.waba_id}/subscribed_apps`;
+    const { data } = await axios.post(url, {}, {
+        headers: { Authorization: `Bearer ${cfg.access_token}` },
+        timeout: 15000,
+    });
+    return data;
+}
+
 export default {
     sendTemplate,
     sendText,
@@ -612,4 +643,6 @@ export default {
     uploadMessageMedia,
     normalizePhone,
     CloudApiError,
+    getSubscribedApps,
+    subscribeWaba,
 };
