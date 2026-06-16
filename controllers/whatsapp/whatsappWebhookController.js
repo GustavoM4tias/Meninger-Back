@@ -41,10 +41,14 @@ export const receive = async (req, res) => {
 
         const valid = await WhatsAppWebhookService.verifySignature(raw, signature);
         if (!valid) {
-            console.warn('[whatsapp/webhook] assinatura inválida (app_secret no banco pode estar desatualizado vs Meta)');
-            // ACK 200 mesmo assim pra Meta não retentar; só logamos.
-            // Se quiser bloquear estritamente, troque pra 401.
-            return res.status(200).send('ok');
+            // Assinatura inválida quase sempre = app_secret desatualizado (NÃO ataque).
+            // DESCARTAR aqui fazia o sistema perder o "SIM" do usuário em silêncio.
+            // Num webhook INTERNO o risco é baixo: o relatório só é enviado pro telefone
+            // do próprio usuário que tem um pendente ativo, no servidor. Então logamos
+            // alto e PROCESSAMOS mesmo assim (cada inbound vira linha 'in' visível na aba
+            // Mensagens). Para reativar a verificação estrita, corrija o app_secret em
+            // /settings/whatsapp (Config) — aí as assinaturas voltam a bater.
+            console.warn('[whatsapp/webhook] ⚠️ ASSINATURA INVÁLIDA — processando mesmo assim. Atualize o app_secret em /settings/whatsapp para reativar a verificação.');
         }
 
         let payload;
