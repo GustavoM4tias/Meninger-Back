@@ -19,16 +19,18 @@ const { Bolao, BolaoMatch } = db;
 
 export const PUBLIC_SLUG = 'copa-2026-publico';
 
-// Próximos jogos (datas da arte). America/Sao_Paulo = UTC-3 em junho/2026.
-// Ordem cronológica: Escócia 19h, depois Haiti 21h30 (mesmo dia 19/06).
+// Próximos jogos do Brasil — datas REAIS confirmadas na API da ESPN (fifa.world):
+//   Brasil x Haiti   = 2026-06-20T00:30Z  → 19/06 21:30 (America/Sao_Paulo, UTC-3)
+//   Escócia x Brasil = 2026-06-24T22:00Z  → 24/06 19:00 (é dia 24, NÃO dia 19!)
+// Ordem cronológica: Haiti (19/06) primeiro, Escócia (24/06) depois.
 const MATCHES = [
-  { match_order: 1, home_team: 'Escócia', away_team: 'Brasil', home_code: 'SCO', away_code: 'BRA', home_country: 'gb-sct', away_country: 'br', kickoff_at: '2026-06-19T19:00:00-03:00' },
-  { match_order: 2, home_team: 'Brasil',  away_team: 'Haiti',  home_code: 'BRA', away_code: 'HAI', home_country: 'br',     away_country: 'ht', kickoff_at: '2026-06-19T21:30:00-03:00' },
+  { match_order: 1, home_team: 'Brasil',  away_team: 'Haiti',  home_code: 'BRA', away_code: 'HAI', home_country: 'br',     away_country: 'ht', kickoff_at: '2026-06-19T21:30:00-03:00' },
+  { match_order: 2, home_team: 'Escócia', away_team: 'Brasil', home_code: 'SCO', away_code: 'BRA', home_country: 'gb-sct', away_country: 'br', kickoff_at: '2026-06-24T19:00:00-03:00' },
 ];
 
-// Palpites travam no apito do PRIMEIRO jogo (Escócia x Brasil, 19h). A pessoa
-// preenche os dois de uma vez, então é tudo-ou-nada antes desse instante.
-const DEADLINE = '2026-06-19T19:00:00-03:00';
+// Palpites abertos até 19/06 às 12h (decisão do usuário) — fecham ANTES dos jogos.
+// A pessoa preenche os dois de uma vez, então é tudo-ou-nada antes desse instante.
+const DEADLINE = '2026-06-19T12:00:00-03:00';
 
 export async function seedBolaoPublico() {
   const [bolao] = await Bolao.findOrCreate({
@@ -38,7 +40,9 @@ export async function seedBolaoPublico() {
       name: 'Bolão da Torcida — Copa 2026',
       description: 'Palpite no placar dos próximos jogos do Brasil: Escócia x Brasil e Brasil x Haiti. 3 pontos por placar exato (cravada), 1 por acertar o resultado.',
       status: 'open',
-      prize: null,
+      // Premiação por colocação no formato "1º|2º|3º" (pipe). O front público
+      // transforma em medalhas 🥇🥈🥉. Atualizar a cada chaveamento.
+      prize: 'R$ 500|R$ 300|R$ 100',
       points_exact: 3,
       points_winner: 1,
       deadline_at: new Date(DEADLINE),

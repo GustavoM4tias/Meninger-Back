@@ -65,7 +65,7 @@ export async function getEnterpriseSettings(companyId) {
     return row ? row.toJSON() : null;
 }
 
-export async function setEnterpriseSettings(companyId, { blockedConsideredAvailable, marketingDeptOverrides } = {}, updatedBy) {
+export async function setEnterpriseSettings(companyId, { blockedConsideredAvailable, marketingDeptOverrides, statusOverride } = {}, updatedBy) {
     const company_id = Number(companyId);
     if (!Number.isFinite(company_id)) throw new Error('company_id inválido.');
 
@@ -75,6 +75,10 @@ export async function setEnterpriseSettings(companyId, { blockedConsideredAvaila
     }
     if (marketingDeptOverrides !== undefined) {
         payload.marketing_dept_overrides = marketingDeptOverrides || null;
+    }
+    if (statusOverride !== undefined) {
+        const allowed = ['concluido', 'em_andamento', 'previsao_futura'];
+        payload.status_override = allowed.includes(statusOverride) ? statusOverride : null;
     }
 
     await ViabilityEnterpriseSettings.upsert(payload);
@@ -105,6 +109,7 @@ export async function buildMarketingResolver() {
 
     const overridesByCompany = new Map(); // company_id -> Map(norm(name) -> bool)
     const blockedByCompany = new Map();   // company_id -> number
+    const statusByCompany = new Map();    // company_id -> 'concluido'|'em_andamento'|'previsao_futura'|null
     for (const r of entRows) {
         const key = Number(r.company_id);
         const ov = r.marketing_dept_overrides || {};
@@ -112,6 +117,7 @@ export async function buildMarketingResolver() {
         for (const [k, val] of Object.entries(ov)) m.set(norm(k), !!val);
         overridesByCompany.set(key, m);
         blockedByCompany.set(key, Math.max(0, Number(r.blocked_considered_available || 0)));
+        statusByCompany.set(key, r.status_override || null);
     }
 
     function isMarketing(deptName, companyId) {
@@ -126,7 +132,11 @@ export async function buildMarketingResolver() {
         return blockedByCompany.get(Number(companyId)) || 0;
     }
 
-    return { isMarketing, blockedConsideredAvailable, hasAnyMarketingConfig: anyMarketing };
+    function statusOverride(companyId) {
+        return statusByCompany.get(Number(companyId)) || null;
+    }
+
+    return { isMarketing, blockedConsideredAvailable, statusOverride, hasAnyMarketingConfig: anyMarketing };
 }
 
 export default {

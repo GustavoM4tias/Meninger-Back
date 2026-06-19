@@ -82,8 +82,10 @@ async function findExistingByCpf(bolaoId, cpf) {
 // NUNCA inclui CPF. O ranking é o mesmo do Office, modo oficial (só jogos encerrados).
 export async function getPublicOverview(req, res) {
   try {
+    // Dado vivo (placar/ranking/prazo) — nunca servir versão cacheada.
+    res.set('Cache-Control', 'no-store');
     const bolao = await findBolao(req);
-    if (!bolao) return res.json({ bolao: null, matches: [], ranking: [], closed: true });
+    if (!bolao) return res.json({ bolao: null, matches: [], ranking: [], closed: true, found: false });
 
     const matches = await BolaoMatch.findAll({
       where: { bolao_id: bolao.id },
@@ -188,6 +190,9 @@ export async function postSubmit(req, res) {
         obra: v.data.obra,
         cpf: v.data.cpf,
         avatar_initials: initialsFrom(v.data.name),
+        // Aceite LGPD — carimba o instante do consentimento (trilha de auditoria).
+        // O front exige o checkbox; aqui só registramos quando veio marcado.
+        consent_at: req.body?.consent === true ? new Date() : null,
       }, { transaction: t });
 
       const now = new Date();

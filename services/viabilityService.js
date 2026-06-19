@@ -115,7 +115,34 @@ export default class ViabilityService {
             if (!linesByKey.has(k)) linesByKey.set(k, []);
             linesByKey.get(k).push(l);
         }
-        return { defaults: defaults.map((d) => d.toJSON()), linesByKey };
+
+        // Soma de unidades e receita projetadas em TODA a projeção (todos os meses),
+        // por enterprise_key — fallback de "total de unidades" / ticket para empresas
+        // sem mapa de unidades no CV (ex.: Ingá, Anjos).
+        const fullRows = await db.sequelize.query(
+            `SELECT enterprise_key,
+                    COALESCE(SUM(units_target),0) AS units,
+                    COALESCE(SUM(units_target * avg_price_target),0) AS revenue
+               FROM sales_projection_lines
+              WHERE projection_id = :pid AND alias_id = :alias
+              GROUP BY enterprise_key`,
+            { replacements: { pid: projectionId, alias: String(aliasId) }, type: db.Sequelize.QueryTypes.SELECT }
+        );
+        const fullByKey = new Map(
+            fullRows.map((r) => [String(r.enterprise_key), { units: Number(r.units || 0), revenue: Number(r.revenue || 0) }])
+        );
+
+        // Unidades projetadas do mês selecionado em diante (futuro/atual) — p/ status do empreendimento.
+        const futureRows = await db.sequelize.query(
+            `SELECT enterprise_key, COALESCE(SUM(units_target),0) AS units
+               FROM sales_projection_lines
+              WHERE projection_id = :pid AND alias_id = :alias AND year_month >= :endYM
+              GROUP BY enterprise_key`,
+            { replacements: { pid: projectionId, alias: String(aliasId), endYM }, type: db.Sequelize.QueryTypes.SELECT }
+        );
+        const futureByKey = new Map(futureRows.map((r) => [String(r.enterprise_key), Number(r.units || 0)]));
+
+        return { defaults: defaults.map((d) => d.toJSON()), linesByKey, fullByKey, futureByKey };
     }
 
     /* erp_id (CC) -> { companyId, companyName } via enterprise_cities (idCompany do Sienge). */
@@ -268,8 +295,19 @@ export default class ViabilityService {
             }
         }
 
-        const avgTicket = unitsTargetTotal > 0
-            ? revenueTarget / unitsTargetTotal
+        // total de unidades/receita projetadas em TODA a projeção (fallback p/ empresas sem CV)
+        let projectionFullUnits = 0;
+        let projectionFullRevenue = 0;
+        let projectedUnitsFuture = 0;
+        for (const r of ccRows) {
+            const f = company.fullByKey?.get(String(r.enterprise_key));
+            if (f) { projectionFullUnits += num(f.units); projectionFullRevenue += num(f.revenue); }
+            projectedUnitsFuture += num(company.futureByKey?.get(String(r.enterprise_key)));
+        }
+
+        // ticket médio: ponderado pelo período; senão pela projeção inteira; senão default
+        const avgTicket = unitsTargetTotal > 0 ? (revenueTarget / unitsTargetTotal)
+            : projectionFullUnits > 0 ? (projectionFullRevenue / projectionFullUnits)
             : defaultPriceFallback;
 
         // ----- Unidades do CV (uma vez por empresa) + config de bloqueadas -----
@@ -284,11 +322,12 @@ export default class ViabilityService {
             resolver.blockedConsideredAvailable(company.companyId),
             units.blockedUnits
         );
-        // Reservada conta como disponível; bloqueada só a parcela liberada.
-        const availableInventory = units.availableUnits + units.reservedUnits + blockedConsidered;
 
         // ----- Base de orçamento (vida útil) -----
-        const totalUnits = projectionTotalUnits > 0 ? projectionTotalUnits : units.totalUnits;
+        // total de unidades: total manual da projeção > snapshot do CV > soma da projeção
+        const totalUnits = projectionTotalUnits > 0 ? projectionTotalUnits
+            : units.totalUnits > 0 ? units.totalUnits
+                : projectionFullUnits;
         const budgetTotal = totalUnits * avgTicket * (pct / 100) + custoLoja;
         const plannedCostPerUnit = totalUnits > 0 ? budgetTotal / totalUnits : 0;
 
@@ -299,6 +338,15 @@ export default class ViabilityService {
         // ----- Vendas realizadas (vida toda até o mês) -----
         const { byMonth: soldByMonth, total: soldUnitsRealYtd } =
             await this.loadSalesLifetimeByMonth({ erpIds, endDate });
+
+        // ----- Estoque disponível p/ marketing -----
+        // O CV manda quando há estoque disponível DE VERDADE (disp + reserv + bloq liberadas).
+        // Se o CV está zerado (tudo vendido) OU sem mapa de unidades, cai para a projeção
+        // (planejado − vendido) — que é o que o usuário enxerga como "previsão".
+        // Reservada sempre conta como disponível; bloqueada só a parcela liberada.
+        const cvAvailable = units.availableUnits + units.reservedUnits + blockedConsidered;
+        const projectionRemaining = Math.max(0, projectionFullUnits - soldUnitsRealYtd);
+        const availableInventory = cvAvailable > 0 ? cvAvailable : projectionRemaining;
 
         // ----- Derivados -----
         const saldo = budgetTotal - spentTotal;                 // pode ser negativo (estourou)
@@ -354,6 +402,16 @@ export default class ViabilityService {
             };
         });
 
+        // ----- Status / categoria do empreendimento -----
+        // Concluído: nada a comercializar (sem disponível e sem projeção futura/atual).
+        // Senão: Em andamento (já gastou) ou Previsão Futura (ainda sem gasto). Admin pode forçar.
+        const hasActivity = availableInventory > 0 || projectedUnitsFuture > 0;
+        const autoStatus = !hasActivity ? 'concluido'
+            : spentTotal > 0 ? 'em_andamento'
+                : 'previsao_futura';
+        const statusOverride = resolver.statusOverride(company.companyId);
+        const status = statusOverride || autoStatus;
+
         const representativeErp = erpIds.length ? erpIds.slice().sort()[0] : null;
 
         return {
@@ -386,7 +444,8 @@ export default class ViabilityService {
                 avgTicketGlobal: avgTicket,
                 marketingPct: pct,
                 custoLoja,
-                unitsTargetTotal: totalUnits,         // "meta" = total de unidades (vida útil)
+                unitsTargetTotal: totalUnits,          // "meta" = total de unidades (vida útil)
+                projectedUnitsMonth: unitsTargetMonth, // unidades projetadas no mês selecionado (p/ filtro de exibição)
                 revenueTargetTotal: totalUnits * avgTicket,
                 budgetTotal,
                 budgetUpToMonth: budgetTotal,         // compat: vida útil = total
@@ -415,6 +474,12 @@ export default class ViabilityService {
                 diffTotal: spentTotal - budgetTotal,
                 diffPerUnit: currentRealCostPerUnit - plannedCostPerUnit,
 
+                // status / categoria do empreendimento
+                status,
+                autoStatus,
+                statusOverride,
+                projectedUnitsFuture,
+
                 monthContext,
             },
             months,
@@ -429,7 +494,7 @@ export default class ViabilityService {
         const range = { startYM, endYM, ymList, endDate };
 
         const projection = await this.getActiveProjection();
-        const { defaults, linesByKey } = await this.loadProjectionAggregates({
+        const { defaults, linesByKey, fullByKey, futureByKey } = await this.loadProjectionAggregates({
             projectionId: projection.id, aliasId, startYM, endYM,
         });
 
@@ -454,6 +519,8 @@ export default class ViabilityService {
                     companyName: info?.companyName || d.enterprise_name_cache || (d.erp_id ? `Empresa ${companyId ?? d.erp_id}` : d.enterprise_key),
                     ccRows: [],
                     linesByKey,
+                    fullByKey,
+                    futureByKey,
                 });
             }
             const g = groups.get(groupKey);
@@ -465,8 +532,8 @@ export default class ViabilityService {
         for (const company of groups.values()) {
             const viability = await this.computeCompanyViability({ company, projection, range, resolver });
             const h = viability.header;
-            // só entra se tiver base de orçamento OU gasto de marketing
-            if (num(h.budgetTotal) <= 0 && num(h.spentTotal) <= 0) continue;
+            // mostra só se há projeção no mês selecionado OU gasto de marketing em algum momento
+            if (num(h.projectedUnitsMonth) <= 0 && num(h.spentTotal) <= 0) continue;
 
             results.push({
                 companyId: company.companyId,
@@ -475,6 +542,7 @@ export default class ViabilityService {
                 enterpriseName: h.enterpriseName,
                 costCenterIds: h.costCenterIds,
                 header: h,
+                months: viability.months,
             });
         }
 
@@ -500,7 +568,7 @@ export default class ViabilityService {
         const range = { startYM, endYM, ymList, endDate };
 
         const projection = await this.getActiveProjection();
-        const { defaults, linesByKey } = await this.loadProjectionAggregates({
+        const { defaults, linesByKey, fullByKey, futureByKey } = await this.loadProjectionAggregates({
             projectionId: projection.id, aliasId, startYM, endYM,
         });
 
@@ -522,6 +590,8 @@ export default class ViabilityService {
             companyName: target?.companyName || (ccRows[0]?.enterprise_name_cache) || `Empresa ${companyId ?? erpId}`,
             ccRows: ccRows.length ? ccRows : defaults.filter((d) => String(d.erp_id) === String(erpId)),
             linesByKey,
+            fullByKey,
+            futureByKey,
         };
 
         return this.computeCompanyViability({ company, projection, range, resolver });

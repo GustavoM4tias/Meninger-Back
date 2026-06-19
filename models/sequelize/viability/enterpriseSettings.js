@@ -14,6 +14,8 @@ export default (sequelize, DataTypes) => {
         company_id: { type: DataTypes.INTEGER, primaryKey: true },
         blocked_considered_available: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
         marketing_dept_overrides: { type: DataTypes.JSONB, allowNull: true },
+        // Categoria manual: 'concluido' | 'em_andamento' | 'previsao_futura' | null (automático).
+        status_override: { type: DataTypes.STRING(20), allowNull: true },
         updated_by: { type: DataTypes.STRING(120), allowNull: true },
     }, {
         tableName: 'viability_enterprise_settings',

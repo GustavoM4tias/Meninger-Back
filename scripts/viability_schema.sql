@@ -20,11 +20,27 @@ CREATE TABLE IF NOT EXISTS viability_marketing_departments (
 -- Fase 2/3 — configuração por EMPRESA Sienge (company_id): bloqueadas consideradas
 -- disponíveis (default 0) + exceções de departamento de marketing
 -- (JSONB { "<department_name>": true|false }).
+-- Migração idempotente: se a tabela existir com a PK antiga (enterprise_key), recria limpa.
+DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'viability_enterprise_settings' AND column_name = 'enterprise_key')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'viability_enterprise_settings' AND column_name = 'company_id')
+  THEN
+    DROP TABLE viability_enterprise_settings;
+  END IF;
+END
+$do$;
+
 CREATE TABLE IF NOT EXISTS viability_enterprise_settings (
     company_id                   INTEGER PRIMARY KEY,
     blocked_considered_available INTEGER NOT NULL DEFAULT 0,
     marketing_dept_overrides     JSONB,
+    status_override              VARCHAR(20),
     updated_by                   VARCHAR(120),
     created_at                   TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at                   TIMESTAMP NOT NULL DEFAULT NOW()
 );
+-- categoria manual do empreendimento (null = automático)
+ALTER TABLE viability_enterprise_settings ADD COLUMN IF NOT EXISTS status_override VARCHAR(20);
