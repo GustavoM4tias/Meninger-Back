@@ -299,6 +299,11 @@ class ConditionAutoGenerateScheduler {
         this.generateTask?.stop();
         console.log('⛔ ConditionAutoGenerateScheduler parado');
     }
+
+    // Roda a geração uma única vez (catch-up manual), sem agendar cron.
+    async runOnce() {
+        return autoGenerateConditions();
+    }
 }
 
 export default new ConditionAutoGenerateScheduler();

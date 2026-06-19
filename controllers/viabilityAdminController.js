@@ -50,12 +50,13 @@ export async function getEnterpriseSettings(req, res) {
 export async function putEnterpriseSettings(req, res) {
     try {
         const { companyId } = req.params;
-        const { blocked_considered_available, marketing_dept_overrides } = req.body || {};
+        const { blocked_considered_available, marketing_dept_overrides, status_override } = req.body || {};
         const out = await cfg.setEnterpriseSettings(
             companyId,
             {
                 blockedConsideredAvailable: blocked_considered_available,
                 marketingDeptOverrides: marketing_dept_overrides,
+                statusOverride: status_override,
             },
             actor(req)
         );

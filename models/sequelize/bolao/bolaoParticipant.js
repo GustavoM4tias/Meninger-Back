@@ -21,6 +21,7 @@ export default (sequelize, DataTypes) => {
     // Autocadastro público — não usados pelo bolão dos gestores (ficam null).
     cpf: { type: DataTypes.STRING(11), allowNull: true },          // só dígitos; anti-replay
     obra: { type: DataTypes.STRING(120), allowNull: true },        // obra informada (texto livre)
+    consent_at: { type: DataTypes.DATE, allowNull: true },         // carimbo do aceite LGPD (trilha de auditoria)
   }, {
     tableName: 'bolao_participant',
     underscored: true,

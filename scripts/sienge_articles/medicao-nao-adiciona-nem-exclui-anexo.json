@@ -1,0 +1,11 @@
+{
+  "code": "SGM-ANEXO",
+  "slug": "medicao-nao-adiciona-nem-exclui-anexo",
+  "title": "Medição não deixa adicionar nem excluir anexo",
+  "aliases": [
+    "anexo na medição",
+    "medição não adiciona anexo",
+    "não consigo excluir anexo da medição"
+  ],
+  "body": "# Medição não deixa adicionar nem excluir anexo\n\n> **Sienge · Contratos e Medições** — procedimento operacional\n> **Quando usar:** ao cadastrar uma medição e perceber que não consegue editar, excluir nem adicionar anexo.\n\n> ⚠️ **Gatilho:** a medição foi cadastrada e está na **1ª alçada de autorização** (ainda **desautorizada** / inconsistente). Ao clicar em `ADICIONAR` na seção de anexos, **não aparece nada**. Mesmo com permissão para incluir anexos, a tela não responde.\n\n## Passo a passo\n\n1. Abra a medição em **Contratos e Medições** e confira o cabeçalho `INFORMAÇÕES PRINCIPAIS` / `INFORMAÇÕES DA MEDIÇÃO`. Repare no aviso amarelo \"Esta medição está desautorizada. Esta medição não possui nenhum anexo.\" e no campo `Status` (ex.: `Medição`).\n\n![Medição desautorizada — aviso amarelo e dados do contrato/obra/medição](https://geeeswzhtzmiparmgpjp.supabase.co/storage/v1/object/public/Office%20Bucket/academy/sienge/medicao-nao-adiciona-nem-exclui-anexo/p01.png)\n\n2. Na seção `ANEXOS`, ao tentar `ESCOLHER ARQUIVO` e clicar em `ADICIONAR`, nada acontece. Importante: a **desautorização não impede o uso da medição** — você ainda consegue editar, salvar e desautorizar; o ajuste apenas fica desautorizado novamente, sendo necessário aprovar (autorizar) de novo.\n\n![Seção ANEXOS com Escolher arquivo e botão Adicionar que não responde](https://geeeswzhtzmiparmgpjp.supabase.co/storage/v1/object/public/Office%20Bucket/academy/sienge/medicao-nao-adiciona-nem-exclui-anexo/p02.png)\n\n3. O comportamento costuma ser **cache do navegador**, e não falta de permissão. Para confirmar, teste em uma **aba anônima**: se o botão `ADICIONAR` voltar a funcionar lá, está confirmado que é cache.\n\n4. De volta à **guia normal**, faça a **limpeza do cache do navegador**. Após limpar, o anexo volta a ser adicionado normalmente.\n\n## Pronto\n\nA medição volta a aceitar anexos (e edição) na guia normal após a limpeza do cache.\n\n> **Dica:** antes de abrir chamado por \"falta de permissão\", teste na aba anônima — se funcionar lá, é cache do navegador e a limpeza resolve."
+}
