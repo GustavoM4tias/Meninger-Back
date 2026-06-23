@@ -26,6 +26,20 @@ const FALLBACK = {
     category: 'UTILITY',
     isSystem: true,
   },
+  alert_share: {
+    key: 'alert_share',
+    name: 'Compartilhamento de alerta',
+    enabled: true,
+    triggerType: 'manual',
+    templateName: 'alert_share_v1',
+    templateLanguage: 'pt_BR',
+    variableMapping: { '1': 'toUser', '2': 'fromUser', '3': 'ruleName', '4': 'recurrence' },
+    buttons: [{ text: 'SIM', action: 'yes' }, { text: 'NÃO', action: 'no' }],
+    replyActions: { yes: { type: 'accept_share' }, no: { type: 'decline_share' } },
+    recipients: { mode: 'target' },
+    category: 'UTILITY',
+    isSystem: true,
+  },
 };
 
 function rowToObj(r) {

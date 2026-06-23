@@ -6,6 +6,7 @@ import {
     resolveUserTokens,
     audiencesWhereLiteral,
 } from './audience.js';
+import { departmentWhereForUser } from './departmentVisibility.js';
 import certificateService from './certificateService.js';
 import questionBankService from './questionBankService.js';
 import prerequisiteService from './prerequisiteService.js';
@@ -282,12 +283,14 @@ function isAllowedByAssignmentsRows(assignmentsForSlug, userCtx) {
 const trackService = {
   async listTracks({ userId = null } = {}) {
     const tokens = await resolveUserTokens(userId);
+    const deptWhere = await departmentWhereForUser(userId);
 
     const rows = await db.AcademyTrack.findAll({
       where: {
         [Op.and]: [
           { status: 'PUBLISHED' },
           audiencesWhereLiteral(tokens),
+          deptWhere,
         ],
       },
       attributes: ['slug', 'title', 'description', 'audience', 'audiences', 'updatedAt'],
@@ -361,6 +364,7 @@ const trackService = {
     if (!trackSlug) return null;
 
     const tokens = await resolveUserTokens(userId);
+    const deptWhere = await departmentWhereForUser(userId);
     const userCtx = await getUserContext(userId);
 
     const assigns = await db.AcademyTrackAssignment.findAll({
@@ -376,6 +380,7 @@ const trackService = {
         [Op.and]: [
           { slug: trackSlug, status: 'PUBLISHED' },
           audiencesWhereLiteral(tokens),
+          deptWhere,
         ],
       },
       attributes: ['id', 'slug', 'title', 'description', 'audience', 'audiences', 'updatedAt'],
@@ -427,6 +432,7 @@ const trackService = {
           [Op.and]: [
             { slug: { [Op.in]: articleSlugsToCheck } },
             audiencesWhereLiteral(tokens),
+            deptWhere,
           ],
         },
         attributes: ['slug'],

@@ -18,10 +18,12 @@ import ValidationHistoryDefine from './validationHistory.js';
 import SalesContractDefine from './sienge/salesContract.js';
 import SiengeBillDefine from './sienge/bill.js';
 import SiengeBillInstallmentDefine from './sienge/billInstallment.js';
+import ExpensePersonalizationDefine from './sienge/expensePersonalization.js';
 
 import ExpenseDefine from './expense.js';
 import CostCenterOverrideDefine from './costCenterOverride.js';
 import ExpenseDepartmentVisibilityDefine from './expenseDepartmentVisibility.js';
+import DepartmentVisibilityOverrideDefine from './departmentVisibilityOverride.js';
 
 // perto dos outros imports
 import LeadDefine from './cv/lead.js';
@@ -62,8 +64,6 @@ import trSatelliteEnterpriseDefine from './trSatelliteEnterprise.js';
 import PaymentLaunchDefine from './sienge/paymentLaunch.js';
 import LaunchTypeConfigDefine from './sienge/launchTypeConfig.js';
 import SiengeBackupLogDefine from './sienge/backupLog.js';
-import BillsSyncLogDefine from './sienge/billsSyncLog.js';
-import BillsAutoSyncSubscriptionDefine from './sienge/billsAutoSyncSubscription.js';
 
 import AcademyArticleDefine from './academy/article.js';
 import AcademyTopicDefine from './academy/topic.js';
@@ -155,6 +155,7 @@ import WhatsappAutomationRunDefine from './whatsapp/whatsappAutomationRun.js';
 import AlertRuleDefine         from './alerts/alertRule.js';
 import AlertTriggerLogDefine   from './alerts/alertTriggerLog.js';
 import AlertPendingReplyDefine from './alerts/alertPendingReply.js';
+import AlertShareDefine        from './alerts/alertShare.js';
 
 // Marketing — Captação de Leads
 import InboundLeadDefine      from './marketing/inboundLead.js';
@@ -171,6 +172,25 @@ import BolaoDefine            from './bolao/bolao.js';
 import BolaoMatchDefine       from './bolao/bolaoMatch.js';
 import BolaoParticipantDefine from './bolao/bolaoParticipant.js';
 import BolaoPredictionDefine  from './bolao/bolaoPrediction.js';
+
+// Mural de Avisos / Comunicados
+import ComunicadoDefine           from './comunicados/comunicado.js';
+import ComunicadoAssignmentDefine from './comunicados/comunicadoAssignment.js';
+import ComunicadoReceiptDefine    from './comunicados/comunicadoReceipt.js';
+
+// Checklist (gestão de lançamentos e demandas)
+import ChecklistTemplateDefine        from './checklist/checklistTemplate.js';
+import ChecklistTemplateSectionDefine from './checklist/checklistTemplateSection.js';
+import ChecklistTemplateItemDefine    from './checklist/checklistTemplateItem.js';
+import ChecklistDefine                from './checklist/checklist.js';
+import ChecklistSectionDefine         from './checklist/checklistSection.js';
+import ChecklistStatusDefine          from './checklist/checklistStatus.js';
+import ChecklistTaskDefine            from './checklist/checklistTask.js';
+import ChecklistTaskAttachmentDefine  from './checklist/checklistTaskAttachment.js';
+import ChecklistTaskCommentDefine     from './checklist/checklistTaskComment.js';
+import ChecklistActivityDefine        from './checklist/checklistActivity.js';
+import ChecklistSettingsDefine        from './checklist/checklistSettings.js';
+import ChecklistReminderRuleDefine    from './checklist/checklistReminderRule.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -196,10 +216,12 @@ db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
 db.SalesContract = SalesContractDefine(sequelize, DataTypes);
 db.SiengeBill = SiengeBillDefine(sequelize, DataTypes);
 db.SiengeBillInstallment = SiengeBillInstallmentDefine(sequelize, DataTypes);
+db.ExpensePersonalization = ExpensePersonalizationDefine(sequelize, DataTypes);
 
 db.Expense = ExpenseDefine(sequelize, DataTypes);
 db.CostCenterOverride = CostCenterOverrideDefine(sequelize, DataTypes);
 db.ExpenseDepartmentVisibility = ExpenseDepartmentVisibilityDefine(sequelize, DataTypes);
+db.DepartmentVisibilityOverride = DepartmentVisibilityOverrideDefine(sequelize, DataTypes);
 
 // ... após definir outros modelos:
 db.Lead = LeadDefine(sequelize, DataTypes);
@@ -241,8 +263,6 @@ db.TrSatelliteEnterprise = trSatelliteEnterpriseDefine(sequelize, DataTypes);
 db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);
 db.LaunchTypeConfig = LaunchTypeConfigDefine(sequelize, DataTypes);
 db.SiengeBackupLog = SiengeBackupLogDefine(sequelize, DataTypes);
-db.BillsSyncLog                = BillsSyncLogDefine(sequelize, DataTypes);
-db.BillsAutoSyncSubscription   = BillsAutoSyncSubscriptionDefine(sequelize, DataTypes);
 
 db.AcademyArticle = AcademyArticleDefine(sequelize, DataTypes);
 db.AcademyTopic = AcademyTopicDefine(sequelize, DataTypes);
@@ -334,6 +354,7 @@ db.WhatsappAutomationRun = WhatsappAutomationRunDefine(sequelize, DataTypes);
 db.AlertRule         = AlertRuleDefine(sequelize, DataTypes);
 db.AlertTriggerLog   = AlertTriggerLogDefine(sequelize, DataTypes);
 db.AlertPendingReply = AlertPendingReplyDefine(sequelize, DataTypes);
+db.AlertShare        = AlertShareDefine(sequelize, DataTypes);
 
 // Marketing — Captação de Leads
 db.InboundLead      = InboundLeadDefine(sequelize, DataTypes);
@@ -350,6 +371,25 @@ db.Bolao            = BolaoDefine(sequelize, DataTypes);
 db.BolaoMatch       = BolaoMatchDefine(sequelize, DataTypes);
 db.BolaoParticipant = BolaoParticipantDefine(sequelize, DataTypes);
 db.BolaoPrediction  = BolaoPredictionDefine(sequelize, DataTypes);
+
+// Mural de Avisos / Comunicados
+db.Comunicado           = ComunicadoDefine(sequelize, DataTypes);
+db.ComunicadoAssignment = ComunicadoAssignmentDefine(sequelize, DataTypes);
+db.ComunicadoReceipt    = ComunicadoReceiptDefine(sequelize, DataTypes);
+
+// Checklist (gestão de lançamentos e demandas)
+db.ChecklistTemplate        = ChecklistTemplateDefine(sequelize, DataTypes);
+db.ChecklistTemplateSection = ChecklistTemplateSectionDefine(sequelize, DataTypes);
+db.ChecklistTemplateItem    = ChecklistTemplateItemDefine(sequelize, DataTypes);
+db.Checklist                = ChecklistDefine(sequelize, DataTypes);
+db.ChecklistSection         = ChecklistSectionDefine(sequelize, DataTypes);
+db.ChecklistStatus          = ChecklistStatusDefine(sequelize, DataTypes);
+db.ChecklistTask            = ChecklistTaskDefine(sequelize, DataTypes);
+db.ChecklistTaskAttachment  = ChecklistTaskAttachmentDefine(sequelize, DataTypes);
+db.ChecklistTaskComment     = ChecklistTaskCommentDefine(sequelize, DataTypes);
+db.ChecklistActivity        = ChecklistActivityDefine(sequelize, DataTypes);
+db.ChecklistSettings        = ChecklistSettingsDefine(sequelize, DataTypes);
+db.ChecklistReminderRule    = ChecklistReminderRuleDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

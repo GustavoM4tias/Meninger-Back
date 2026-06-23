@@ -40,8 +40,11 @@ import marketingRoutes from './routes/marketingRoutes.js';
 import alertRoutes from './routes/alertRoutes.js';
 import bolaoRoutes from './routes/bolaoRoutes.js';
 import bolaoPublicRoutes from './routes/bolaoPublicRoutes.js';
+import comunicadoRoutes from './routes/comunicadoRoutes.js';
+import checklistRoutes from './routes/checklistRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
+import seedChecklist from './services/checklist/seedChecklist.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
@@ -61,19 +64,22 @@ import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import boletoPaymentCheckScheduler from './scheduler/boletoPaymentCheckScheduler.js';
 import boletoSituacaoApplyScheduler from './scheduler/boletoSituacaoApplyScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
-import billsAutoSyncScheduler from './scheduler/billsAutoSyncScheduler.js';
 import marketingDispatchScheduler from './scheduler/marketingDispatchScheduler.js';
 import marketingSyncScheduler     from './scheduler/marketingSyncScheduler.js';
-import { ensureBillsAutoSyncSchema } from './lib/ensureBillsAutoSyncSchema.js';
+import { ensureFinanceOverridesSchema } from './lib/ensureFinanceOverridesSchema.js';
 import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
+import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureViabilitySchema } from './lib/ensureViabilitySchema.js';
+import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
+import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
+import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
 import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
@@ -179,6 +185,8 @@ app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/bolao', bolaoRoutes);
+app.use('/api/comunicados', comunicadoRoutes);
+app.use('/api/checklists', checklistRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -229,6 +237,8 @@ async function bootServer() {
     ['BolaoPrediction', db.BolaoPrediction],
     // Viabilidade de Marketing — campo Custo Loja novo em sales_projection_enterprises
     ['SalesProjectionEnterprise', db.SalesProjectionEnterprise],
+    // Personalização de custos (categoria + observação) — Títulos/Custos agora ao vivo do backup
+    ['ExpensePersonalization', db.ExpensePersonalization],
   ]) {
     if (!model) continue;
     try {
@@ -242,22 +252,28 @@ async function bootServer() {
   // Patch defensivo: ALTER TABLE ADD COLUMN IF NOT EXISTS para campos novos.
   // Cobre casos onde sync({ alter: true }) falha silenciosamente (ENUM, etc.).
   // Idempotente — pode rodar a cada boot sem efeito colateral.
-  await ensureBillsAutoSyncSchema();
+  await ensureFinanceOverridesSchema();
   await ensureSiengeBackupLogSchema();
   await ensureBoletoSchema();
   await ensureAcademyPostSync();
   await ensureMarketingCaptureSchema();
   await ensureEmeBrainSchema();
   await ensureWhatsappAutomationSchema();
+  await ensureAlertSharesSchema();
   await ensureViabilitySchema();
+  await ensureDepartmentVisibilitySchema();
   await ensureComercialConditionsSchema();
 
   await seedInitialTypes();
+  await ensureChecklistSchema(); // adiciona colunas novas (ex.: reminder_mode) em tabelas já existentes
+  seedChecklist().catch(err => console.warn('⚠️  seedChecklist falhou:', err?.message || err)); // background: não bloqueia o boot
 
   // Provisiona template WhatsApp do boleto na Meta se faltar — assim em caso
   // de perda/recriação da conta Meta o sistema se auto-recupera. Idempotente.
   ensureBoletoWhatsappTemplate().catch(err =>
       console.warn('⚠️  ensureBoletoWhatsappTemplate falhou:', err.message));
+  ensureChecklistWhatsappTemplates().catch(err =>
+      console.warn('⚠️  ensureChecklistWhatsappTemplates falhou:', err.message));
 
   if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') contractValidatorScheduler.start();
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractSiengeScheduler.start();
@@ -278,7 +294,6 @@ async function bootServer() {
   boletoPaymentCheckScheduler.start();    // 8h: verifica pagamento/baixa de boletos no Ecobrança
   boletoSituacaoApplyScheduler.start();   // 1min: aplica situações CV agendadas (delay lote Sienge)
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
-  if (process.env.ENABLE_BILLS_AUTO_SYNC === 'true') billsAutoSyncScheduler.start();
   eventReminderScheduler.start();         // lembretes de evento (D-1) via NotificationService
   startAcademyDeadlineScheduler();        // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
   startAcademyRecertifyScheduler();       // recertificação periódica (expira certificado + reassign mandatory)

@@ -765,6 +765,13 @@ export async function stepCreateTitulo(launchId, userId = null) {
     }
 }
 
+// Erros de registro de boleto que NÃO se resolvem com retry (ex.: linha digitável
+// inválida -> Sienge 400). Nesses casos a esteira encerra a tentativa automática e
+// instrui o registro manual no Sienge, em vez de retentar a cada ciclo do scheduler.
+export function isPermanentBoletoError(message) {
+    return /\bSienge 400\b|linha digit[aá]vel.*inv[aá]lid/i.test(String(message || ''));
+}
+
 // ── Etapa 8: Registrar boleto na parcela do título ────────────────────────────
 export async function stepRegisterBoleto(launchId) {
     const launch = await Model().findByPk(launchId);
@@ -795,14 +802,25 @@ export async function stepRegisterBoleto(launchId) {
     } catch (err) {
         // Não bloqueia o fluxo — salva o erro no banco para visibilidade no frontend
         console.error(`❌ [Pipeline] #${launchId}: erro ao registrar boleto: ${err.message}`);
+        // Linha digitável inválida (Sienge 400) é erro permanente: retentar não resolve.
+        // Encerra a tentativa automática e instrui o registro manual no Sienge.
+        const permanent = isPermanentBoletoError(err.message);
+        if (permanent) {
+            console.warn(`⚠️  [Pipeline] #${launchId}: linha digitável inválida - registre o boleto manualmente no Sienge. Retry automático encerrado.`);
+        }
         try {
             const l = await Model().findByPk(launchId, { attributes: ['id', 'pipelineStage'] });
             // Só salva o erro se o stage ainda é titulo_created (não sobrescreve se já avançou)
             if (l?.pipelineStage === 'titulo_created') {
-                await l.update({ siengeTituloError: `Erro ao registrar boleto: ${err.message}` });
+                const msg = permanent
+                    ? `${err.message} Registre o boleto manualmente no Sienge.`
+                    : `Erro ao registrar boleto: ${err.message}`;
+                await l.update({ siengeTituloError: msg });
             }
         } catch (_) { /* silencioso */ }
-        return { success: false, error: err.message };
+        return permanent
+            ? { success: false, reason: 'manual_required', error: err.message }
+            : { success: false, error: err.message };
     }
 }
 

@@ -16,11 +16,10 @@ const ctrl = new expenseController();
 
 router.use(authenticate);
 
-// ── CRUD básico (já existia) ─────────────────────────────────────────────
-router.post('', authenticate, ctrl.add);
+// ── Custos (leitura ao vivo do backup) + personalização (categoria/observação) ──
 router.get('', ctrl.listMonth);
-router.put('/:id', ctrl.update);
-router.delete('/:id', ctrl.remove);
+router.put('/:id', ctrl.update);     // edita categoria/observação (id = "<nutitulo>-<nuparcela>")
+router.delete('/:id', ctrl.remove);  // limpa personalização da parcela
 router.get('/links', ctrl.listLinks);
 
 // ── Leitura do mapa de overrides (qualquer usuário autenticado) ──────────

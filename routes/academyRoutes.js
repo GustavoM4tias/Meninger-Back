@@ -28,6 +28,7 @@ import onboardingController from '../controllers/academy/onboardingController.js
 import { externalRequestCode, externalVerifyCode } from '../controllers/academy/authExternalController.js';
 import { generateArticle } from '../services/academy/kbGenerateService.js';
 import { resolveUserTokens, audiencesWhereLiteral } from '../services/academy/audience.js';
+import { listDepartments } from '../services/academy/departmentVisibility.js';
 import db from '../models/sequelize/index.js';
 
 function resolveAcademyUserId(req) {
@@ -232,6 +233,17 @@ router.post('/tracks/:slug/quiz', authenticate, trackController.submitQuiz);
 router.get('/kb/articles/my', authenticate, requireInternal, kbAdminController.listMine);
 // Picker "Quem pode editar" — usuários internos. Antes da rota :id pra não colidir.
 router.get('/kb/editor-candidates', authenticate, requireInternal, kbAdminController.editorCandidates);
+
+// Departamentos (id + nome) para o seletor de visibilidade no editor de
+// artigos/trilhas (interno). Substitui a antiga UI de audiência.
+router.get('/departments', authenticate, requireInternal, async (req, res) => {
+    try {
+        res.json({ results: await listDepartments() });
+    } catch (err) {
+        console.error('[academy.departments] error:', err);
+        res.status(500).json({ error: 'Erro ao carregar departamentos.' });
+    }
+});
 router.get('/kb/articles/:id(\\d+)', authenticate, requireInternal, kbAdminController.getById);
 router.post('/kb/articles', authenticate, requireInternal, kbAdminController.create);
 router.patch('/kb/articles/:id(\\d+)', authenticate, requireInternal, kbAdminController.update);

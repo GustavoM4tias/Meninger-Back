@@ -4,7 +4,7 @@
 
 import cron from 'node-cron';
 import db from '../models/sequelize/index.js';
-import { pollContractStatus, pollMeasurementStatus, pollTituloStatus, stepRegisterBoleto } from '../services/sienge/PaymentFlowPipelineService.js';
+import { pollContractStatus, pollMeasurementStatus, pollTituloStatus, stepRegisterBoleto, isPermanentBoletoError } from '../services/sienge/PaymentFlowPipelineService.js';
 
 const CRON_EXP = process.env.CONTRACT_APPROVAL_CRON || '*/20 * * * *';
 
@@ -80,9 +80,13 @@ async function checkContractApprovals() {
         attributes: ['id', 'siengeTituloNumber', 'boletoBarcode', 'siengeTituloError'],
     });
 
-    if (pendingBoleto.length) {
-        console.log(`🔁 [ContractApproval] ${pendingBoleto.length} título(s) com boleto pendente de registro — retentando...`);
-        for (const launch of pendingBoleto) {
+    // Linha digitável inválida (Sienge 400) não se resolve com retry: pula esses
+    // títulos em silêncio (aguardam registro manual no Sienge, sinalizado no card) e
+    // só retenta os que falharam por motivo transitório.
+    const retriableBoleto = pendingBoleto.filter(l => !isPermanentBoletoError(l.siengeTituloError));
+    if (retriableBoleto.length) {
+        console.log(`🔁 [ContractApproval] ${retriableBoleto.length} título(s) com boleto pendente de registro — retentando...`);
+        for (const launch of retriableBoleto) {
             try {
                 const result = await stepRegisterBoleto(launch.id);
                 if (result.success) {

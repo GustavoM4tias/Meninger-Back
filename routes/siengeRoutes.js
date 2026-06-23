@@ -29,13 +29,6 @@ import {
     cancelBackup,
 } from '../controllers/sienge/backupController.js';
 import {
-    listAutoSyncStatus,
-    runAutoSyncNow,
-    listSyncLog,
-    setRecurring,
-    purgeEnterprise,
-} from '../controllers/sienge/billsAutoSyncController.js';
-import {
     getFilters as inadimplenciaFilters,
     getDashboard as inadimplenciaDashboard,
     getDetail as inadimplenciaDetail,
@@ -66,19 +59,8 @@ router.post('/contracts/sync/full', bulk.fullSync.bind(bulk));
 router.post('/contracts/sync/delta', bulk.deltaSync.bind(bulk));
 router.get('/contracts/sync/status', bulk.syncStatus.bind(bulk));
 
-router.post('/bills/sync', authenticate, ctrl.sync);
+// Títulos (contas a pagar) — leitura AO VIVO do backup do Sienge
 router.get('/bills', authenticate, ctrl.list);
-
-// Sync completo de empreendimento (fire-and-forget + polling)
-router.post('/bills/sync-enterprise', authenticate, ctrl.startEnterpriseSync);
-router.get('/bills/sync-enterprise/status/:costCenterId', authenticate, ctrl.getEnterpriseSyncStatus);
-
-// Auto-sync diário de bills (monitoramento + disparo manual)
-router.get('/bills/auto-sync', authenticate, listAutoSyncStatus);
-router.post('/bills/auto-sync/run-now', authenticate, runAutoSyncNow);
-router.post('/bills/auto-sync/recurring', authenticate, setRecurring);
-router.post('/bills/auto-sync/purge', authenticate, purgeEnterprise);
-router.get('/bills/sync-log', authenticate, listSyncLog);
 
 // ── Inadimplência (admin-only) — lê do backup diário do Sienge (sie214801) ────
 // Gate de admin é aplicado dentro do controller (req.user.role).

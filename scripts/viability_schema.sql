@@ -7,6 +7,8 @@
 -- Default 0; preenchido só no CC que tem loja. Entra no pool de orçamento de marketing.
 ALTER TABLE sales_projection_enterprises
     ADD COLUMN IF NOT EXISTS custo_loja NUMERIC(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE sales_projection_enterprises
+    ADD COLUMN IF NOT EXISTS blocked_considered_available INTEGER NOT NULL DEFAULT 0;
 
 -- Fase 2 — config admin de quais departamentos contam como marketing (global).
 CREATE TABLE IF NOT EXISTS viability_marketing_departments (

@@ -1,5 +1,5 @@
 /**
- * SEED de PROCEDIMENTOS DO SIENGE — Base de Conhecimento do Academy.
+ * SEED de PROCEDIMENTOS DO SIENGE - Base de Conhecimento do Academy.
  *
  * Categoria `sienge` (acento VERMELHO no leitor, mapeado em Article.vue),
  * subcategoria `contratos-e-medicoes`. Visibilidade INTERNA. Autor Gustavo (1).
@@ -40,7 +40,68 @@ function loadJsonArticles() {
 
 const AUTHOR_USER_ID = process.env.SEED_AUTHOR_USER_ID ? Number(process.env.SEED_AUTHOR_USER_ID) : 1;
 const CATEGORY = 'sienge';
-const SUBCATEGORY = 'contratos-e-medicoes';
+const SUBCATEGORY = 'contratos-e-medicoes'; // fallback; o mapa abaixo manda
+
+// Subcategoria por artigo: NÃO usar a combinada - separar Contratos x Medições.
+const SUBCATEGORY_BY_SLUG = {
+    // Contratos (criação/estrutura do contrato)
+    'elaboracao-de-contratos': 'contratos',
+    'aditivo-negativo-contrato-medicao': 'contratos',
+    'multiplos-cc-unidades-construtivas-ct-medicao': 'contratos',
+    'troca-ct-para-ctpj': 'contratos',
+    // É de CONTRATO (mexe na previsão financeira do contrato) - a pedido do usuário.
+    'alteracao-vencimento-previsao-financeira': 'contratos',
+    // Medições (medição/liberação/financeiro da medição)
+    'medicoes-no-sienge': 'medicoes',
+    'medicao-nao-adiciona-nem-exclui-anexo': 'medicoes',
+    'caucao-sob-liberacao-de-medicao': 'medicoes',
+    'fluxo-pre-faturamento-direto': 'medicoes',
+    'troca-de-empresa-do-grupo': 'medicoes',
+};
+
+// Ficam como RASCUNHO (ocultos dos usuários; admin vê) - a pedido do usuário.
+const DRAFT_SLUGS = new Set([
+    'caucao-sob-liberacao-de-medicao',
+    'fluxo-pre-faturamento-direto',
+    'troca-ct-para-ctpj',
+    'troca-de-empresa-do-grupo',
+]);
+
+// Cross-links curados ("Veja também"). Só apontam para artigos PUBLICADOS - assim
+// nenhum link quebra p/ usuário comum. Os 2 fundamentos (Elaboração / Medições)
+// são os hubs; cada how-to liga ao seu fundamento. Os backlinks ("Mencionado em")
+// do leitor se montam sozinhos a partir destes links.
+const PUB_TITLE = {
+    'elaboracao-de-contratos': 'Elaboração de Contratos no Sienge',
+    'medicoes-no-sienge': 'Medições no Sienge',
+    'alteracao-vencimento-previsao-financeira': 'Alteração do vencimento da previsão financeira (Contrato de Medição)',
+    'aditivo-negativo-contrato-medicao': 'Aditivo negativo de contrato de medição',
+    'multiplos-cc-unidades-construtivas-ct-medicao': 'Múltiplos C.C. ou unidades construtivas (CT de medição)',
+    'medicao-nao-adiciona-nem-exclui-anexo': 'Medição não deixa adicionar nem excluir anexo',
+};
+const RELATED = {
+    'elaboracao-de-contratos': ['medicoes-no-sienge', 'alteracao-vencimento-previsao-financeira', 'aditivo-negativo-contrato-medicao', 'multiplos-cc-unidades-construtivas-ct-medicao'],
+    'medicoes-no-sienge': ['elaboracao-de-contratos', 'medicao-nao-adiciona-nem-exclui-anexo', 'alteracao-vencimento-previsao-financeira'],
+    'alteracao-vencimento-previsao-financeira': ['elaboracao-de-contratos', 'medicoes-no-sienge'],
+    'aditivo-negativo-contrato-medicao': ['elaboracao-de-contratos'],
+    'multiplos-cc-unidades-construtivas-ct-medicao': ['elaboracao-de-contratos'],
+    'medicao-nao-adiciona-nem-exclui-anexo': ['medicoes-no-sienge'],
+    // Rascunhos: ligam aos fundamentos publicados (só admin vê os rascunhos).
+    'caucao-sob-liberacao-de-medicao': ['medicoes-no-sienge'],
+    'fluxo-pre-faturamento-direto': ['medicoes-no-sienge', 'elaboracao-de-contratos'],
+    'troca-ct-para-ctpj': ['elaboracao-de-contratos'],
+    'troca-de-empresa-do-grupo': ['medicoes-no-sienge'],
+};
+
+// Anexa (idempotente) a seção "Veja também" ao corpo. Só inclui alvos que
+// existem em PUB_TITLE (publicados) e remove o próprio slug.
+function withRelated(slug, body) {
+    const base = String(body || '').split(/\n+##\s+Veja também[\s\S]*$/)[0].trimEnd();
+    const targets = (RELATED[slug] || []).filter((s) => s !== slug && PUB_TITLE[s]);
+    if (!targets.length) return base;
+    const lines = targets.map((s) => `- [${PUB_TITLE[s]}](/academy/kb/${CATEGORY}/${s})`).join('\n');
+    return `${base}\n\n## Veja também\n\n${lines}\n`;
+}
 
 // Base pública das imagens (Supabase Office Bucket).
 const IMG = 'https://geeeswzhtzmiparmgpjp.supabase.co/storage/v1/object/public/Office%20Bucket/academy/sienge';
@@ -58,7 +119,7 @@ const PROCEDURES = [
         ],
         body: `# Alteração do vencimento da previsão financeira (Contrato de Medição)
 
-> **Sienge · Contratos e Medições** — procedimento operacional
+> **Sienge · Contratos e Medições** - procedimento operacional
 > **Quando usar:** a liberação/alteração de uma medição é **bloqueada** por causa de *parcelas de previsão financeira atrasadas*.
 
 ## Quando este erro aparece
@@ -85,7 +146,7 @@ Ou seja: há parcelas da **previsão financeira** do contrato com vencimento **v
 
 ## Pronto
 
-Com as parcelas reprogramadas (sem atraso), volte à **liberação da medição** — o cadastro/alteração agora será permitido.
+Com as parcelas reprogramadas (sem atraso), volte à **liberação da medição** - o cadastro/alteração agora será permitido.
 
 > **Dica:** se o erro persistir, confirme que **todas** as parcelas atrasadas foram movidas para datas futuras e que a soma das parcelas continua batendo com o valor total da previsão financeira.
 
@@ -106,14 +167,14 @@ async function upsert(proc) {
     const fields = {
         title: String(proc.title).trim(),
         categorySlug: CATEGORY,
-        subcategorySlug: proc.subcategorySlug || SUBCATEGORY,
+        subcategorySlug: SUBCATEGORY_BY_SLUG[slug] || proc.subcategorySlug || SUBCATEGORY,
         slug,
-        body: String(proc.body || ''),
+        body: withRelated(slug, proc.body),
         payload: null,
         aliases: Array.isArray(proc.aliases) ? proc.aliases : [],
         audiences,
         audience: deriveLegacyAudience(audiences),
-        status: 'PUBLISHED',
+        status: DRAFT_SLUGS.has(slug) ? 'DRAFT' : (proc.status || 'PUBLISHED'),
         updatedByUserId: AUTHOR_USER_ID,
     };
 
@@ -144,7 +205,7 @@ async function run() {
         const a = r.article;
         out.push(r);
         console.log(`  ${r.action === 'created' ? '➕ criado ' : '♻️  atualizado'}  [${proc.code}] ${a.title}`);
-        console.log(`     id=${a.id} · ${a.categorySlug}/${a.subcategorySlug}/${a.slug} · audiences=[${(a.audiences || []).join(', ')}]`);
+        console.log(`     id=${a.id} · ${a.categorySlug}/${a.subcategorySlug}/${a.slug} · ${a.status}`);
     }
     return out;
 }

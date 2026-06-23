@@ -6,6 +6,9 @@ export default (sequelize, DataTypes) => {
         audience: { type: DataTypes.STRING, allowNull: false, defaultValue: 'BOTH' }, // legacy — compat
         // Multi-audience: set de tokens (INTERNAL | GESTOR | ADMIN | BROKER | REALESTATE | CORRESPONDENT).
         audiences: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+        // Visibilidade por departamento (modelo interno). [] = GERAL (todos);
+        // [ids de Department] = só esses departamentos (+ admin) enxergam.
+        departmentIds: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'PUBLISHED' }, // DRAFT | PUBLISHED
 
         // S3.5: recertificação periódica. Se preenchido, scheduler mensal expira

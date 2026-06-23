@@ -3,6 +3,7 @@ import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
 import { getMyPermissions, getAllPermissions, setUserPermissions } from '../controllers/permissionController.js';
 import { getProfiles, createProfile, updateProfile, deleteProfile } from '../controllers/permissionProfileController.js';
+import { getMeta, getRules, putRule, deleteRule } from '../controllers/departmentVisibilityController.js';
 
 const router = express.Router();
 
@@ -21,6 +22,13 @@ router.get('/profiles', authenticate, adminOnly, getProfiles);
 router.post('/profiles', authenticate, adminOnly, createProfile);
 router.put('/profiles/:id', authenticate, adminOnly, updateProfile);
 router.delete('/profiles/:id', authenticate, adminOnly, deleteProfile);
+
+// Visibilidade de departamento em cascata (global/cargo/usuário) — admin only.
+// Declarado ANTES de /:userId (senão o PUT cairia na rota paramétrica).
+router.get('/department-visibility/meta', authenticate, adminOnly, getMeta);
+router.get('/department-visibility', authenticate, adminOnly, getRules);
+router.put('/department-visibility', authenticate, adminOnly, putRule);
+router.delete('/department-visibility', authenticate, adminOnly, deleteRule);
 
 // Usuários (admin only)
 router.get('/', authenticate, adminOnly, getAllPermissions);

@@ -22,8 +22,9 @@ import db from '../../models/sequelize/index.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
+import AlertShareService from './AlertShareService.js';
 
-const { AlertPendingReply, WhatsappMessage } = db;
+const { AlertPendingReply, AlertShare, AlertRule, WhatsappMessage } = db;
 
 const YES_WORDS = new Set(['sim', 's', 'si', 'yes', 'y', 'ok', 'enviar', 'mostrar', 'detalhes', 'quero', 'confirmo', 'confirmar']);
 const NO_WORDS  = new Set(['nao', 'n', 'no', 'cancelar', 'cancela', 'descartar', 'ignorar', 'pular']);
@@ -118,6 +119,40 @@ async function sendFreeText({ to, body, userId }) {
  */
 async function handleInbound({ fromPhone, body, contextId }) {
     console.log(`[AlertReply] inbound from=${fromPhone} body="${body}" contextId=${contextId || 'NONE'}`);
+
+    // 0) Resposta a um CONVITE de compartilhamento (responder o template alert_share).
+    //    Casa pelo wamid do convite (context.id) — sem ambiguidade. SIM aceita
+    //    (clona o alerta pro destinatário), NÃO recusa. Consome a mensagem.
+    if (contextId) {
+        const share = await AlertShare.findOne({
+            where: { meta_message_id: contextId, status: 'pending', expires_at: { [Op.gt]: new Date() } },
+            include: [{ model: AlertRule, as: 'rule', attributes: ['id', 'name'] }],
+        });
+        if (share) {
+            const ruleName = share.rule?.name || 'alerta';
+            const verdict = classify(body);
+            console.log(`[AlertReply] share#${share.id} rule="${ruleName}" verdict=${verdict}`);
+
+            if (verdict === 'other') {
+                await sendFreeText({
+                    to: fromPhone,
+                    body: `Recebi sua resposta sobre o alerta *${ruleName}*, mas não entendi. Responda *SIM* para aceitar ou *NÃO* para recusar.`,
+                    userId: share.to_user_id,
+                });
+                return true;
+            }
+
+            await AlertShareService.respondFromWhatsApp({ share, verdict });
+            await sendFreeText({
+                to: fromPhone,
+                body: verdict === 'yes'
+                    ? `Pronto! O alerta *${ruleName}* agora é seu também. Gerencie em Configurações → Alertas.`
+                    : `Tudo bem, recusei o compartilhamento do alerta *${ruleName}*.`,
+                userId: share.to_user_id,
+            });
+            return true;
+        }
+    }
 
     let pending = null;
 
