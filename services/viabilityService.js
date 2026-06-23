@@ -19,8 +19,9 @@
 //    (admin libera N por empresa); vendida sai do estoque a vender.
 
 import db from '../models/sequelize/index.js';
-import { summarizeUnitsFromDb } from './cv/enterpriseUnitsSummaryService.js';
+import { resolveUnitsForErp } from './cv/enterpriseUnitsSummaryService.js';
 import { buildMarketingResolver } from './viability/viabilityConfigService.js';
+import { listMarketingSpendByMonth } from './sienge/payableLiveService.js';
 
 const {
     SalesProjection,
@@ -185,16 +186,21 @@ export default class ViabilityService {
         }
     }
 
-    /* Soma o snapshot de unidades do CV uma vez por crm_id distinto (evita dupla contagem
-       quando vários CCs da mesma empresa resolvem para o mesmo empreendimento CV). */
-    async summarizeCompanyUnits(crmIds) {
-        const distinct = [...new Set((crmIds || []).filter((x) => x != null).map(Number))];
+    /* Soma o snapshot de unidades dos CCs da empresa usando a COLETA UNIFICADA do serviço
+       de CV (resolveUnitsForErp) — exatamente a MESMA da tela de Projeção. Dedupe por erp_id;
+       master-only + módulos não se sobrepõem, então a soma é segura. */
+    async summarizeCompanyUnits(erpIds) {
         const acc = {
             totalUnits: 0, soldUnitsStock: 0, reservedUnits: 0,
             blockedUnits: 0, availableUnits: 0,
         };
-        for (const id of distinct) {
-            const s = await summarizeUnitsFromDb(id);
+        const seen = new Set();
+        for (const erp of (erpIds || [])) {
+            const key = String(erp);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            const s = await resolveUnitsForErp(key);
+            if (!s) continue;
             acc.totalUnits += num(s.totalUnits);
             acc.soldUnitsStock += num(s.soldUnitsStock ?? s.soldUnits);
             acc.reservedUnits += num(s.reservedUnits);
@@ -211,23 +217,16 @@ export default class ViabilityService {
         const ids = (costCenterIds || []).map(Number).filter((n) => Number.isFinite(n));
         if (!ids.length) return { byMonth, total: 0, firstYm: null };
 
-        const rows = await Expense.findAll({
-            where: {
-                cost_center_id: { [Op.in]: ids },
-                competence_month: { [Op.lt]: endDate },
-                status: { [Op.ne]: 'cancelled' },
-            },
-            attributes: ['competence_month', 'amount', 'department_name'],
-        });
+        // Lê AO VIVO do backup do Sienge (agregado por mês de competência + departamento).
+        // competência = mês do vencimento, < endDate (mesma semântica do antigo competence_month).
+        const rows = await listMarketingSpendByMonth({ costCenterIds: ids, endDate });
 
         let total = 0;
         let firstYm = null;
-        for (const e of rows) {
-            if (!resolver.isMarketing(e.department_name, companyId)) continue;
-            const ym = (e.competence_month instanceof Date)
-                ? e.competence_month.toISOString().slice(0, 7)
-                : String(e.competence_month).slice(0, 7);
-            const amount = num(e.amount);
+        for (const r of rows) {
+            if (!resolver.isMarketing(r.departmentName, companyId)) continue;
+            const ym = r.ym; // 'YYYY-MM'
+            const amount = num(r.amount);
             byMonth.set(ym, (byMonth.get(ym) || 0) + amount);
             total += amount;
             if (!firstYm || ym < firstYm) firstYm = ym;
@@ -275,10 +274,12 @@ export default class ViabilityService {
         let pct = 0;
         let projectionTotalUnits = 0;
         let custoLoja = 0;
+        let blockedConsideredRaw = 0;
         let defaultPriceFallback = 0;
 
         for (const r of ccRows) {
             custoLoja += num(r.custo_loja);
+            blockedConsideredRaw += num(r.blocked_considered_available);
             if (r.total_units != null) projectionTotalUnits += num(r.total_units);
             if (!defaultPriceFallback && num(r.default_avg_price) > 0) defaultPriceFallback = num(r.default_avg_price);
             if (pct === 0 && num(r.default_marketing_pct) > 0) pct = num(r.default_marketing_pct);
@@ -310,18 +311,11 @@ export default class ViabilityService {
             : projectionFullUnits > 0 ? (projectionFullRevenue / projectionFullUnits)
             : defaultPriceFallback;
 
-        // ----- Unidades do CV (uma vez por empresa) + config de bloqueadas -----
-        const crmIds = [];
-        for (const erp of erpIds) {
-            const crm = await this.resolveCvEnterpriseId(erp);
-            if (crm != null) crmIds.push(crm);
-        }
-        const units = await this.summarizeCompanyUnits(crmIds);
+        // ----- Unidades do CV (mesma resolução da tela de Projeção) + config de bloqueadas -----
+        const units = await this.summarizeCompanyUnits(erpIds);
 
-        const blockedConsidered = Math.min(
-            resolver.blockedConsideredAvailable(company.companyId),
-            units.blockedUnits
-        );
+        // "bloqueadas consideradas disponíveis" agora vem da PROJEÇÃO (por CC, somado).
+        const blockedConsidered = Math.min(blockedConsideredRaw, units.blockedUnits);
 
         // ----- Base de orçamento (vida útil) -----
         // total de unidades: total manual da projeção > snapshot do CV > soma da projeção
@@ -340,13 +334,12 @@ export default class ViabilityService {
             await this.loadSalesLifetimeByMonth({ erpIds, endDate });
 
         // ----- Estoque disponível p/ marketing -----
-        // O CV manda quando há estoque disponível DE VERDADE (disp + reserv + bloq liberadas).
-        // Se o CV está zerado (tudo vendido) OU sem mapa de unidades, cai para a projeção
-        // (planejado − vendido) — que é o que o usuário enxerga como "previsão".
-        // Reservada sempre conta como disponível; bloqueada só a parcela liberada.
+        // Com mapa no CV: disponíveis + reservadas + bloqueadas liberadas (mesmo que dê 0 =
+        // tudo vendido, como mostra a tela de Projeção). SEM mapa no CV: cai para a projeção
+        // (planejado − vendido). Reservada sempre conta; bloqueada só a parcela liberada.
         const cvAvailable = units.availableUnits + units.reservedUnits + blockedConsidered;
         const projectionRemaining = Math.max(0, projectionFullUnits - soldUnitsRealYtd);
-        const availableInventory = cvAvailable > 0 ? cvAvailable : projectionRemaining;
+        const availableInventory = units.totalUnits > 0 ? cvAvailable : projectionRemaining;
 
         // ----- Derivados -----
         const saldo = budgetTotal - spentTotal;                 // pode ser negativo (estourou)
@@ -516,7 +509,9 @@ export default class ViabilityService {
             if (!groups.has(groupKey)) {
                 groups.set(groupKey, {
                     companyId,
-                    companyName: info?.companyName || d.enterprise_name_cache || (d.erp_id ? `Empresa ${companyId ?? d.erp_id}` : d.enterprise_key),
+                    // Nome de exibição: prioriza o nome da PROJEÇÃO (enterprise_name_cache),
+                    // depois o nome da empresa Sienge, depois o fallback.
+                    companyName: d.enterprise_name_cache || info?.companyName || (d.erp_id ? `Empresa ${companyId ?? d.erp_id}` : d.enterprise_key),
                     ccRows: [],
                     linesByKey,
                     fullByKey,

@@ -16,6 +16,9 @@ export default (sequelize, DataTypes) => {
     // por centro de custo. Default 0; preenchido só no CC que tem loja. Entra no
     // pool de orçamento de marketing da Viabilidade. Ver memória [[project_viability]].
     custo_loja: { type: DataTypes.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+    // Unidades BLOQUEADAS (no CV) a considerar como disponíveis p/ marketing na Viabilidade.
+    // Por CC, default 0 (bloqueada não conta). Movido da config de Viabilidade p/ cá.
+    blocked_considered_available: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     manual_city: { type: DataTypes.STRING(120), allowNull: true },
   }, {
     tableName: 'sales_projection_enterprises',

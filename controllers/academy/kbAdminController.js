@@ -48,7 +48,7 @@ const kbAdminController = {
         try {
             const userId = resolveUserId(req);
 
-            const { title, categorySlug, subcategorySlug, body, payload = null, aliases, audiences, visibility, editorUserIds } = req.body || {};
+            const { title, categorySlug, subcategorySlug, body, payload = null, aliases, audiences, visibility, editorUserIds, departmentIds } = req.body || {};
 
             if (!String(title || '').trim()) return res.status(400).json({ message: 'Título é obrigatório.' });
             if (!String(categorySlug || '').trim()) return res.status(400).json({ message: 'Categoria é obrigatória.' });
@@ -70,6 +70,7 @@ const kbAdminController = {
                 visibility,
                 audiences,
                 editorUserIds,
+                departmentIds,
             });
 
             return res.json({ article });
@@ -84,7 +85,7 @@ const kbAdminController = {
             const userId = resolveUserId(req);
 
             const id = Number(req.params.id);
-            const { title, categorySlug, subcategorySlug, body, payload = null, aliases, audiences, visibility, editorUserIds } = req.body || {};
+            const { title, categorySlug, subcategorySlug, body, payload = null, aliases, audiences, visibility, editorUserIds, departmentIds } = req.body || {};
 
             if (!id) return res.status(400).json({ message: 'ID inválido.' });
             if (!String(title || '').trim()) return res.status(400).json({ message: 'Título é obrigatório.' });
@@ -108,6 +109,7 @@ const kbAdminController = {
                 visibility, // OPCIONAL (4 classes): tem prioridade sobre audiences.
                 audiences, // OPCIONAL (legado): canonicalizado p/ uma das 4 classes.
                 editorUserIds, // OPCIONAL: undefined deixa intacto (só autor/admin altera).
+                departmentIds, // OPCIONAL (visibilidade): undefined deixa intacto.
                 versionMessage: req.body?.versionMessage || null,
             });
 

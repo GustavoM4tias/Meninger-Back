@@ -16,6 +16,7 @@ import { Op } from 'sequelize';
 import db from '../models/sequelize/index.js';
 import AlertEngine from '../services/alerts/AlertEngine.js';
 import AlertReportService from '../services/alerts/AlertReportService.js';
+import AlertShareService from '../services/alerts/AlertShareService.js';
 
 const { AlertRule, AlertTriggerLog, User } = db;
 
@@ -71,11 +72,15 @@ async function loadRuleForUser(req, id) {
 
 // ─── Endpoints ───────────────────────────────────────────────────────────────
 
-/** GET /api/alerts — lista as regras visíveis pro user */
+/**
+ * GET /api/alerts — lista as regras do PRÓPRIO usuário (inclusive admin).
+ * A tela de Alertas mostra só os alertas de quem está logado. O admin pode
+ * passar ?owner_user_id=<id> para fazer drill-down de um usuário a partir do
+ * painel admin.
+ */
 export const list = async (req, res) => {
     try {
-        const where = {};
-        if (!isAdmin(req)) where.owner_user_id = req.user.id;
+        const where = { owner_user_id: req.user.id };
         if (req.query.owner_user_id && isAdmin(req)) where.owner_user_id = Number(req.query.owner_user_id);
 
         const rules = await AlertRule.findAll({
@@ -210,6 +215,10 @@ export const remove = async (req, res) => {
         // Cascade manual — as FKs foram criadas sem ON DELETE CASCADE
         await db.AlertPendingReply.destroy({ where: { alert_rule_id: rule.id } });
         await db.AlertTriggerLog.destroy({ where: { alert_rule_id: rule.id } });
+        // Compartilhamentos que apontam pra essa regra (como origem OU como cópia clonada)
+        await db.AlertShare.destroy({
+            where: { [Op.or]: [{ alert_rule_id: rule.id }, { cloned_rule_id: rule.id }] },
+        });
         await rule.destroy();
         return res.json({ ok: true });
     } catch (err) {
@@ -270,6 +279,111 @@ export const preview = async (req, res) => {
         });
     } catch (err) {
         console.error('[alerts/preview]', err);
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+// ─── Compartilhamento ──────────────────────────────────────────────────────────
+
+/**
+ * POST /api/alerts/:id/share — compartilha uma regra com outro usuário.
+ * Só o dono da regra (ou admin) pode compartilhar. Body: { to_user_id, note?, channels? }
+ */
+export const share = async (req, res) => {
+    try {
+        const { rule, error } = await loadRuleForUser(req, req.params.id);
+        if (error === 'not_found') return res.status(404).json({ error: 'Alerta não encontrado.' });
+        if (error === 'forbidden') return res.status(403).json({ error: 'Sem permissão.' });
+
+        const { to_user_id, note, channels } = req.body || {};
+        if (!to_user_id) return res.status(400).json({ error: 'to_user_id é obrigatório.' });
+
+        const result = await AlertShareService.createShare({
+            rule, fromUser: req.user, toUserId: to_user_id, note, channels,
+        });
+        if (result.error) {
+            const map = {
+                invalid_target:   'Destinatário inválido.',
+                target_not_found: 'Usuário não encontrado.',
+                already_pending:  'Já existe um convite pendente para esse usuário.',
+                already_accepted: 'Esse usuário já tem esse alerta.',
+            };
+            return res.status(400).json({ error: map[result.error] || result.error });
+        }
+        return res.status(201).json({ share: result.share.get({ plain: true }) });
+    } catch (err) {
+        console.error('[alerts/share]', err);
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+/** GET /api/alerts/shares/incoming — convites pendentes do usuário logado. */
+export const incomingShares = async (req, res) => {
+    try {
+        const items = await AlertShareService.listIncoming(req.user.id);
+        return res.json({ items });
+    } catch (err) {
+        console.error('[alerts/incomingShares]', err);
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+/** POST /api/alerts/shares/:shareId/respond — body { action: 'accept' | 'decline' }. */
+export const respondShare = async (req, res) => {
+    try {
+        const { action } = req.body || {};
+        if (!['accept', 'decline'].includes(action)) {
+            return res.status(400).json({ error: "action deve ser 'accept' ou 'decline'." });
+        }
+        const result = await AlertShareService.respond({ shareId: req.params.shareId, user: req.user, action });
+        if (result.error) {
+            const status = result.error === 'forbidden' ? 403 : result.error === 'not_found' ? 404 : 400;
+            const map = {
+                not_found: 'Convite não encontrado.',
+                forbidden: 'Sem permissão.',
+                rule_gone: 'O alerta original não existe mais.',
+                invalid_action: 'Ação inválida.',
+            };
+            return res.status(status).json({ error: map[result.error] || result.error });
+        }
+        return res.json({ ok: true, status: result.status, clonedRuleId: result.clonedRuleId || null });
+    } catch (err) {
+        console.error('[alerts/respondShare]', err);
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+/**
+ * GET /api/alerts/shareable-users — lista mínima de usuários para o seletor de
+ * destinatário (qualquer usuário autenticado; exclui o próprio e contas CVCRM).
+ */
+export const shareableUsers = async (req, res) => {
+    try {
+        const users = await User.findAll({
+            where: {
+                id: { [Op.ne]: req.user.id },
+                status: true,
+                auth_provider: { [Op.ne]: 'CVCRM' },
+            },
+            attributes: ['id', 'username', 'position', 'email'],
+            order: [['username', 'ASC']],
+            limit: 500,
+        });
+        return res.json({ items: users.map(u => u.get({ plain: true })) });
+    } catch (err) {
+        console.error('[alerts/shareableUsers]', err);
+        return res.status(500).json({ error: err.message });
+    }
+};
+
+/** GET /api/alerts/admin/stats — visão geral (admin-only). */
+export const adminStats = async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Sem permissão.' });
+        const stats = await AlertShareService.getAdminStats();
+        return res.json(stats);
+    } catch (err) {
+        console.error('[alerts/adminStats]', err);
         return res.status(500).json({ error: err.message });
     }
 };

@@ -1,6 +1,7 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { normalizeAudiences, deriveLegacyAudience, visibilityToAudiences, canonicalizeAudiences } from './audience.js';
+import { normalizeDepartmentIds } from './departmentVisibility.js';
 
 function normStr(v) {
   return String(v ?? '').trim();
@@ -155,7 +156,7 @@ const trackAdminService = {
 
     const rows = await db.AcademyTrack.findAll({
       where,
-      attributes: ['id', 'slug', 'title', 'description', 'status', 'audience', 'audiences', 'updatedAt', 'createdAt'],
+      attributes: ['id', 'slug', 'title', 'description', 'status', 'audience', 'audiences', 'departmentIds', 'updatedAt', 'createdAt'],
       order: [['updatedAt', 'DESC']],
     });
 
@@ -188,6 +189,7 @@ const trackAdminService = {
 
     const audiences = resolveAudiencesForWrite(payload?.audiences);
     const audience = deriveLegacyAudience(audiences);
+    const departmentIds = normalizeDepartmentIds(payload?.departmentIds);
 
     const typedSlug = normStr(payload?.slug);
     const base = slugify(typedSlug || title);
@@ -200,6 +202,7 @@ const trackAdminService = {
       status,
       audience,
       audiences,
+      departmentIds,
     });
 
     return { track: created.toJSON() };
@@ -222,6 +225,10 @@ const trackAdminService = {
       const audiences = resolveAudiencesForWrite(payload.audiences);
       track.audiences = audiences;
       track.audience = deriveLegacyAudience(audiences);
+    }
+
+    if (payload?.departmentIds !== undefined) {
+      track.departmentIds = normalizeDepartmentIds(payload.departmentIds);
     }
 
     await track.save();

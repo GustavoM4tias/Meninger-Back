@@ -1,6 +1,7 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
+import { departmentWhereForUser } from './departmentVisibility.js';
 
 const DEFAULT_LIMIT = 6;
 
@@ -18,11 +19,12 @@ const panelService = {
 
         const tokens = await resolveUserTokens(userId);
         const audWhere = audiencesWhereLiteral(tokens);
+        const deptWhere = await departmentWhereForUser(userId);
 
         // 1) KB updates
         const kbUpdates = await db.AcademyArticle.findAll({
             where: {
-                [Op.and]: [{ status: 'PUBLISHED' }, audWhere],
+                [Op.and]: [{ status: 'PUBLISHED' }, audWhere, deptWhere],
             },
             attributes: ['id', 'title', 'slug', 'categorySlug', 'updatedAt'],
             order: [['updatedAt', 'DESC']],

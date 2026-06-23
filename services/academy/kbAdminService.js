@@ -12,6 +12,8 @@ import {
     canonicalizeAudiences,
     deriveVisibility,
 } from './audience.js';
+import { normalizeDepartmentIds } from './departmentVisibility.js';
+import academyDigestService from './academyDigestService.js';
 
 /**
  * Resolve usuários que devem ser notificados pelo conjunto de audiences do
@@ -243,6 +245,7 @@ const kbAdminService = {
                 'audiences',
                 'audience',
                 'editorUserIds',
+                'departmentIds',
                 'status',
                 'createdByUserId',
                 'updatedByUserId',
@@ -269,7 +272,7 @@ const kbAdminService = {
         return json;
     },
 
-    async create({ userId, title, categorySlug, body, payload, aliases, audiences, visibility, editorUserIds, subcategorySlug }) {
+    async create({ userId, title, categorySlug, body, payload, aliases, audiences, visibility, editorUserIds, subcategorySlug, departmentIds }) {
         const baseSlug = kebab(title);
         const slug = await uniqueSlug({ baseSlug });
 
@@ -286,6 +289,7 @@ const kbAdminService = {
             audiences: aud,
             audience: deriveLegacyAudience(aud),
             editorUserIds: normalizeEditorUserIds(editorUserIds),
+            departmentIds: normalizeDepartmentIds(departmentIds),
             status: 'DRAFT',
             createdByUserId: userId || null,
             updatedByUserId: userId || null,
@@ -320,7 +324,7 @@ const kbAdminService = {
         return { results: rows };
     },
 
-    async update(id, { userId, title, categorySlug, body, payload, aliases, audiences, visibility, editorUserIds, subcategorySlug, isAdmin = false, versionMessage = null }) {
+    async update(id, { userId, title, categorySlug, body, payload, aliases, audiences, visibility, editorUserIds, subcategorySlug, departmentIds, isAdmin = false, versionMessage = null }) {
         const article = await db.AcademyArticle.findByPk(id);
         if (!article) throw new Error('Artigo não encontrado.');
 
@@ -364,6 +368,9 @@ const kbAdminService = {
         const subcategoryChanged = nextSubcategory !== undefined &&
             nextSubcategory !== (article.subcategorySlug || null);
 
+        // departmentIds (visibilidade interna) é OPCIONAL — undefined = não alterar.
+        const nextDepartmentIds = departmentIds === undefined ? undefined : normalizeDepartmentIds(departmentIds);
+
         const changed =
             nextCategory !== article.categorySlug ||
             nextTitle !== article.title ||
@@ -403,6 +410,7 @@ const kbAdminService = {
         }
         if (nextEditorIds !== undefined) fields.editorUserIds = nextEditorIds;
         if (nextSubcategory !== undefined) fields.subcategorySlug = nextSubcategory;
+        if (nextDepartmentIds !== undefined) fields.departmentIds = nextDepartmentIds;
 
         await article.update(fields);
 
@@ -473,6 +481,13 @@ const kbAdminService = {
             status: publish ? 'PUBLISHED' : 'DRAFT',
             updatedByUserId: userId || article.updatedByUserId || null,
         });
+
+        // Eme × Processos: ao publicar, gera/atualiza digest + embedding (async,
+        // não bloqueia; idempotente por digest_hash). É a base da busca da Eme.
+        if (publish) {
+            academyDigestService.ensureForArticle(article)
+                .catch(err => console.warn('[academy.kb.publish] digest failed', err?.message));
+        }
 
         // Notifica apenas na transição DRAFT→PUBLISHED (não em re-publish nem em despublish).
         if (publish && !wasPublished) {

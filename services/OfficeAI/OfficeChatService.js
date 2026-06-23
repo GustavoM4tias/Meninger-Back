@@ -464,6 +464,12 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     const toolOverlay = overlayOfficeTools(TOOL_DECLARATIONS, brain?.reports);
     activeDeclarations = toolOverlay.declarations;
     if (toolOverlay.promptRules) systemPrompt += toolOverlay.promptRules;
+
+    // Eme do Office é o assistente ÚNICO — também responde sobre PROCESSOS do
+    // Academy. Anexa as tools do registry elegíveis p/ OFFICE (academy_*),
+    // executadas via SecureRunner (ver roteamento no loop do stream).
+    const academyOfficeTools = await getToolsFor(fullUser, 'OFFICE');
+    activeDeclarations = activeDeclarations.concat(toGeminiDeclarations(academyOfficeTools));
   }
   const history = await buildHistory(session.id);
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
@@ -577,12 +583,15 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           //    do Office (que se protege por city/role) + audit marcado ACADEMY.
           //  - OFFICE → caminho histórico — executeTool + audit (E4). Zero regressão.
           let toolResult;
-          if (isAcademy && findTool(name)) {
+          // Tools do registry (academy_*) → SecureRunner em QUALQUER contexto
+          // (no Office a Eme também responde processos do Academy). Demais
+          // (Marketing/Comercial/Alert do Map) → executeTool histórico.
+          if (findTool(name)) {
             toolResult = await runSecureTool({
               user: fullUser,
               toolName: name,
               args: args || {},
-              context: 'ACADEMY',
+              context: ctx,
               sessionId: session.id,
               ip: req?.ip || null,
               userAgent: req?.headers?.['user-agent'] || null,

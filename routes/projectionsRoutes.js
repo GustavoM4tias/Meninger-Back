@@ -13,6 +13,8 @@ router.post('/', ctrl.createProjection);
 router.post('/clone', ctrl.cloneProjection);
 router.get('/enterprise-picker', ctrl.listEnterprisesForPicker);
 router.get('/report', ctrl.getProjectionReport);
+// nomes de exibição por CC (fonte única = projeção ativa, com fallback override)
+router.get('/cost-center-names', ctrl.getActiveProjectionCostCenterNames);
 
 // rotas que usam :id com regex numérica
 router.get('/:id(\\d+)', ctrl.getProjectionDetail);

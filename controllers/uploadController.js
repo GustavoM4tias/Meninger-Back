@@ -14,6 +14,8 @@ const CONTEXTS = {
     SIGNATURE_DOC: 'signature_doc',               // Documentos para assinar
     // ── Suporte / Reporte ──────────────────────────────────────────────────────
     SUPPORT_ATTACHMENT: 'support_attachment',     // Anexos de tickets de suporte
+    // ── Checklist ───────────────────────────────────────────────────────────────
+    CHECKLIST_ATTACHMENT: 'checklist_attachment', // Anexos de tarefa do checklist
 };
 
 function sanitizeFileName(name = '') {
@@ -118,6 +120,25 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
             return {
                 bucket: STORAGE_BUCKET,
                 path: `office/support/${referenceId || 'temp'}/${timestamp}-${originalName}`,
+                isPublic: true,
+            };
+
+        // ── Checklist: anexo de tarefa (PDF, imagem ou documento) ──────────────
+        case CONTEXTS.CHECKLIST_ATTACHMENT:
+            if (!referenceId) throw new Error('referenceId (taskId) é obrigatório para anexo de checklist');
+            if (![
+                'application/pdf',
+                'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+                'application/msword',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.ms-excel',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ].includes(file.mimetype)) {
+                throw new Error('Anexo de checklist aceita PDF, imagem (PNG/JPG/WEBP/GIF) ou documento (DOC/DOCX/XLS/XLSX)');
+            }
+            return {
+                bucket: STORAGE_BUCKET,
+                path: `office/checklist/tasks/${referenceId}/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 

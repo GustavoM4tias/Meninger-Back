@@ -22,6 +22,9 @@ export const NotificationType = {
     SUPPORT_UPDATED:         'support.updated',
     GENERIC:                 'generic',
 
+    // Alertas — compartilhamento entre usuários
+    ALERT_SHARED:            'alert.shared',
+
     // Fichas Comerciais
     CONDITION_AUTHORIZATION_REQUESTED: 'condition.authorization.requested',
 
@@ -44,6 +47,17 @@ export const NotificationType = {
     BOLAO_PREMATCH:  'bolao.prematch',
     BOLAO_GOAL:      'bolao.goal',
     BOLAO_FULLTIME:  'bolao.fulltime',
+
+    // Mural de Avisos / Comunicados
+    COMUNICADO_PUBLISHED: 'comunicado.published',
+
+    // Checklist (gestão de lançamentos e demandas)
+    CHECKLIST_TASK_ASSIGNED:  'checklist.task.assigned',
+    CHECKLIST_TASK_DUE_SOON:  'checklist.task.due_soon',
+    CHECKLIST_TASK_OVERDUE:   'checklist.task.overdue',
+    CHECKLIST_TASK_NUDGE:     'checklist.task.nudge',
+    CHECKLIST_TASK_COMMENT:   'checklist.task.comment',
+    CHECKLIST_TASK_COMPLETED: 'checklist.task.completed',
 };
 
 export const NOTIFICATION_CATALOG = {
@@ -120,6 +134,19 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
+    },
+    [NotificationType.ALERT_SHARED]: {
+        label: 'Alerta compartilhado com você',
+        group: 'Sistema',
+        description: 'Quando outro usuário compartilha um alerta com você para aceitar ou recusar.',
+        emailType: 'generic.notification',
+        // WhatsApp do convite é enviado pelo AlertShareService via automação
+        // 'alert_share' (template com SIM/NÃO), não pelo dispatch do catálogo.
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        // Convite acionável: quem escolhe os canais é quem compartilha (bypassPrefs),
+        // então a preferência é forçada — o convite sempre chega ao destinatário.
+        userOptional: false,
     },
 
     // ── Marketing — Captação de Leads ──────────────────────────────────────────
@@ -250,6 +277,93 @@ export const NOTIFICATION_CATALOG = {
         label: 'Bolão: fim de jogo',
         group: 'Bolão',
         description: 'Resultado final, cravadas e novo líder do bolão.',
+        emailType: null,
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+
+    // ── Mural de Avisos / Comunicados ───────────────────────────────────────────
+    [NotificationType.COMUNICADO_PUBLISHED]: {
+        label: 'Novo comunicado no mural',
+        group: 'Comunicados',
+        description: 'Quando um comunicado/aviso oficial é publicado e você é destinatário.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        // Comunicação oficial: a preferência é forçada (sempre chega ao destinatário).
+        userOptional: false,
+    },
+
+    // ── Checklist (gestão de lançamentos e demandas) ────────────────────────────
+    // WhatsApp fica null por ora; na Fase 2 criam-se os templates na Meta
+    // (checklist_task_assigned_v1, checklist_due_soon_v1, checklist_overdue_v1,
+    // checklist_nudge_v1) e aponta-se aqui.
+    [NotificationType.CHECKLIST_TASK_ASSIGNED]: {
+        label: 'Tarefa de checklist atribuída',
+        group: 'Checklist',
+        description: 'Quando uma tarefa de checklist é atribuída a você.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CHECKLIST_TASK_DUE_SOON]: {
+        label: 'Entrega de checklist se aproximando',
+        group: 'Checklist',
+        description: 'Lembrete D-3/D-1 e no dia de uma tarefa sua com prazo.',
+        emailType: 'generic.notification',
+        whatsapp: {
+            template: 'checklist_due_soon_v1',
+            language: 'pt_BR',
+            category: 'UTILITY',
+            variables: ['userName', 'taskTitle', 'checklistTitle', 'dueDateFormatted'],
+        },
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CHECKLIST_TASK_OVERDUE]: {
+        label: 'Entrega de checklist em atraso',
+        group: 'Checklist',
+        description: 'Quando uma tarefa sua vence sem ser concluída.',
+        emailType: 'generic.notification',
+        whatsapp: {
+            template: 'checklist_overdue_v1',
+            language: 'pt_BR',
+            category: 'UTILITY',
+            variables: ['userName', 'taskTitle', 'checklistTitle', 'dueDateFormatted'],
+        },
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CHECKLIST_TASK_NUDGE]: {
+        label: 'Cobrança de entrega',
+        group: 'Checklist',
+        description: 'Quando alguém cobra diretamente a entrega de uma tarefa sua.',
+        emailType: 'generic.notification',
+        whatsapp: {
+            template: 'checklist_nudge_v1',
+            language: 'pt_BR',
+            category: 'UTILITY',
+            variables: ['userName', 'taskTitle', 'checklistTitle', 'dueDateFormatted'],
+        },
+        defaults: { inapp: true, email: true, whatsapp: false },
+        // Cobrança direcionada: sempre chega ao responsável.
+        userOptional: false,
+    },
+    [NotificationType.CHECKLIST_TASK_COMMENT]: {
+        label: 'Comentário ou menção em tarefa',
+        group: 'Checklist',
+        description: 'Quando alguém comenta ou cita você em uma tarefa de checklist.',
+        emailType: null,
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CHECKLIST_TASK_COMPLETED]: {
+        label: 'Tarefa de checklist concluída',
+        group: 'Checklist',
+        description: 'Quando uma tarefa é concluída (avisa o dono do checklist).',
         emailType: null,
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },

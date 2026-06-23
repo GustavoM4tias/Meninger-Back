@@ -7,7 +7,7 @@
  *   - Trilha "Primeiros Passos no Menin Academy" apontando para esses artigos
  *   - 1 highlight de destaque no painel
  *
- * É um PONTO DE PARTIDA — depois o admin edita tudo pelo painel.
+ * É um PONTO DE PARTIDA - depois o admin edita tudo pelo painel.
  *
  * Como rodar:
  *   node scripts/academy_seed_welcome.js
@@ -27,10 +27,10 @@ aprende, evolui e comprova seu conhecimento.
 
 ## O que você encontra aqui
 
-- **Trilhas de aprendizagem** — sequências de conteúdo organizadas por tema.
-- **Base de Conhecimento** — artigos com procedimentos e materiais de estudo.
-- **Comunidade** — espaço para dúvidas, discussões e sugestões.
-- **Certificados** — comprovação das trilhas que você concluir.
+- **Trilhas de aprendizagem** - sequências de conteúdo organizadas por tema.
+- **Base de Conhecimento** - artigos com procedimentos e materiais de estudo.
+- **Comunidade** - espaço para dúvidas, discussões e sugestões.
+- **Certificados** - comprovação das trilhas que você concluir.
 
 ## Por onde começar
 
@@ -58,7 +58,7 @@ quizzes e tarefas).
 
 - Alguns itens são avaliações. Pode haver **nota mínima** e **número de
   tentativas**.
-- A correção é automática — você vê o resultado na hora.
+- A correção é automática - você vê o resultado na hora.
 
 ## Trilhas obrigatórias
 
@@ -73,10 +73,10 @@ A Comunidade é onde a equipe troca conhecimento.
 
 ## Tipos de tópico
 
-- **Dúvida** — pergunte algo e receba respostas.
-- **Discussão** — debata um tema.
-- **Sugestão** — proponha melhorias.
-- **Incidente** — relate um problema.
+- **Dúvida** - pergunte algo e receba respostas.
+- **Discussão** - debata um tema.
+- **Sugestão** - proponha melhorias.
+- **Incidente** - relate um problema.
 
 ## Boas práticas
 
@@ -91,11 +91,11 @@ A Comunidade é onde a equipe troca conhecimento.
 
 Para um ambiente de aprendizagem saudável:
 
-1. **Respeito** — trate todos com cordialidade na Comunidade.
-2. **Conteúdo** — não publique informação confidencial ou de terceiros sem
+1. **Respeito** - trate todos com cordialidade na Comunidade.
+2. **Conteúdo** - não publique informação confidencial ou de terceiros sem
    autorização.
-3. **Avaliações** — os quizzes são individuais. Aprender de verdade é o objetivo.
-4. **Certificados** — são pessoais e verificáveis publicamente por um código.
+3. **Avaliações** - os quizzes são individuais. Aprender de verdade é o objetivo.
+4. **Certificados** - são pessoais e verificáveis publicamente por um código.
 
 > Em caso de dúvida sobre as normas, fale com o seu gestor.`,
     },
@@ -140,7 +140,7 @@ export async function seedAcademyWelcome() {
         },
     });
 
-    // 3) Itens da trilha — um por artigo (tipo ARTICLE apontando para a KB)
+    // 3) Itens da trilha - um por artigo (tipo ARTICLE apontando para a KB)
     const existingItems = await db.AcademyTrackItem.count({ where: { trackId: track.id } });
     if (existingItems === 0) {
         let order = 1;

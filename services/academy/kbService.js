@@ -1,6 +1,7 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
+import { departmentWhereForUser } from './departmentVisibility.js';
 
 function normalizeMode(mode) {
     return String(mode || '').toLowerCase() === 'admin' ? 'admin' : '';
@@ -17,6 +18,7 @@ const KB_LABELS = {
     // categorias
     'comercial': 'Comercial',
     'construtor-de-vendas': 'Construtor de Vendas',
+    'procedimentos': 'Procedimentos',
     // subcategorias Comercial
     'cartorio': 'Cartório',
     'caixa-economica': 'Caixa Econômica',
@@ -24,8 +26,14 @@ const KB_LABELS = {
     // subcategorias Construtor de Vendas
     'leads': 'Leads',
     'portal-do-cliente': 'Portal do Cliente',
+    'pre-cadastro': 'Pré-Cadastro',
     // Gestor
     'painel-do-gestor': 'Painel do Gestor',
+    // subcategorias Procedimentos
+    'fluxo-de-repasse': 'Fluxo de Repasse',
+    'reservas': 'Reservas',
+    'contratos': 'Contratos',
+    'financeiro': 'Financeiro',
 };
 
 const CONNECTORS = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
@@ -44,6 +52,7 @@ function kbLabel(slug) {
 const kbService = {
     async listCategories({ userId }) {
         const tokens = await resolveUserTokens(userId);
+        const deptWhere = await departmentWhereForUser(userId);
 
         // Agrupa por (categoria, subcategoria) com contagem, num único GROUP BY.
         const rows = await db.AcademyArticle.findAll({
@@ -51,6 +60,7 @@ const kbService = {
                 [Op.and]: [
                     { status: 'PUBLISHED' },
                     audiencesWhereLiteral(tokens),
+                    deptWhere,
                 ],
             },
             attributes: [
@@ -91,10 +101,11 @@ const kbService = {
 
     async listArticles({ q, categorySlug, subcategorySlug, userId, page, pageSize, mode, status }) {
         const tokens = await resolveUserTokens(userId);
+        const deptWhere = await departmentWhereForUser(userId);
         const finalMode = normalizeMode(mode);
         const finalStatus = normalizeStatus(status);
 
-        const andClauses = [audiencesWhereLiteral(tokens)];
+        const andClauses = [audiencesWhereLiteral(tokens), deptWhere];
 
         if (finalMode !== 'admin') {
             andClauses.push({ status: 'PUBLISHED' });
@@ -106,13 +117,25 @@ const kbService = {
         if (subcategorySlug) andClauses.push({ subcategorySlug });
 
         if (q && String(q).trim()) {
-            const like = `%${String(q).trim()}%`;
-            andClauses.push({
-                [Op.or]: [
-                    { title: { [Op.iLike]: like } },
-                    { body: { [Op.iLike]: like } },
-                ],
-            });
+            // Busca por CONTEXTO (não só título): cada palavra precisa aparecer
+            // (AND) em algum campo — título, CORPO ou apelidos. Independe da ordem
+            // das palavras e casa trechos parciais. Como entra no MESMO andClauses
+            // do filtro de categoria/subcategoria acima, a busca já fica RESTRITA
+            // à categoria/subcategoria atual (não procura fora dela).
+            const raw = String(q).trim().split(/\s+/).filter(Boolean);
+            const meaningful = raw.filter((t) => t.length >= 2);
+            const terms = (meaningful.length ? meaningful : raw).slice(0, 8);
+            for (const term of terms) {
+                const like = `%${term}%`;
+                const safe = like.replace(/'/g, "''"); // escapa aspas p/ o literal jsonb
+                andClauses.push({
+                    [Op.or]: [
+                        { title: { [Op.iLike]: like } },
+                        { body: { [Op.iLike]: like } },
+                        db.Sequelize.literal(`aliases::text ILIKE '${safe}'`),
+                    ],
+                });
+            }
         }
 
         const where = { [Op.and]: andClauses };
@@ -157,6 +180,7 @@ const kbService = {
 
     async getArticle({ categorySlug, articleSlug, userId }) {
         const tokens = await resolveUserTokens(userId);
+        const deptWhere = await departmentWhereForUser(userId);
 
         const User = db.User || db.Users;
 
@@ -167,6 +191,7 @@ const kbService = {
                     { categorySlug },
                     { slug: articleSlug },
                     audiencesWhereLiteral(tokens),
+                    deptWhere,
                 ],
             },
             attributes: [

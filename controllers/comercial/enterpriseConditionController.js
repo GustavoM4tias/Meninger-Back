@@ -326,11 +326,16 @@ export const getCondition = async (req, res) => {
             });
         }
 
-        // Histórico de fichas do mesmo empreendimento (para navegação)
+        // Histórico da MESMA série, para navegação mês a mês.
+        // CV agrupa por idempreendimento; avulsa por series_id — senão cairia em
+        // { idempreendimento: null } e juntaria TODAS as avulsas de todos os produtos.
         const { Op } = db.Sequelize;
+        const seriesScope = condition.idempreendimento != null
+            ? { idempreendimento: condition.idempreendimento }
+            : (condition.series_id != null ? { series_id: condition.series_id } : { id: condition.id });
         const history = await EnterpriseCondition.findAll({
             where: {
-                idempreendimento: condition.idempreendimento,
+                ...seriesScope,
                 ...(privileged ? {} : { status: { [Op.in]: ['approved', 'closed'] } }),
             },
             attributes: ['id', 'reference_month', 'status'],

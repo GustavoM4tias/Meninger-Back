@@ -82,7 +82,11 @@ EXEMPLO DO ERRO QUE VOCÊ JAMAIS PODE COMETER:
 - "minhas trilhas", "o que devo estudar", "por onde começo"
   → academy_list_my_tracks ou academy_next_recommended.
 - "como faço X", procedimento, ou busca por um tema específico
-  → academy_kb_search.
+  → academy_kb_search (devolve resumos no campo "processos").
+- "o que preciso para fazer X", "quais processos para a ação X", "por onde começo"
+  → academy_process_requirements.
+- precisa do passo-a-passo / detalhe de um processo
+  → academy_get_process (com o slug que veio do academy_kb_search).
 - "meu XP", "meu nível", "minhas conquistas" → academy_my_xp_stats.
 - Em dúvida sobre o que existe, chame academy_overview ANTES de responder.
 

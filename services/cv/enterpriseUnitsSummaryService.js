@@ -206,6 +206,37 @@ export async function summarizeMasterCcFromDb(cvEnterpriseId, masterErpId) {
 }
 
 /**
+ * COLETA UNIFICADA do snapshot de unidades de um centro de custo (CC Sienge),
+ * lendo as tabelas de backup do CV. É a MESMA lógica usada pela tela de Projeção
+ * e pela Viabilidade — não há cálculo paralelo em cada tela.
+ *
+ * Prioridade: etapa específica (idetapa_int = CC, p/ módulos como 99903/10103) →
+ * CC mestre (total − módulos) → empreendimento completo. Retorna o summary com
+ * `cvEnterpriseId`, ou null quando o CC não tem mapa de unidades no CV.
+ */
+export async function resolveUnitsForErp(erpId) {
+    if (!erpId) return null;
+
+    // 1) etapa específica (módulo) via idetapa_int = CC Sienge
+    const stage = await summarizeUnitsFromStageInt(String(erpId));
+    if (stage) return stage; // já traz cvEnterpriseId
+
+    // 2) CC mestre (total − módulos) / 3) empreendimento completo
+    const row = await db.EnterpriseCity.findOne({
+        where: { source: 'crm', erp_id: String(erpId) },
+        attributes: ['crm_id'],
+    });
+    const crm = row?.crm_id != null ? Number(row.crm_id) : null;
+    if (crm == null) return null;
+
+    const master = await summarizeMasterCcFromDb(crm, String(erpId));
+    if (master && Number(master.totalUnits) > 0) return { ...master, cvEnterpriseId: crm };
+
+    const full = await summarizeUnitsFromDb(crm);
+    return { ...full, cvEnterpriseId: crm };
+}
+
+/**
  * Resumo de unidades do CV (snapshot atual) por empreendimento completo.
  * Usado como fallback quando não há idetapa_int configurado.
  */

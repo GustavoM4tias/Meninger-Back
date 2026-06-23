@@ -25,6 +25,17 @@ export default (sequelize, DataTypes) => {
         // desta lista. Selecionado no editor ao criar/editar.
         editorUserIds: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
 
+        // Visibilidade por departamento (modelo interno). [] = GERAL (todos);
+        // [ids de Department] = só esses departamentos (+ admin) enxergam.
+        departmentIds: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+
+        // Eme × Processos: digest estruturado + grafo + hash do corpo (gerados
+        // 1× no publish pelo academyDigestService). A coluna `embedding`
+        // (pgvector) NÃO é atributo Sequelize — é gerenciada via SQL cru.
+        aiDigest: { type: DataTypes.JSONB, allowNull: true },
+        processMeta: { type: DataTypes.JSONB, allowNull: true },
+        digestHash: { type: DataTypes.STRING, allowNull: true },
+
         createdByUserId: { type: DataTypes.INTEGER, allowNull: true },
         updatedByUserId: { type: DataTypes.INTEGER, allowNull: true },
     }, {

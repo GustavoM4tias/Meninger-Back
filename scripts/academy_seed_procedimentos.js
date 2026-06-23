@@ -1,12 +1,12 @@
 /**
- * SEED de PROCEDIMENTOS OPERACIONAIS — Base de Conhecimento do Academy.
+ * SEED de PROCEDIMENTOS OPERACIONAIS - Base de Conhecimento do Academy.
  *
  * Importa procedimentos antigos (PDF/Word) para a KB do Academy como artigos
- * markdown. É IDEMPOTENTE: identifica cada procedimento pelo `slug` — se já
+ * markdown. É IDEMPOTENTE: identifica cada procedimento pelo `slug` - se já
  * existir, ATUALIZA o conteúdo; senão, cria. Pode rodar quantas vezes quiser.
  *
  * Diferente do fluxo de publicação pela API (`kbAdminService.publish`), este
- * script grava direto no model — então NÃO dispara notificação para todos os
+ * script grava direto no model - então NÃO dispara notificação para todos os
  * funcionários a cada importação. Ideal para popular a base em lote.
  *
  * Visibilidade: cada procedimento define `audiences` (tokens de público).
@@ -48,7 +48,7 @@ import {
 // Autor opcional (id de um usuário interno). Deixe null para "sem autor".
 const AUTHOR_USER_ID = process.env.SEED_AUTHOR_USER_ID
     ? Number(process.env.SEED_AUTHOR_USER_ID)
-    : null;
+    : 1; // default: Gustavo Diniz (id 1) - todos os procedimentos são dele
 
 // Subcategoria (2º nível da KB) por slug de artigo: Comercial > <sub> > artigo.
 // Um procedimento pode sobrescrever com seu próprio campo `subcategorySlug`.
@@ -58,12 +58,13 @@ const SUBCATEGORY_BY_SLUG = {
     'demanda-minima': 'caixa-economica',
     'registro-de-contratos-empreendimentos-mcmv': 'cartorio',
     'ri-digital': 'cartorio',
-    // cv-crm: sem subcategoria — é a visão geral da categoria Construtor de Vendas.
+    // cv-crm: sem subcategoria - é a visão geral da categoria Construtor de Vendas.
     'certificacao-digital': 'assinatura-e-certificacao',
     'icp-brasil': 'assinatura-e-certificacao',
     'cv-leads-andamento': 'leads',
     'cv-leads-cadastro': 'leads',
     // Gestor
+    'painel-do-gestor-guia-inicial': 'painel-do-gestor',
     'cv-empresas-correspondentes': 'painel-do-gestor',
     'cv-usuario-correspondente': 'painel-do-gestor',
     'cv-imobiliarias': 'painel-do-gestor',
@@ -90,30 +91,30 @@ const PROCEDURES = [
         ],
         body: `# Programa Minha Casa Minha Vida (MCMV)
 
-> **Base de Conhecimento — Comercial** · Guia introdutório
+> **Base de Conhecimento - Comercial** · Guia introdutório
 > Condições vigentes desde **22/04/2026** · Conteúdo atualizado em jun/2026
 
 ## O que é
 
 O **Minha Casa Minha Vida (MCMV)** é o principal programa habitacional do Governo Federal. O objetivo é facilitar o acesso à casa própria para famílias de baixa e média renda por meio de três alavancas: **subsídio** (desconto dado pelo governo), **juros reduzidos** e uso do **FGTS**.
 
-Foi criado em 2009, substituído pelo programa "Casa Verde e Amarela" (2020–2022) e **relançado em 2023** pela **Lei nº 14.620/2023**, retomando o nome Minha Casa Minha Vida.
+Foi criado em 2009, substituído pelo programa "Casa Verde e Amarela" (2020-2022) e **relançado em 2023** pela **Lei nº 14.620/2023**, retomando o nome Minha Casa Minha Vida.
 
 ## Quem é quem
 
-- **Ministério das Cidades** — define as regras e normativas do programa.
-- **Conselho Curador do FGTS** — aprova as condições financiadas com recursos do **FGTS**.
-- **Caixa Econômica Federal** e **Banco do Brasil** — operam o financiamento: analisam o crédito e liberam os recursos.
-- **Construtoras / incorporadoras** (como a Menin) — produzem os empreendimentos enquadrados e vendem as unidades.
+- **Ministério das Cidades** - define as regras e normativas do programa.
+- **Conselho Curador do FGTS** - aprova as condições financiadas com recursos do **FGTS**.
+- **Caixa Econômica Federal** e **Banco do Brasil** - operam o financiamento: analisam o crédito e liberam os recursos.
+- **Construtoras / incorporadoras** (como a Menin) - produzem os empreendimentos enquadrados e vendem as unidades.
 
 ## Como funciona
 
 A casa é financiada em parcelas que cabem no orçamento da família. Conforme a renda, o programa combina:
 
-1. **Subsídio** — valor que o governo abate do preço do imóvel e que **não precisa ser devolvido**. Quanto menor a renda, maior o subsídio.
-2. **Juros reduzidos** — taxas abaixo das de mercado, que variam por faixa de renda e por região.
-3. **Uso do FGTS** — o saldo do FGTS pode ser usado como entrada, para abater parcelas ou reduzir o saldo devedor.
-4. **Prazo longo** — financiamento de **120 a 420 meses** (até 35 anos).
+1. **Subsídio** - valor que o governo abate do preço do imóvel e que **não precisa ser devolvido**. Quanto menor a renda, maior o subsídio.
+2. **Juros reduzidos** - taxas abaixo das de mercado, que variam por faixa de renda e por região.
+3. **Uso do FGTS** - o saldo do FGTS pode ser usado como entrada, para abater parcelas ou reduzir o saldo devedor.
+4. **Prazo longo** - financiamento de **120 a 420 meses** (até 35 anos).
 
 ## Faixas de renda (condições de 22/04/2026)
 
@@ -134,16 +135,16 @@ O enquadramento é definido pela **renda familiar bruta mensal**:
 
 Criada para atender famílias de renda média que antes não se enquadravam:
 
-- **Sem subsídio** — o benefício é o acesso ao **Sistema Financeiro de Habitação (SFH)** com teto de juros (até ~10% a.a.).
+- **Sem subsídio** - o benefício é o acesso ao **Sistema Financeiro de Habitação (SFH)** com teto de juros (até ~10% a.a.).
 - **Entrada mínima de 20%** do valor do imóvel.
 - Aceita imóvel **novo, usado ou na planta** (na planta, a obra precisa ser financiada pela Caixa).
 - Teto do imóvel: **R$ 600 mil**.
 
 ## Modalidades
 
-- **MCMV Urbano** — imóveis em áreas urbanas (foco da maior parte das vendas).
-- **MCMV Rural** — moradia para trabalhadores e produtores do campo.
-- **MCMV Entidades / Cidades** — produção via prefeituras, associações e cooperativas habitacionais.
+- **MCMV Urbano** - imóveis em áreas urbanas (foco da maior parte das vendas).
+- **MCMV Rural** - moradia para trabalhadores e produtores do campo.
+- **MCMV Entidades / Cidades** - produção via prefeituras, associações e cooperativas habitacionais.
 
 ## Requisitos gerais para participar
 
@@ -158,17 +159,17 @@ Sobre a inscrição: a **Faixa 1** costuma ser cadastrada via **CadÚnico / pref
 
 ## Por que isso importa para a venda
 
-O preço, o subsídio e a parcela que o cliente enxerga dependem do **enquadramento correto** na faixa. Erros de renda ou de documentação atrasam o financiamento. Na formalização, os valores precisam bater exatamente entre o **Contrato Caixa (CEF)** e a **Confissão de Dívida** — veja o procedimento **CONF01** para os detalhes.
+O preço, o subsídio e a parcela que o cliente enxerga dependem do **enquadramento correto** na faixa. Erros de renda ou de documentação atrasam o financiamento. Na formalização, os valores precisam bater exatamente entre o **Contrato Caixa (CEF)** e a **Confissão de Dívida** - veja o procedimento **CONF01** para os detalhes.
 
 ## Normativas de referência
 
-- **Lei nº 14.620/2023** — relançou o programa.
+- **Lei nº 14.620/2023** - relançou o programa.
 - Regras operacionais definidas pelo **Ministério das Cidades** (portarias) e pelo **Conselho Curador do FGTS**.
 - **Condições atuais em vigor desde 22/04/2026** (atualização de faixas, tetos de imóvel, juros e prazos).
 
 ---
 
-**Fonte:** Ministério das Cidades (gov.br/cidades) e Caixa Econômica Federal. Conteúdo educativo — confirme sempre as condições vigentes no simulador oficial da Caixa.`,
+**Fonte:** Ministério das Cidades (gov.br/cidades) e Caixa Econômica Federal. Conteúdo educativo - confirme sempre as condições vigentes no simulador oficial da Caixa.`,
     },
 {
         code: 'CEF-CONTRATO',
@@ -180,7 +181,7 @@ O preço, o subsídio e a parcela que o cliente enxerga dependem do **enquadrame
         aliases: ['Contrato Caixa (CEF)', 'Contrato Caixa', 'Contrato da Caixa', 'Contrato CEF', 'CEF'],
         body: `# Contrato Caixa (CEF)
 
-> **Base de Conhecimento — Comercial** · Guia introdutório
+> **Base de Conhecimento - Comercial** · Guia introdutório
 
 ## O que é
 
@@ -194,7 +195,7 @@ O **Contrato Caixa** é o instrumento que formaliza, ao mesmo tempo, a **compra 
 - A **construtora/vendedora**;
 - A **Caixa Econômica Federal**, como agente financeiro.
 
-Todas as assinaturas seguem o padrão de Certificação Digital ICP-Brasil — a regra completa de assinatura está na Confissão de Dívida (procedimento CONF01).
+Todas as assinaturas seguem o padrão de Certificação Digital ICP-Brasil - a regra completa de assinatura está na Confissão de Dívida (procedimento CONF01).
 
 ## O que o contrato traz
 
@@ -207,18 +208,18 @@ Todas as assinaturas seguem o padrão de Certificação Digital ICP-Brasil — a
 
 No nosso processo, duas referências do contrato são centrais:
 
-- **B.4 — Valor de venda** do imóvel.
-- **B.4.2 — Composição de recursos** (soma de recurso à vista, parcelado e Desconto Construtora).
+- **B.4 - Valor de venda** do imóvel.
+- **B.4.2 - Composição de recursos** (soma de recurso à vista, parcelado e Desconto Construtora).
 
-> A numeração/letra das cláusulas segue o modelo de contrato vigente da Caixa e pode variar entre versões — confirme sempre no contrato do cliente.
+> A numeração/letra das cláusulas segue o modelo de contrato vigente da Caixa e pode variar entre versões - confirme sempre no contrato do cliente.
 
 ## Relação com a Confissão de Dívida
 
-A Confissão de Dívida precisa **refletir fielmente** os valores do Contrato Caixa (data de assinatura, valor de venda, recursos e subsídios). Qualquer divergência — até de centavos — compromete a formalização. O passo a passo está no procedimento CONF01.
+A Confissão de Dívida precisa **refletir fielmente** os valores do Contrato Caixa (data de assinatura, valor de venda, recursos e subsídios). Qualquer divergência - até de centavos - compromete a formalização. O passo a passo está no procedimento CONF01.
 
 ## No sistema
 
-Depois de assinado, o contrato é vinculado no CV CRM, na etapa de repasse, com o tipo de documento \`Contrato CEF – ASSINADO\`.`,
+Depois de assinado, o contrato é vinculado no CV CRM, na etapa de repasse, com o tipo de documento \`Contrato CEF - ASSINADO\`.`,
     },
 {
         code: 'CV-CRM',
@@ -230,11 +231,11 @@ Depois de assinado, o contrato é vinculado no CV CRM, na etapa de repasse, com 
         aliases: ['CV CRM', 'CVCRM', 'Construtor de Vendas', 'CV'],
         body: `# CV CRM (Construtor de Vendas)
 
-> **Base de Conhecimento — Comercial** · Guia introdutório
+> **Base de Conhecimento - Comercial** · Guia introdutório
 
 ## O que é
 
-O **CV CRM** (originalmente **Construtor de Vendas**, do Grupo Softplan) é a plataforma de CRM e gestão comercial usada por incorporadoras e construtoras. Cobre toda a jornada da venda — do **lead** ao **pós-venda** —, reunindo atendimento, reservas, negociação, documentação e repasse num só lugar.
+O **CV CRM** (originalmente **Construtor de Vendas**, do Grupo Softplan) é a plataforma de CRM e gestão comercial usada por incorporadoras e construtoras. Cobre toda a jornada da venda - do **lead** ao **pós-venda** -, reunindo atendimento, reservas, negociação, documentação e repasse num só lugar.
 
 É o sistema onde o time comercial registra e acompanha as vendas.
 
@@ -247,9 +248,9 @@ O **CV CRM** (originalmente **Construtor de Vendas**, do Grupo Softplan) é a pl
 
 ## Conceitos importantes
 
-- **Etapa de repasse** — fase em que os documentos pós-assinatura são vinculados e autorizados.
-- **Tipos de documento** — categorias usadas no vínculo, como \`Contrato CEF – ASSINADO\` e \`Confissão de Dívida - ASSINADO\`.
-- **Situação** — status do processo, como \`CONTRATOS ASSINADOS MCMV\`.
+- **Etapa de repasse** - fase em que os documentos pós-assinatura são vinculados e autorizados.
+- **Tipos de documento** - categorias usadas no vínculo, como \`Contrato CEF - ASSINADO\` e \`Confissão de Dívida - ASSINADO\`.
+- **Situação** - status do processo, como \`CONTRATOS ASSINADOS MCMV\`.
 
 ## Relação com os contratos
 
@@ -267,7 +268,7 @@ Na venda financiada pela Caixa (Programa Minha Casa Minha Vida), o **Contrato Ca
         aliases: ['Certificação Digital', 'Certificado Digital'],
         body: `# Certificação Digital
 
-> **Base de Conhecimento — Comercial** · Guia introdutório
+> **Base de Conhecimento - Comercial** · Guia introdutório
 
 ## O que é
 
@@ -281,9 +282,9 @@ A base legal é a **Medida Provisória nº 2.200-2/2001**. Pelo art. 10, documen
 
 ## Tipos de assinatura eletrônica
 
-- **Simples** — apenas identifica o signatário.
-- **Avançada** — garante integridade e vínculo com o signatário.
-- **Qualificada** — usa Certificado Digital no padrão ICP-Brasil; é o nível mais alto de segurança jurídica.
+- **Simples** - apenas identifica o signatário.
+- **Avançada** - garante integridade e vínculo com o signatário.
+- **Qualificada** - usa Certificado Digital no padrão ICP-Brasil; é o nível mais alto de segurança jurídica.
 
 ## No nosso processo
 
@@ -299,7 +300,7 @@ Para a Confissão de Dívida e o Contrato Caixa (CEF), a **única certificação
         aliases: ['ICP-Brasil', 'ICP Brasil'],
         body: `# ICP-Brasil
 
-> **Base de Conhecimento — Comercial** · Guia introdutório
+> **Base de Conhecimento - Comercial** · Guia introdutório
 
 ## O que é
 
@@ -309,17 +310,17 @@ A **ICP-Brasil** (Infraestrutura de Chaves Públicas Brasileira) é o sistema na
 
 ## Como é organizada
 
-- **AC Raiz** — no topo da cadeia está o **ITI** (Instituto Nacional de Tecnologia da Informação), que credencia e audita as demais.
-- **Autoridades Certificadoras (AC)** — emitem os certificados.
-- **Autoridades de Registro (AR)** — fazem a identificação presencial do solicitante.
+- **AC Raiz** - no topo da cadeia está o **ITI** (Instituto Nacional de Tecnologia da Informação), que credencia e audita as demais.
+- **Autoridades Certificadoras (AC)** - emitem os certificados.
+- **Autoridades de Registro (AR)** - fazem a identificação presencial do solicitante.
 
 ## Tipos de certificado
 
-- **A1** — fica em software (arquivo no computador), validade de até 1 ano.
-- **A3** — fica em cartão ou token, validade de até 3 anos.
-- **e-CPF** e **e-CNPJ** — identidades digitais de pessoa física e jurídica.
+- **A1** - fica em software (arquivo no computador), validade de até 1 ano.
+- **A3** - fica em cartão ou token, validade de até 3 anos.
+- **e-CPF** e **e-CNPJ** - identidades digitais de pessoa física e jurídica.
 
-> A ICP-Brasil atualiza periodicamente seus modelos de certificado — confirme os tipos vigentes no ITI.
+> A ICP-Brasil atualiza periodicamente seus modelos de certificado - confirme os tipos vigentes no ITI.
 
 ## Validade jurídica
 
@@ -330,21 +331,21 @@ Pelo art. 10 da MP 2.200-2/2001, documentos assinados com certificado ICP-Brasil
 É o **único padrão aceito** para assinar a Confissão de Dívida e o Contrato Caixa (CEF). A explicação geral de assinatura está em Certificação Digital; a regra do processo está no procedimento CONF01.
 
 - **A Menin custeia a emissão** do certificado digital de cada cliente.
-- O certificado costuma ser emitido com **validade de 90 dias** — o prazo mínimo disponível.
-- **Todas as pessoas presentes no Contrato Caixa (CEF) precisam assinar** — logo, cada uma precisa do seu próprio certificado digital.
+- O certificado costuma ser emitido com **validade de 90 dias** - o prazo mínimo disponível.
+- **Todas as pessoas presentes no Contrato Caixa (CEF) precisam assinar** - logo, cada uma precisa do seu próprio certificado digital.
 - **Gestão atual (via WhatsApp):** as solicitações são organizadas em grupos de comunicação no WhatsApp. O **gestor do empreendimento** é o responsável por solicitar a certificação dos seus clientes assim que eles **iniciam a etapa de repasse no CV CRM**.`,
     },
 {
         code: 'COMRC1',
         slug: 'registro-de-contratos-empreendimentos-mcmv',
-        title: 'Registro de Contratos – Empreendimentos MCMV',
-        categorySlug: 'comercial',
+        title: 'Registro de Contratos - Empreendimentos MCMV',
+        categorySlug: 'comercial', // Cartório/Registro fica em Comercial (sub 'cartorio' via SUBCATEGORY_BY_SLUG)
         authorUserId: 1, // Gustavo Diniz
         audiences: ['INTERNAL'],
         aliases: ['COMRC1', 'Registro de Contratos', 'Registro de Contratos MCMV'],
-        body: `# Registro de Contratos – Empreendimentos MCMV
+        body: `# Registro de Contratos - Empreendimentos MCMV
 
-> **Procedimento Operacional — Departamento Comercial**
+> **Procedimento Operacional - Departamento Comercial**
 > **Código:** COMRC1 · **Revisão:** 00
 
 **Objetivo:** registrar no Cartório de Registro de Imóveis o **Contrato Caixa (CEF)** e a **Confissão de Dívida** dos empreendimentos do **Programa Minha Casa Minha Vida**, garantindo que cada empreendimento tenha saldo na plataforma **RI Digital** para não travar prazos.
@@ -357,7 +358,7 @@ O registro passou a ser **provisionado por empreendimento**, de forma proativa:
 - **Antes de assinar a demanda mínima**, o **gestor** aciona a **equipe comercial interna**, informando a necessidade de preparar o sistema e os valores para o registro dos contratos.
 - A equipe faz o **levantamento e projeta o custo** de **prenotação + registro**, que a **construtora carrega na plataforma RI Digital**.
 - O **saldo fica na conta do empreendimento** e é de **uso único e exclusivo** para esse fim. A equipe interna **acompanha para validar o uso correto**.
-- **Antes de o saldo acabar**, é preciso **notificar a equipe** para novas entradas — para não criar gargalos nos prazos de pagamento nem morosidade no registro.
+- **Antes de o saldo acabar**, é preciso **notificar a equipe** para novas entradas - para não criar gargalos nos prazos de pagamento nem morosidade no registro.
 
 ## Pré-requisito do contrato
 
@@ -368,7 +369,7 @@ O contrato só avança para prenotação/registro quando está na etapa \`Contra
 - **Com isenção:** anexar a **Certidão de Isenção** aos documentos enviados ao cartório.
 - **Sem isenção:** anexar a **guia de ITBI paga** para envio a Registro.
 
-## RI Digital — consultar e adicionar saldo
+## RI Digital - consultar e adicionar saldo
 
 Plataforma: **registradores.onr.org.br**. O login é normalmente via **gov.br**, mas a incorporadora pode disponibilizar um acesso próprio para o **gestor** ou o **CCA**.
 
@@ -381,7 +382,7 @@ Havendo custas estaduais ou municipais diferentes das previstas neste procedimen
 
 ---
 
-**Dúvidas:** Departamento Comercial — comercial@menin.com.br`,
+**Dúvidas:** Departamento Comercial - comercial@menin.com.br`,
     },
 {
         code: 'DEMANDA-MINIMA',
@@ -393,7 +394,7 @@ Havendo custas estaduais ou municipais diferentes das previstas neste procedimen
         aliases: ['Demanda Mínima', 'demanda mínima', 'demanda minima'],
         body: `# Demanda Mínima (MCMV)
 
-> **Base de Conhecimento — Comercial** · Guia introdutório
+> **Base de Conhecimento - Comercial** · Guia introdutório
 
 ## O que é
 
@@ -403,20 +404,20 @@ Em outras palavras: antes de "subir" o empreendimento, é preciso comprovar que 
 
 ## Por que existe
 
-Protege todos os envolvidos — Caixa, construtora e compradores:
+Protege todos os envolvidos - Caixa, construtora e compradores:
 
 - Garante que o projeto tem **demanda confirmada** antes de começar a obra;
 - Reduz o risco de empreendimento parado por falta de vendas;
-- Faz parte da análise de crédito da obra junto à Caixa (a **Geric** — Gerência de Risco de Crédito — avalia a saúde financeira da construtora).
+- Faz parte da análise de crédito da obra junto à Caixa (a **Geric** - Gerência de Risco de Crédito - avalia a saúde financeira da construtora).
 
 ## Relação com o nosso processo
 
 A assinatura da demanda mínima é um **marco**: a partir dela, o empreendimento entra na fase de formalização e registro dos contratos.
 
-- **Antes de assinar a demanda mínima**, o gestor deve acionar a **equipe comercial interna** para preparar o **RI Digital** e projetar os custos de registro — ver o procedimento Registro de Contratos (COMRC1).
+- **Antes de assinar a demanda mínima**, o gestor deve acionar a **equipe comercial interna** para preparar o **RI Digital** e projetar os custos de registro - ver o procedimento Registro de Contratos (COMRC1).
 - Em seguida, cada venda segue com o **Contrato Caixa (CEF)** e a **Confissão de Dívida**, assinados e vinculados no **CV CRM**.
 
-> Os percentuais e as regras exatas de demanda mínima podem variar por empreendimento e por diretriz da Caixa — confirme as condições vigentes a cada projeto.`,
+> Os percentuais e as regras exatas de demanda mínima podem variar por empreendimento e por diretriz da Caixa - confirme as condições vigentes a cada projeto.`,
     },
 {
         code: 'RI-DIGITAL',
@@ -428,7 +429,7 @@ A assinatura da demanda mínima é um **marco**: a partir dela, o empreendimento
         aliases: ['RI Digital', 'RI Digital (ONR)'],
         body: `# RI Digital (ONR)
 
-> **Base de Conhecimento — Comercial** · Guia introdutório
+> **Base de Conhecimento - Comercial** · Guia introdutório
 
 ## O que é
 
@@ -445,9 +446,9 @@ O **RI Digital** é a plataforma oficial do **ONR** (Operador Nacional do Sistem
 
 ## Conceitos
 
-- **e-Protocolo** — envio eletrônico de títulos (contratos) direto ao cartório para prenotação e registro.
-- **Prenotação** — o protocolo que reserva a prioridade do registro enquanto o cartório analisa a documentação.
-- **Conta do empreendimento** — cada empreendimento tem (ou deve ter) a sua conta no RI Digital, com saldo de **uso exclusivo** para o registro daquele projeto.
+- **e-Protocolo** - envio eletrônico de títulos (contratos) direto ao cartório para prenotação e registro.
+- **Prenotação** - o protocolo que reserva a prioridade do registro enquanto o cartório analisa a documentação.
+- **Conta do empreendimento** - cada empreendimento tem (ou deve ter) a sua conta no RI Digital, com saldo de **uso exclusivo** para o registro daquele projeto.
 
 ## Acesso
 
@@ -460,14 +461,14 @@ O provisionamento do saldo e o passo a passo de **consultar valor** e **adiciona
 {
         code: 'CV-COR-INICIO',
         slug: 'painel-do-corretor-guia-inicial',
-        title: 'Guia Inicial',
+        title: 'Guia Inicial - Corretor',
         categorySlug: 'construtor-de-vendas',
         authorUserId: 1,
         visibility: 'BOTH',
         aliases: ['Guia Inicial do Corretor', 'App do Corretor', 'CVCRM:Corretor'],
         body: `# Guia Inicial
 
-> **Construtor de Vendas — Painel do Corretor** · Guia do módulo
+> **Construtor de Vendas - Painel do Corretor** · Guia do módulo
 
 ## O que é
 
@@ -477,20 +478,20 @@ Pode ser acessado pelo navegador ou pelo **aplicativo CVCRM: Corretor** (Android
 
 ## Primeiros passos
 
-1. **Acesso** — você recebe o convite/login da Menin. Externos entram com o acesso de corretor (não é o login Office).
-2. **Instale o app** e ative as **notificações push** — é assim que você fica sabendo na hora de movimentações nos seus atendimentos (lead respondido, reserva aprovada, documentação pendente).
-3. **Conheça a página inicial** — ela resume seus leads recentes, suas reservas em andamento e os avisos da incorporadora.
+1. **Acesso** - você recebe o convite/login da Menin. Externos entram com o acesso de corretor (não é o login Office).
+2. **Instale o app** e ative as **notificações push** - é assim que você fica sabendo na hora de movimentações nos seus atendimentos (lead respondido, reserva aprovada, documentação pendente).
+3. **Conheça a página inicial** - ela resume seus leads recentes, suas reservas em andamento e os avisos da incorporadora.
 
-> 📸 **Espaço para print/GIF** — capture a página inicial do Painel do Corretor na nossa instância e cole aqui (edite o artigo e insira a imagem em markdown).
+> 📸 **Espaço para print/GIF** - capture a página inicial do Painel do Corretor na nossa instância e cole aqui (edite o artigo e insira a imagem em markdown).
 
 ## O caminho da venda no CV
 
 O fluxo padrão que você vai percorrer:
 
-1. **Lead** — o interessado entra (por campanha, indicação ou cadastro manual).
-2. **Pré-cadastro** — dados e documentos do comprador para análise.
-3. **Reserva** — unidade travada + proposta enviada.
-4. **Venda/Contrato** — aprovação, assinatura e repasse (conduzidos com o time Menin).
+1. **Lead** - o interessado entra (por campanha, indicação ou cadastro manual).
+2. **Pré-cadastro** - dados e documentos do comprador para análise.
+3. **Reserva** - unidade travada + proposta enviada.
+4. **Venda/Contrato** - aprovação, assinatura e repasse (conduzidos com o time Menin).
 
 Cada etapa tem um artigo próprio nesta categoria.
 
@@ -505,7 +506,7 @@ Tutoriais ilustrados do módulo, direto na central do CV (abrem em nova aba):
 
 ---
 
-**📎 Documentação oficial (CV CRM):** [Guia Inicial — Painel do Corretor](https://ajuda.cvcrm.com.br/support/solutions/folders/157000592133)
+**📎 Documentação oficial (CV CRM):** [Guia Inicial - Painel do Corretor](https://ajuda.cvcrm.com.br/support/solutions/folders/157000592133)
 *Passo a passo detalhado com prints e GIFs oficiais na central de ajuda do CV. Este guia é um resumo da Menin.*`,
     },
 {
@@ -519,11 +520,11 @@ Tutoriais ilustrados do módulo, direto na central do CV (abrem em nova aba):
         aliases: ['Leads no CV', 'Gestão de Leads'],
         body: `# Leads
 
-> **Construtor de Vendas — Painel do Corretor** · Guia do módulo
+> **Construtor de Vendas - Painel do Corretor** · Guia do módulo
 
 ## O que é
 
-**Lead** é todo interessado em comprar que ainda não virou cliente: chegou por uma campanha, um portal, uma indicação ou um atendimento no plantão. O módulo de **Leads** é onde esse interessado entra no funil, é atendido e caminha até virar uma reserva — e, no fim, uma **Venda Realizada**.
+**Lead** é todo interessado em comprar que ainda não virou cliente: chegou por uma campanha, um portal, uma indicação ou um atendimento no plantão. O módulo de **Leads** é onde esse interessado entra no funil, é atendido e caminha até virar uma reserva - e, no fim, uma **Venda Realizada**.
 
 ## O workflow de Leads na Menin
 
@@ -554,15 +555,15 @@ Nossa regra padrão é **rotelar o lead para outro corretor** via a roleta do CV
 
 | Situação | Prazo | Ação ao vencer | Pausa |
 | --- | --- | --- | --- |
-| **Aguardando Atendimento Corretor** | **180 minutos** | Usar a roleta | Feriados e fins de semana · 18h–08h · +30 min extra |
-| **1ª Tentativa de Contato** | **24 horas** | Usar a roleta | Feriados e fins de semana · 18h–08h · +30 min extra |
-| **2ª Tentativa de Contato** | **48 horas** | Usar a roleta | Feriados e fins de semana · 18h–08h · +30 min extra |
-| **Em Atendimento** | **480 horas** (~20 dias) | Não executar ação | Feriados e fins de semana · 18h–08h · +30 min extra |
-| **Demais situações** | — | Não rotelam | — |
+| **Aguardando Atendimento Corretor** | **180 minutos** | Usar a roleta | Feriados e fins de semana · 18h-08h · +30 min extra |
+| **1ª Tentativa de Contato** | **24 horas** | Usar a roleta | Feriados e fins de semana · 18h-08h · +30 min extra |
+| **2ª Tentativa de Contato** | **48 horas** | Usar a roleta | Feriados e fins de semana · 18h-08h · +30 min extra |
+| **Em Atendimento** | **480 horas** (~20 dias) | Não executar ação | Feriados e fins de semana · 18h-08h · +30 min extra |
+| **Demais situações** | - | Não rotelam | - |
 
 > As situações de tentativa de contato ignoram a configuração de vencimento do empreendimento (opção "Ignorar Configuração de Vencimento" ativada) para garantir o fluxo padrão independentemente das regras locais.
 
-> **Onde configurar:** Painel do Gestor → Configurações → Workflow de Leads → selecione a situação. Cada empreendimento pode ter prazos e ações diferentes — consulte o gestor responsável antes de alterar.
+> **Onde configurar:** Painel do Gestor → Configurações → Workflow de Leads → selecione a situação. Cada empreendimento pode ter prazos e ações diferentes - consulte o gestor responsável antes de alterar.
 
 ---
 
@@ -580,13 +581,13 @@ Para abrir e editar, vá em **Leads › Listagem**, clique em **Abrir** no lead 
 
 ### Lead Score
 
-Pontuação atribuída ao lead conforme a quantidade e a relevância dos dados preenchidos. Quanto mais completo o perfil, maior o score — e melhor a qualificação para conversão.
+Pontuação atribuída ao lead conforme a quantidade e a relevância dos dados preenchidos. Quanto mais completo o perfil, maior o score - e melhor a qualificação para conversão.
 
 ![Lead Score](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM6.png)
 
 ### Bloqueio de Leads
 
-Se o lead recebe dados por integração, **bloqueá-lo** faz com que as alterações só possam vir do próprio CV — atualizações que chegarem pela integração não são aplicadas.
+Se o lead recebe dados por integração, **bloqueá-lo** faz com que as alterações só possam vir do próprio CV - atualizações que chegarem pela integração não são aplicadas.
 
 ![Bloqueio de leads](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM7.png)
 
@@ -600,12 +601,12 @@ Ainda nessa lateral aparecem dados úteis: **nome, e-mail, telefone** (com atalh
 
 O CV registra cada contato com o lead, formando o histórico do atendimento. Os tipos são:
 
-- **Anotação** — bloco de anotações gerais. A opção *"Recalcular vencimento do lead"* reinicia o prazo de vencimento ao salvar.
-- **Ligação** — registra o que foi tratado (não disca; serve de histórico).
-- **E-mail** — dispara um e-mail ao cliente (e, se quiser, ao gestor, imobiliária e corretor).
-- **SMS** — dispara SMS (requer pacote de SMS contratado).
-- **WhatsApp** — registra a conversa tratada por WhatsApp (não envia a mensagem).
-- **Visita** — registra a visita, que entra automaticamente na agenda do responsável.
+- **Anotação** - bloco de anotações gerais. A opção *"Recalcular vencimento do lead"* reinicia o prazo de vencimento ao salvar.
+- **Ligação** - registra o que foi tratado (não disca; serve de histórico).
+- **E-mail** - dispara um e-mail ao cliente (e, se quiser, ao gestor, imobiliária e corretor).
+- **SMS** - dispara SMS (requer pacote de SMS contratado).
+- **WhatsApp** - registra a conversa tratada por WhatsApp (não envia a mensagem).
+- **Visita** - registra a visita, que entra automaticamente na agenda do responsável.
 
 ![Anotação](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM10.png)
 
@@ -613,25 +614,25 @@ O CV registra cada contato com o lead, formando o histórico do atendimento. Os 
 
 ![E-mail](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM12.png)
 
-> **CVIA** — assistente de redação integrado ao e-mail (e às mensagens do pré-cadastro e da reserva). Ajuda a escrever anotações e e-mails mais claros e profissionais.
+> **CVIA** - assistente de redação integrado ao e-mail (e às mensagens do pré-cadastro e da reserva). Ajuda a escrever anotações e e-mails mais claros e profissionais.
 
 ![CVIA](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM15-1.png)
 
 ### Cadastrar uma Tarefa
 
-Em cada interação você pode cadastrar uma **tarefa** — que vincula um lembrete na sua agenda (e pode disparar e-mail). Para uma tarefa avulsa, use o botão **Tarefa**: ele já traz uma descrição automática (editável), com **Data, Prioridade, Situação** e lembrete por e-mail.
+Em cada interação você pode cadastrar uma **tarefa** - que vincula um lembrete na sua agenda (e pode disparar e-mail). Para uma tarefa avulsa, use o botão **Tarefa**: ele já traz uma descrição automática (editável), com **Data, Prioridade, Situação** e lembrete por e-mail.
 
 ![Cadastro de tarefa](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM16.gif)
 
 ### Atividades do Lead
 
-Toda interação e toda alteração (mudança de situação, edição de dados) é registrada automaticamente com **data, hora e responsável** — dando transparência e rastreabilidade à jornada do cliente.
+Toda interação e toda alteração (mudança de situação, edição de dados) é registrada automaticamente com **data, hora e responsável** - dando transparência e rastreabilidade à jornada do cliente.
 
 ![Atividades do lead](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM19.gif)
 
 ### Nova Reserva / Pré-cadastro / Simulação
 
-No topo da página do lead dá para iniciar uma **Reserva**, um **Pré-cadastro** ou uma **Simulação** — desde que habilitadas pelo gestor e o lead tenha pelo menos um interesse associado.
+No topo da página do lead dá para iniciar uma **Reserva**, um **Pré-cadastro** ou uma **Simulação** - desde que habilitadas pelo gestor e o lead tenha pelo menos um interesse associado.
 
 ![Nova reserva / pré-cadastro / simulação](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM20.png)
 
@@ -643,8 +644,8 @@ Guarda contatos estratégicos para oportunidades futuras: quem demonstrou intere
 
 ### Possibilidade de Venda e Momento do Lead
 
-- **Possibilidade de Venda** — nota de **1 a 5** indicando a chance de fechar (1 = baixa, 5 = alta).
-- **Momento do Lead** — classifica o estágio (muito interessado, pouco interessado, em decisão, frio). Ajuda a priorizar os leads mais quentes.
+- **Possibilidade de Venda** - nota de **1 a 5** indicando a chance de fechar (1 = baixa, 5 = alta).
+- **Momento do Lead** - classifica o estágio (muito interessado, pouco interessado, em decisão, frio). Ajuda a priorizar os leads mais quentes.
 
 ![Possibilidade de venda](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM21.png)
 
@@ -652,10 +653,10 @@ Guarda contatos estratégicos para oportunidades futuras: quem demonstrou intere
 
 ### Quem está atendendo, Interesses e Associações
 
-- **Quem está atendendo** — mostra a imobiliária e o corretor responsáveis.
-- **Associar Interesse** — adiciona empreendimentos de interesse ao perfil.
-- **Reservas / Pré-cadastros / Simulações associados** — centraliza no lead o que veio por outros canais.
-- **Contatos Associados** — vincula cônjuge, familiar ou sócio que compra junto.
+- **Quem está atendendo** - mostra a imobiliária e o corretor responsáveis.
+- **Associar Interesse** - adiciona empreendimentos de interesse ao perfil.
+- **Reservas / Pré-cadastros / Simulações associados** - centraliza no lead o que veio por outros canais.
+- **Contatos Associados** - vincula cônjuge, familiar ou sócio que compra junto.
 
 ![Quem está atendendo](https://cv.alfamaoraculo.com.br/storage/discovirtual/49/56/LEADS-ADM22.png)
 
@@ -671,9 +672,9 @@ Guarda contatos estratégicos para oportunidades futuras: quem demonstrou intere
 
 ## Boas práticas Menin
 
-- Registre a interação **no momento em que ela acontece** — o histórico é o que protege a sua autoria do atendimento.
+- Registre a interação **no momento em que ela acontece** - o histórico é o que protege a sua autoria do atendimento.
 - Lead parado é lead perdido: use as **tarefas/agendamentos** para nunca deixar um interessado sem retorno.
-- Atualize a **situação** a cada avanço real — é dela que saem a distribuição e os relatórios.
+- Atualize a **situação** a cada avanço real - é dela que saem a distribuição e os relatórios.
 
 ---
 
@@ -697,11 +698,11 @@ Guarda contatos estratégicos para oportunidades futuras: quem demonstrou intere
         aliases: ['Andamento dos Leads', 'Kanban de Leads'],
         body: `# Andamento dos Leads
 
-> **Construtor de Vendas — Painel do Corretor** · Guia do módulo
+> **Construtor de Vendas - Painel do Corretor** · Guia do módulo
 
 ## O que é
 
-O **Andamento dos Leads** é a visão em **pipeline** (kanban) do módulo de Leads. Em vez de uma listagem linear, os leads aparecem em **colunas** — cada coluna é uma situação do workflow — e você arrasta, visualiza e atua sem precisar abrir um por um. Também exibe em tempo real o **total de reservas e vendas do mês corrente**.
+O **Andamento dos Leads** é a visão em **pipeline** (kanban) do módulo de Leads. Em vez de uma listagem linear, os leads aparecem em **colunas** - cada coluna é uma situação do workflow - e você arrasta, visualiza e atua sem precisar abrir um por um. Também exibe em tempo real o **total de reservas e vendas do mês corrente**.
 
 ---
 
@@ -739,27 +740,27 @@ Cada card possui o botão **"+ Informações"** que exibe detalhes adicionais. P
 
 Cada card traz **5 ícones** com acesso rápido a informações do lead:
 
-**Ícone 1 — Tarefas**
+**Ícone 1 - Tarefas**
 Passe o mouse para verificar se o lead possui uma tarefa cadastrada.
 
 ![Ícone 1 - Tarefas](https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/157008619745/original/9KvpyVSM1t2USpcw9C9sra4UQhan9TAg7w.gif?1752240733)
 
-**Ícone 2 — Gestor**
+**Ícone 2 - Gestor**
 Exibe nome, e-mail e telefone do gestor associado ao lead.
 
 ![Ícone 2 - Gestor](https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/157008619769/original/3dho84amkyibDiEyLQ1V0aYAbNuaxcEVJw.gif?1752240753)
 
-**Ícone 3 — Imobiliária**
+**Ícone 3 - Imobiliária**
 Exibe nome, e-mail e telefone da imobiliária associada ao lead.
 
 ![Ícone 3 - Imobiliária](https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/157008619799/original/twxVvwY5W5pl4m_bJCSsTcrJnXlp1kNieg.gif?1752240772)
 
-**Ícone 4 — Corretor**
+**Ícone 4 - Corretor**
 Mostra os dados do corretor vinculado (as suas próprias informações).
 
 ![Ícone 4 - Corretor](https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/157008619809/original/0Sp50AUAnLGdm27WpIJFPdTn6Yn1779suw.gif?1752240786)
 
-**Ícone 5 — Abrir lead (clicável)**
+**Ícone 5 - Abrir lead (clicável)**
 Abre a tela completa do lead, onde você registra interações, muda a situação e cria reservas.
 
 ![Ícone 5 - Abre administrar do lead](https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/157008619836/original/Gk9xS3FzrgzZG7DBHmjpBY5bWoyIJI10Wg.gif?1752240803)
@@ -793,7 +794,7 @@ A tela possui filtros para refinar a visualização:
 
 ### Boas vendas! 🚀
 
-**📎 Documentação oficial (CV CRM):** [Andamento dos Leads — Painel do Corretor](https://ajuda.cvcrm.com.br/support/solutions/articles/157000363862-andamento-dos-leads-painel-do-corretor)`,
+**📎 Documentação oficial (CV CRM):** [Andamento dos Leads - Painel do Corretor](https://ajuda.cvcrm.com.br/support/solutions/articles/157000363862-andamento-dos-leads-painel-do-corretor)`,
     },
 {
         code: 'CV-COR-LEADS-CAD',
@@ -806,11 +807,11 @@ A tela possui filtros para refinar a visualização:
         aliases: ['Cadastro de Lead', 'Cadastro de Leads', 'Novo Lead'],
         body: `# Cadastro de Leads
 
-> **Construtor de Vendas — Painel do Corretor** · Guia do módulo
+> **Construtor de Vendas - Painel do Corretor** · Guia do módulo
 
 ## O que é
 
-O **Cadastro de Leads** é onde você registra manualmente um novo interessado no sistema. Todo lead precisa existir no CV para ser acompanhado, distribuído e atendido — seja ele cadastrado por você, por integração com portais ou via campanha digital.
+O **Cadastro de Leads** é onde você registra manualmente um novo interessado no sistema. Todo lead precisa existir no CV para ser acompanhado, distribuído e atendido - seja ele cadastrado por você, por integração com portais ou via campanha digital.
 
 ---
 
@@ -818,8 +819,8 @@ O **Cadastro de Leads** é onde você registra manualmente um novo interessado n
 
 Os leads podem ser cadastrados no CV por múltiplos canais:
 
-- **Cadastro manual** — diretamente pelo Painel do Corretor, do Gestor, da Imobiliária ou do PDV.
-- **Integrações automáticas** — captados de plataformas como Facebook Leads, Google Ads, portais imobiliários e o site da incorporadora.
+- **Cadastro manual** - diretamente pelo Painel do Corretor, do Gestor, da Imobiliária ou do PDV.
+- **Integrações automáticas** - captados de plataformas como Facebook Leads, Google Ads, portais imobiliários e o site da incorporadora.
 
 > As funcionalidades visíveis variam conforme as permissões definidas pela incorporadora para cada perfil.
 
@@ -829,11 +830,11 @@ Os leads podem ser cadastrados no CV por múltiplos canais:
 
 Você pode iniciar o cadastro de duas formas:
 
-**Opção 1 — Botão "Novo Lead" na tela inicial:**
+**Opção 1 - Botão "Novo Lead" na tela inicial:**
 
 ![Botão Novo Lead na tela inicial](https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/157008616137/original/TfUWBeXLrZJ_4gCP9XvqjTUOvtbYozHBWA.png?1752236965)
 
-**Opção 2 — Menu Leads:**
+**Opção 2 - Menu Leads:**
 - **Leads > Novo Lead**, ou
 - **Leads > Listagem > Novo Lead**
 
@@ -841,7 +842,7 @@ Você pode iniciar o cadastro de duas formas:
 
 ### Preenchendo o formulário
 
-Na tela de cadastro, preencha os campos básicos: **nome**, **e-mail** e **telefone**. Outros campos obrigatórios — como **Empreendimento**, **Mídia de Visita** e **Ponto de Venda** — podem variar conforme a configuração da incorporadora.
+Na tela de cadastro, preencha os campos básicos: **nome**, **e-mail** e **telefone**. Outros campos obrigatórios - como **Empreendimento**, **Mídia de Visita** e **Ponto de Venda** - podem variar conforme a configuração da incorporadora.
 
 ![Campos básicos do cadastro](https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/157008616154/original/8Qq8PY1BnyjJXVggtkPF-9PtA4h0SGlesQ.png?1752236988)
 
@@ -861,7 +862,7 @@ Clicando em **"+ Adicionar mais informações"** você pode enriquecer o cadastr
 
 ![Adicionar mais informações](https://s3.amazonaws.com/cdn.freshdesk.com/data/helpdesk/attachments/production/157008616331/original/Oyp_0SmWeFxiTC9w6KL9xz7AaTDnG3ShQw.png?1752237251)
 
-> Quanto mais completo o cadastro, maior o **Lead Score** — e mais fácil qualificar e priorizar o atendimento.
+> Quanto mais completo o cadastro, maior o **Lead Score** - e mais fácil qualificar e priorizar o atendimento.
 
 ---
 
@@ -884,23 +885,23 @@ Além do cadastro manual, o CV permite a **distribuição automática de leads v
 
 ### Boas vendas! 🚀
 
-**📎 Documentação oficial (CV CRM):** [Cadastro de Leads — Painel do Corretor](https://ajuda.cvcrm.com.br/support/solutions/articles/157000357141-cadastro-de-leads-painel-do-corretor)`,
+**📎 Documentação oficial (CV CRM):** [Cadastro de Leads - Painel do Corretor](https://ajuda.cvcrm.com.br/support/solutions/articles/157000357141-cadastro-de-leads-painel-do-corretor)`,
     },
 {
         code: 'CV-GES-INICIO',
         slug: 'painel-do-gestor-guia-inicial',
-        title: 'Guia Inicial',
+        title: 'Guia Inicial - Gestor',
         categorySlug: 'construtor-de-vendas',
         authorUserId: 1,
         visibility: 'BOTH',
         aliases: ['Guia Inicial do Gestor'],
         body: `# Guia Inicial
 
-> **Construtor de Vendas — Painel do Gestor** · Guia do módulo
+> **Construtor de Vendas - Painel do Gestor** · Guia do módulo
 
 ## O que é
 
-O **Painel do Gestor** é a visão administrativa do CV CRM — onde a incorporadora opera: cadastros de empreendimentos e tabelas, gestão do funil comercial, financeiro da venda, jurídico, relacionamento com o cliente e configurações do sistema.
+O **Painel do Gestor** é a visão administrativa do CV CRM - onde a incorporadora opera: cadastros de empreendimentos e tabelas, gestão do funil comercial, financeiro da venda, jurídico, relacionamento com o cliente e configurações do sistema.
 
 Se o Painel do Corretor é "onde se vende", o do Gestor é "onde a venda é administrada".
 
@@ -918,11 +919,11 @@ Se o Painel do Corretor é "onde se vende", o do Gestor é "onde a venda é admi
 
 Cada área tem um guia próprio nesta categoria.
 
-> 📸 **Espaço para print/GIF** — capture o menu principal do Painel do Gestor da nossa instância.
+> 📸 **Espaço para print/GIF** - capture o menu principal do Painel do Gestor da nossa instância.
 
 ## Boas práticas Menin
 
-- Antes de mexer em **Configurações**, fale com a equipe comercial interna — mudanças de workflow afetam todos os empreendimentos.
+- Antes de mexer em **Configurações**, fale com a equipe comercial interna - mudanças de workflow afetam todos os empreendimentos.
 
 ## Passo a passo oficial (prints e GIFs)
 
@@ -941,7 +942,7 @@ Tutoriais ilustrados, direto na central do CV (abrem em nova aba):
 
 ---
 
-**📎 Documentação oficial (CV CRM):** [Guia Inicial — Painel do Gestor](https://ajuda.cvcrm.com.br/support/solutions/folders/157000592138)
+**📎 Documentação oficial (CV CRM):** [Guia Inicial - Painel do Gestor](https://ajuda.cvcrm.com.br/support/solutions/folders/157000592138)
 *Visão geral oficial do painel, com prints e GIFs, na central do CV.*`,
     },
 {
@@ -955,7 +956,7 @@ Tutoriais ilustrados, direto na central do CV (abrem em nova aba):
         aliases: ['Portal do Cliente CV', 'Portal do Cliente'],
         body: `# Portal do Cliente
 
-> **Construtor de Vendas — Portal do Cliente** · Guia do módulo
+> **Construtor de Vendas - Portal do Cliente** · Guia do módulo
 
 ## O que é
 
@@ -963,17 +964,17 @@ O **Portal do Cliente** é a área que o **comprador** acessa depois da venda: o
 
 ## O que o cliente encontra
 
-- **Extrato financeiro** — parcelas pagas e em aberto, com correção aplicada.
-- **Boletos / 2ª via** — emissão sem precisar falar com o financeiro.
-- **Documentos** — contrato e documentos da compra disponíveis para download.
-- **Andamento da obra** — evolução por etapa, com fotos/percentuais quando publicados.
-- **Atendimentos** — abertura e acompanhamento de solicitações (inclusive assistência técnica), que caem no módulo de Relacionamento do gestor.
+- **Extrato financeiro** - parcelas pagas e em aberto, com correção aplicada.
+- **Boletos / 2ª via** - emissão sem precisar falar com o financeiro.
+- **Documentos** - contrato e documentos da compra disponíveis para download.
+- **Andamento da obra** - evolução por etapa, com fotos/percentuais quando publicados.
+- **Atendimentos** - abertura e acompanhamento de solicitações (inclusive assistência técnica), que caem no módulo de Relacionamento do gestor.
 
-> 📸 **Espaço para print/GIF** — capture a home do Portal do Cliente da nossa instância (com dados de um cliente de teste).
+> 📸 **Espaço para print/GIF** - capture a home do Portal do Cliente da nossa instância (com dados de um cliente de teste).
 
 ## Boas práticas Menin
 
-- Oriente o cliente a usar o portal **desde a assinatura** — boleto e extrato em autoatendimento poupam o time financeiro.
+- Oriente o cliente a usar o portal **desde a assinatura** - boleto e extrato em autoatendimento poupam o time financeiro.
 - O que o cliente vê no portal depende do que publicamos (obra, documentos): mantenha as publicações em dia.
 
 ## Passo a passo oficial (prints e GIFs)
@@ -999,7 +1000,7 @@ Tutoriais ilustrados, direto na central do CV (abrem em nova aba):
         title: 'Cadastro de Empresas Correspondentes',
         categorySlug: 'construtor-de-vendas',
         visibility: 'INTERNAL',
-        body: `O Correspondente é o elo principal antes do processo de venda — durante o pré-cadastro ou durante o processo de repasse. Para o correspondente acessar o painel, é necessário criar seu usuário. Antes disso, a **Empresa Correspondente** deve ser cadastrada no CV.
+        body: `O Correspondente é o elo principal antes do processo de venda - durante o pré-cadastro ou durante o processo de repasse. Para o correspondente acessar o painel, é necessário criar seu usuário. Antes disso, a **Empresa Correspondente** deve ser cadastrada no CV.
 
 ## Pré-requisitos
 
@@ -1057,7 +1058,7 @@ Defina o(s) dia(s) da semana e o intervalo de horas.
 
 ![Configuração de horário](https://assets.cvcrm.com.br/kb/data/medias/309977/B4493531DCF09BD803448969218BF13F.png)
 
-> **Obs.:** o sistema aceita apenas horários inteiros — se o padrão for 8:30–10:30, registre 8:00–10:00. Os agendamentos ficam limitados a no máximo 7 dias ou ao valor definido no campo de agendamento.
+> **Obs.:** o sistema aceita apenas horários inteiros - se o padrão for 8:30-10:30, registre 8:00-10:00. Os agendamentos ficam limitados a no máximo 7 dias ou ao valor definido no campo de agendamento.
 
 ## Configurando as Agências
 
@@ -1125,7 +1126,7 @@ Além disso, é necessário que a **Empresa Correspondente** já esteja cadastra
 
 ![Campos opcionais](https://assets.cvcrm.com.br/kb/data/medias/154322/3D3E6B166AD2C5634324889455B4FA6A.png)
 
-**5.** Também é possível criar uma senha e ativar a gestão de mensagens. Com a **Gestão de Mensagem** ativa, o usuário visualiza mensagens enviadas do pré-cadastro, reserva e repasse — exibidas em **"Alertas para Você"** na tela inicial.
+**5.** Também é possível criar uma senha e ativar a gestão de mensagens. Com a **Gestão de Mensagem** ativa, o usuário visualiza mensagens enviadas do pré-cadastro, reserva e repasse - exibidas em **"Alertas para Você"** na tela inicial.
 
 ![Gestão de mensagens](https://assets.cvcrm.com.br/kb/data/medias/154322/645D14C6041BFA2260992A0A7F12ECF0.png)
 
@@ -1166,7 +1167,7 @@ Clique em **"Criar nova imobiliária"**.
 - **E-mail e Telefone**
 - **Microempresa:** selecione "Sim" ou "Não"
 
-![Dados obrigatórios — parte 1](https://assets.cvcrm.com.br/kb/data/medias/136701/C4C5FFF584090C48D42294CD0B525ABB.png)
+![Dados obrigatórios - parte 1](https://assets.cvcrm.com.br/kb/data/medias/136701/C4C5FFF584090C48D42294CD0B525ABB.png)
 
 - **Estado, Cidade, Logradouro, Endereço:** localidade da imobiliária
 - **CRECI:** número do CRECI
@@ -1175,20 +1176,20 @@ Clique em **"Criar nova imobiliária"**.
 - **Autocadastro Corretor:** "Sim" para exibir a imobiliária no "Cadastre-se" do Painel do Corretor
 - **Ativo no painel:** se Inativo, a imobiliária ficará oculta em outras funcionalidades
 
-![Dados obrigatórios — parte 2](https://assets.cvcrm.com.br/kb/data/medias/136701/05FDAE42FBC0583E70B74DBC95A2EED6.png)
+![Dados obrigatórios - parte 2](https://assets.cvcrm.com.br/kb/data/medias/136701/05FDAE42FBC0583E70B74DBC95A2EED6.png)
 
 **Campos opcionais:**
 
 - **CNPJ para Faturamento:** documento PJ para confirmação de pagamentos
 - **Celular, Inscrição estadual e municipal, CEP**
 
-![Campos opcionais — parte 1](https://assets.cvcrm.com.br/kb/data/medias/136701/708C68155BED198D3A1D6B694D9D4BC3.png)
+![Campos opcionais - parte 1](https://assets.cvcrm.com.br/kb/data/medias/136701/708C68155BED198D3A1D6B694D9D4BC3.png)
 
 - **Bairro, Número, Complemento**
 - **Logo:** imagem recomendada de até 60 px de altura e 120 px de largura
 - **Código interno:** usado para integrações
 
-![Campos opcionais — parte 2](https://assets.cvcrm.com.br/kb/data/medias/136701/E8047E01ED39F5627BEFCD98EB3A9745.png)
+![Campos opcionais - parte 2](https://assets.cvcrm.com.br/kb/data/medias/136701/E8047E01ED39F5627BEFCD98EB3A9745.png)
 
 Também é possível adicionar os dados do **Gerente** e do **Diretor** (nome, CPF, telefone, celular e e-mail).
 
@@ -1300,11 +1301,11 @@ Você pode cadastrar um corretor **pessoa física** ou **pessoa jurídica**.
 
 ![Opções de cadastro](https://assets.cvcrm.com.br/kb/data/medias/133276/31BB0173DBE81A5D8393DDD2AD5DDBE8.png)
 
-**Pessoa Física — campos obrigatórios em "Dados do Corretor":** CPF, nome, gênero, nascimento e telefone.
+**Pessoa Física - campos obrigatórios em "Dados do Corretor":** CPF, nome, gênero, nascimento e telefone.
 
 ![Campos pessoa física](https://assets.cvcrm.com.br/kb/data/medias/133276/ED2E16EAFF542EBBD00DA9FB5018BC46.png)
 
-**Pessoa Jurídica — campos obrigatórios em "Dados do Corretor":** CNPJ, razão social, nome fantasia e data de registro.
+**Pessoa Jurídica - campos obrigatórios em "Dados do Corretor":** CNPJ, razão social, nome fantasia e data de registro.
 
 ![Campos pessoa jurídica](https://assets.cvcrm.com.br/kb/data/medias/133276/B69EF742013BCA4ECC90B421B7E52FEA.png)
 
@@ -1508,15 +1509,1207 @@ Os campos são divididos em 2 colunas:
 
 - **Reserva e pré-cadastro (módulo do cliente):** controla os campos obrigatórios feitos pelo próprio cliente através do painel de cadastro.
 
-![Coluna módulo do cliente — parte 1](https://assets.cvcrm.com.br/kb/data/medias/280965/3AE4429728EBE1BB2D024F6BDDBFB8C6.png)
+![Coluna módulo do cliente - parte 1](https://assets.cvcrm.com.br/kb/data/medias/280965/3AE4429728EBE1BB2D024F6BDDBFB8C6.png)
 
-![Coluna módulo do cliente — parte 2](https://assets.cvcrm.com.br/kb/data/medias/280965/ED155A5178261CC06A6EDC8A94569E17.png)
+![Coluna módulo do cliente - parte 2](https://assets.cvcrm.com.br/kb/data/medias/280965/ED155A5178261CC06A6EDC8A94569E17.png)
 
 Cada coluna tem subcolunas que definem se o campo será **obrigatório** ou deve ser **retirado** do cadastro. Por exemplo, para tornar "País de origem" obrigatório na reserva (painéis do gestor/corretor/imobiliária) e removê-lo do pré-cadastro e do módulo do cliente:
 
 ![Exemplo de configuração](https://assets.cvcrm.com.br/kb/data/medias/280965/33C0909C26EEE4369FE7BE52772DC846.gif)
 
-Se um campo não precisar ser obrigatório mas ainda dever aparecer, basta não marcar as colunas **"Obrigatório"** e **"Retirar"** — o campo continuará exibido com preenchimento opcional.`,
+Se um campo não precisar ser obrigatório mas ainda dever aparecer, basta não marcar as colunas **"Obrigatório"** e **"Retirar"** - o campo continuará exibido com preenchimento opcional.`,
+    },
+
+    // ═══════════════════════════ CATEGORIA: PROCEDIMENTOS ═══════════════════════════
+    // POPs (Procedimentos Operacionais) importados de PDF/Word. Criados como
+    // rascunho (status: 'DRAFT') para validação e publicação manual pela equipe.
+    // Visibilidade INTERNAL. Subcategorias temáticas (fluxo-de-repasse, reservas,
+    // contratos, cartorio, financeiro). NÃO entram no LINK_TARGETS enquanto forem
+    // rascunho (evita link "morto" a partir de artigos publicados); ligar quando publicar.
+
+    // ── Fluxo de Repasse (4 etapas) ──
+    {
+        code: 'REPASSE-CONTRATACAO',
+        slug: 'fluxo-repasse-contratacao',
+        title: 'Fluxo de Repasse - Contratação (MCMV)',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'fluxo-de-repasse',
+        authorUserId: 1, // Gustavo Diniz
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Fluxo de Repasse Contratação', 'Repasse Contratação', 'Contratação MCMV'],
+        body: `# Fluxo de Repasse - Contratação (MCMV)
+
+> **Construtor de Vendas** · Fluxo de Repasse (MCMV)
+> **Parte 1 de 3** · Próxima etapa: [Aprovação](/academy/kb/procedimentos/fluxo-repasse-aprovacao)
+
+O **workflow de Repasse** define as etapas e processos necessários para a conclusão dos contratos dentro do **CV CRM** da construtora. Cada etapa possui atribuições específicas para garantir a conformidade e a eficiência do trâmite. Este documento descreve a etapa de **Contratação**.
+
+## Etapas do fluxo (Contratação)
+
+**Em Espera**
+O processo se inicia após a assinatura dos contratos da Menin, gerando um Repasse na etapa "Em Espera".
+
+**Abertura SIOPI**
+Informar no sistema a "Abertura do SIOPI".
+
+**Ressarcimento FGTS**
+Informar no sistema que o processo está em "Ressarcimento FGTS".
+
+**Assinatura de Formulários**
+Cliente e responsáveis assinam os documentos necessários para formalizar o processo.
+
+**Enviado CEHOP**
+Informar no sistema que o processo está em "Enviado CEHOP". Possível retorno com "Inconforme CEHOP" (reajustar e enviar novamente).
+
+**Conforme CEHOP**
+Informar no sistema que o processo está em "Conforme CEHOP". Caso já disponível, anexar a "Carta Proposta" na aba de Documentos do Repasse.
+
+**Contratação CAIXA**
+Informar no sistema que o processo está em "Contratação CAIXA".
+
+**Entrevista Comercial CAIXA**
+Informar no sistema que o processo está em "Entrevista Comercial CAIXA".
+
+**Contrato Emitido CAIXA**
+Informar no sistema que o processo está em "Contrato Emitido CAIXA". Anexar o **Contrato Caixa (CEF)** na aba de Documentos do CV, com o tipo **"CONTRATO CEF"**. Passar para a próxima etapa após anexar.
+
+## Possíveis interrupções
+
+- **Cancelamento** - o processo pode ser cancelado em qualquer etapa anterior à assinatura, caso não seja possível seguir com o Repasse.
+- **Distrato** - formalização do cancelamento do contrato por ambas as partes.
+- **Cessão** - transferência do contrato para um novo titular.
+
+## Considerações finais
+
+O fluxo de Repasse deve ser seguido conforme definido para garantir o pleno funcionamento; todo o processo é monitorado e historiado. É responsabilidade da construtora garantir o suporte e os ajustes técnicos necessários - em caso de problemas, erros ou ajustes no sistema, informar o suporte imediatamente. Cabe aos usuários, gestores e correspondentes, seguir as etapas e executar todos os passos (informativos ou de envio de documentos) para a sequência correta do fluxo.
+
+---
+
+**Dúvidas:** Gustavo Diniz - gustavo.diniz@menin.com.br`,
+    },
+    {
+        code: 'REPASSE-APROVACAO',
+        slug: 'fluxo-repasse-aprovacao',
+        title: 'Fluxo de Repasse - Aprovação (MCMV)',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'fluxo-de-repasse',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Fluxo de Repasse Aprovação', 'Repasse Aprovação', 'Aprovação MCMV'],
+        body: `# Fluxo de Repasse - Aprovação (MCMV)
+
+> **Construtor de Vendas** · Fluxo de Repasse (MCMV)
+> **Parte 2 de 3** · Etapa anterior: [Contratação](/academy/kb/procedimentos/fluxo-repasse-contratacao) · Próxima: [Cartório](/academy/kb/procedimentos/fluxo-repasse-cartorio)
+
+Continuação do **workflow de Repasse** no **CV CRM**, a partir de "Contrato Emitido CAIXA". Este documento descreve a etapa de **Aprovação**.
+
+## Etapas do fluxo (Aprovação)
+
+**Aguardando Contrato Construtora**
+Ao passar para esta etapa, o gerente responsável pelo empreendimento gera os documentos necessários (**Confissão de Dívida**) e os anexa na aba de Documentos do Repasse. Após finalizar, passar para a próxima etapa.
+
+**Análise Contratos**
+A construtora visualiza os documentos anexados - **Confissão de Dívida** e **Contrato CEF**. Em caso de erro em algum deles, retorno para "Inconforme Contrato" ou "Inconforme Confissão". Em caso de aprovação, passar para a próxima etapa.
+
+> 🔎 É nesta etapa que atua a análise automática - veja o procedimento [Validador de Contratos](/academy/kb/procedimentos/validador-de-contratos).
+
+**Autorizado Envio Assinatura**
+As permissões voltam ao correspondente e os contratos anexados estão aptos para envio - já é possível enviar para assinatura digital ou coletar a assinatura. Após enviar, passar para a próxima etapa.
+
+**Enviado Assinatura**
+Informar no sistema que foi "Enviado assinatura". Quando assinados por todas as partes, anexar os contratos **"Confissão de Dívida"** e **"Contrato CEF" ASSINADOS** na aba de Documentos do Repasse, com os tipos **"CONTRATO CEF - ASSINADO"** e **"CONFISSÃO DE DÍVIDA - ASSINADO"** (em casos sem confissão, anexar documento em branco). Esses anexos são **obrigatórios** para seguir. Após, passar para a próxima etapa.
+
+**Contratos Assinados MCMV**
+Cabe à construtora coletar as informações do Repasse para seguir com o processo de **Faturamento**. Após finalizar, passar para a próxima etapa.
+
+**Faturado SIENGE MCMV**
+Informativo de que o contrato já seguiu para Faturamento e está liberado para prosseguir nas etapas de **Cartório**.
+
+## Possíveis interrupções
+
+- **Cancelamento** - em qualquer etapa anterior à assinatura.
+- **Distrato** - formalização do cancelamento por ambas as partes.
+- **Cessão** - transferência do contrato para um novo titular.
+
+## Considerações finais
+
+O fluxo de Repasse deve ser seguido conforme definido; todo o processo é monitorado e historiado. Em caso de problemas, erros ou ajustes no sistema, informar o suporte imediatamente. Cabe aos gestores e correspondentes seguir as etapas e executar todos os passos para a sequência correta do fluxo.
+
+---
+
+**Dúvidas:** Gustavo Diniz - gustavo.diniz@menin.com.br`,
+    },
+    {
+        code: 'REPASSE-CARTORIO',
+        slug: 'fluxo-repasse-cartorio',
+        title: 'Fluxo de Repasse - Cartório (MCMV)',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'fluxo-de-repasse',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Fluxo de Repasse Cartório', 'Repasse Cartório', 'Cartório MCMV'],
+        body: `# Fluxo de Repasse - Cartório (MCMV)
+
+> **Construtor de Vendas** · Fluxo de Repasse (MCMV)
+> **Parte 3 de 3** · Etapa anterior: [Aprovação](/academy/kb/procedimentos/fluxo-repasse-aprovacao)
+
+Etapa final do **workflow de Repasse** no **CV CRM**, a partir de "Faturado SIENGE MCMV". Este documento descreve a etapa de **Cartório**.
+
+> 📌 Para o detalhamento do registro (RI Digital, ITBI, saldo do empreendimento), veja o procedimento [Registro de Contratos](/academy/kb/comercial/registro-de-contratos-empreendimentos-mcmv).
+
+## Etapas do fluxo (Cartório)
+
+**ITBI**
+Cálculo e pagamento do imposto necessário.
+
+**Preparação para Envio Cartório**
+Conferência final da documentação e preparação do envio ao cartório para registro.
+
+**Entrada Cartório RI**
+Documentação enviada ao cartório para registro oficial.
+
+**Devolução**
+Etapa utilizada para devoluções e ajustes do cartório. Após a correção, retornar para "Entrada Cartório RI".
+
+**Contrato Registrado**
+Finalização do registro no cartório.
+
+**Envio para Conformidade CEHOP**
+Validação final de conformidade.
+
+**Inconforme CEHOP**
+Etapa para ajustes da inconformidade. Após a correção, retornar para "Envio para Conformidade CEHOP".
+
+**Conforme Contrato CEHOP**
+Retorno CONFORME do CEHOP.
+
+**Finalizado**
+Após a entrega da garantia na Caixa e a finalização de TODO o fluxo de registro, finalizar o processo de Repasse do cliente nesta última etapa.
+
+## Possíveis interrupções
+
+- **Distrato** - formalização do cancelamento por ambas as partes.
+- **Cessão** - transferência do contrato para um novo titular.
+
+## Considerações finais
+
+O fluxo de Repasse deve ser seguido conforme definido; todo o processo é monitorado e historiado. Em caso de problemas, erros ou ajustes no sistema, informar o suporte imediatamente. Cabe aos gestores e correspondentes seguir as etapas e executar todos os passos para a sequência correta do fluxo.
+
+---
+
+**Dúvidas:** Gustavo Diniz - gustavo.diniz@menin.com.br`,
+    },
+    {
+        code: 'REPASSE-SBPE',
+        slug: 'fluxo-repasse-sbpe',
+        title: 'Fluxo de Repasse - SBPE',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'fluxo-de-repasse',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Fluxo de Repasse SBPE', 'Repasse SBPE', 'SBPE'],
+        body: `# Fluxo de Repasse - SBPE
+
+> **Construtor de Vendas** · Fluxo de Repasse (SBPE)
+
+Fluxo de Repasse para contratos **SBPE** (Sistema Brasileiro de Poupança e Empréstimo) no **CV CRM** - distinto do fluxo MCMV. Cada etapa possui atribuições específicas para garantir a conformidade e a eficiência do trâmite.
+
+## Etapas do fluxo (SBPE)
+
+**Em Espera**
+O processo se inicia após a assinatura do **Contrato de Compra e Venda** da Menin, gerando um Repasse na etapa "Em Espera". O gerente responsável pelo empreendimento deve anexar o **Contrato de Compra e Venda ASSINADO** do cliente na aba de Documentos, com o tipo **"CONTRATO SBPE"**. Após anexar, seguir para a próxima etapa.
+
+**Contrato Assinado SBPE**
+Cabe à construtora fazer o **faturamento** do cliente. Após o faturamento, passar para a próxima etapa.
+
+**Finalizado**
+Etapa que informa a finalização do processo de Repasse.
+
+## Possíveis interrupções
+
+- **Cancelamento** - em qualquer etapa anterior à assinatura, caso não seja possível seguir com o Repasse.
+- **Distrato** - formalização do cancelamento por ambas as partes.
+- **Cessão** - transferência do contrato para um novo titular.
+
+## Considerações finais
+
+O fluxo de Repasse deve ser seguido conforme definido; todo o processo é monitorado e historiado. Em caso de problemas, erros ou ajustes no sistema, informar o suporte imediatamente. Cabe aos gestores e correspondentes seguir as etapas e executar todos os passos para a sequência correta do fluxo.
+
+---
+
+**Dúvidas:** Gustavo Diniz - gustavo.diniz@menin.com.br`,
+    },
+
+    // ── Contratos ──
+    {
+        code: 'CONF01',
+        slug: 'confissao-de-divida',
+        title: 'Geração de Contratos de Confissão de Dívida',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'contratos',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['CONF01', 'Confissão de Dívida', 'Geração de Contratos de Confissão de Dívida'],
+        body: `# Geração de Contratos de Confissão de Dívida
+
+> **Procedimento Operacional - Departamento Comercial**
+> **Código:** CONF01 · **Revisão:** 02
+
+**Objetivo:** estabelecer as diretrizes e responsabilidades para a geração, assinatura e certificação dos contratos de **Confissão de Dívida** vinculados ao **Programa Minha Casa Minha Vida (MCMV)**, assegurando conformidade com os contratos firmados com a **Caixa Econômica Federal**.
+
+## 1. Responsável
+
+O **gestor do empreendimento** é o responsável direto por:
+
+- Gerar o contrato de confissão de dívida;
+- Garantir que todas as informações estejam **corretas e compatíveis** com o **Contrato Caixa (CEF)**;
+- Anexar a confissão de dívida no sistema **CV CRM** para conferência interna;
+- Coletar as assinaturas de **TODOS os envolvidos** (associados, cônjuges e sócios);
+- Garantir a **Certificação Digital** válida de todas as assinaturas;
+- Vincular os documentos pós-assinatura, na etapa de **Repasse** no CV CRM, utilizando os tipos de documento **"Contrato CEF - ASSINADO"** e **"Confissão de Dívida - ASSINADO"**, autorizando-os e deixando na situação **"CONTRATOS ASSINADOS MCMV"**.
+
+## 2. Regras gerais para a Confissão de Dívida
+
+**Assinaturas e certificação**
+
+- Todos os clientes e associados mencionados no **Contrato Caixa (CEF)** devem assinar o documento.
+- Sócios, associados, cônjuges, fiadores - **quaisquer pessoas citadas** na confissão de dívida - devem assinar.
+- A única certificação aceita é a do padrão **ICP-Brasil**, utilizando o **Certificado Digital** de cada assinante.
+- Assinaturas físicas, ou com certificações como "GOV" ou outras, **não serão aceitas** (salvo exceções).
+
+## 3. Requisitos de validação dos contratos
+
+### 3.1 Da ordem de assinatura
+
+- A **Confissão de Dívida** deve ser assinada **ANTERIORMENTE** em relação ao **Contrato Caixa (CEF)**.
+
+### 3.2 Envio e validade contratual
+
+- **NENHUM** contrato com a Caixa será considerado válido sem a **Confissão de Dívida** em anexo.
+
+### 3.3 Coerência das informações
+
+A confissão de dívida deve **refletir fielmente** as informações presentes no Contrato Caixa (CEF):
+
+| Item | Regra |
+| --- | --- |
+| **Data de assinatura** | Deve ser a mesma no Contrato da Caixa e na confissão de dívida. |
+| **Valor de venda** (B.4 no Contrato CEF) | Deve ser igual ao valor de venda do imóvel, mesmo que a avaliação divirja. |
+| **Descontos Construtora** | São descritos somente na confissão de dívida; são retirados do valor da cláusula B.4.2 no Contrato CEF. |
+| **Recursos próprios** (à vista ou parcelado) | Os valores somados - recurso à vista, parcelado e Desconto Construtora - devem bater **exatamente** com os descritos no B.4.2 do Contrato da Caixa. |
+| **Subsídio** Estadual, Federal e FGTS | Todos os valores devem estar **rigorosamente iguais** nos dois documentos. |
+
+## 4. Observações importantes
+
+- **Diferenças de centavos**, divergência de datas ou assinatura inválida podem comprometer a formalização do contrato junto à Caixa, podendo gerar atrasos e retrabalho.
+- Em casos em que o cliente teve recorrência de cobrança da entrada **antes** da assinatura do Contrato Caixa, é preciso solicitar ao setor de **Contas a Receber** o **extrato do cliente**, lançar a soma dos valores pagos e a data do último pagamento no campo **"Recurso Próprio à Vista"** no CV, informando que o valor já pago foi uma **"entrada"**, e recalculando o parcelamento restante.
+- Recomenda-se realizar **validação dupla** dos dados antes do envio para conferência interna.
+- Após a assinatura, caso seja encontrada divergência entre os contratos, é de responsabilidade do gestor **gerar um novo contrato** e garantir a assinatura do cliente o mais rápido possível - sendo aceitas correções **somente dentro do mês da assinatura**.
+
+## 5. Conclusão
+
+A correta emissão, assinatura e envio da confissão de dívida é fundamental para garantir a formalização da venda. O não cumprimento deste procedimento pode gerar **riscos jurídicos e comerciais** para o empreendimento.
+
+---
+
+**Dúvidas:** Departamento Comercial - comercial@menin.com.br`,
+    },
+    {
+        code: 'VALC01',
+        slug: 'validador-de-contratos',
+        title: 'Validador de Contratos (Validação Automática)',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'contratos',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['VALC01', 'Validador de Contratos', 'Validação Automática de Contratos'],
+        body: `# Validador de Contratos (Validação Automática)
+
+> **Procedimento Operacional - Departamento Comercial**
+> **Código:** VALC01 · **Revisão:** 01
+
+Este procedimento aplica-se a todos os contratos de **Confissão de Dívida** e **Contrato Caixa (CEF)**, e deve ser realizado **antes do processo de assinatura**.
+
+> O **gestor do empreendimento** é o responsável final por garantir o cumprimento de todo o procedimento descrito.
+
+## 1. Objetivo
+
+Estabelecer o procedimento para utilização do **sistema validador integrado ao CV CRM**, destinado à análise automática dos contratos dos clientes na etapa de **Repasse** - posterior à emissão do contrato e anterior à assinatura.
+
+## 2. Abrangência
+
+Aplica-se a todos os contratos **MCMV** em que o cliente se encontra na etapa de Repasse, especificamente na fase **"Geração Contratos Construtora"**.
+
+## 3. Procedimentos
+
+### 3.1 Emissão e anexação dos documentos necessários
+
+- O **CCA** é responsável por anexar o **Contrato Caixa** do cliente nos documentos do Repasse.
+- Com base no Contrato Caixa, gerar o **termo de confissão de dívida** na etapa de contratos da reserva.
+- Anexar o Contrato Caixa nos documentos da reserva, com o tipo definido como **"Contrato CEF"**.
+- Anexar o termo de confissão de dívida nos documentos da reserva, com o tipo definido como **"Confissão de Dívida"**.
+- Os documentos para validação devem sempre estar com o campo **"Pessoa"** definido como **"Titular"**.
+
+> 📸 **Espaço para print** - exemplo de como os documentos devem ficar anexados (insira a imagem ao editar o artigo).
+
+### 3.2 Envio para análise automatizada
+
+- Após anexar ambos os documentos, alterar o Repasse para a etapa **"Análise Contratos"**.
+- O sistema de automação realiza varreduras **a cada 15 minutos**, verificando se os documentos necessários foram anexados corretamente.
+- Estando os documentos presentes, o sistema os envia automaticamente para o **validador de contratos com IA**.
+
+### 3.3 Resultado da análise
+
+- **Aprovado:** o Repasse segue automaticamente para **"Autorizado Envio Assinatura"**.
+- **Reprovado:** o Repasse segue automaticamente para **"Reprovada Automação"**.
+- Em ambos os casos, o campo de **mensagens** traz a descrição detalhada do resultado da análise.
+
+## 4. Responsabilidades
+
+- Os gestores dos empreendimentos são responsáveis por garantir que a **minuta** e o **termo de confissão de dívida** sejam corretamente gerados e anexados no CV CRM antes do envio para análise.
+- O gestor deve acompanhar as mensagens geradas pelo sistema, garantindo os ajustes necessários em caso de reprovação.
+
+## 5. Observações importantes
+
+- O correto preenchimento e anexação dos documentos é **essencial** para que a automação funcione adequadamente.
+- Qualquer divergência ou ausência de documentos **impedirá o andamento** do processo, trazendo também uma mensagem de erro no Repasse.
+- Dúvidas devem ser direcionadas ao setor comercial responsável.
+- Em caso de falhas no funcionamento, reportar diretamente ao setor comercial responsável.
+
+---
+
+**Autor e responsável:** Gustavo Diniz (Comercial) - gustavo.diniz@menin.com.br`,
+    },
+
+    // ── Reservas ──
+    {
+        code: 'SIER01',
+        slug: 'envio-de-reservas-ao-sienge',
+        title: 'Envio das Reservas ao Sienge',
+        categorySlug: 'construtor-de-vendas', // movido: Construtor de Vendas › Reservas
+        subcategorySlug: 'reservas',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['SIER01', 'Envio de Reservas ao Sienge', 'Envio Sienge', 'Integração Sienge'],
+        body: `# Envio das Reservas ao Sienge
+
+> **Procedimento Operacional - Departamento Comercial**
+> **Código:** SIER01 · **Revisão:** 01
+
+Este procedimento aplica-se a **todos os contratos que assinaram o contrato de "Reserva"** na compra e venda, com foco em garantir o funcionamento e o recebimento correto das informações na integração entre o **CV CRM** e o **Sienge**.
+
+> O **gestor da operação** é o responsável final por garantir o cumprimento de todo o procedimento descrito.
+
+## 1. Identificação de erros de integração
+
+- Por padrão, toda reserva no **CV CRM**, após a assinatura por todas as partes, é alterada para a etapa **"Envio Sienge"** e tem o módulo de **Repasse** do cliente criado.
+- Alguns erros na integração entre o CV CRM e o Sienge podem causar a falha do envio. Os mais comuns são:
+  - **Unidade não disponível**;
+  - **Profissão não existente** na base de dados;
+  - **Número de telefone** fora do padrão utilizado.
+- Para diferenciar um erro de uma reserva funcional, acesse a **Listagem** no campo de **Reservas** no CV CRM. Somente as reservas na etapa **"Envio Sienge"** podem apresentar esse erro, caracterizado pelo **triângulo com a exclamação**.
+- Ao abrir a reserva, o erro é informado logo na página inicial.
+
+> 📸 **Espaço para print** - capture a listagem de reservas destacando o ícone de erro e a tela da reserva com a mensagem (insira a imagem ao editar o artigo).
+
+## 2. Responsabilidades
+
+É responsabilidade do **gestor** garantir:
+
+- O **ajuste do problema** descrito na reserva e a habilitação do reenvio pelo botão **"HABILITAR REENVIO"**;
+- Em caso de erros complexos ou desconhecimento da informação solicitada, o **setor comercial interno** fica à disposição para auxiliar no ajuste.
+
+## 3. Observações importantes
+
+- O ajuste da reserva deve ser feito **antes da assinatura do Contrato Caixa (CEF)** pelo cliente, pois é necessário ter a informação correta dentro do Sienge para seguir as etapas de faturamento internas.
+
+---
+
+**Dúvidas:** Departamento Comercial - comercial@menin.com.br`,
+    },
+    {
+        code: 'CCC01',
+        slug: 'cancelamento-de-reservas-pre-assinatura-caixa',
+        title: 'Cancelamento de Reservas (Pré-assinatura Caixa)',
+        categorySlug: 'construtor-de-vendas', // movido: Construtor de Vendas › Reservas
+        subcategorySlug: 'reservas',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['CCC01', 'Cancelamento de Reservas', 'Cancelamento de Contratos', 'Distrato Pré-assinatura'],
+        body: `# Cancelamento de Reservas (Pré-assinatura Caixa)
+
+> **Procedimento Operacional - Departamento Comercial**
+> **Código:** CCC01 · **Revisão:** 01
+
+Este procedimento aplica-se a todos os contratos que ainda se encontram **antes da etapa "Contratos Assinados MCMV"**, no módulo **Repasse** do **CV CRM**, e que por qualquer motivo venham a ser **cancelados, distratados ou desistidos antes da assinatura do contrato com a Caixa**.
+
+> O **gestor da operação** é o responsável final por garantir o cumprimento de todo o procedimento descrito.
+
+## 1. Identificação do cancelamento
+
+Quando um cliente manifestar intenção de cancelar, distratar ou desistir da compra da unidade:
+
+- Verifique se a reserva se encontra **antes da etapa "Contratos Assinados MCMV"**, no módulo Repasse do CV CRM;
+- Confirme que **ainda não houve assinatura** do contrato com a Caixa Econômica Federal.
+
+## 2. Atualização no CV CRM
+
+- Acesse o módulo **Reservas** no CV CRM;
+- Localize a reserva correspondente ao cliente;
+- Altere a etapa da reserva para **"Cancelado"**, conforme o fluxo padrão do sistema.
+
+> Os demais módulos são cancelados em conjunto: **Lead**, **Pré-cadastro**, **Reserva** e **Repasse**.
+
+## 3. Comunicação formal
+
+Após realizar o cancelamento no CV CRM, envie um e-mail com as informações:
+
+- **Para:** isabela.scorsato@menin.com.br
+- **Com cópia (Cc):** gustavo.diniz@menin.com.br
+- **Conteúdo:** nome, documento, empreendimento, unidade e motivo da desistência.
+
+> Em casos em que o cliente já tenha pago algum valor de **entrada** para a construtora, é necessária uma **carta de próprio punho** do cliente solicitando a desistência.
+
+## 4. Responsabilidades
+
+É responsabilidade do gestor garantir:
+
+- O correto cancelamento no sistema CV CRM;
+- O envio do e-mail de notificação à equipe responsável pela atualização no **Sienge**.
+
+## 5. Observações importantes
+
+- **Não** realizar este procedimento para contratos **já assinados** com a Caixa (etapas posteriores a "Contratos Assinados MCMV").
+- Em casos em que o cliente já tenha assinado o Contrato Caixa (CEF), utilize o procedimento de cancelamento relacionado a essa situação - procure a **equipe comercial interna** para mais detalhes.
+- A solicitação do cancelamento deve ser feita **imediatamente** após a confirmação do pedido pelo cliente.
+- O cancelamento dentro do **Sienge** deve ser efetuado em até **2 dias úteis**, para que não haja problema na integração entre o CV CRM e o Sienge.
+
+---
+
+**Dúvidas:** Departamento Comercial - comercial@menin.com.br`,
+    },
+
+    // ── Financeiro ──
+    {
+        code: 'COM01',
+        slug: 'pagamento-de-comissao-mcmv',
+        title: 'Pagamento de Comissão - Empreendimentos MCMV',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'financeiro',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['COM01', 'Pagamento de Comissão', 'Comissão MCMV'],
+        body: `# Pagamento de Comissão - Empreendimentos MCMV
+
+> **Procedimento Operacional - Departamento Comercial**
+> **Código:** COM01 · **Revisão:** 03
+
+**Objetivo:** padronizar a emissão da nota fiscal e do boleto e o pagamento da comissão dos prestadores nos empreendimentos do **Programa Minha Casa Minha Vida (MCMV)**.
+
+## 1. Regras para emissão da nota fiscal
+
+- **Condição para emissão:** a nota fiscal deve ser emitida somente após a confirmação da **assinatura do Contrato Caixa (CEF)** e a validação pelo departamento de **Contas a Receber** da Menin Engenharia.
+- O contrato deve estar na etapa **"Faturado Sienge MCMV"** ou posterior, no ERP **Construtor de Vendas (CV CRM)**, na aba de **Repasse**.
+- A nota fiscal deve ser emitida somente após a **autorização do Gestor** responsável pelo empreendimento.
+- **Período para emissão:** do **dia 01 ao dia 20** de cada mês.
+  > Exemplo: se a assinatura do Contrato Caixa (CEF) ocorrer no dia 21, a emissão da nota fiscal deve ser feita no dia 01 do mês seguinte.
+- A nota fiscal deve conter:
+  - Nome do empreendimento;
+  - Unidade vendida;
+  - Nome do cliente;
+  - CPF do cliente.
+
+## 2. Regras para emissão do boleto
+
+- **Período de vencimento:** no mínimo **28 dias corridos** contando da data de envio ao Financeiro.
+
+## 3. Dos responsáveis
+
+- É responsabilidade do **Gestor** de cada empreendimento gerenciar e solicitar a emissão da NF e do boleto para pagamento da comissão.
+- O Gestor é responsável por **coletar, validar e encaminhar** as informações ao departamento de Contas a Receber da Menin Engenharia.
+- Caso seja a **primeira comissão** paga ao prestador, enviar em anexo o **cartão CNPJ** da empresa em questão.
+
+## 4. Pagamento
+
+- O pagamento será realizado em até **28 (vinte e oito) dias corridos** após o recebimento da nota fiscal pelo departamento de Contas a Receber da Menin Engenharia.
+- O pagamento será feito via **boleto bancário**, que deve estar emitido no **mesmo nome e razão social** da nota fiscal.
+
+## 5. Envio da documentação
+
+- O Gestor responsável deverá enviar a **nota fiscal e o boleto** para o e-mail **isabela.scorsato@menin.com.br** até o **dia 20** de cada mês.
+
+---
+
+**Dúvidas:** Departamento Comercial - comercial@menin.com.br`,
+    },
+    {
+        code: 'DOCP01',
+        slug: 'documentacao-e-parcelamento',
+        title: 'Documentação e Parcelamento',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'financeiro',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['DOCP01', 'Documentação e Parcelamento', 'Parcelamento da Documentação'],
+        body: `# Documentação e Parcelamento
+
+> **Procedimento Operacional - Departamento Comercial**
+> **Código:** DOCP01 · **Revisão:** 01
+
+Este procedimento aplica-se a todos os contratos em que a construtora **não garante** o pagamento da documentação por campanha, e o cliente precisa **parcelar** o valor junto do seu **recurso próprio** no termo de confissão de dívida.
+
+> O **gestor do empreendimento** é o responsável final por garantir o cumprimento de todo o procedimento descrito.
+
+## 1. Objetivo
+
+Estabelecer o padrão para a criação da documentação no **CV CRM**, contemplando os casos em que a documentação seja paga pela construtora, paga à vista pelo cliente ou parcelada pela construtora.
+
+## 2. Abrangência
+
+Aplica-se a todos os contratos registrados no CV CRM que demandem **registro da documentação** vinculada à unidade adquirida.
+
+## 3. Procedimentos
+
+### 3.1 Documentação paga pela construtora (campanha)
+
+- **Nenhum lançamento adicional** deve ser feito no financeiro do cliente.
+- A construtora assume integralmente o custo.
+
+### 3.2 Documentação paga à vista pelo cliente
+
+- A documentação será paga **diretamente entre o cliente e a instituição financeira**, sem necessidade de intermédio da construtora ou descrição dos valores em contrato.
+
+### 3.3 Documentação parcelada pela construtora
+
+Após o lançamento do financeiro da unidade (valores de venda, recursos próprios, financiamento, subsídios etc.), inclua uma **nova série**:
+
+| Campo | Como preencher |
+| --- | --- |
+| **Série** | Documentação |
+| **Como calcular** | Usando o valor total da série |
+| **Dividido em** | Mesma quantidade de parcelas do recurso próprio do cliente |
+| **Valor total** | Valor total da documentação a ser paga |
+| **Primeiro vencimento** | Mesmo vencimento do recurso próprio do cliente |
+
+> Exemplo: se o recurso próprio do cliente foi parcelado em **60 vezes**, a documentação também deverá ser lançada em **60 parcelas**.
+
+## 4. Registro no sistema
+
+- Todos os lançamentos devem ser feitos diretamente no **módulo de Financeiro** do CV CRM.
+
+> 📸 **Espaço para print** - exemplo de como a série "Documentação" deve ser criada e vinculada (insira a imagem ao editar o artigo).
+
+## 5. Responsabilidades
+
+O gestor do empreendimento é o responsável final por garantir:
+
+- A correta inserção das informações no CV CRM;
+- O alinhamento entre os valores de venda da unidade e o lançamento da documentação;
+- A comunicação clara ao cliente sobre a forma de pagamento da documentação.
+
+## 6. Observações importantes
+
+- O parcelamento da documentação **só poderá ser realizado se aprovado previamente** pela construtora ou definido como norma do empreendimento.
+- Qualquer dúvida deverá ser direcionada ao setor comercial.
+
+---
+
+**Autor e responsável:** Gustavo Diniz (Comercial) - gustavo.diniz@menin.com.br`,
+    },
+    {
+        code: 'REEM01',
+        slug: 'reembolso-de-custas',
+        title: 'Reembolso de Custas',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'financeiro',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['REEM01', 'Reembolso', 'Reembolso de Custas', 'Relatório de Despesas'],
+        body: `# Reembolso de Custas
+
+> **Procedimento Operacional - Departamento Comercial**
+> **Código:** REEM01 · **Revisão:** 04
+
+**Objetivo:** padronizar o pagamento de **reembolso de custas** - despesas pessoais, de locomoção ou de **viagem** - aos colaboradores, garantindo a **autorização prévia** de todo gasto e a **documentação completa**.
+
+## ⚠️ Autorização prévia obrigatória
+
+Por diretriz da diretoria, está **terminantemente proibido** pagar custos ou solicitar reembolso **sem autorização prévia**. Para que qualquer valor seja processado, o fluxo é:
+
+1. **Solicite a aprovação ANTES de realizar o gasto.**
+2. **Receba o "ok" formal** do **gestor direto** - por **e-mail** ou **mensagem**.
+3. **Siga o processo padrão de prestação de contas** (seções abaixo).
+
+> ⛔ Gastos realizados **sem o "ok" formal prévio não serão reembolsados**. Dúvidas sobre o processo de aprovação: procure o gestor direto.
+
+## 1. Regras para reembolso de valores
+
+- **Autorização prévia (obrigatória):** o gasto só pode ocorrer **após o "ok" formal** do responsável/gestor direto (ver seção acima). Sem a autorização prévia, o valor **não é reembolsado**.
+- **Método de reembolso:**
+  - Somente para **Pessoa Física**;
+  - Enviar **agência e conta** para devolução;
+  - Enviar **chave Pix** para pagamento;
+  - Valores **acima de R$ 5.000,00** são feitos **somente via TED**.
+
+## Despesas de viagem - documentação obrigatória (CI 004/2026)
+
+O pagamento de **despesas de viagem** é feito **somente** mediante o envio da **documentação completa**, **sem exceções**, e do preenchimento da planilha (modelo da empresa):
+
+- **Relatório de viagem** preenchido e **assinado pelo responsável e pelo superior** (modelo da empresa);
+- **Comprovantes digitalizados** anexados ao e-mail, **contendo o CPF** do colaborador na nota/comprovante;
+- **Comprovantes de pedágio:**
+  - Preferencialmente o **relatório do Sem Parar / Veloe** (ou outro sistema de passagem automática);
+  - Na falta dele, o **ticket do pedágio** com **data e horário** para comprovação.
+- **Prestadores PJ:** o pagamento é feito mediante **emissão de Nota Fiscal**, no valor previamente acordado entre as partes.
+
+> O envio correto das informações e documentos evita **atrasos no pagamento**.
+
+## 2. Termo de reembolso
+
+- Preencher o **Relatório de Despesas** disponibilizado pela empresa com as informações do reembolso (despesas pessoais ou de locomoção).
+- **Assinatura obrigatória:** o documento só é **válido** com a **assinatura da diretoria / liderança direta**. Sem ela, o reembolso **não é processado**.
+- **Digitalize** o termo assinado para **anexá-lo no lançamento do Sienge** (ver seção 3).
+
+> 📥 **Modelo - Relatório de Despesas:** [Baixar a planilha (.xlsx)](https://geeeswzhtzmiparmgpjp.supabase.co/storage/v1/object/public/Office%20Bucket/academy/procedimentos/reembolso/relatorio-de-despesas-reembolso-menin.xlsx?download=Relat%C3%B3rio%20de%20Despesas%20-%20Reembolso%20Menin.xlsx)
+> Preencha esta planilha, assine e anexe na solicitação.
+
+## 3. Efetivação do reembolso (lançamento no Sienge)
+
+> 🔄 **Mudança de processo:** o reembolso deixou de ser pago por solicitação avulsa e passou a ser **lançado no Sienge**.
+
+- O reembolso é **lançado no Sienge**, em **contrato específico de reembolso**, seguindo o **processo padrão de pagamento: Contrato → Medição → Título** (ver [Elaboração de Contratos no Sienge](/academy/kb/sienge/elaboracao-de-contratos) e [Medições no Sienge](/academy/kb/sienge/medicoes-no-sienge)).
+- É aceito **somente para Pessoa Física (PF)**.
+- O favorecido precisa estar **cadastrado como credor/fornecedor no Sienge**. Se ainda não estiver, **solicite o cadastro antes** do lançamento - ver [Cadastro de Credor / Fornecedor no Sienge](/academy/kb/procedimentos/cadastro-credor-fornecedor-sienge).
+- O **documento assinado** (Relatório de Despesas + recibos digitalizados) deve ser **anexado no próprio lançamento do Sienge** - **sem o anexo, o pagamento não é liberado**. Para viagens, anexar também a documentação da seção de viagem.
+
+---
+
+**Dúvidas:** Departamento Comercial - comercial@menin.com.br`,
+    },
+    {
+        code: 'PRE02',
+        slug: 'pagamento-de-premiacao-de-venda',
+        title: 'Pagamento de Premiação por Venda/Campanha',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'financeiro',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['PRE02', 'Premiação', 'Pagamento de Premiação', 'Premiação de Venda', 'Campanha'],
+        body: `# Pagamento de Premiação por Venda/Campanha
+
+> **Procedimento Operacional - Departamento Comercial**
+> **Código:** PRE02 · **Revisão:** 02
+
+**Objetivo:** padronizar a emissão da nota fiscal e do boleto e o pagamento das **premiações de venda/campanha** nos empreendimentos.
+
+## 1. Regras para emissão da nota fiscal
+
+**Responsável e envio mensal**
+
+- O **Gestor** do empreendimento é responsável por levantar **todas as premiações a pagar do período** e enviá-las em um **único e-mail** ao departamento Comercial da Menin **até o dia 10 de cada mês**.
+
+**Condições e validação**
+
+- A nota fiscal só deverá ser emitida após:
+  - a confirmação da **assinatura do Contrato Caixa (CEF)**;
+  - a **validação pelo departamento Comercial** da Menin, que retornará via e-mail solicitando a emissão das notas fiscais correspondentes.
+- O contrato deve estar na etapa **"Faturado Sienge MCMV"** ou posterior, no **CV CRM**, aba **Repasse**.
+- A emissão das NFs pode ocorrer **somente após autorização via e-mail**.
+
+**Emissão, retorno e início das tratativas de pagamento**
+
+- Após a validação e a solicitação do Comercial, o Gestor deve solicitar a emissão das NFs nos valores determinados e **reenviá-las** ao departamento Comercial, que iniciará as tratativas de pagamento.
+- Neste momento **ainda não deve ser emitido nenhum boleto** nem informada qualquer programação de pagamento.
+
+**Dados obrigatórios na NF**
+
+- Nome do empreendimento;
+- Unidade vendida;
+- Nome do cliente;
+- CPF do cliente;
+- Campanha em questão.
+
+## 2. Regras para emissão do boleto
+
+- Após o envio da nota fiscal, o departamento fará toda a tratativa necessária para a **liberação do saldo** no empreendimento dentro do ERP **Sienge**.
+- Com a confirmação da liberação, será solicitada a emissão dos boletos com **D+7 dias** após a solicitação.
+- A solicitação dos boletos pode ser feita **em conjunto ou separadamente**, de acordo com as liberações no sistema e as demandas de pagamento.
+
+## 3. Dos responsáveis
+
+- É responsabilidade do **Gestor** de cada empreendimento gerenciar e solicitar a emissão da NF e do boleto para pagamento da premiação em suas determinadas etapas.
+- O Gestor é responsável por **coletar, validar e encaminhar** as informações ao departamento Comercial da Menin.
+
+## 4. Pagamento
+
+- O pagamento será realizado em até **07 (sete) dias corridos** após o recebimento do boleto pelo departamento Comercial da Menin.
+- O pagamento será feito via **boleto bancário**, que deve estar emitido no **mesmo nome e razão social** da nota fiscal.
+- **Não informar prazos** para o pagamento - pode variar de acordo com o relacionamento já existente com a empresa.
+
+## 5. Envio da documentação
+
+- O Gestor responsável deverá enviar a **nota fiscal e o boleto**, em suas respectivas etapas, ao e-mail **comercial@menin.com.br**.
+
+---
+
+**Dúvidas:** Departamento Comercial - comercial@menin.com.br`,
+    },
+
+    // ── Reservas (vídeo-tutoriais do CV CRM) ──
+    {
+        code: 'CV-PRE-CADASTRO',
+        slug: 'pre-cadastro-cv-crm',
+        title: 'Como realizar um Pré-Cadastro (CV CRM)',
+        categorySlug: 'construtor-de-vendas',
+        subcategorySlug: 'pre-cadastro', // subcategoria própria do Pré-Cadastro
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Pré-Cadastro', 'Pré-cadastro CV', 'Como fazer um pré-cadastro'],
+        payload: { embeds: [{ type: 'VIDEO', ref: 'x-PDK2Qd1zY', url: 'https://youtu.be/x-PDK2Qd1zY', durationSec: 286, title: 'Treinamento Menin x CV CRM: Como realizar um Pré-Cadastro' }] },
+        body: `# Como realizar um Pré-Cadastro (CV CRM)
+
+> **Treinamento - Construtor de Vendas (CV CRM)** · Vídeo + passo a passo
+> Primeira etapa da jornada de venda: o **pré-cadastro** leva o cliente à análise de crédito do correspondente bancário.
+
+## 🎥 Vídeo do passo a passo
+
+@[VIDEO:x-PDK2Qd1zY]
+
+> Não vê o player acima? [Assista no YouTube](https://youtu.be/x-PDK2Qd1zY).
+
+## Passo a passo
+
+1. **Acesse o CV CRM.** Na página inicial, passe o mouse em **Pré-cadastro** e clique em **Novo pré-cadastro**.
+2. **Selecione o empreendimento** desejado e clique em **Abrir empreendimento**.
+3. **Dados do cliente:** informe o **CPF** e clique em **Buscar**. Preencha o formulário com o máximo de informações.
+   - Os campos com **asterisco** são obrigatórios. Quanto mais completo, mais fácil a análise bancária.
+   - **Profissão:** use o seletor; se a profissão não existir na lista, digite no campo abaixo e prossiga.
+   - **Fator social:** use para adicionar **dependentes**, se necessário.
+4. **Associado (cônjuge/participantes):** o processo é o mesmo do cliente - informe o **CPF**, clique em **Buscar** e preencha. Se a residência for a mesma, use **"Preencher com dados do cliente"**.
+   - ⚠️ O **e-mail e o telefone do associado precisam ser diferentes** dos do cliente (são usados no envio de documentos para assinatura).
+   - Use sempre **informações verdadeiras** - esses dados são apresentados ao correspondente bancário.
+5. Confirme as informações e **dê sequência**. O pré-cadastro está criado.
+6. Clique em **Administrar pré-cadastro**. Preencha os **campos adicionais** que auxiliam na avaliação.
+7. **Documentos** (menu à esquerda): selecione o **tipo de documento** e a **pessoa** a quem pertence. São **4 documentos obrigatórios** (há outros opcionais que ajudam na análise). Arraste/anexe o arquivo e clique em **Adicionar**. Acompanhe a **barra de progresso**.
+   - Para o **associado**, repita o processo - confira sempre o **tipo de associado** antes de enviar.
+8. Volte à aba **Informações** e **passe para "pasta completa"** (libera novas opções).
+9. **Enviar para análise:** clique em **Análise de crédito associativo** e confirme. Aguarde o retorno do correspondente.
+10. **Acompanhar a situação:** menu do topo → **Pré-cadastro → Listagem**. À direita de cada pré-cadastro aparece a **situação** (ex.: *Aprovada*). Ao abrir, você vê as **condições aprovadas** para informar ao cliente.
+
+> ✅ Com o pré-cadastro **aprovado**, o próximo passo é a **Reserva da unidade** - veja [Como realizar uma Reserva de Unidade](/academy/kb/construtor-de-vendas/reserva-de-unidade-cv-crm).
+
+---
+
+*Passo a passo transcrito do vídeo de treinamento. Em caso de divergência com a tela atual do CV, confirme com o setor Comercial.*`,
+    },
+    {
+        code: 'CV-RESERVA',
+        slug: 'reserva-de-unidade-cv-crm',
+        title: 'Como realizar uma Reserva de Unidade (CV CRM)',
+        categorySlug: 'construtor-de-vendas', // tutorial do CV CRM
+        subcategorySlug: 'reservas',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Reserva de Unidade', 'Como fazer uma reserva', 'Reserva CV'],
+        payload: { embeds: [{ type: 'VIDEO', ref: 'rl5cULIcH9c', url: 'https://youtu.be/rl5cULIcH9c', durationSec: 319, title: 'Treinamento Menin x CV CRM: Como realizar uma Reserva de Unidade' }] },
+        body: `# Como realizar uma Reserva de Unidade (CV CRM)
+
+> **Treinamento - Construtor de Vendas (CV CRM)** · Vídeo + passo a passo
+> A **reserva** é feita a partir de um **pré-cadastro aprovado** e trava a unidade para o cliente.
+
+## 🎥 Vídeo do passo a passo
+
+@[VIDEO:rl5cULIcH9c]
+
+> Não vê o player acima? [Assista no YouTube](https://youtu.be/rl5cULIcH9c).
+
+## Passo a passo
+
+1. No CV CRM, menu do topo → **Pré-cadastro → Listagem**. Abra o pré-cadastro **Aprovado** que deseja reservar (botão **Abrir**).
+2. Confira as **condições aprovadas** e clique em **Iniciar reserva**.
+3. **Selecione a unidade** disponível, veja os detalhes e clique em **Iniciar uma nova reserva**.
+4. Confira/preencha os **dados do cliente** e do **associado** - é com base neles que o **contrato** é gerado, então tudo precisa estar correto.
+5. **Tabela de preço:** confira previsão de entrega e vencimentos. O **financiamento** e o **subsídio** definidos pelo correspondente são puxados automaticamente (ex.: total de R$ 160.000), abaixo do valor da unidade (ex.: R$ 175.000).
+6. **Ajuste o recurso próprio parcelado** (valor restante a ser pago pelo cliente). Regras:
+   - **Parcela mínima:** R$ 500;
+   - **Total máximo parcelável:** R$ 41.000.
+7. Clique em **Recalcular** para ver os valores. Exemplo: 60 parcelas = R$ 250 (abaixo do mínimo) → altere para **30 parcelas** → **Salvar** → **Recalcular** → 30× R$ 500.
+8. Com os valores batendo com o total da unidade, **Finalize a reserva**. Em seguida, **Administrar reserva** → **Análise comercial** e aguarde o retorno do time.
+
+### Caso especial: aprovado condicionado (sem subsídio)
+
+1. Abra um pré-cadastro **Aprovado condicionado** (ex.: R$ 130.000, sem subsídio) → **Iniciar reserva** → selecione a unidade (ex.: R$ 175.000).
+2. **Exclua a opção de subsídio** (não disponível para o cliente).
+3. No **recurso próprio parcelado**, clique em **Recalcular**: ex.: 60× R$ 750 = R$ 45.000 - **acima** do limite de R$ 41.000.
+4. **Adicione uma nova série manualmente:** botão acima → série **"Recurso próprio à vista"** → **1 parcela** → valor = **saldo restante** (ex.: R$ 4.000) → informe uma **data de vencimento** → **Adicionar** (forma de pagamento não é necessária).
+5. **Recalcule** o recurso próprio parcelado nas novas condições - a tabela passa a bater com o valor da unidade respeitando o máximo de R$ 41.000.
+6. Dê sequência → reserva concluída → **Administrar reserva**. Para conferir/editar valores, use o menu **Financeiro** à esquerda. Volte a **Informações** e passe para **Análise comercial**.
+
+---
+
+*Passo a passo transcrito do vídeo de treinamento. Os valores são exemplos; confirme as regras de parcelamento com o setor Comercial.*`,
+    },
+    {
+        code: 'CV-RESERVA-DIRETA',
+        slug: 'reserva-direta-cv-crm',
+        title: 'Reserva Direta - sem Pré-Cadastro (CV CRM)',
+        categorySlug: 'construtor-de-vendas', // tutorial do CV CRM
+        subcategorySlug: 'reservas',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Reserva Direta', 'Reserva sem pré-cadastro', 'Reserva Direta CV'],
+        payload: { embeds: [{ type: 'VIDEO', ref: 'MPdc4WJ69Xc', url: 'https://youtu.be/MPdc4WJ69Xc', durationSec: 275, title: 'Treinamento Menin x CV CRM: Reserva Direta (Sem Pré-Cadastro)' }] },
+        body: `# Reserva Direta - sem Pré-Cadastro (CV CRM)
+
+> **Treinamento - Construtor de Vendas (CV CRM)** · Vídeo + passo a passo
+> Alguns empreendimentos (ex.: **Residencial Verona**) **não exigem cadastro prévio** - a venda pode começar direto pela reserva da unidade.
+
+## 🎥 Vídeo do passo a passo
+
+@[VIDEO:MPdc4WJ69Xc]
+
+> Não vê o player acima? [Assista no YouTube](https://youtu.be/MPdc4WJ69Xc).
+
+## Passo a passo
+
+1. No acesso de **corretor**, a tela inicial traz **Lead, Pré-cadastro, Disponibilidade e Reserva**. Você pode **iniciar direto pela Reserva** (ou consultar a **Disponibilidade** para ver as unidades já reservadas).
+2. Clique em **iniciar uma nova reserva** e **selecione o empreendimento** - abre o **mapa de disponibilidade**.
+3. **Selecione a unidade** (ex.: Bloco A, apartamento 103). O sistema traz as informações da unidade (tabela de preço oficial, plantas, metragem).
+4. Clique em **Iniciar uma nova reserva**. Informe o cliente pelo **CPF** e clique em **Buscar** (procura na base).
+   - Se o cliente **não existir**, preencha o formulário. Campos com **asterisco** são obrigatórios; os demais são importantes porque **aparecem no contrato**. A **profissão** é uma informação relevante. Clique em **Salvar e continuar**.
+5. **Cônjuge:** se houver e for participar do contrato, adicione (informe o **CPF** e **Buscar**).
+6. **Financeiro:** por padrão o sistema já traz a **tabela de preço** com o valor vinculado à unidade. É possível lançar valores manualmente, mas normalmente não é necessário neste momento. Siga com a reserva.
+7. **Reserva finalizada:** aparecem **Administrar reserva** (folha para imprimir e entregar ao cliente) e a opção de **ver a reserva** no sistema. A situação inicia como **Nova reserva**.
+8. **Documentos:** anexe a documentação do cliente. Por padrão pede-se **RG e CPF**; anexe outros documentos relevantes à venda.
+9. Passe para **Análise comercial**. A partir daí o **gestor assume**: entra em contato com o corretor/imobiliária, entende a proposta e **gera os contratos** (intermediação, assinatura de planta, memorial descritivo e o contrato de compra e venda, enviado ao e-mail do cliente para assinatura). Concluído, a situação passa para **Vendida**.
+
+---
+
+*Passo a passo transcrito do vídeo de treinamento. O fluxo de reserva direta vale apenas para empreendimentos configurados para isso - confirme com o setor Comercial.*`,
+    },
+
+    // ── Financeiro (vídeo-tutorial do CV CRM) ──
+    {
+        code: 'CV-BOLETO-ATO',
+        slug: 'emissao-boleto-de-ato-cv-crm',
+        title: 'Emissão Automática de Boleto de Ato (CV CRM)',
+        categorySlug: 'procedimentos', // movido: é procedimento (sai do Construtor de Vendas)
+        subcategorySlug: null,
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Boleto de Ato', 'Emissão de Boleto de Ato', 'Ato', 'Boleto Ato'],
+        payload: { embeds: [{ type: 'VIDEO', ref: '_66V0eHf7Y8', url: 'https://youtu.be/_66V0eHf7Y8', durationSec: 425, title: 'Nova Funcionalidade: Emissão Automática de Boleto de Ato no CRM' }] },
+        body: `# Emissão Automática de Boleto de Ato (CV CRM)
+
+> **Treinamento - Construtor de Vendas (CV CRM)** · Vídeo + passo a passo
+> Nova funcionalidade: após a assinatura dos contratos de reserva, o **boleto de ato** é **emitido automaticamente** conforme as regras do financeiro do CV.
+
+## 🎥 Vídeo do passo a passo
+
+@[VIDEO:_66V0eHf7Y8]
+
+> Não vê o player acima? [Assista no YouTube](https://youtu.be/_66V0eHf7Y8).
+
+## Como funciona
+
+1. Na reserva, na etapa **Análise comercial**, a gestão administrativa/de produto faz a **conferência e validação** dos dados (menu **Financeiro**).
+2. No **Financeiro**, preencha a tabela. As séries padrão do **Minha Casa Minha Vida** são: recurso próprio à vista, recurso próprio parcelado, financiamento e subsídio federal (alguns casos têm desconto e/ou subsídio estadual).
+3. O **boleto de ato** usa a parcela **"recurso próprio à vista"**. ⚠️ **O ato é sempre uma única parcela** - defina o valor conforme o empreendimento.
+4. **Gere os contratos** (reserva, uso de imagem etc.) para a assinatura do cliente.
+5. Após o envio do contrato, o sistema passa para **Em assinatura**. Quando o cliente assina, passa para **Envio Sienge**.
+6. No **Envio Sienge**, com o contrato assinado, o sistema **identifica a reserva MCMV com a série ATO e emite o boleto automaticamente**.
+   - Se o cliente **não tiver ato** (apenas recurso), **não adicione** a série "recurso próprio à vista" - assim o sistema não emite o boleto.
+
+## Regras de emissão do ato
+
+- Sempre **uma única parcela**;
+- Dentro dos **valores prescritos** para o empreendimento;
+- Dentro das **datas propostas**: **não emitir boleto com vencimento superior a 10 dias** da data atual (ex.: no dia 11, não emitir com vencimento após o dia 21).
+
+> As regras **variam por empreendimento**. Para consultá-las, use a **ficha comercial do produto**.
+
+## Conferir a emissão e tratar problemas
+
+- **Documentos:** se emitido, o boleto é anexado com o tipo **"boleto ato"**.
+- **Ações:** permite **visualizar** o boleto com as condições do período.
+- **Mensagens:** após 1-2 minutos do Envio Sienge, informa o resultado (emitido, falha ou já emitido).
+- **Informações (etapas do cliente):** a etapa correta é **"ato emitido"**. Se houver erro, aparece **"ato divergente"** - geralmente **data de emissão, valor do boleto ou alguma regra não atingida** (detalhe no campo Mensagens). Depois seguem, de forma automática, **"ato pago"** e **"ato vencido"**.
+- **Reemitir:** clique novamente em **Envio Sienge** para solicitar nova análise. As etapas de ato passam **automaticamente** - só clique para **voltar ao Envio Sienge** em caso de problema.
+- Problemas que você não conseguir ajustar facilmente: **acione a equipe interna** para ajuste manual do boleto.
+- O sistema valida **diariamente** pagamento e etapas. O **Envio Sienge** demora um pouco mais para atualizar (depende de o contrato estar corretamente no Sienge).
+
+## Para o cliente
+
+- O cliente recebe o boleto por **WhatsApp** (notificação com o boleto em anexo) e por **e-mail** (enviado pelo sistema @menin, com botão de download do PDF e link direto).
+- ⚠️ O número de **WhatsApp é somente para notificações** - se o cliente responder, **não será atendido**. O **gestor deve manter contato direto** com o cliente e orientá-lo na emissão e no pagamento do ato.
+
+---
+
+*Passo a passo transcrito do vídeo de treinamento. As regras de valores e datas de cada empreendimento estão na respectiva ficha comercial.*`,
+    },
+
+    // ── Referência (Cartório / Contratos) ──
+    {
+        code: 'ITBI',
+        slug: 'itbi',
+        title: 'ITBI - Imposto sobre Transmissão de Bens Imóveis',
+        categorySlug: 'comercial', // Cartório/Registro fica em Comercial
+        subcategorySlug: 'cartorio',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['ITBI', 'Imposto sobre Transmissão de Bens Imóveis', 'Imposto de Transmissão'],
+        body: `# ITBI - Imposto sobre Transmissão de Bens Imóveis
+
+> **Base de Conhecimento - Comercial** · Guia de referência
+> Conteúdo educativo - confirme sempre as regras vigentes no município do imóvel.
+
+## O que é
+
+O **ITBI** (Imposto sobre a Transmissão de Bens Imóveis) é um **imposto municipal** cobrado quando um imóvel muda de dono por **ato oneroso entre pessoas vivas** (a compra e venda, por exemplo). É a etapa fiscal que antecede o **registro** da propriedade no Cartório de Registro de Imóveis: sem a comprovação do ITBI (pago ou isento), o cartório não registra a transferência.
+
+Base constitucional: **art. 156, II, da Constituição Federal**, que dá aos municípios a competência para instituir o imposto sobre a transmissão "inter vivos", a qualquer título, por ato oneroso, de bens imóveis e de direitos reais sobre imóveis (exceto os de garantia).
+
+## Quem paga e quando
+
+- **Quem paga:** em regra, o **comprador** (adquirente), salvo disposição em contrário da lei municipal.
+- **Quando:** antes do **registro** da transmissão no Cartório de Registro de Imóveis. No nosso fluxo, o comprovante de ITBI (guia paga) ou a **Certidão de Isenção** integra a documentação enviada ao cartório - veja o procedimento Registro de Contratos.
+
+## Alíquota
+
+A alíquota é definida por **cada município** e costuma ficar entre **2% e 3%** sobre a base de cálculo.
+
+> ⚠️ A alíquota e as regras variam por município. Confirme sempre na prefeitura / secretaria de fazenda do município do imóvel.
+
+**Financiamento pelo SFH:** em muitos municípios, a **parcela financiada** pelo Sistema Financeiro da Habitação (SFH) tem alíquota reduzida (frequentemente **0,5%**), enquanto a parte paga com recursos próprios segue a alíquota cheia. Isso também varia por município.
+
+## Base de cálculo (STJ - Tema 1.113)
+
+A base de cálculo é o **valor do imóvel transmitido em condições normais de mercado** - normalmente o **valor da transação** declarado.
+
+O **STJ**, no julgamento do **Tema 1.113** (REsp 1.937.821, 2022), firmou pontos importantes:
+
+1. A base de cálculo do ITBI é o **valor de mercado** do imóvel na transação; **não está vinculada** à base de cálculo do IPTU (o valor venal do IPTU **não pode** ser usado nem como piso).
+2. O **valor declarado** pelo contribuinte goza de **presunção de veracidade**, que só pode ser afastada pelo fisco mediante **processo administrativo** próprio.
+3. O município **não pode arbitrar** previamente a base de cálculo com base em "valor de referência" fixado unilateralmente.
+
+## Isenções e reduções (variam por município)
+
+Muitos municípios concedem **isenção ou redução** do ITBI para:
+
+- **Primeira aquisição** de imóvel residencial; e/ou
+- Imóveis do **Programa Minha Casa Minha Vida** ou financiados pelo **SFH**, normalmente até um teto de valor.
+
+> Exemplo ilustrativo: o município de São Paulo concede isenção do ITBI na primeira aquisição / MCMV para imóveis até um teto de valor atualizado periodicamente. Cada município tem suas próprias regras e tetos - **confirme na prefeitura**.
+
+Havendo isenção, anexa-se a **Certidão de Isenção** aos documentos do registro; sem isenção, anexa-se a **guia de ITBI paga**.
+
+## Imunidade (não incidência)
+
+O ITBI **não incide** (imunidade do art. 156, §2º, I, da CF) sobre:
+
+- A transmissão de bens ou direitos **incorporados ao patrimônio de pessoa jurídica em realização de capital**; nem
+- A transmissão decorrente de **fusão, incorporação, cisão ou extinção** de pessoa jurídica,
+
+**salvo** quando a atividade **preponderante** do adquirente for a **compra e venda, locação ou arrendamento** de imóveis.
+
+## Por que importa para a venda
+
+- O ITBI é **pré-requisito do registro**: sem ele (pago ou isento), o Contrato Caixa (CEF) e a Confissão de Dívida não são registrados.
+- Erro na base de cálculo gera **pagamento a maior** (passível de restituição) ou exigência do fisco.
+- Havendo **isenção/redução** no município, é preciso protocolar o pedido com a documentação correta.
+
+---
+
+**Fontes:** Constituição Federal, art. 156 (gov.br/planalto); STJ, Tema 1.113 - REsp 1.937.821. Conteúdo educativo: alíquotas, isenções e procedimentos variam por município - confirme sempre na prefeitura do município do imóvel.`,
+    },
+    {
+        code: 'CONF-CONTRATO',
+        slug: 'confissao-de-divida-contrato',
+        title: 'Confissão de Dívida - Estrutura do Contrato',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'contratos',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Confissão de Dívida Contrato', 'Instrumento de Confissão de Dívida', 'Estrutura da Confissão de Dívida'],
+        body: `# Confissão de Dívida - Estrutura do Contrato
+
+> **Base de Conhecimento - Comercial** · Entenda o instrumento
+> Resumo explicativo do modelo de contrato gerado no Construtor de Vendas. Não substitui o contrato; em dúvida jurídica, consulte o Jurídico.
+
+## O que é este documento
+
+A **Confissão de Dívida** das vendas MCMV é o **"Instrumento Particular de Confissão de Dívida com Pacto Adjeto de Alienação Fiduciária Superveniente"**. Por meio dele, o comprador (DEVEDOR) **confessa dever** à construtora (CREDORA) o valor dos **recursos próprios** que não foram pagos à vista e ajusta o **parcelamento** desse valor.
+
+É gerado automaticamente no **Construtor de Vendas (CV CRM)** a partir dos dados da reserva (empreendimento, unidade, cliente, associados e séries financeiras). O passo a passo de geração, assinatura e validação está no procedimento **CONF01 - Geração de Contratos de Confissão de Dívida**.
+
+## Partes do contrato
+
+- **Promitente Vendedora / CREDORA:** a construtora (empresa do grupo).
+- **Promissário(s) Comprador(es) / DEVEDOR(A):** o titular e, quando houver, **cônjuge, sócios e associados** (cada um com sua cota de participação).
+- **Fiador(es):** quando exigido pela CREDORA, respondem como **principais pagadores** (renunciam aos benefícios dos arts. 827, 835, 838 e 839 do Código Civil).
+
+## Estrutura (quadros e cláusulas)
+
+**A-C - Qualificação e imóvel:** identifica a vendedora, o(s) comprador(es) e associados, o empreendimento, a unidade e a **renda familiar** declarada.
+
+**Composição do valor da unidade:** o valor de venda é integralizado por recursos próprios + financiamento da Caixa + FGTS + subsídios (federal, estadual, FPHIS, COHAPAR, Bônus Moradia etc.) + eventual desconto da construtora. *(Esses valores precisam bater com o Contrato Caixa - ver CONF01.)*
+
+**D - Condições de pagamento:** valor do **ato**, valor **a parcelar** (recursos próprios e, quando houver, documentação) e o **parcelamento** (quantidade de parcelas, valor unitário e primeiro vencimento).
+
+**Cláusulas (resumo):**
+
+| Cláusula | O que trata |
+| --- | --- |
+| **1. Objeto** | O devedor confessa a dívida dos recursos próprios e a parcela nas condições do Quadro Resumo. |
+| **2. Pagamento** | Pagamento por **boletos** mensais; a falta de recebimento do boleto não justifica o não pagamento. Cobrança: 0800 400 4200 / cobranca@menin.com.br. |
+| **3. Correção monetária** | Parcelas corrigidas **mensalmente pelo INCC/FGV** até o "Habite-se"; depois, **IPCA/IBGE + juros de 1% ao mês**. Nunca há índice negativo. |
+| **4. Inadimplência** | Atraso permite **protesto**, negativação (SERASA/SPC), **multa de 2%** e juros de 1% a.m., com **vencimento antecipado** de todo o saldo (título executivo - art. 784, III, do CPC). |
+| **5. Encargos da obra** | Durante a construção, o devedor arca com **juros de evolução de obra** e correção devidos à Caixa. Inadimplência pode levar à **retenção das chaves**. |
+| **6. Garantia (fiança)** | Os fiadores garantem o pagamento quando solicitado pela CREDORA. |
+| **8. Cessão / CRI** | A CREDORA pode **ceder ou caucionar** os créditos (lastro para **CRI** - Lei 9.514/97). |
+| **9. Alienação fiduciária superveniente** | O imóvel é alienado em garantia à CREDORA, com eficácia após o cancelamento da alienação anterior (Lei 9.514/97, com a Lei 14.711/2023). |
+| **16. LGPD** | Tratamento de dados conforme a Lei 13.709/2018; informações confidenciais. |
+| **17. Foro** | Foro da comarca do imóvel. |
+
+## Assinaturas
+
+Assinam **eletronicamente** a incorporadora, o cliente, os associados (quando houver) e **duas testemunhas**. A certificação aceita é a do padrão **ICP-Brasil** - ver CONF01.
+
+## Pontos de atenção para o gestor
+
+- Os **valores** da confissão (recursos próprios, ato, parcelas, subsídios) devem refletir **fielmente** o Contrato Caixa (CEF). Divergências comprometem a formalização - ver CONF01.
+- A confissão deve ser assinada **antes** do Contrato Caixa e vinculada na etapa de Repasse no CV.
+
+---
+
+**Origem:** modelo de contrato do Construtor de Vendas (campos de mesclagem preenchidos automaticamente). Resumo explicativo - o texto vigente do contrato prevalece. Dúvidas jurídicas: Jurídico / Departamento Comercial.`,
+    },
+    {
+        code: 'FECH-CONTABIL',
+        slug: 'fechamento-periodo-contabil',
+        title: 'Fechamento do Período Contábil',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'financeiro',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Período Contábil', 'Fechamento Contábil', 'Fechamento do Período Contábil', 'Período Fiscal', 'Fechamento de Mês'],
+        body: `# Fechamento do Período Contábil
+
+> **Procedimento Operacional - Departamento Comercial** · Uso interno
+> Consolida os comunicados de fechamento (ex.: CI 007/2026). 🔒 **Confidencial - uso interno.**
+
+**Objetivo:** garantir o **fechamento correto do período contábil**, assegurando a conformidade dos indicadores e o fluxo financeiro - com **todos os contratos atualizados** no sistema e **todas as notas lançadas** no prazo.
+
+## 1. Responsabilidade do Comercial (contratos)
+
+Até a **data-limite do fechamento** (informada no comunicado do mês), **TODOS os contratos** devem estar, obrigatoriamente, em uma das etapas:
+
+- **"Faturado Sienge MCMV"**, ou
+- **"Contratos Assinado 30/70"**.
+
+E ainda:
+
+- **Valide a integração com o Sienge** - não pode haver **erros de sincronização** (ver o procedimento Envio das Reservas ao Sienge).
+- ⛔ **Não há prorrogação:** após a data-limite, o sistema **trava para auditoria interna**. Nenhum contrato pode ficar para trás.
+
+## 2. Enquadramento dos períodos
+
+Trabalhamos com dois enquadramentos:
+
+- **Fiscal** - as **obras** estão enquadradas neste item; o fechamento ocorre no **3º dia útil** do mês seguinte.
+- **Administrativo / Obra (adm/obra)**.
+
+A abertura de período contábil é **rigorosamente controlada**.
+
+## 3. Lançamento de notas no Sienge
+
+- As notas devem ser lançadas no **Sienge** pela sua **data de EMISSÃO / COMPETÊNCIA**, e **não** pela data de **vencimento**.
+- Providencie os **lançamentos, correções e ajustes** dentro do prazo.
+
+## 4. Correção de pendências (dia 10)
+
+**No dia 10** do mês seguinte, o período é **reaberto** especificamente para **regularizar pendências**: lançamento de **notas não realizadas no prazo legal**, **correções e ajustes**.
+
+## Resumo dos prazos
+
+| Item | Prazo |
+| --- | --- |
+| Contratos em "Faturado Sienge MCMV" ou "Contratos Assinado 30/70" | Data-limite do fechamento (comunicado do mês) |
+| Encerramento | **3º dia útil** do mês seguinte |
+| Correção de pendências / notas atrasadas | **Dia 10** do mês seguinte (reabertura) |
+| Prorrogação | **Não há** - o sistema trava após o prazo |
+
+---
+
+🔒 **Confidencial - uso interno.** Dúvidas: Departamento Comercial / Contabilidade.`,
+    },
+    {
+        code: 'CAD-FORNECEDOR',
+        slug: 'cadastro-credor-fornecedor-sienge',
+        title: 'Cadastro de Credor / Fornecedor no Sienge',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'financeiro',
+        authorUserId: 1,
+        status: 'DRAFT',
+        audiences: ['INTERNAL'],
+        aliases: ['Cadastro de Fornecedor', 'Cadastro de Credor', 'Ficha Cadastral de Fornecedor', 'Qualificação de Fornecedores', 'RID 12'],
+        body: `# Cadastro de Credor / Fornecedor no Sienge
+
+> **Procedimento Operacional - Suprimentos** · Uso interno
+> Como cadastrar um novo credor (prestador de serviço / fornecedor) na base do Sienge.
+
+**Objetivo:** orientar o cadastro de **novos credores** - prestadores de serviço e fornecedores - na base do **Sienge**, pré-requisito para qualquer pagamento (inclusive o **reembolso**, que é lançado em contrato específico e aceito **somente para pessoa física**).
+
+## Quando é necessário cadastrar
+
+Sempre que um pagamento for direcionado a um **credor ainda não cadastrado** no Sienge - por exemplo, ao lançar um **reembolso** (apenas PF) ou ao contratar um novo **prestador/fornecedor**.
+
+O cadastro do credor é **pré-requisito** para **cadastrar o contrato no Sienge** (ver [Elaboração de Contratos no Sienge](/academy/kb/sienge/elaboracao-de-contratos)) e dar seguimento ao **processo de pagamento** (Contrato → Medição → Título).
+
+## Como solicitar o cadastro
+
+1. **Preencha a ficha cadastral** (modelo abaixo) com os dados do prestador/fornecedor.
+2. **Encaminhe um e-mail para fornecedores@menin.com.br** com a ficha preenchida em anexo.
+3. O time de **Suprimentos** (responsável pelos cadastros) realiza o cadastro **conforme as demandas**.
+
+> 📥 **Modelo - Ficha Cadastral de Fornecedor (RID 12):** [Baixar o formulário (.pdf)](https://geeeswzhtzmiparmgpjp.supabase.co/storage/v1/object/public/Office%20Bucket/academy/procedimentos/fornecedores/ficha-cadastral-fornecedor-rid12.pdf)
+> Preencha com os dados do fornecedor e anexe ao e-mail.
+
+## Por que passa por análise
+
+Alguns fornecedores são **controlados** e exigem **certificados de qualidade** dos produtos. Por isso, o cadastro do credor na base passa por **controle e análise** do Suprimentos (qualificação de fornecedores).
+
+## Dica
+
+Havendo necessidade ou urgência, acione o **gestor do seu departamento** para ajudar a **agilizar** o processo.
+
+## Veja também
+
+- [Reembolso de Custas](/academy/kb/procedimentos/reembolso-de-custas) - exige o favorecido (PF) cadastrado como credor.
+- [Pagamento de Comissão](/academy/kb/procedimentos/pagamento-de-comissao-mcmv) · [Pagamento de Premiação](/academy/kb/procedimentos/pagamento-de-premiacao-de-venda) - pagamentos a prestadores PJ exigem o credor cadastrado.
+
+---
+
+🔒 **Uso interno.** Dúvidas: Suprimentos - fornecedores@menin.com.br`,
     },
 ];
 
@@ -1549,7 +2742,7 @@ const LINK_TARGETS = [
     { slug: 'cv-crm', category: 'construtor-de-vendas', aliases: ['CV CRM', 'CVCRM', 'Construtor de Vendas', 'CV'] },
     { slug: 'certificacao-digital', aliases: ['Certificação Digital', 'Certificado Digital'] },
     { slug: 'icp-brasil', aliases: ['ICP-Brasil', 'ICP Brasil'] },
-    { slug: 'registro-de-contratos-empreendimentos-mcmv', aliases: ['Registro de Contratos', 'COMRC1'] },
+    { slug: 'registro-de-contratos-empreendimentos-mcmv', category: 'comercial', aliases: ['Registro de Contratos', 'COMRC1'] },
     { slug: 'demanda-minima', aliases: ['demanda mínima', 'demanda minima'] },
     { slug: 'ri-digital', aliases: ['RI Digital'] },
     { slug: 'painel-do-corretor-guia-inicial', category: 'construtor-de-vendas', aliases: ['Painel do Corretor'] },
@@ -1575,7 +2768,7 @@ function autolink(body, selfSlug) {
     // Liga menções a outros artigos. Divide o texto em trechos LIVRES e
     // PROTEGIDOS (código e links/imagens já existentes) e só linka nos livres.
     // Numa única varredura casa o termo mais longo primeiro (alternância
-    // ordenada por tamanho) e linka a 1ª ocorrência de CADA forma — assim
+    // ordenada por tamanho) e linka a 1ª ocorrência de CADA forma - assim
     // "CV CRM" e "CV" são ambos linkados. Preserva o texto; é bidirecional
     // porque roda em todos os artigos.
     const entries = [];
@@ -1646,26 +2839,34 @@ async function upsertProcedure(proc) {
         slug,
         subcategorySlug: proc.subcategorySlug || SUBCATEGORY_BY_SLUG[slug] || null,
         body: autolink(String(proc.body || ''), slug), // injeta cross-links automaticamente
-        payload: null, // markdown puro — sem TokenEditor
+        // `payload` opcional (JSONB). Markdown puro = null. Para vídeos, traz
+        // `{ embeds: [{type:'VIDEO', ref:'<id>', url, title}] }` - o corpo usa o
+        // token @[VIDEO:<id>] e o TokenRenderer resolve a URL pelo embed (iframe).
+        payload: proc.payload || null,
         aliases: Array.isArray(proc.aliases) ? proc.aliases : [],
         audiences: finalAudiences,
         audience: deriveLegacyAudience(finalAudiences),
-        status: 'PUBLISHED',
         updatedByUserId: author,
     };
-    // Quando o autor é declarado, ele é a fonte de verdade da autoria — então
+    // Status: definido APENAS na criação (`proc.status`, default PUBLISHED; um
+    // rascunho nasce 'DRAFT'). Em updates o status atual é PRESERVADO - re-rodar
+    // o seed NÃO republica nem rebaixa um artigo. A publicação dos rascunhos é
+    // feita pelo fluxo normal da UI (que também dispara a notificação).
+    const initialStatus = proc.status || 'PUBLISHED';
+    // Quando o autor é declarado, ele é a fonte de verdade da autoria - então
     // estabelece/corrige o createdBy também em updates. Sem autor declarado,
     // preserva o createdBy já existente (não sobrescreve).
     if (author != null) fields.createdByUserId = author;
 
     const existing = await db.AcademyArticle.findOne({ where: { slug } });
     if (existing) {
-        await existing.update(fields);
+        await existing.update(fields); // status preservado (não está em `fields`)
         return { action: 'updated', article: existing };
     }
 
     const created = await db.AcademyArticle.create({
         ...fields,
+        status: initialStatus,
         createdByUserId: author,
     });
     return { action: 'created', article: created };
@@ -1678,7 +2879,7 @@ async function run() {
     const dbHost = db.sequelize.config?.host;
     console.log(`🔌 Conectado em ${dbName} @ ${dbHost}`);
 
-    // Garante a coluna de subcategoria (2º nível) — idempotente, p/ a seed rodar
+    // Garante a coluna de subcategoria (2º nível) - idempotente, p/ a seed rodar
     // sem depender de redeploy do app (que adicionaria via ensureAcademySchema).
     await db.sequelize.query('ALTER TABLE academy_articles ADD COLUMN IF NOT EXISTS subcategory_slug VARCHAR(255)');
 
@@ -1689,9 +2890,9 @@ async function run() {
         const a = r.article;
         out.push(r);
         const url = `/academy/kb/${a.categorySlug}/${a.slug}`;
-        const aud = (a.audiences || []).join(', ') || '—';
+        const aud = (a.audiences || []).join(', ') || '-';
         console.log(`  ${r.action === 'created' ? '➕ criado ' : '♻️  atualizado'}  [${proc.code}] ${a.title}`);
-        console.log(`     id=${a.id} · status=${a.status} · audiences=[${aud}] · sub=${a.subcategorySlug || '—'}`);
+        console.log(`     id=${a.id} · status=${a.status} · audiences=[${aud}] · sub=${a.subcategorySlug || '-'}`);
         console.log(`     ${url}`);
     }
     return out;

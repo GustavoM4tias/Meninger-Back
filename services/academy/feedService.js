@@ -17,6 +17,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import followService from './followService.js';
 import { resolveUserTokens, audiencesWhereLiteral } from './audience.js';
+import { departmentWhereForUser } from './departmentVisibility.js';
 
 const HORIZON_DAYS = 30;
 const PER_SOURCE_LIMIT = 20;
@@ -44,6 +45,7 @@ const feedService = {
         const since = horizonDate();
         const tokens = await resolveUserTokens(uid);
         const audWhere = audiencesWhereLiteral(tokens);
+        const deptWhere = await departmentWhereForUser(uid);
 
         // 1) follows do user
         const follows = await db.AcademyFollow.findAll({
@@ -62,6 +64,7 @@ const feedService = {
         const articleAndConds = [
             { status: 'PUBLISHED', updatedAt: { [Op.gte]: since } },
             audWhere,
+            deptWhere,
         ];
         // Se user segue categorias, prioriza-as. Se não, mostra recentes (geral).
         if (followedCategories.length) {
@@ -209,6 +212,7 @@ const feedService = {
                             updatedAt: { [Op.gte]: since },
                         },
                         audWhere,
+                        deptWhere,
                     ],
                 },
                 attributes: ['id', 'title', 'slug', 'categorySlug', 'createdByUserId', 'updatedAt'],

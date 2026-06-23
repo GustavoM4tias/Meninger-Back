@@ -1,405 +1,243 @@
 // services/expenseService.js
-import db from '../models/sequelize/index.js';
+//
+// Tela "Custos" — agora lê AO VIVO do backup do Sienge (payableLiveService), não
+// mais da tabela `expenses` populada pelo Auto-Sync. Cada "expense" é uma parcela
+// (ecpgparcela) atribuída ao centro de custo principal do título. Departamento vem
+// sempre do Sienge; categoria + observação são personalizações do Office,
+// guardadas em `expense_personalizations` (chave nutitulo+nuparcela) e mescladas
+// por cima dos dados ao vivo.
 
-const { Expense, SiengeBill, Sequelize, sequelize } = db;
+import db from '../models/sequelize/index.js';
+import { getHiddenDepartmentsForUser } from './permissions/departmentVisibilityService.js';
+import { listExpenseRows, listLinkRows } from './sienge/payableLiveService.js';
+
+const { ExpensePersonalization, Sequelize, sequelize } = db;
 const { Op } = Sequelize;
 
+// Decodifica o id sintético "<nutitulo>-<nuparcela>" usado pelas linhas ao vivo.
+function parseSyntheticId(id) {
+  const [t, p] = String(id).split('-');
+  const nutitulo = Number(t);
+  const nuparcela = Number(p);
+  if (!Number.isFinite(nutitulo) || !Number.isFinite(nuparcela)) return null;
+  return { nutitulo, nuparcela };
+}
+
 export default class expenseService {
-  async addExpense({
-    costCenterId,
-    costCenterName,
-    competenceMonth,
-    billId,
-    amount,
-    description,
-    departmentId,
-    departmentName,
-    departmentCategoryId,
-    departmentCategoryName,
+  /**
+   * Resolve o nome de exibição dos empreendimentos (cost_center_id = cdempreendview).
+   * Ordem de prioridade (idêntica ao comportamento anterior):
+   *   0) cost_center_overrides.display_name (admin sobrepôs) — MÁXIMA
+   *   1) enterprise_cities, match direto (preferência source='crm')
+   *   2) enterprise_cities, match pelo "CC base" (sub-CC herda do pai)
+   * @returns {Promise<Map<number,string>>}
+   */
+  async resolveCostCenterNames(costCenterIds) {
+    const ids = [...new Set((costCenterIds || []).map(Number).filter(Number.isFinite))];
+    const nameByCc = new Map();
+    if (!ids.length) return nameByCc;
 
-    // ✅ NOVO
-    installmentNumber,
-    installmentsNumber,
-  }) {
-    const [y, m] = competenceMonth.split('-').map(Number);
-    const monthStart = new Date(y, m - 1, 1);
-    const compDate = monthStart.toISOString().slice(0, 10);
+    // Passo 0 — overrides admin (mais alta prioridade)
+    const overrides = await sequelize.query(
+      `SELECT cost_center_id, display_name FROM cost_center_overrides WHERE cost_center_id IN (:ids)`,
+      { replacements: { ids }, type: Sequelize.QueryTypes.SELECT }
+    );
+    for (const o of overrides) nameByCc.set(Number(o.cost_center_id), o.display_name);
 
-    const expense = await Expense.create({
-      cost_center_id: costCenterId,
-      cost_center_name: costCenterName || null,
-      competence_month: compDate,
-      bill_id: billId || null,
-      amount,
-      description,
-      department_id: departmentId || null,
-      department_name: departmentName || null,
-      department_category_id: departmentCategoryId || null,
-      department_category_name: departmentCategoryName || null,
+    // Passo 1 — match direto
+    const directRows = await sequelize.query(
+      `SELECT DISTINCT ON (ec.erp_id::int) ec.erp_id::int AS erp_id, ec.enterprise_name
+         FROM enterprise_cities ec
+        WHERE ec.erp_id IS NOT NULL AND ec.erp_id ~ '^[0-9]+$' AND ec.erp_id::int IN (:ids)
+          AND COALESCE(NULLIF(TRIM(ec.enterprise_name), ''), NULL) IS NOT NULL
+        ORDER BY ec.erp_id::int, CASE ec.source WHEN 'crm' THEN 1 ELSE 2 END, ec.id`,
+      { replacements: { ids }, type: Sequelize.QueryTypes.SELECT }
+    );
+    for (const r of directRows) {
+      if (!nameByCc.has(Number(r.erp_id))) nameByCc.set(Number(r.erp_id), r.enterprise_name);
+    }
 
-      // ✅ NOVO
-      installment_number: installmentNumber ?? null,
-      installments_number: installmentsNumber ?? null,
-    });
-
-    return expense;
-  }
-
-  /** Lista gastos de UM centro de custo no mês */
-  async listMonth({ costCenterId, competenceMonth }) {
-    const [y, m] = competenceMonth.split('-').map(Number);
-    const monthStart = new Date(y, m - 1, 1);
-    const compDate = monthStart.toISOString().slice(0, 10);
-
-    const rows = await Expense.findAll({
-      where: {
-        cost_center_id: costCenterId,
-        competence_month: compDate,
-      },
-      include: [
-        {
-          model: SiengeBill,
-          as: 'bill',
-        }
-      ],
-      order: [['id', 'ASC']],
-    });
-
-    return rows;
-  }
-
-  /** Resumo do mês para UM centro de custo */
-  async summarizeMonth({ costCenterId, competenceMonth }) {
-    const expenses = await this.listMonth({ costCenterId, competenceMonth });
-    const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
-
-    const costCenterName =
-      expenses.length ? expenses[0].cost_center_name || null : null;
-
-    return {
-      costCenterId,
-      costCenterName,
-      competenceMonth,
-      total,
-      expenses: expenses.map(e => ({
-        id: e.id,
-        amount: Number(e.amount),
-        description: e.description,
-        competenceMonth: e.competence_month,
-        dueDate: e.due_date,
-
-        installmentNumber: e.installment_number ?? null,
-        installmentsNumber: e.installments_number ?? null,
-
-        departmentId: e.department_id,
-        departmentName: e.department_name,
-        departmentCategoryId: e.department_category_id,
-        departmentCategoryName: e.department_category_name,
-
-        status: e.status || 'open',
-        paidAt: e.paid_at || null,
-
-        costCenterId: e.cost_center_id,
-        costCenterName: e.cost_center_name,
-        billId: e.bill_id,
-        bill: e.bill
-          ? {
-            id: e.bill.id,
-            issueDate: e.bill.issue_date,
-            totalInvoiceAmount: Number(e.bill.total_invoice_amount),
-            mainDepartmentName: e.bill.main_department_name,
-            notes: e.bill.notes,
-            document_identification_id: e.bill.document_identification_id,
-            document_number: e.bill.document_number,
-            installmentNumber: Number(e.bill.installment_number || 0),
-            installmentsNumber: Number(e.bill.installments_number || 0),
-            creditor_json: e.bill.creditor_json,
-            currentStatus: e.bill.current_status || 'open',
-            isSettled: !!e.bill.is_settled,
+    // Passo 2 — CC base (heurística de sub-CC: 80101 → 80001)
+    const stillMissing = ids.filter(cc => !nameByCc.has(Number(cc)));
+    if (stillMissing.length) {
+      const baseToOriginals = new Map();
+      for (const cc of stillMissing) {
+        const base = Math.floor(Number(cc) / 100) * 100 + 1;
+        if (base === Number(cc)) continue;
+        if (!baseToOriginals.has(base)) baseToOriginals.set(base, []);
+        baseToOriginals.get(base).push(Number(cc));
+      }
+      const baseIds = [...baseToOriginals.keys()];
+      if (baseIds.length) {
+        const baseRows = await sequelize.query(
+          `SELECT DISTINCT ON (ec.erp_id::int) ec.erp_id::int AS erp_id, ec.enterprise_name
+             FROM enterprise_cities ec
+            WHERE ec.erp_id IS NOT NULL AND ec.erp_id ~ '^[0-9]+$' AND ec.erp_id::int IN (:ids)
+              AND COALESCE(NULLIF(TRIM(ec.enterprise_name), ''), NULL) IS NOT NULL
+            ORDER BY ec.erp_id::int, CASE ec.source WHEN 'crm' THEN 1 ELSE 2 END, ec.id`,
+          { replacements: { ids: baseIds }, type: Sequelize.QueryTypes.SELECT }
+        );
+        for (const r of baseRows) {
+          for (const original of (baseToOriginals.get(Number(r.erp_id)) || [])) {
+            nameByCc.set(original, r.enterprise_name);
           }
-          : null,
-      })),
-    };
+        }
+      }
+    }
+    return nameByCc;
+  }
+
+  /** Busca as personalizações (categoria/observação) das parcelas presentes. */
+  async loadPersonalizations(billIds) {
+    const ids = [...new Set((billIds || []).map(Number).filter(Number.isFinite))];
+    if (!ids.length) return new Map();
+    const rows = await ExpensePersonalization.findAll({ where: { nutitulo: { [Op.in]: ids } } });
+    const map = new Map();
+    for (const r of rows) map.set(`${r.nutitulo}-${r.nuparcela}`, r);
+    return map;
   }
 
   /**
-   * Lista TODOS os gastos no período (todos os centros de custo)
-   * e agrupa por cost_center_id.
-   * startDate e endDate: 'YYYY-MM-DD' (competence_month BETWEEN startDate AND endDate)
+   * Lista TODOS os custos no período (todos os centros de custo, ou um só) e agrupa
+   * por cost_center_id. startDate/endDate: 'YYYY-MM-DD' (competência = mês do vencimento).
+   * Mesmo shape de antes: { startDate, endDate, total, groups[], hiddenDepartments }.
    */
-  async summarizeAllMonth({ competenceMonth, startDate, endDate, costCenterId }) {
-    let whereClause;
+  async summarizeAllMonth({ startDate, endDate, costCenterId, user }) {
+    // 1) Dados ao vivo (uma linha por parcela)
+    const rows = await listExpenseRows({ startDate, endDate, costCenterId });
 
-    if (startDate && endDate) {
-      whereClause = { competence_month: { [Op.between]: [startDate, endDate] } };
-    } else {
-      // fallback: compatibilidade com código legado que passa competenceMonth
-      const [y, m] = (competenceMonth || '').split('-').map(Number);
-      const compDate = new Date(y, m - 1, 1).toISOString().slice(0, 10);
-      whereClause = { competence_month: compDate };
-    }
+    // 2) Departamentos ocultos (cascata global → cargo → usuário). Admin vê tudo.
+    //    department_name NULL nunca é "oculto".
+    const hiddenDepartments = await getHiddenDepartmentsForUser(user);
+    const hiddenSet = new Set(hiddenDepartments);
+    const visible = hiddenSet.size
+      ? rows.filter(r => !r.departmentName || !hiddenSet.has(r.departmentName))
+      : rows;
 
-    // Filtro opcional por centro de custo
-    if (costCenterId) {
-      whereClause.cost_center_id = costCenterId;
-    }
+    // 3) Personalizações (categoria/observação) por parcela
+    const persMap = await this.loadPersonalizations(visible.map(r => r.billId));
 
-    // ── Departamentos ocultos pelo admin ─────────────────────────────────────
-    // Carrega ANTES da query principal para excluir os gastos desses departamentos
-    // direto da fonte — o dropdown do front filtrar não bastava (sem filtro o
-    // usuário via tudo, incluindo o que estava desativado em configurações).
-    const hiddenRows = await sequelize.query(
-      `SELECT name FROM expense_department_visibility WHERE hidden = true`,
-      { type: Sequelize.QueryTypes.SELECT }
-    );
-    const hiddenDepartments = hiddenRows.map(r => r.name).filter(Boolean);
+    // 4) Nomes de empreendimento
+    const ccIds = [...new Set(visible.map(r => r.costCenterId).filter(Number.isFinite))];
+    const nameByCc = await this.resolveCostCenterNames(ccIds);
 
-    if (hiddenDepartments.length) {
-      // department_name NULL não é "oculto" (admin nem tinha como desativar) → mantém visível
-      whereClause[Op.and] = [
-        ...(whereClause[Op.and] || []),
-        {
-          [Op.or]: [
-            { department_name: null },
-            { department_name: { [Op.notIn]: hiddenDepartments } },
-          ],
-        },
-      ];
-    }
-
-    const rows = await Expense.findAll({
-      where: whereClause,
-      include: [
-        {
-          model: SiengeBill,
-          as: 'bill',
-        }
-      ],
-      order: [['cost_center_id', 'ASC'], ['id', 'ASC']],
-    });
-
+    // 5) Agrupa por cost_center_id
     const groupsMap = new Map();
-
-    for (const e of rows) {
-      const cc = e.cost_center_id;
-      if (!groupsMap.has(cc)) {
-        groupsMap.set(cc, []);
-      }
-      groupsMap.get(cc).push(e);
-    }
-
-    // ── Resolve nome de empreendimento para os cost_center_ids que apareceram ───
-    //
-    // Identidade do empreendimento = cost_center_id (perpetuado pelo CC, não pelo nome).
-    // O nome exibido é apenas uma label; fontes em ordem de prioridade:
-    //   0) cost_center_overrides.display_name (admin sobrepôs manualmente) — MÁXIMA
-    //   1) enterprise_cities, match direto, preferência source='crm'
-    //   2) enterprise_cities, match pelo "CC base" (sub-CC herda do pai)
-    const costCenterIdsInUse = [...groupsMap.keys()].filter(Number.isFinite);
-    const nameByCc = new Map();
-
-    if (costCenterIdsInUse.length) {
-      // Passo 0 — overrides admin (mais alta prioridade)
-      const overrides = await sequelize.query(
-        `SELECT cost_center_id, display_name FROM cost_center_overrides
-         WHERE cost_center_id IN (:ids)`,
-        { replacements: { ids: costCenterIdsInUse }, type: Sequelize.QueryTypes.SELECT }
-      );
-      for (const o of overrides) {
-        nameByCc.set(Number(o.cost_center_id), o.display_name);
-      }
-      // Passo 1 — match direto
-      const directRows = await sequelize.query(
-        `SELECT DISTINCT ON (ec.erp_id::int)
-            ec.erp_id::int AS erp_id,
-            ec.enterprise_name
-         FROM enterprise_cities ec
-         WHERE ec.erp_id IS NOT NULL
-           AND ec.erp_id ~ '^[0-9]+$'
-           AND ec.erp_id::int IN (:ids)
-           AND COALESCE(NULLIF(TRIM(ec.enterprise_name), ''), NULL) IS NOT NULL
-         ORDER BY ec.erp_id::int, CASE ec.source WHEN 'crm' THEN 1 ELSE 2 END, ec.id`,
-        { replacements: { ids: costCenterIdsInUse }, type: Sequelize.QueryTypes.SELECT }
-      );
-      for (const r of directRows) {
-        // não sobrescreve override admin já setado no Passo 0
-        if (!nameByCc.has(Number(r.erp_id))) {
-          nameByCc.set(Number(r.erp_id), r.enterprise_name);
-        }
-      }
-
-      // Passo 2 — para CCs sem match, busca pelo "CC base" (heurística de sub-CC)
-      const stillMissing = costCenterIdsInUse.filter(cc => !nameByCc.has(Number(cc)));
-      if (stillMissing.length) {
-        const baseToOriginals = new Map();
-        for (const cc of stillMissing) {
-          const base = Math.floor(Number(cc) / 100) * 100 + 1;
-          if (base === Number(cc)) continue; // já tentamos o exato no passo 1
-          if (!baseToOriginals.has(base)) baseToOriginals.set(base, []);
-          baseToOriginals.get(base).push(Number(cc));
-        }
-        const baseIds = [...baseToOriginals.keys()];
-        if (baseIds.length) {
-          const baseRows = await sequelize.query(
-            `SELECT DISTINCT ON (ec.erp_id::int)
-                ec.erp_id::int AS erp_id,
-                ec.enterprise_name
-             FROM enterprise_cities ec
-             WHERE ec.erp_id IS NOT NULL
-               AND ec.erp_id ~ '^[0-9]+$'
-               AND ec.erp_id::int IN (:ids)
-               AND COALESCE(NULLIF(TRIM(ec.enterprise_name), ''), NULL) IS NOT NULL
-             ORDER BY ec.erp_id::int, CASE ec.source WHEN 'crm' THEN 1 ELSE 2 END, ec.id`,
-            { replacements: { ids: baseIds }, type: Sequelize.QueryTypes.SELECT }
-          );
-          for (const r of baseRows) {
-            const originals = baseToOriginals.get(Number(r.erp_id)) || [];
-            for (const original of originals) {
-              nameByCc.set(original, r.enterprise_name);
-            }
-          }
-        }
-      }
+    for (const r of visible) {
+      if (!groupsMap.has(r.costCenterId)) groupsMap.set(r.costCenterId, []);
+      groupsMap.get(r.costCenterId).push(r);
     }
 
     const groups = [];
     let totalAll = 0;
-
-    for (const [costCenterId, expenses] of groupsMap.entries()) {
-      const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    for (const [cc, list] of groupsMap.entries()) {
+      const total = list.reduce((s, e) => s + Number(e.amount || 0), 0);
       totalAll += total;
-
-      // Ordem: 1) enterprise_cities (preferência ERP) 2) cost_center_name salvo no Expense 3) null
-      const costCenterName =
-        nameByCc.get(Number(costCenterId))
-        || (expenses.length ? expenses[0].cost_center_name || null : null);
-
+      const costCenterName = nameByCc.get(Number(cc)) || null;
       groups.push({
-        costCenterId,
+        costCenterId: cc,
         costCenterName,
         total,
-        expenses: expenses.map(e => ({
-          id: e.id,
-          amount: Number(e.amount),
-          description: e.description,
-          competenceMonth: e.competence_month,
-          dueDate: e.due_date,
-
-          installmentNumber: e.installment_number ?? null,
-          installmentsNumber: e.installments_number ?? null,
-
-          departmentId: e.department_id,
-          departmentName: e.department_name,
-          departmentCategoryId: e.department_category_id,
-          departmentCategoryName: e.department_category_name,
-
-          status: e.status || 'open',
-          paidAt: e.paid_at || null,
-
-          costCenterId: e.cost_center_id,
-          costCenterName: e.cost_center_name,
-          billId: e.bill_id,
-          bill: e.bill
-            ? {
-              id: e.bill.id,
-              issueDate: e.bill.issue_date,
-              totalInvoiceAmount: Number(e.bill.total_invoice_amount),
-              mainDepartmentName: e.bill.main_department_name,
-              notes: e.bill.notes,
-              document_identification_id: e.bill.document_identification_id,
-              document_number: e.bill.document_number,
-              installmentNumber: Number(e.bill.installment_number || 0),
-              installmentsNumber: Number(e.bill.installments_number || 0),
-              creditor_json: e.bill.creditor_json,
-              currentStatus: e.bill.current_status || 'open',
-              isSettled: !!e.bill.is_settled,
-            }
-            : null,
-        })),
+        expenses: list.map(e => {
+          const pers = persMap.get(e.id);
+          return {
+            id: e.id,
+            amount: Number(e.amount),
+            description: pers?.description ?? null,
+            competenceMonth: e.competenceMonth,
+            dueDate: e.dueDate,
+            installmentNumber: e.installmentNumber ?? null,
+            installmentsNumber: e.installmentsNumber ?? null,
+            departmentId: e.departmentId,
+            departmentName: e.departmentName,
+            departmentCategoryId: pers?.department_category_id ?? null,
+            departmentCategoryName: pers?.department_category_name ?? null,
+            status: e.status || 'open',
+            paidAt: e.paidAt || null,
+            costCenterId: e.costCenterId,
+            costCenterName,
+            billId: e.billId,
+            bill: e.bill,
+          };
+        }),
       });
     }
 
-    // hiddenDepartments já foi carregado no topo da função e usado no WHERE.
-    // Retornamos no metadata também para o front continuar filtrando o dropdown
-    // (consistência: lista do dropdown == backend está filtrando).
     return {
-      startDate: startDate || competenceMonth,
-      endDate: endDate || competenceMonth,
+      startDate,
+      endDate,
       total: totalAll,
       groups,
       hiddenDepartments,
     };
   }
 
-  // services/expenseService.js
+  /** Vínculos por título (tela Títulos): contagem/soma de parcelas + categoria representativa. */
   async listLinksByBill({ billIds }) {
-    const rows = await Expense.findAll({
-      where: { bill_id: { [Op.in]: billIds } },
-      attributes: [
-        'bill_id',
-        [Sequelize.fn('COUNT', Sequelize.col('id')), 'count'],
-        [Sequelize.fn('SUM', Sequelize.col('amount')), 'total'],
-        // 👇 pega uma categoria "representativa" (MAX serve pra isso)
-        [Sequelize.fn('MAX', Sequelize.col('department_category_id')), 'departmentCategoryId'],
-        [Sequelize.fn('MAX', Sequelize.col('department_category_name')), 'departmentCategoryName'],
-      ],
-      group: ['bill_id'],
-    });
-
-    return rows.map(r => ({
-      billId: r.bill_id,
-      count: Number(r.get('count') || 0),
-      total: Number(r.get('total') || 0),
-      departmentCategoryId: r.get('departmentCategoryId')
-        ? Number(r.get('departmentCategoryId'))
-        : null,
-      departmentCategoryName: r.get('departmentCategoryName') || null,
+    const links = await listLinkRows({ billIds });
+    // categoria representativa por título (qualquer parcela personalizada)
+    const ids = [...new Set((billIds || []).map(Number).filter(Number.isFinite))];
+    const catByBill = new Map();
+    if (ids.length) {
+      const pers = await ExpensePersonalization.findAll({
+        where: { nutitulo: { [Op.in]: ids }, department_category_id: { [Op.ne]: null } },
+      });
+      for (const p of pers) {
+        if (!catByBill.has(p.nutitulo)) {
+          catByBill.set(p.nutitulo, {
+            departmentCategoryId: p.department_category_id,
+            departmentCategoryName: p.department_category_name,
+          });
+        }
+      }
+    }
+    return links.map(l => ({
+      billId: l.billId,
+      count: l.count,
+      total: l.total,
+      departmentCategoryId: catByBill.get(l.billId)?.departmentCategoryId ?? null,
+      departmentCategoryName: catByBill.get(l.billId)?.departmentCategoryName ?? null,
     }));
   }
 
-  // 'amount' não é atualizável — vem do Sienge e é fonte da verdade
-  async updateExpense({
-    id,
-    description,
-    departmentId,
-    departmentName,
-    departmentCategoryId,
-    departmentCategoryName,
-  }) {
-    const exp = await Expense.findByPk(id);
-    if (!exp) {
-      throw new Error('Despesa não encontrada');
-    }
+  /**
+   * Atualiza a personalização (categoria + observação) de UMA parcela. O id é o
+   * sintético "<nutitulo>-<nuparcela>". Departamento NÃO é editável (vem do Sienge),
+   * então departmentId/departmentName são ignorados se vierem no payload.
+   */
+  async updateExpense({ id, description, departmentCategoryId, departmentCategoryName, updatedBy }) {
+    const parsed = parseSyntheticId(id);
+    if (!parsed) throw new Error('Identificador de custo inválido.');
+    const { nutitulo, nuparcela } = parsed;
 
-    // Se o departamento foi informado explicitamente, marca como override manual.
-    // Isso blinda o campo contra qualquer sobrescrita do re-sync (presente e futura).
-    const departmentTouched =
-      (departmentName !== undefined && departmentName !== null) ||
-      (departmentId !== undefined && departmentId !== null);
-
-    await exp.update({
-      description,
-      department_id: departmentId ?? exp.department_id,
-      department_name: departmentName ?? exp.department_name,
-      department_category_id: departmentCategoryId ?? exp.department_category_id,
-      department_category_name: departmentCategoryName ?? exp.department_category_name,
-      department_overridden: departmentTouched ? true : exp.department_overridden,
+    const [row] = await ExpensePersonalization.findOrCreate({
+      where: { nutitulo, nuparcela },
+      defaults: { nutitulo, nuparcela },
     });
 
-    return exp;
+    await row.update({
+      description: description !== undefined ? description : row.description,
+      department_category_id: departmentCategoryId !== undefined ? departmentCategoryId : row.department_category_id,
+      department_category_name: departmentCategoryName !== undefined ? departmentCategoryName : row.department_category_name,
+      updated_by: updatedBy || row.updated_by,
+    });
+
+    return {
+      id: `${nutitulo}-${nuparcela}`,
+      billId: nutitulo,
+      installmentNumber: nuparcela,
+      description: row.description,
+      departmentCategoryId: row.department_category_id,
+      departmentCategoryName: row.department_category_name,
+    };
   }
+
+  /** "Remove" = limpa a personalização daquela parcela (não apaga dado do Sienge). */
   async deleteExpense({ id }) {
-    const exp = await Expense.findByPk(id);
-    if (!exp) return;
-
-    // se tem vínculo com título, apaga tudo daquele título (todas as parcelas)
-    if (exp.bill_id) {
-      await Expense.destroy({ where: { bill_id: exp.bill_id } });
-      return;
-    }
-
-    // sem título vinculado: apaga só o registro
-    await Expense.destroy({ where: { id } });
+    const parsed = parseSyntheticId(id);
+    if (!parsed) return { cleared: 0 };
+    const { nutitulo, nuparcela } = parsed;
+    const cleared = await ExpensePersonalization.destroy({ where: { nutitulo, nuparcela } });
+    return { cleared };
   }
-
 }

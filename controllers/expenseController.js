@@ -7,56 +7,6 @@ export default class expenseController {
     this.service = new expenseService();
   }
 
-  /** POST /api/expenses */
-  add = async (req, res) => {
-    try {
-      const {
-        costCenterId,
-        costCenterName,
-        month, // YYYY-MM
-        billId,
-        amount,
-        description,
-        departmentId,
-        departmentName,
-        departmentCategoryId,
-        departmentCategoryName,
-
-        // ✅ NOVO (vem do front)
-        installmentNumber,
-        installmentsNumber,
-      } = req.body;
-
-      if (!costCenterId || !month || amount == null) {
-        return res
-          .status(400)
-          .json({ error: 'costCenterId, month e amount são obrigatórios' });
-      }
-
-      const exp = await this.service.addExpense({
-        costCenterId,
-        costCenterName,
-        competenceMonth: month, // service espera competenceMonth
-        billId,
-        amount,
-        description,
-        departmentId,
-        departmentName,
-        departmentCategoryId,
-        departmentCategoryName,
-
-        // ✅ repassa pro service gravar no Expense
-        installmentNumber,
-        installmentsNumber,
-      });
-
-      res.json(exp);
-    } catch (e) {
-      console.error('[ExpenseController.add] error', e);
-      res.status(500).send('Erro ao adicionar gastos');
-    }
-  };
-
   /** GET /api/expenses?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD[&costCenterId=80001] */
   listMonth = async (req, res) => {
     try {
@@ -72,6 +22,7 @@ export default class expenseController {
         startDate,
         endDate,
         costCenterId: costCenterId ? Number(costCenterId) : undefined,
+        user: req.user,
       });
 
       res.json(data);
@@ -86,9 +37,7 @@ export default class expenseController {
     try {
       const { billIds } = req.query;
       if (!billIds) {
-        return res
-          .status(400)
-          .json({ error: 'billIds é obrigatório' });
+        return res.status(400).json({ error: 'billIds é obrigatório' });
       }
 
       const ids = billIds
@@ -105,26 +54,19 @@ export default class expenseController {
     }
   };
 
-  // PUT /api/expenses/:id
-  // Atenção: 'amount' é deliberadamente ignorado — o valor da parcela vem do Sienge e não pode ser alterado manualmente.
+  // PUT /api/expenses/:id  (id sintético "<nutitulo>-<nuparcela>")
+  // Edita só categoria + observação (personalização). Departamento vem do Sienge.
   update = async (req, res) => {
     try {
       const { id } = req.params;
-      const {
-        description,
-        departmentId,
-        departmentName,
-        departmentCategoryId,
-        departmentCategoryName,
-      } = req.body;
+      const { description, departmentCategoryId, departmentCategoryName } = req.body;
 
       const exp = await this.service.updateExpense({
-        id: Number(id),
+        id,
         description,
-        departmentId,
-        departmentName,
         departmentCategoryId,
         departmentCategoryName,
+        updatedBy: req.user?.name || req.user?.email || null,
       });
 
       res.json(exp);
@@ -134,10 +76,11 @@ export default class expenseController {
     }
   };
 
+  // DELETE /api/expenses/:id  → limpa a personalização daquela parcela
   remove = async (req, res) => {
     try {
       const { id } = req.params;
-      const result = await this.service.deleteExpense({ id: Number(id) });
+      const result = await this.service.deleteExpense({ id });
       res.json({ success: true, ...result });
     } catch (e) {
       console.error(e);

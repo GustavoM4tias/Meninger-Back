@@ -1,10 +1,6 @@
 // controllers/projectionsController.js
 import db from '../models/sequelize/index.js';
-import {
-  summarizeUnitsFromDb,
-  summarizeUnitsFromStageInt,
-  summarizeMasterCcFromDb,
-} from '../services/cv/enterpriseUnitsSummaryService.js';
+import { resolveUnitsForErp } from '../services/cv/enterpriseUnitsSummaryService.js';
 
 const {
   SalesProjection,
@@ -59,46 +55,18 @@ const getRangeOrNull = (req) => {
 const unitsCache = new Map();
 const UNITS_TTL = 30_000;
 
-async function getUnitsSummaryCached(cvEnterpriseId) {
-  if (!cvEnterpriseId) return null;
-
-  const key = `units:${cvEnterpriseId}`;
-  const now = Date.now();
-  const memo = unitsCache.get(key);
-  if (memo && now - memo.ts < UNITS_TTL) return memo.data;
-
-  try {
-    const data = await summarizeUnitsFromDb(Number(cvEnterpriseId));
-    unitsCache.set(key, { ts: now, data });
-    return data;
-  } catch (e) {
-    // log técnico pra investigar falhas de CV sem quebrar a tela
-    console.error('[projections][units_summary] erro ao carregar CV snapshot', {
-      cvEnterpriseId,
-      message: e?.message,
-    });
-    unitsCache.set(key, { ts: now, data: null });
-    return null;
-  }
-}
+// TTL reduzido para "não encontrado": etapas/CCs podem ser cadastrados a qualquer
+// momento no CV, então não cacheamos o vazio por muito tempo.
+const STAGE_NULL_TTL = 5_000;
 
 /**
- * Tenta resolver o summary de unidades pelo idetapa_int (CC Sienge) antes de
- * cair no lookup de nível empresa. Isso permite que módulos distintos de um
- * mesmo empreendimento (ex: MÓD 1 → 99901, MÓD 2 → 99903, MÓD 3 → 99905)
- * mostrem a contagem correta de unidades da sua etapa específica no CV.
- *
- * Retorna o summary (pode ser { totalUnits:0,... }) ou null quando a etapa
- * não existe — nesse caso o caller pode tentar o fallback de nível empresa.
+ * Cache (process-wide, 30 s) por CC, em cima da COLETA UNIFICADA do serviço de CV
+ * (resolveUnitsForErp). Projeção e Viabilidade usam exatamente a mesma coleta.
  */
-// TTL reduzido para resultados "não encontrado": etapas podem ser cadastradas
-// a qualquer momento no CV, então não queremos cachear o vazio por muito tempo.
-const STAGE_NULL_TTL = 5_000; // 5 s para null; resultados positivos usam UNITS_TTL
+async function getUnitsResolvedByErpCached(erpId) {
+  if (!erpId) return null;
 
-async function getUnitsSummaryByStageIntCached(idetapa_int) {
-  if (!idetapa_int) return null;
-
-  const key = `stage:${idetapa_int}`;
+  const key = `erp:${erpId}`;
   const now = Date.now();
   const memo = unitsCache.get(key);
   if (memo) {
@@ -107,54 +75,16 @@ async function getUnitsSummaryByStageIntCached(idetapa_int) {
   }
 
   try {
-    const data = await summarizeUnitsFromStageInt(String(idetapa_int));
-    unitsCache.set(key, { ts: now, data });
-    return data; // null = etapa não encontrada (expira em 5 s)
-  } catch (e) {
-    console.error('[projections][units_summary] erro ao carregar CV por etapa', {
-      idetapa_int,
-      message: e?.message,
-    });
-    unitsCache.set(key, { ts: now, data: null });
-    return null;
-  }
-}
-
-/**
- * Cache para CC mestre — chave única por (cvEnterpriseId, masterErpId).
- * Permite reusar o resultado sem re-calcular na mesma janela de 30 s.
- */
-async function getMasterCcSummaryCached(cvEnterpriseId, masterErpId) {
-  if (!cvEnterpriseId || !masterErpId) return null;
-
-  const key = `master:${cvEnterpriseId}:${masterErpId}`;
-  const now = Date.now();
-  const memo = unitsCache.get(key);
-  if (memo && now - memo.ts < UNITS_TTL) return memo.data;
-
-  try {
-    const data = await summarizeMasterCcFromDb(Number(cvEnterpriseId), masterErpId);
+    const data = await resolveUnitsForErp(String(erpId));
     unitsCache.set(key, { ts: now, data });
     return data;
   } catch (e) {
-    console.error('[projections][units_summary] erro ao calcular CC mestre', {
-      cvEnterpriseId, masterErpId, message: e?.message,
+    console.error('[projections][units_summary] erro ao resolver unidades por CC', {
+      erpId, message: e?.message,
     });
     unitsCache.set(key, { ts: now, data: null });
     return null;
   }
-}
-
-async function resolveCvEnterpriseIdByErp({ erpId }) {
-  if (!erpId) return undefined;
-
-  const row = await EnterpriseCity.findOne({
-    where: { source: 'crm', erp_id: String(erpId) },
-    attributes: ['crm_id'],
-  });
-
-  if (!row) return undefined;
-  return row.crm_id != null ? Number(row.crm_id) : undefined;
 }
 
 async function enrichDefaultsWithUnits(defaults) {
@@ -163,32 +93,12 @@ async function enrichDefaultsWithUnits(defaults) {
   const items = await Promise.all(
     defaults.map(async (d) => {
       const erpId = d?.erp_id != null ? String(d.erp_id) : null;
-      let cvId = d?.cv_enterprise_id != null ? Number(d.cv_enterprise_id) : undefined;
 
-      let unitsSummary = null;
-
-      // 1) PRIORIDADE: etapa específica no CV via idetapa_int
-      if (erpId) {
-        const stageData = await getUnitsSummaryByStageIntCached(erpId);
-        if (stageData) {
-          unitsSummary = stageData;
-          if (!cvId) cvId = stageData.cvEnterpriseId ?? null;
-        }
-      }
-
-      // 2) FALLBACK: se não existe etapa, tenta resolver como CC mestre
-      if (!unitsSummary && erpId) {
-        const resolvedCvId = await resolveCvEnterpriseIdByErp({ erpId });
-        if (resolvedCvId) {
-          cvId = resolvedCvId;
-          unitsSummary = await getMasterCcSummaryCached(cvId, erpId);
-        }
-      }
-
-      // 3) FALLBACK final: resumo do empreendimento completo
-      if (!unitsSummary && cvId) {
-        unitsSummary = await getUnitsSummaryCached(cvId);
-      }
+      // Coleta UNIFICADA (a MESMA da Viabilidade): etapa → CC mestre → empreendimento.
+      const unitsSummary = erpId ? await getUnitsResolvedByErpCached(erpId) : null;
+      const cvId = unitsSummary?.cvEnterpriseId != null
+        ? Number(unitsSummary.cvEnterpriseId)
+        : (d?.cv_enterprise_id != null ? Number(d.cv_enterprise_id) : null);
 
       return {
         ...d,
@@ -264,6 +174,7 @@ SELECT
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
   COALESCE(d.custo_loja,0) AS custo_loja,
+  COALESCE(d.blocked_considered_available,0) AS blocked_considered_available,
   d.total_units,
   d.manual_city
 FROM pairs_in_view p
@@ -321,6 +232,7 @@ SELECT
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
   COALESCE(d.custo_loja,0) AS custo_loja,
+  COALESCE(d.blocked_considered_available,0) AS blocked_considered_available,
   d.total_units,
   d.manual_city
 FROM pairs p
@@ -365,6 +277,7 @@ SELECT
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
   COALESCE(d.custo_loja,0) AS custo_loja,
+  COALESCE(d.blocked_considered_available,0) AS blocked_considered_available,
   d.total_units,
   d.manual_city
 FROM pairs_in_view p
@@ -431,6 +344,7 @@ SELECT
   COALESCE(d.default_marketing_pct,0) AS default_marketing_pct,
   COALESCE(d.default_commission_pct,0) AS default_commission_pct,
   COALESCE(d.custo_loja,0) AS custo_loja,
+  COALESCE(d.blocked_considered_available,0) AS blocked_considered_available,
   d.total_units,
   d.manual_city
 FROM pairs p
@@ -601,6 +515,7 @@ export async function cloneProjection(req, res) {
           default_commission_pct: Number(d.default_commission_pct || 0),
           total_units: d.total_units ?? null,
           custo_loja: Number(d.custo_loja || 0),
+          blocked_considered_available: Number(d.blocked_considered_available || 0),
           manual_city: d.manual_city ?? null,
         })),
         { transaction: trx }
@@ -785,6 +700,7 @@ export async function getProjectionDetail(req, res) {
             'default_commission_pct',
             'total_units',
             'custo_loja',
+            'blocked_considered_available',
           ],
           order: [['enterprise_key', 'ASC'], ['alias_id', 'ASC']],
         });
@@ -926,7 +842,8 @@ export async function getProjectionDetail(req, res) {
            d.enterprise_key, d.erp_id, d.alias_id,
            d.default_avg_price, d.enterprise_name_cache,
            d.default_marketing_pct, d.default_commission_pct,
-           d.total_units, COALESCE(d.custo_loja,0) AS custo_loja
+           d.total_units, COALESCE(d.custo_loja,0) AS custo_loja,
+           COALESCE(d.blocked_considered_available,0) AS blocked_considered_available
          FROM sales_projection_enterprises d
          JOIN allowed a ON a.erp_id = d.erp_id
          WHERE d.projection_id = :pid
@@ -1150,6 +1067,7 @@ export async function upsertProjectionDefaults(req, res) {
         default_commission_pct: Number(i.default_commission_pct ?? 0),
         total_units,
         custo_loja: Number(i.custo_loja ?? i.custoLoja ?? 0),
+        blocked_considered_available: Number(i.blocked_considered_available ?? i.blockedConsideredAvailable ?? 0),
         manual_city,
       });
     }
@@ -1166,6 +1084,7 @@ export async function upsertProjectionDefaults(req, res) {
         'default_commission_pct',
         'total_units',
         'custo_loja',
+        'blocked_considered_available',
         'manual_city',
         'updated_at',
       ],
@@ -1868,6 +1787,52 @@ export async function listEnterprisesForPicker(req, res) {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Erro ao listar empreendimentos.' });
+  }
+}
+
+/**
+ * Mapa de nomes de exibição por centro de custo, vindo da PROJEÇÃO ATIVA (fonte única
+ * de naming — o nome editável da projeção), com fallback nos overrides legados para não
+ * regredir nomes já cadastrados. Consumido pelo costCenterNamesStore (Custos/Títulos/
+ * AutoSync). Substitui o antigo /api/expenses/cost-center-overrides/map.
+ * Retorna { "<erp_id>": "Nome" }.
+ */
+export async function getActiveProjectionCostCenterNames(req, res) {
+  try {
+    if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+
+    const map = {};
+
+    // fallback legado: overrides existentes (não quebra nomes já cadastrados)
+    try {
+      const overrides = await db.CostCenterOverride.findAll({ attributes: ['cost_center_id', 'display_name'] });
+      for (const o of overrides) {
+        if (o.cost_center_id != null && o.display_name) map[String(o.cost_center_id)] = o.display_name;
+      }
+    } catch (_e) {
+      // tabela pode não existir em algum ambiente — segue só com a projeção
+    }
+
+    // prioridade: nome da projeção ativa (enterprise_name_cache por erp_id/CC)
+    const proj = await db.SalesProjection.findOne({
+      where: { is_active: true },
+      order: [['updated_at', 'DESC']],
+      attributes: ['id'],
+    });
+    if (proj) {
+      const rows = await db.SalesProjectionEnterprise.findAll({
+        where: { projection_id: proj.id },
+        attributes: ['erp_id', 'enterprise_name_cache'],
+      });
+      for (const r of rows) {
+        if (r.erp_id != null && r.enterprise_name_cache) map[String(r.erp_id)] = r.enterprise_name_cache;
+      }
+    }
+
+    return res.json(map);
+  } catch (e) {
+    console.error('[projections] getActiveProjectionCostCenterNames erro', e);
+    return res.status(500).json({ error: e.message || 'Erro ao carregar nomes de exibição.' });
   }
 }
 

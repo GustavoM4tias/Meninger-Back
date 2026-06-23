@@ -1,5 +1,8 @@
 // src/controllers/sienge/billsController.js
-import BillsService from '../../services/sienge/billsService.js';
+//
+// Tela "Títulos" — agora lê AO VIVO do backup do Sienge (payableLiveService),
+// não mais da API/Auto-Sync. Mantém a regra de permissão por cidade para não-admin.
+import { listBills } from '../../services/sienge/payableLiveService.js';
 import db from '../../models/sequelize/index.js';
 
 // helper de normalização de cidade igual aos outros controllers
@@ -7,29 +10,15 @@ const CITY_EQ = (col) => `
   unaccent(upper(regexp_replace(${col}, '[^A-Z0-9]+',' ','g')))
 `;
 
-/**
- * Estado de sync por empreendimento (costCenterId -> state).
- * Vive no módulo para persistir entre requisições (mesmo processo Node).
- */
-const enterpriseSyncState = new Map();
-
 export default class BillsController {
-    constructor() {
-        this.service = new BillsService();
-        this.isRunning = false;
-    }
-
     /**
-     * GET /api/sienge/bills
-     * Exemplo:
-     *   /api/sienge/bills?costCenterId=80001&startDate=2025-08-01&endDate=2025-10-31&debtorId=80
+     * GET /api/sienge/bills?costCenterId=80001,80002&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD[&debtorId=80]
      *
      * Regras:
      * - 🔒 Requer usuário autenticado (middleware authenticate na rota)
      * - admin  → pode consultar qualquer costCenterId
-     * - não-admin → só pode consultar costCenterId mapeado para sua cidade em enterprise_cities (source='erp')
+     * - não-admin → só pode consultar costCenterId mapeado para sua cidade em enterprise_cities
      */
-    // src/controllers/sienge/billsController.js
     list = async (req, res) => {
         try {
             if (!req.user) {
@@ -42,7 +31,7 @@ export default class BillsController {
                 return res.status(400).json({ error: 'costCenterId é obrigatório' });
             }
 
-            // 👇 aceita "80001" ou "80001,80002,83001"
+            // aceita "80001" ou "80001,80002,83001"
             const ids = String(costCenterId)
                 .split(',')
                 .map(v => Number(v.trim()))
@@ -51,10 +40,6 @@ export default class BillsController {
             if (!ids.length) {
                 return res.status(400).json({ error: 'costCenterId inválido.' });
             }
-
-            // Sem limite duro de quantidade de empreendimentos nem de range de datas —
-            // o auto-sync diário mantém o banco populado, e a consulta DB-first é barata.
-            // (Antes existia limite de 3 empreendimentos e 6 meses; removidos em 2026-05.)
 
             const isAdmin = req.user.role === 'admin';
 
@@ -89,237 +74,19 @@ export default class BillsController {
                 }
             }
 
-            // ✅ chama o service para cada centro de custo e concatena resultados
-            let allRows = [];
-
-            for (const id of ids) {
-                const rows = await this.service.listFromSiengeWithDepartments({
-                    costCenterId: id,
-                    startDate,
-                    endDate,
-                    debtorId: debtorId ? Number(debtorId) : undefined,
-                });
-                allRows = allRows.concat(rows);
-            }
-
-            return res.json(allRows);
-        } catch (e) {
-            console.error('❌ [BillsController] Erro ao listar títulos');
-            console.error('   Mensagem:', e?.message);
-            console.error('   Response status:', e?.response?.status);
-            console.error('   Response data:', e?.response?.data);
-
-            const status = e.response?.status || 500;
-            const providerMsg =
-                e.response?.data?.clientMessage ||
-                e.response?.data?.developerMessage ||
-                e.response?.data?.message ||
-                e.response?.data?.error ||
-                e.message;
-
-            return res.status(status).json({
-                error: providerMsg || 'Erro ao listar títulos do Sienge',
-            });
-        }
-    };
-
-    /**
-     * POST /api/sienge/bills/sync-enterprise
-     * Dispara (fire-and-forget) o sync completo de um empreendimento.
-     * Retorna 202 imediatamente; o progresso pode ser consultado via GET /sync-enterprise/status/:costCenterId.
-     */
-    startEnterpriseSync = async (req, res) => {
-        if (!req.user) {
-            return res.status(401).json({ error: 'Usuário não autenticado.' });
-        }
-
-        const isAdmin = req.user.role === 'admin';
-        const { costCenterId } = req.body;
-
-        if (!costCenterId) {
-            return res.status(400).json({ error: 'costCenterId é obrigatório.' });
-        }
-
-        const id = Number(costCenterId);
-        if (!Number.isFinite(id)) {
-            return res.status(400).json({ error: 'costCenterId inválido.' });
-        }
-
-        // Não-admin: valida permissão por cidade
-        if (!isAdmin) {
-            const userCity = (req.user.city || '').trim();
-            if (!userCity) {
-                return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-            }
-
-            const sql = `
-        SELECT 1
-        FROM enterprise_cities ec
-        WHERE ec.erp_id IS NOT NULL
-          AND ec.erp_id::int = :costCenterId
-          AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-        LIMIT 1;
-      `;
-
-            const rows = await db.sequelize.query(sql, {
-                replacements: { costCenterId: id, userCity },
-                type: db.Sequelize.QueryTypes.SELECT,
-            });
-
-            if (!rows.length) {
-                return res.status(403).json({ error: 'Centro de custo não permitido para sua cidade.' });
-            }
-        }
-
-        // Verifica se já está rodando
-        const existing = enterpriseSyncState.get(id);
-        if (existing?.running) {
-            return res.status(409).json({
-                error: 'Sync já em andamento para este empreendimento.',
-                status: existing,
-            });
-        }
-
-        // Inicializa estado
-        const state = {
-            running: true,
-            phase: 'starting',
-            fetched: 0,
-            total: null,
-            done: 0,
-            startedAt: new Date().toISOString(),
-            finishedAt: null,
-            error: null,
-            result: null,
-        };
-        enterpriseSyncState.set(id, state);
-
-        // Dispara em background
-        (async () => {
-            try {
-                const result = await this.service.syncEnterpriseFull(id, (progress) => {
-                    Object.assign(state, progress);
-                });
-                state.running = false;
-                state.phase = 'done';
-                state.result = result;
-                state.finishedAt = new Date().toISOString();
-            } catch (err) {
-                console.error(`❌ [SyncEnterprise] Erro no sync do empreendimento ${id}:`, err.message);
-                state.running = false;
-                state.phase = 'error';
-                state.error = err.message;
-                state.finishedAt = new Date().toISOString();
-            }
-        })();
-
-        return res.status(202).json({ message: 'Sync iniciado.', costCenterId: id });
-    };
-
-    /**
-     * GET /api/sienge/bills/sync-enterprise/status/:costCenterId
-     * Retorna o estado atual do sync do empreendimento.
-     */
-    getEnterpriseSyncStatus = async (req, res) => {
-        if (!req.user) {
-            return res.status(401).json({ error: 'Usuário não autenticado.' });
-        }
-
-        const id = Number(req.params.costCenterId);
-        const state = enterpriseSyncState.get(id);
-
-        if (!state) {
-            return res.json({ running: false, phase: null, costCenterId: id });
-        }
-
-        return res.json({ ...state, costCenterId: id });
-    };
-
-    /**
-     * (opcional) POST /api/sienge/bills/sync
-     * Pode ser usada para sincronização em lote, se você ainda quiser manter.
-     * Também segue regra de cidade para não-admin.
-     */
-    sync = async (req, res) => {
-        // precisa estar autenticado
-        if (!req.user) {
-            return res.status(401).json({ error: 'Usuário não autenticado.' });
-        }
-
-        const isAdmin = req.user.role === 'admin';
-
-        if (this.isRunning) {
-            return res.status(429).send('Já em execução');
-        }
-
-        this.isRunning = true;
-
-        try {
-            const { costCenterId, startDate, endDate, debtorId } = req.body;
-
-            if (!costCenterId || !startDate || !endDate) {
-                return res.status(400).json({
-                    error: 'costCenterId, startDate e endDate são obrigatórios'
-                });
-            }
-
-            // não-admin também precisa estar autorizado pela cidade
-            if (!isAdmin) {
-                const userCity = (req.user.city || '').trim();
-
-                if (!userCity) {
-                    return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-                }
-
-                const sql = `
-          SELECT 1
-          FROM enterprise_cities ec
-          WHERE ec.erp_id IS NOT NULL
-            AND ec.erp_id::int = :costCenterId
-            AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-          LIMIT 1;
-        `;
-
-                const rows = await db.sequelize.query(sql, {
-                    replacements: {
-                        costCenterId: Number(costCenterId),
-                        userCity
-                    },
-                    type: db.Sequelize.QueryTypes.SELECT,
-                });
-
-                if (!rows.length) {
-                    return res.status(403).json({ error: 'Centro de custo não permitido para sua cidade.' });
-                }
-            }
-
-            const count = await this.service.syncBills({
-                costCenterId,
+            const rows = await listBills({
+                costCenterIds: ids,
                 startDate,
                 endDate,
-                debtorId,
+                debtorId: debtorId ? Number(debtorId) : undefined,
             });
 
-            return res.json({ synced: count });
+            return res.json(rows);
         } catch (e) {
-            console.error('❌ [BillsController] Erro ao sincronizar títulos');
-            console.error('   Mensagem:', e?.message);
-            console.error('   Response status:', e?.response?.status);
-            console.error('   Response data:', e?.response?.data);
-
-            const status = e.response?.status || 500;
-            const providerMsg =
-                e.response?.data?.clientMessage ||
-                e.response?.data?.developerMessage ||
-                e.response?.data?.message ||
-                e.response?.data?.error ||
-                e.message;
-
-            return res.status(status).json({
-                error: providerMsg || 'Erro ao sincronizar títulos do Sienge',
+            console.error('❌ [BillsController] Erro ao listar títulos:', e?.message);
+            return res.status(500).json({
+                error: e?.message || 'Erro ao listar títulos do Sienge',
             });
-        } finally {
-            this.isRunning = false;
         }
     };
 }
