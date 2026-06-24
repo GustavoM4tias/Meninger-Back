@@ -16,7 +16,7 @@ router.get('/dashboard', ...internal, checklistController.dashboard);
 router.get('/my-tasks', ...internal, checklistController.myTasks);
 router.get('/users', ...internal, checklistController.listUsers);
 router.get('/enterprises', ...internal, checklistController.listEnterprises);
-router.post('/import/excel', ...internal, uploadExcelSingle, checklistController.importExcel);
+router.post('/import/excel', ...admin, uploadExcelSingle, checklistController.importExcel);
 
 // ── Cobrança (régua configurável) — admin ──
 router.get('/cobranca/settings', ...admin, checklistController.getCobrancaSettings);
@@ -27,6 +27,14 @@ router.patch('/cobranca/rules/:id(\\d+)', ...admin, checklistController.updateRu
 router.delete('/cobranca/rules/:id(\\d+)', ...admin, checklistController.removeRule);
 router.post('/cobranca/run', ...admin, checklistController.runCobranca);
 
+// ── Autorização: perfis (leitura interna; escrita admin) + estado/pendências ──
+router.get('/approval/profiles', ...internal, checklistController.listAuthProfiles);
+router.post('/approval/profiles', ...admin, checklistController.createAuthProfile);
+router.patch('/approval/profiles/:id(\\d+)', ...admin, checklistController.updateAuthProfile);
+router.delete('/approval/profiles/:id(\\d+)', ...admin, checklistController.removeAuthProfile);
+router.get('/approval/me', ...internal, checklistController.approvalMe);
+router.get('/approval/pending', ...internal, checklistController.pendingApprovals);
+
 // ── Catálogo de status (escrita = admin) ──
 router.get('/statuses', ...internal, checklistController.listStatuses);
 router.post('/statuses', ...admin, checklistController.createStatus);
@@ -36,19 +44,29 @@ router.delete('/statuses/:id(\\d+)', ...admin, checklistController.removeStatus)
 // ── Modelos (biblioteca) ──
 router.get('/templates', ...internal, checklistController.listTemplates);
 router.get('/templates/:id(\\d+)', ...internal, checklistController.getTemplate);
-router.post('/templates/:id(\\d+)/instantiate', ...internal, checklistController.instantiate);
+router.post('/templates/:id(\\d+)/instantiate', ...admin, checklistController.instantiate);
+// Edição de modelos (admin)
+router.post('/templates', ...admin, checklistController.createTemplate);
+router.patch('/templates/:id(\\d+)', ...admin, checklistController.updateTemplate);
+router.delete('/templates/:id(\\d+)', ...admin, checklistController.deleteTemplate);
+router.post('/templates/:id(\\d+)/sections', ...admin, checklistController.saveTemplateSection);
+router.delete('/templates/sections/:id(\\d+)', ...admin, checklistController.removeTemplateSection);
+router.post('/templates/:id(\\d+)/items', ...admin, checklistController.saveTemplateItem);
+router.delete('/templates/items/:id(\\d+)', ...admin, checklistController.removeTemplateItem);
 
-// ── Seções (por id) ──
-router.patch('/sections/:id(\\d+)', ...internal, checklistController.updateSection);
-router.delete('/sections/:id(\\d+)', ...internal, checklistController.removeSection);
+// ── Seções (por id) — admin ──
+router.patch('/sections/:id(\\d+)', ...admin, checklistController.updateSection);
+router.delete('/sections/:id(\\d+)', ...admin, checklistController.removeSection);
 
 // ── Tarefas (flat, por id) ──
-router.post('/tasks/reorder', ...internal, checklistController.reorderTasks);
-router.post('/tasks/bulk', ...internal, checklistController.bulkTasks);
+router.post('/tasks/reorder', ...admin, checklistController.reorderTasks);
+router.post('/tasks/bulk', ...admin, checklistController.bulkTasks);
 router.get('/tasks/:id(\\d+)', ...internal, checklistController.getTask);
 router.patch('/tasks/:id(\\d+)', ...internal, checklistController.updateTask);
-router.delete('/tasks/:id(\\d+)', ...internal, checklistController.removeTask);
+router.delete('/tasks/:id(\\d+)', ...admin, checklistController.removeTask);
 router.post('/tasks/:id(\\d+)/status', ...internal, checklistController.setTaskStatus);
+router.post('/tasks/:id(\\d+)/submit-approval', ...internal, checklistController.submitApproval);
+router.post('/tasks/:id(\\d+)/decision', ...internal, checklistController.decideApproval);
 router.post('/tasks/:id(\\d+)/nudge', ...internal, checklistController.nudgeTask);
 router.get('/tasks/:id(\\d+)/comments', ...internal, checklistController.listComments);
 router.post('/tasks/:id(\\d+)/comments', ...internal, checklistController.addComment);
@@ -60,14 +78,15 @@ router.delete('/attachments/:id(\\d+)', ...internal, checklistController.removeA
 
 // ── Checklists (CRUD) + sub-recursos por checklist id ──
 router.get('/', ...internal, checklistController.list);
-router.post('/', ...internal, checklistController.create);
+router.post('/', ...admin, checklistController.create);
 router.get('/:id(\\d+)', ...internal, checklistController.getOne);
-router.patch('/:id(\\d+)', ...internal, checklistController.update);
-router.post('/:id(\\d+)/archive', ...internal, checklistController.archive);
+router.patch('/:id(\\d+)', ...admin, checklistController.update);
+router.post('/:id(\\d+)/archive', ...admin, checklistController.archive);
+router.post('/:id(\\d+)/clone', ...admin, checklistController.clone);
 router.delete('/:id(\\d+)', ...admin, checklistController.remove);
-router.post('/:id(\\d+)/sections', ...internal, checklistController.addSection);
-router.post('/:id(\\d+)/tasks', ...internal, checklistController.createTask);
+router.post('/:id(\\d+)/sections', ...admin, checklistController.addSection);
+router.post('/:id(\\d+)/tasks', ...admin, checklistController.createTask);
 router.get('/:id(\\d+)/cobranca', ...internal, checklistController.getChecklistCobranca);
-router.put('/:id(\\d+)/cobranca', ...internal, checklistController.setChecklistCobranca);
+router.put('/:id(\\d+)/cobranca', ...admin, checklistController.setChecklistCobranca);
 
 export default router;

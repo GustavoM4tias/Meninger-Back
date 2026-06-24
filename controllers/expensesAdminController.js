@@ -5,6 +5,7 @@
 //   2. expense_department_visibility — escolher quais departamentos aparecem no filtro
 
 import db from '../models/sequelize/index.js';
+import { listActiveDepartmentNames } from '../services/sienge/payableLiveService.js';
 
 const { CostCenterOverride, ExpenseDepartmentVisibility, sequelize, Sequelize } = db;
 
@@ -111,24 +112,20 @@ export const deleteCostCenterOverride = async (req, res) => {
 export const listDepartmentVisibility = async (req, res) => {
     if (!ensureAdmin(req, res)) return;
     try {
-        // 1) Pega todos os departamentos distintos vistos em sienge_bills
-        const rowsAll = await sequelize.query(
-            `SELECT DISTINCT main_department_name AS name
-             FROM sienge_bills
-             WHERE main_department_name IS NOT NULL
-               AND TRIM(main_department_name) <> ''
-             ORDER BY main_department_name`,
-            { type: Sequelize.QueryTypes.SELECT }
-        );
-
-        // 2) Pega flags atuais
-        const flags = await ExpenseDepartmentVisibility.findAll();
+        // 1) Departamentos ativos do Sienge (ao vivo) ∪ os que já têm flag salva
+        const [liveNames, flags] = await Promise.all([
+            listActiveDepartmentNames().catch(() => []),
+            ExpenseDepartmentVisibility.findAll(),
+        ]);
         const hiddenSet = new Set(flags.filter(f => f.hidden).map(f => f.name));
 
-        const departments = rowsAll.map(r => ({
-            name: r.name,
-            hidden: hiddenSet.has(r.name),
-        }));
+        const set = new Set();
+        for (const n of liveNames) if (n && n.trim()) set.add(n.trim());
+        for (const f of flags) if (f.name && f.name.trim()) set.add(f.name.trim());
+
+        const departments = [...set]
+            .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+            .map(name => ({ name, hidden: hiddenSet.has(name) }));
 
         return res.json({ departments });
     } catch (err) {

@@ -154,6 +154,24 @@ async function seedStatuses() {
     return missing.length;
 }
 
+// Marca os flags de autorização (Fase 3) só na PRIMEIRA vez — depois o admin gerencia
+// pelo editor de status. Roda mesmo em banco já semeado (fora do fast-path).
+async function seedApprovalFlags() {
+    try {
+        const [reviewCount, gatedCount] = await Promise.all([
+            db.ChecklistStatus.count({ where: { scope: 'GLOBAL', approval_role: 'REVIEW' } }),
+            db.ChecklistStatus.count({ where: { scope: 'GLOBAL', requires_approval: true } }),
+        ]);
+        if (reviewCount > 0 || gatedCount > 0) return 0; // já configurado
+        await Promise.all([
+            db.ChecklistStatus.update({ approval_role: 'REVIEW' }, { where: { scope: 'GLOBAL', label: 'EM APROVAÇÃO' } }),
+            db.ChecklistStatus.update({ approval_role: 'REWORK' }, { where: { scope: 'GLOBAL', label: 'EM AJUSTE' } }),
+            db.ChecklistStatus.update({ requires_approval: true }, { where: { scope: 'GLOBAL', label: ['CONCLUÍDO', 'SOLIC P/ COMPRAS'] } }),
+        ]);
+        return 1;
+    } catch (err) { console.warn('[seedChecklist.approvalFlags] falhou:', err?.message || err); return 0; }
+}
+
 async function seedLaunchTemplate() {
     const existing = await db.ChecklistTemplate.findOne({
         where: { kind: LAUNCH_TEMPLATE.kind, name: LAUNCH_TEMPLATE.name },
@@ -234,6 +252,9 @@ export default async function seedChecklist() {
             console.warn('[seedChecklist] models do checklist nao registrados; pulando.');
             return;
         }
+        // Flags de autorização (Fase 3): idempotente e fora do fast-path (precisa rodar
+        // mesmo num banco que já tinha os status semeados antes da Fase 3).
+        await seedApprovalFlags();
         // Fast-path: se já está tudo semeado, sai em ~1 ida ao banco (3 counts em paralelo).
         const [statusCount, tplCount, settingsCount] = await Promise.all([
             db.ChecklistStatus.count({ where: { scope: 'GLOBAL' } }),

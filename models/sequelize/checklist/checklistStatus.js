@@ -12,6 +12,11 @@ export default (sequelize, DataTypes) => {
         state_class: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'TODO' },
         position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
         is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+        // ── Autorização (Fase 3) ──
+        // requires_approval: mover p/ este status exige aprovação prévia (ex.: CONCLUÍDO, SOLIC P/ COMPRAS).
+        requires_approval: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        // approval_role: REVIEW = etapa "Em Aprovação" | REWORK = "Em Ajuste".
+        approval_role: { type: DataTypes.STRING(20), allowNull: true },
     }, {
         tableName: 'checklist_statuses',
         timestamps: true,

@@ -58,6 +58,8 @@ export const NotificationType = {
     CHECKLIST_TASK_NUDGE:     'checklist.task.nudge',
     CHECKLIST_TASK_COMMENT:   'checklist.task.comment',
     CHECKLIST_TASK_COMPLETED: 'checklist.task.completed',
+    CHECKLIST_APPROVAL_REQUESTED: 'checklist.approval.requested',
+    CHECKLIST_APPROVAL_DECIDED:   'checklist.approval.decided',
 };
 
 export const NOTIFICATION_CATALOG = {
@@ -368,6 +370,25 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
+    },
+    [NotificationType.CHECKLIST_APPROVAL_REQUESTED]: {
+        label: 'Tarefa aguardando sua autorização',
+        group: 'Checklist',
+        description: 'Quando uma tarefa de um perfil de autorização seu entra em aprovação.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CHECKLIST_APPROVAL_DECIDED]: {
+        label: 'Resultado da autorização da sua tarefa',
+        group: 'Checklist',
+        description: 'Quando sua tarefa é aprovada ou reprovada na revisão.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        // Resultado direcionado ao responsável: sempre chega.
+        userOptional: false,
     },
 };
 

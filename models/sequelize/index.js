@@ -16,11 +16,8 @@ import ValidationHistoryDefine from './validationHistory.js';
 
 // Singe imports
 import SalesContractDefine from './sienge/salesContract.js';
-import SiengeBillDefine from './sienge/bill.js';
-import SiengeBillInstallmentDefine from './sienge/billInstallment.js';
 import ExpensePersonalizationDefine from './sienge/expensePersonalization.js';
 
-import ExpenseDefine from './expense.js';
 import CostCenterOverrideDefine from './costCenterOverride.js';
 import ExpenseDepartmentVisibilityDefine from './expenseDepartmentVisibility.js';
 import DepartmentVisibilityOverrideDefine from './departmentVisibilityOverride.js';
@@ -191,6 +188,8 @@ import ChecklistTaskCommentDefine     from './checklist/checklistTaskComment.js'
 import ChecklistActivityDefine        from './checklist/checklistActivity.js';
 import ChecklistSettingsDefine        from './checklist/checklistSettings.js';
 import ChecklistReminderRuleDefine    from './checklist/checklistReminderRule.js';
+import ChecklistAuthProfileDefine     from './checklist/checklistAuthProfile.js';
+import ChecklistTaskApprovalDefine    from './checklist/checklistTaskApproval.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -214,11 +213,8 @@ db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
 
 // sienge db 
 db.SalesContract = SalesContractDefine(sequelize, DataTypes);
-db.SiengeBill = SiengeBillDefine(sequelize, DataTypes);
-db.SiengeBillInstallment = SiengeBillInstallmentDefine(sequelize, DataTypes);
 db.ExpensePersonalization = ExpensePersonalizationDefine(sequelize, DataTypes);
 
-db.Expense = ExpenseDefine(sequelize, DataTypes);
 db.CostCenterOverride = CostCenterOverrideDefine(sequelize, DataTypes);
 db.ExpenseDepartmentVisibility = ExpenseDepartmentVisibilityDefine(sequelize, DataTypes);
 db.DepartmentVisibilityOverride = DepartmentVisibilityOverrideDefine(sequelize, DataTypes);
@@ -390,6 +386,8 @@ db.ChecklistTaskComment     = ChecklistTaskCommentDefine(sequelize, DataTypes);
 db.ChecklistActivity        = ChecklistActivityDefine(sequelize, DataTypes);
 db.ChecklistSettings        = ChecklistSettingsDefine(sequelize, DataTypes);
 db.ChecklistReminderRule    = ChecklistReminderRuleDefine(sequelize, DataTypes);
+db.ChecklistAuthProfile     = ChecklistAuthProfileDefine(sequelize, DataTypes);
+db.ChecklistTaskApproval    = ChecklistTaskApprovalDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

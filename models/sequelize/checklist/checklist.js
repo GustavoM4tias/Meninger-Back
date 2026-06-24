@@ -7,6 +7,8 @@ export default (sequelize, DataTypes) => {
         kind: { type: DataTypes.STRING(40), allowNull: false, defaultValue: 'GENERIC' },
         idempreendimento: { type: DataTypes.INTEGER, allowNull: true },
         display_name: { type: DataTypes.STRING(200), allowNull: true },
+        // Centro de custo: vincula manualmente p/ puxar dados depois (independe do CV).
+        cost_center: { type: DataTypes.STRING(60), allowNull: true },
         // active | archived | done
         status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'active' },
         // Régua de cobrança: DEFAULT (usa a régua global) | CUSTOM (régua própria) | OFF

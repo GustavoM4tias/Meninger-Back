@@ -4,7 +4,10 @@ export default (sequelize, DataTypes) => {
     const ChecklistTaskComment = sequelize.define('ChecklistTaskComment', {
         task_id: { type: DataTypes.INTEGER, allowNull: false },
         user_id: { type: DataTypes.INTEGER, allowNull: false },
-        body: { type: DataTypes.TEXT, allowNull: false },
+        body: { type: DataTypes.TEXT, allowNull: true }, // pode ser só imagem (marcação)
+        // Imagem anexada ao comentário (ex.: marcação/proofing sobre um anexo).
+        image_url: { type: DataTypes.TEXT, allowNull: true },
+        annotated_from_id: { type: DataTypes.INTEGER, allowNull: true }, // anexo de origem da marcação
     }, {
         tableName: 'checklist_task_comments',
         timestamps: true,

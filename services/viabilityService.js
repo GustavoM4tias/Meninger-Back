@@ -27,7 +27,6 @@ const {
     SalesProjection,
     SalesProjectionLine,
     SalesProjectionEnterprise,
-    Expense,
     EnterpriseCity,
     Sequelize,
 } = db;
