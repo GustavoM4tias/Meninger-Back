@@ -12,7 +12,9 @@ export default (sequelize, DataTypes) => {
         default_value: { type: DataTypes.DECIMAL(15, 2), allowNull: true },
         // Dica de responsável (cargo/papel) a mapear para um usuário no instantiate.
         default_assignee_role: { type: DataTypes.STRING(120), allowNull: true },
-        // STORE_OPENING | MEETING | START
+        // Responsável padrão (usuário real) — vai direto p/ a tarefa criada.
+        default_assignee_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        // TODAY | STORE_OPENING | MEETING | START
         due_anchor: { type: DataTypes.STRING(40), allowNull: true },
         due_offset_days: { type: DataTypes.INTEGER, allowNull: true },
         notes_template: { type: DataTypes.TEXT, allowNull: true },

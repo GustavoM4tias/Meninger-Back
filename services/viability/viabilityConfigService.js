@@ -10,6 +10,7 @@
 // quantas bloqueadas liberar.
 
 import db from '../../models/sequelize/index.js';
+import { listActiveDepartmentNames } from '../sienge/payableLiveService.js';
 
 const { ViabilityMarketingDepartment, ViabilityEnterpriseSettings } = db;
 
@@ -23,16 +24,9 @@ const norm = (s) =>
 
 /* ============================ Departamentos (global) ============================ */
 
-// Lista os department_name distintos já vistos nas despesas — fonte para o admin escolher.
+// Departamentos ativos do Sienge (ao vivo) — fonte para o admin escolher quais contam como marketing.
 export async function listKnownDepartments() {
-    const rows = await db.sequelize.query(
-        `SELECT DISTINCT department_name AS name
-           FROM expenses
-          WHERE department_name IS NOT NULL AND TRIM(department_name) <> ''
-          ORDER BY department_name ASC`,
-        { type: db.Sequelize.QueryTypes.SELECT }
-    );
-    return rows.map((r) => r.name);
+    return await listActiveDepartmentNames();
 }
 
 export async function listMarketingDepartments() {

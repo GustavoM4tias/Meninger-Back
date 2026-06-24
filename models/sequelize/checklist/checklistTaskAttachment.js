@@ -8,8 +8,10 @@ export default (sequelize, DataTypes) => {
         url: { type: DataTypes.TEXT, allowNull: false },
         storage_path: { type: DataTypes.TEXT, allowNull: true },
         size: { type: DataTypes.BIGINT, allowNull: true },
-        // FILE | IMAGE
+        // FILE | IMAGE | LINK
         kind: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'FILE' },
+        // Versão marcada (proofing): aponta para o anexo de imagem original.
+        annotated_from_id: { type: DataTypes.INTEGER, allowNull: true },
         uploaded_by: { type: DataTypes.INTEGER, allowNull: true },
     }, {
         tableName: 'checklist_task_attachments',

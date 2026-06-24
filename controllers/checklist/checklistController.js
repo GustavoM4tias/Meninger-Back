@@ -4,11 +4,15 @@ import templateService from '../../services/checklist/templateService.js';
 import taskService from '../../services/checklist/taskService.js';
 import importService from '../../services/checklist/importService.js';
 import cobrancaService from '../../services/checklist/cobrancaService.js';
+import authProfileService from '../../services/checklist/authProfileService.js';
 
 const fail = (res, err, code = 400, ctx = '') => {
     console.error(`[checklist.${ctx}]`, err);
-    return res.status(code).json({ message: err?.message || 'Erro inesperado.' });
+    const status = err?.httpStatus || code;
+    // err.code (ex.: APPROVAL_REQUIRED, APPROVAL_LOCKED) deixa o front reagir.
+    return res.status(status).json({ message: err?.message || 'Erro inesperado.', code: err?.code });
 };
+const isAdminReq = (req) => req.user?.role === 'admin';
 
 const checklistController = {
     // ── Checklists ──
@@ -18,11 +22,13 @@ const checklistController = {
                 status: req.query.status,
                 idempreendimento: req.query.idempreendimento,
                 ownerUserId: req.query.ownerUserId,
+                requesterId: req.user?.id,
+                isAdmin: isAdminReq(req),
             }));
         } catch (err) { return fail(res, err, 400, 'list'); }
     },
     async dashboard(req, res) {
-        try { return res.json(await checklistService.dashboard({ userId: req.user?.id })); }
+        try { return res.json(await checklistService.dashboard({ userId: req.user?.id, isAdmin: isAdminReq(req) })); }
         catch (err) { return fail(res, err, 400, 'dashboard'); }
     },
     async myTasks(req, res) {
@@ -30,8 +36,8 @@ const checklistController = {
         catch (err) { return fail(res, err, 400, 'myTasks'); }
     },
     async getOne(req, res) {
-        try { return res.json(await checklistService.getChecklistFull({ id: req.params.id })); }
-        catch (err) { return fail(res, err, 404, 'getOne'); }
+        try { return res.json(await checklistService.getChecklistFull({ id: req.params.id, requesterId: req.user?.id, isAdmin: isAdminReq(req) })); }
+        catch (err) { return fail(res, err, err?.httpStatus || 404, 'getOne'); }
     },
     async create(req, res) {
         try { return res.status(201).json(await checklistService.createChecklist({ payload: req.body || {}, userId: req.user?.id })); }
@@ -44,6 +50,10 @@ const checklistController = {
     async archive(req, res) {
         try { return res.json(await checklistService.archiveChecklist({ id: req.params.id, userId: req.user?.id })); }
         catch (err) { return fail(res, err, 400, 'archive'); }
+    },
+    async clone(req, res) {
+        try { return res.status(201).json(await checklistService.cloneChecklist({ id: req.params.id, userId: req.user?.id, title: req.body?.title })); }
+        catch (err) { return fail(res, err, 400, 'clone'); }
     },
     async remove(req, res) {
         try { return res.json(await checklistService.deleteChecklist({ id: req.params.id })); }
@@ -95,6 +105,35 @@ const checklistController = {
         try { return res.status(201).json(await templateService.instantiate({ templateId: req.params.id, payload: req.body || {}, userId: req.user?.id })); }
         catch (err) { return fail(res, err, 400, 'instantiate'); }
     },
+    // ── Edição de modelos (admin) ──
+    async createTemplate(req, res) {
+        try { return res.status(201).json(await templateService.createTemplate({ payload: req.body || {} })); }
+        catch (err) { return fail(res, err, 400, 'createTemplate'); }
+    },
+    async updateTemplate(req, res) {
+        try { return res.json(await templateService.updateTemplate({ id: req.params.id, payload: req.body || {} })); }
+        catch (err) { return fail(res, err, 400, 'updateTemplate'); }
+    },
+    async deleteTemplate(req, res) {
+        try { return res.json(await templateService.deleteTemplate({ id: req.params.id })); }
+        catch (err) { return fail(res, err, 400, 'deleteTemplate'); }
+    },
+    async saveTemplateSection(req, res) {
+        try { return res.json(await templateService.saveTemplateSection({ templateId: req.params.id, payload: req.body || {} })); }
+        catch (err) { return fail(res, err, 400, 'saveTemplateSection'); }
+    },
+    async removeTemplateSection(req, res) {
+        try { return res.json(await templateService.removeTemplateSection({ id: req.params.id })); }
+        catch (err) { return fail(res, err, 400, 'removeTemplateSection'); }
+    },
+    async saveTemplateItem(req, res) {
+        try { return res.json(await templateService.saveTemplateItem({ templateId: req.params.id, payload: req.body || {} })); }
+        catch (err) { return fail(res, err, 400, 'saveTemplateItem'); }
+    },
+    async removeTemplateItem(req, res) {
+        try { return res.json(await templateService.removeTemplateItem({ id: req.params.id })); }
+        catch (err) { return fail(res, err, 400, 'removeTemplateItem'); }
+    },
 
     // ── Tarefas ──
     async getTask(req, res) {
@@ -106,7 +145,7 @@ const checklistController = {
         catch (err) { return fail(res, err, 400, 'createTask'); }
     },
     async updateTask(req, res) {
-        try { return res.json(await taskService.updateTask({ id: req.params.id, payload: req.body || {}, userId: req.user?.id })); }
+        try { return res.json(await taskService.updateTask({ id: req.params.id, payload: req.body || {}, userId: req.user?.id, isAdmin: isAdminReq(req) })); }
         catch (err) { return fail(res, err, 400, 'updateTask'); }
     },
     async setTaskStatus(req, res) {
@@ -132,7 +171,7 @@ const checklistController = {
         catch (err) { return fail(res, err, 400, 'listComments'); }
     },
     async addComment(req, res) {
-        try { return res.status(201).json(await taskService.addComment({ taskId: req.params.id, body: req.body?.body, userId: req.user?.id })); }
+        try { return res.status(201).json(await taskService.addComment({ taskId: req.params.id, body: req.body?.body, image_url: req.body?.image_url, annotated_from_id: req.body?.annotated_from_id, userId: req.user?.id })); }
         catch (err) { return fail(res, err, 400, 'addComment'); }
     },
     async removeComment(req, res) {
@@ -215,6 +254,44 @@ const checklistController = {
     async setChecklistCobranca(req, res) {
         try { return res.json(await cobrancaService.setChecklistCobranca({ checklistId: req.params.id, mode: req.body?.mode, rules: req.body?.rules, userId: req.user?.id })); }
         catch (err) { return fail(res, err, 400, 'setChecklistCobranca'); }
+    },
+
+    // ── Perfis de autorização (admin) ──
+    async listAuthProfiles(req, res) {
+        try { return res.json(await authProfileService.listProfiles()); }
+        catch (err) { return fail(res, err, 400, 'listAuthProfiles'); }
+    },
+    async createAuthProfile(req, res) {
+        try { return res.status(201).json(await authProfileService.createProfile({ payload: req.body || {}, userId: req.user?.id })); }
+        catch (err) { return fail(res, err, 400, 'createAuthProfile'); }
+    },
+    async updateAuthProfile(req, res) {
+        try { return res.json(await authProfileService.updateProfile({ id: req.params.id, payload: req.body || {}, userId: req.user?.id })); }
+        catch (err) { return fail(res, err, 400, 'updateAuthProfile'); }
+    },
+    async removeAuthProfile(req, res) {
+        try { return res.json(await authProfileService.removeProfile({ id: req.params.id })); }
+        catch (err) { return fail(res, err, 400, 'removeAuthProfile'); }
+    },
+
+    // ── Aprovação (fluxo) ──
+    async approvalMe(req, res) {
+        try {
+            const profiles = await authProfileService.profilesForUser(req.user?.id);
+            return res.json({ isApprover: profiles.length > 0, profiles: profiles.map((p) => ({ id: p.id, name: p.name })) });
+        } catch (err) { return fail(res, err, 400, 'approvalMe'); }
+    },
+    async pendingApprovals(req, res) {
+        try { return res.json(await taskService.pendingApprovalsFor({ userId: req.user?.id })); }
+        catch (err) { return fail(res, err, 400, 'pendingApprovals'); }
+    },
+    async submitApproval(req, res) {
+        try { return res.json(await taskService.submitForApproval({ id: req.params.id, userId: req.user?.id })); }
+        catch (err) { return fail(res, err, 400, 'submitApproval'); }
+    },
+    async decideApproval(req, res) {
+        try { return res.json(await taskService.decideApproval({ id: req.params.id, profileId: req.body?.profileId, decision: req.body?.decision, comment: req.body?.comment, userId: req.user?.id })); }
+        catch (err) { return fail(res, err, 400, 'decideApproval'); }
     },
 };
 

@@ -17,8 +17,16 @@ export default (sequelize, DataTypes) => {
         due_date: { type: DataTypes.DATEONLY, allowNull: true },      // data para entrega/prevista
         started_at: { type: DataTypes.DATEONLY, allowNull: true },
         completed_at: { type: DataTypes.DATE, allowNull: true },      // setado ao entrar em state_class DONE
-        assignee_user_id: { type: DataTypes.INTEGER, allowNull: true },
+        assignee_user_id: { type: DataTypes.INTEGER, allowNull: true }, // responsável "primário" (= assignee_user_ids[0]); legado p/ notif/agregados
+        assignee_user_ids: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] }, // 1+ responsáveis (tarefa em grupo)
         assignee_label: { type: DataTypes.STRING(120), allowNull: true }, // fallback texto livre
+        // Subtarefas leves (checklist dentro da tarefa): [{ text, done }]
+        checklist_items: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+        // ── Autorização / proofing (Fase 3) ──
+        needs_authorization: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        auth_profile_ids: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] }, // perfis que precisam aprovar
+        approval_status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'NONE' }, // NONE | PENDING | APPROVED | REJECTED
+        approval_round: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
         position: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
         created_by: { type: DataTypes.INTEGER, allowNull: true },
         updated_by: { type: DataTypes.INTEGER, allowNull: true },

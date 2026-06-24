@@ -6,7 +6,7 @@ import db from '../../models/sequelize/index.js';
 // Carrega o catálogo de status em um Map(id -> { state_class, label, color, ... }).
 export async function loadStatusMap() {
     const rows = await db.ChecklistStatus.findAll({
-        attributes: ['id', 'label', 'color', 'state_class', 'scope', 'template_id', 'position', 'is_active'],
+        attributes: ['id', 'label', 'color', 'state_class', 'scope', 'template_id', 'position', 'is_active', 'requires_approval', 'approval_role'],
         raw: true,
     });
     return new Map(rows.map((r) => [r.id, r]));
@@ -73,6 +73,8 @@ export function parseMentions(body = '') {
 // due_date = data do marco (key_dates) + offset. Null se faltar âncora/marco.
 export function computeDueDate({ anchor, offsetDays, keyDates }) {
     if (!anchor || offsetDays === null || offsetDays === undefined) return null;
+    // Âncora relativa a HOJE (criação do checklist): funciona sem marcos cadastrados.
+    if (anchor === 'TODAY' || anchor === 'CREATION') return dayjs().add(Number(offsetDays), 'day').format('YYYY-MM-DD');
     const keyMap = { STORE_OPENING: 'store_opening', MEETING: 'meeting', START: 'start' };
     const key = keyMap[anchor] || String(anchor).toLowerCase();
     const kd = Array.isArray(keyDates) ? keyDates.find((k) => k.key === key) : null;
