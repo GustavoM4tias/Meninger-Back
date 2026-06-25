@@ -26,3 +26,6 @@ GRANT CONNECT ON DATABASE sie214801   TO sienge_readonly;
 GRANT USAGE   ON SCHEMA   public      TO sienge_readonly;
 GRANT SELECT  ON ALL TABLES    IN SCHEMA public TO sienge_readonly;
 GRANT SELECT  ON ALL SEQUENCES IN SCHEMA public TO sienge_readonly;
+-- CREATE em public: permite ao usuário (Marcus/BI) criar suas próprias VIEWs.
+-- Reaplicado a cada restore; sem isto o GRANT manual some no swap diário (~05h).
+GRANT CREATE  ON SCHEMA   public      TO sienge_readonly;
