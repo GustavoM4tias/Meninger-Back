@@ -293,6 +293,14 @@ const checklistController = {
         try { return res.json(await taskService.decideApproval({ id: req.params.id, profileId: req.body?.profileId, decision: req.body?.decision, comment: req.body?.comment, userId: req.user?.id })); }
         catch (err) { return fail(res, err, 400, 'decideApproval'); }
     },
+    async cancelApproval(req, res) {
+        try { return res.json(await taskService.cancelApproval({ id: req.params.id, userId: req.user?.id, isAdmin: isAdminReq(req) })); }
+        catch (err) { return fail(res, err, 400, 'cancelApproval'); }
+    },
+    async cancelApproval(req, res) {
+        try { return res.json(await taskService.cancelApproval({ id: req.params.id, userId: req.user?.id, isAdmin: isAdminReq(req) })); }
+        catch (err) { return fail(res, err, 400, 'cancelApproval'); }
+    },
 };
 
 export default checklistController;
