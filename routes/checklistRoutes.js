@@ -67,6 +67,8 @@ router.delete('/tasks/:id(\\d+)', ...admin, checklistController.removeTask);
 router.post('/tasks/:id(\\d+)/status', ...internal, checklistController.setTaskStatus);
 router.post('/tasks/:id(\\d+)/submit-approval', ...internal, checklistController.submitApproval);
 router.post('/tasks/:id(\\d+)/decision', ...internal, checklistController.decideApproval);
+router.post('/tasks/:id(\\d+)/cancel-approval', ...internal, checklistController.cancelApproval);
+router.post('/tasks/:id(\\d+)/cancel-approval', ...internal, checklistController.cancelApproval);
 router.post('/tasks/:id(\\d+)/nudge', ...internal, checklistController.nudgeTask);
 router.get('/tasks/:id(\\d+)/comments', ...internal, checklistController.listComments);
 router.post('/tasks/:id(\\d+)/comments', ...internal, checklistController.addComment);

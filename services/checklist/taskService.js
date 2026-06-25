@@ -520,6 +520,32 @@ async function recomputeApproval(task) {
     if (decided) await notifyApprovalDecided({ task, approved: decided === 'APPROVED' });
 }
 
+// Recall: o responsável (ou admin) volta a tarefa para "Em Ajuste" mesmo sem terminar
+// as aprovações — CANCELA o pedido (approval_status volta a NONE). Para concluir depois,
+// precisa enviar de novo. As decisões do round ficam no histórico (round novo no reenvio).
+export async function cancelApproval({ id, userId, isAdmin = false }) {
+    const task = await db.ChecklistTask.findByPk(Number(id));
+    if (!task) throw new Error('Tarefa não encontrada.');
+    if (task.approval_status !== 'PENDING') throw new Error('A tarefa não está em aprovação.');
+    const isAssignee = assigneeIdsOf(task).includes(Number(userId));
+    let isOwner = false;
+    if (!isAdmin && !isAssignee) {
+        const ck = await db.Checklist.findByPk(task.checklist_id, { attributes: ['owner_user_id'] });
+        isOwner = ck?.owner_user_id === Number(userId);
+    }
+    if (!isAdmin && !isAssignee && !isOwner) throw new Error('Apenas o responsável ou um admin pode voltar para ajuste.');
+    const statusMap = await loadStatusMap();
+    const reworkId = roleStatusId(statusMap, 'REWORK');
+    task.approval_status = 'NONE';
+    if (reworkId) task.status_id = reworkId;
+    task.completed_at = null;
+    task.updated_by = userId || null;
+    await task.save();
+    await recomputeProgress(task.checklist_id);
+    await logActivity({ checklistId: task.checklist_id, taskId: task.id, userId, action: 'approval.cancelled', meta: { round: task.approval_round } });
+    return getTask({ id: task.id });
+}
+
 // Tarefas em aprovação que dependem de algum perfil do usuário (menu Aprovações).
 export async function pendingApprovalsFor({ userId }) {
     const myProfiles = await authProfileService.profilesForUser(userId);
@@ -556,5 +582,5 @@ export default {
     getTask, createTask, updateTask, setTaskStatus, reorderTasks, removeTask, nudgeTask, bulkUpdate,
     listComments, addComment, removeComment,
     addAttachment, removeAttachment,
-    submitForApproval, decideApproval, pendingApprovalsFor,
+    submitForApproval, decideApproval, cancelApproval, pendingApprovalsFor,
 };
