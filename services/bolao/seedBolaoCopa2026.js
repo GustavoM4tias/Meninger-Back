@@ -17,7 +17,7 @@ const SLUG = 'copa-2026-gestores';
 const MATCHES = [
   { match_order: 1, home_team: 'Brasil',  away_team: 'Marrocos', home_code: 'BRA', away_code: 'MAR', home_country: 'br',     away_country: 'ma', kickoff_at: '2026-06-13T19:00:00-03:00' },
   { match_order: 2, home_team: 'Brasil',  away_team: 'Haiti',    home_code: 'BRA', away_code: 'HAI', home_country: 'br',     away_country: 'ht', kickoff_at: '2026-06-19T21:30:00-03:00' },
-  { match_order: 3, home_team: 'Escócia', away_team: 'Brasil',   home_code: 'SCO', away_code: 'BRA', home_country: 'gb-sct', away_country: 'br', kickoff_at: '2026-06-19T19:00:00-03:00' },
+  { match_order: 3, home_team: 'Escócia', away_team: 'Brasil',   home_code: 'SCO', away_code: 'BRA', home_country: 'gb-sct', away_country: 'br', kickoff_at: '2026-06-24T19:00:00-03:00' },
 ];
 
 export async function seedBolaoCopa2026() {

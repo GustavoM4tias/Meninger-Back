@@ -27,6 +27,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import pg from 'pg';
 
 import db from '../../models/sequelize/index.js';
+import { snapshotCustomViews, applyCustomViews } from './siengeCustomViews.js';
 
 // ── Sienge API ────────────────────────────────────────────────────────────────
 const SIENGE_USER     = process.env.SIENGE_BACKUP_USER;
@@ -603,6 +604,8 @@ function runPgRestore(dmpcPath, log, totals, targetUrl) {
  *   3. validating         : sanity check no staging (contagem/tamanho)
  *   4. swapping           : rename atômico — staging vira produção, antiga é dropada
  *   5. applying_grants    : reaplica permissões a partir de scripts/sienge-grants.sql
+ *   6. applying_views     : recria as views criadas ao vivo pelo sienge_readonly
+ *                           (snapshot tirado antes do swap; ver siengeCustomViews.js)
  *
  * Se qualquer passo até "validating" falhar, o staging é descartado e o banco
  * de produção continua intocado (sem janela de inconsistência).
@@ -611,7 +614,7 @@ function runPgRestore(dmpcPath, log, totals, targetUrl) {
  * <1s (rename é só metadado no catálogo do Postgres).
  */
 async function restoreIntoPostgres(dmpcPath, log) {
-  const { targetDb, stagingDb, targetUrl, stagingUrl } = buildPgUrls();
+  const { targetDb, stagingDb, targetUrl, stagingUrl, adminUrl } = buildPgUrls();
 
   // ── Inventário do dump (rápido) → UI consegue calcular % por fase ─────────
   let totals;
@@ -658,6 +661,19 @@ async function restoreIntoPostgres(dmpcPath, log) {
     throw err;
   }
 
+  // ── 3.5 Snapshot das views custom do sienge_readonly (ANTES do swap) ────
+  // Lê do banco vivo (intocado) e espelha no database `postgres`, que sobrevive
+  // ao swap. Best-effort: se falhar, mantém o snapshot anterior (recria a véspera
+  // em vez de perder as views). Pula na 1ª execução (produção ainda não existe).
+  try {
+    if (await databaseExists(targetDb)) {
+      const snap = await snapshotCustomViews({ prodUrl: targetUrl, storeUrl: adminUrl });
+      console.log(`[SiengeBackup] snapshot custom views:`, snap);
+    }
+  } catch (e) {
+    console.warn(`[SiengeBackup] snapshot de views custom falhou (mantém snapshot anterior): ${e.message}`);
+  }
+
   // ── 4. Swap atômico ─────────────────────────────────────────────────────
   await setStage(log, 'swapping');
   console.log(`[SiengeBackup] swap: "${stagingDb}" → "${targetDb}"...`);
@@ -670,6 +686,19 @@ async function restoreIntoPostgres(dmpcPath, log) {
     console.log(`[SiengeBackup] grants:`, grantsResult);
   } catch (e) {
     console.warn(`[SiengeBackup] applyGrants falhou (banco já promovido, ignorando): ${e.message}`);
+  }
+
+  // ── 6. Recria as views custom do sienge_readonly (depois dos grants, pra
+  //       que o role tenha CREATE + SELECT). Não falha o restore se der erro. ──
+  await setStage(log, 'applying_views');
+  try {
+    const viewsResult = await applyCustomViews({ targetUrl, storeUrl: adminUrl });
+    console.log(`[SiengeBackup] custom views:`, viewsResult);
+    if (viewsResult.failed?.length) {
+      console.warn(`[SiengeBackup] views que não subiram:`, viewsResult.failed);
+    }
+  } catch (e) {
+    console.warn(`[SiengeBackup] applyCustomViews falhou (banco já promovido, ignorando): ${e.message}`);
   }
 
   const finishedAt = new Date();

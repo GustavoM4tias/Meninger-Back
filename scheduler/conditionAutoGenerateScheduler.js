@@ -15,12 +15,26 @@ const {
     EnterpriseCondition,
     EnterpriseConditionModule,
     EnterpriseConditionCampaign,
+    CvEnterprisePriceTable,
     ComercialSettings,
     sequelize: dbSequelize,
 } = db;
 
-// Cron: 1h da manhã do dia 1 de todo mês
+// Cron: 1h da manhã do dia 1 de todo mês (no fuso configurado)
 const AUTO_GENERATE_CRON = process.env.CONDITION_AUTO_GENERATE_CRON || '0 1 1 * *';
+// Fuso do agendamento e do cálculo do "mês corrente": evita gerar no mês errado
+// quando o servidor roda em UTC (1h UTC do dia 1 = 22h do dia anterior em SP).
+const TIMEZONE = process.env.CONDITION_TZ || 'America/Sao_Paulo';
+// Chave fixa do advisory lock que serializa a auto-geração entre instâncias (Railway).
+const AUTO_GENERATE_LOCK_KEY = 884412;
+
+// Mês de referência (YYYY-MM-01) no fuso configurado, independente do TZ do servidor.
+function currentMonthRef() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+    return `${parts.substring(0, 7)}-01`;
+}
 
 // ─── Campos não herdados na geração mensal ────────────────────────────────────
 // Identidade da ficha (idempreendimento/display_name/series_id) é definida
@@ -58,6 +72,25 @@ function pickInherit(obj, blocked) {
     return out;
 }
 
+// Tabelas de preço VIGENTES do empreendimento (mesma regra do controller
+// getPriceTablesForEnterprise + flag `vigente`): ativo_painel=true e a data de hoje
+// dentro da vigência. Espelha o autoSelectVigentes do frontend, para que a ficha
+// auto-gerada já nasça com as vigentes selecionadas em vez de vazia.
+async function getVigentePriceTableIds(idempreendimento, t) {
+    if (!idempreendimento || !CvEnterprisePriceTable) return [];
+    const today = new Date();
+    const tables = await CvEnterprisePriceTable.findAll({
+        where: { idempreendimento, ativo_painel: true },
+        attributes: ['idtabela', 'data_vigencia_de', 'data_vigencia_ate'],
+        transaction: t,
+    });
+    return tables
+        .filter(pt =>
+            (!pt.data_vigencia_de || new Date(pt.data_vigencia_de) <= today) &&
+            (!pt.data_vigencia_ate || new Date(pt.data_vigencia_ate) >= today))
+        .map(pt => pt.idtabela);
+}
+
 // Include padrão para puxar a ficha mais recente com módulos+campanhas.
 const LATEST_INCLUDE = [{
     model: EnterpriseConditionModule,
@@ -81,13 +114,13 @@ function buildInheritedCondition(latest, targetMonth, identity) {
             user_id: null,
             username: 'Sistema',
             at: new Date().toISOString(),
-            note: `Gerada automaticamente — herdada de ${String(latest.reference_month).substring(0, 7)} (tabelas do CV serão re-selecionadas no novo mês)`,
+            note: `Gerada automaticamente, herdada de ${String(latest.reference_month).substring(0, 7)} (tabelas de preço vigentes pré-selecionadas no novo mês)`,
         }],
     };
 }
 
 // Replica módulos e campanhas da ficha origem para a ficha nova (dentro da transação).
-async function cloneModulesAndCampaigns(latest, newCond, t) {
+async function cloneModulesAndCampaigns(latest, newCond, vigentePriceTableIds, t) {
     for (const mod of (latest.modules ?? [])) {
         const modJson = typeof mod.toJSON === 'function' ? mod.toJSON() : mod;
         const modFields = pickInherit(modJson, MODULE_NO_INHERIT);
@@ -95,7 +128,8 @@ async function cloneModulesAndCampaigns(latest, newCond, t) {
             ...modFields,
             condition_id: newCond.id,
             unit_snapshot: null, // sempre limpo na nova ficha
-            price_table_ids: [], // CV reseleciona vigentes na 1ª abertura
+            // Pré-seleciona as tabelas vigentes do mês (módulos do CV); avulsas ficam [].
+            price_table_ids: modJson.idetapa ? vigentePriceTableIds : [],
         }, { transaction: t });
 
         for (const camp of (modJson.campaigns ?? [])) {
@@ -127,11 +161,12 @@ async function generateMonthlyForEnterprise(idempreendimento, targetMonth) {
         if (!latest) return { status: 'skipped', reason: 'no_source_ficha' };
         if (latest.status === 'closed') return { status: 'skipped', reason: 'closed' };
 
+        const vigenteIds = await getVigentePriceTableIds(idempreendimento, t);
         const newCond = await EnterpriseCondition.create(
             buildInheritedCondition(latest, targetMonth, { idempreendimento, display_name: null, series_id: null }),
             { transaction: t }
         );
-        await cloneModulesAndCampaigns(latest, newCond, t);
+        await cloneModulesAndCampaigns(latest, newCond, vigenteIds, t);
 
         return { status: 'created', sourceMonth: String(latest.reference_month).substring(0, 7) };
     });
@@ -163,7 +198,7 @@ async function generateMonthlyForSeries(seriesId, targetMonth) {
             }),
             { transaction: t }
         );
-        await cloneModulesAndCampaigns(latest, newCond, t);
+        await cloneModulesAndCampaigns(latest, newCond, [], t);
 
         return { status: 'created', sourceMonth: String(latest.reference_month).substring(0, 7) };
     });
@@ -210,9 +245,8 @@ async function autoGenerateConditions() {
     await backfillAvulsaSeries().catch(err =>
         console.error('[ConditionAutoGenerate] backfill falhou:', err.message));
 
-    // Mês de referência = mês atual
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    // Mês de referência = mês atual no fuso configurado (não no TZ do servidor).
+    const currentMonth = currentMonthRef();
 
     const { Op } = db.Sequelize;
 
@@ -273,6 +307,27 @@ async function autoGenerateConditions() {
     console.log(`📋 [ConditionAutoGenerate] Concluído — ${created} criada(s), ${skipped} já existiam, ${closed} encerradas, ${errors} erro(s).`);
 }
 
+// Serializa a auto-geração entre instâncias (Railway pode reiniciar/escalar): usa
+// advisory lock transacional do Postgres, auto-liberado no fim da transação e preso
+// a uma única conexão. Se outra execução já está em andamento, apenas pula.
+async function runAutoGenerateGuarded(reason) {
+    try {
+        await dbSequelize.transaction(async (t) => {
+            const rows = await dbSequelize.query(
+                'SELECT pg_try_advisory_xact_lock(:k) AS locked',
+                { replacements: { k: AUTO_GENERATE_LOCK_KEY }, type: db.Sequelize.QueryTypes.SELECT, transaction: t }
+            );
+            if (!rows?.[0]?.locked) {
+                console.log(`📋 [ConditionAutoGenerate] ${reason}: outra execução em andamento, pulando.`);
+                return;
+            }
+            await autoGenerateConditions();
+        });
+    } catch (err) {
+        console.error(`[ConditionAutoGenerate] ${reason} falhou:`, err);
+    }
+}
+
 // ─── Scheduler ───────────────────────────────────────────────────────────────
 
 class ConditionAutoGenerateScheduler {
@@ -281,18 +336,16 @@ class ConditionAutoGenerateScheduler {
     }
 
     start() {
-        // Auto-geração mensal
+        // Auto-geração mensal (no fuso configurado).
         this.generateTask = cron.schedule(AUTO_GENERATE_CRON, async () => {
-            await autoGenerateConditions().catch(console.error);
-        });
+            await runAutoGenerateGuarded('cron mensal');
+        }, { timezone: TIMEZONE });
 
-        console.log(`✅ ConditionAutoGenerateScheduler: geração=${AUTO_GENERATE_CRON}`);
+        console.log(`✅ ConditionAutoGenerateScheduler: geração=${AUTO_GENERATE_CRON} (${TIMEZONE})`);
 
         // Catch-up no startup: garante que o mês corrente tem ficha em todas as
-        // séries elegíveis (cobre o servidor fora do ar no dia 1). Idempotente.
-        autoGenerateConditions().catch(err =>
-            console.error('[ConditionAutoGenerate] catch-up startup falhou:', err)
-        );
+        // séries elegíveis (cobre o servidor fora do ar no dia 1). Idempotente + com lock.
+        runAutoGenerateGuarded('catch-up startup');
     }
 
     stop() {
@@ -302,7 +355,7 @@ class ConditionAutoGenerateScheduler {
 
     // Roda a geração uma única vez (catch-up manual), sem agendar cron.
     async runOnce() {
-        return autoGenerateConditions();
+        return runAutoGenerateGuarded('runOnce manual');
     }
 }
 
