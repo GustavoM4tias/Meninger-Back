@@ -35,6 +35,13 @@ setInterval(() => {
 // ── Margem de renovação do access_token ─────────────────────────────────────
 const REFRESH_MARGIN_MS = 5 * 60 * 1000; // renova se faltam ≤5 min
 
+// ── App-only (client credentials) ───────────────────────────────────────────
+// Token de APLICAÇÃO (sem usuário), cacheado em memória e compartilhado por todo
+// o backend. Usado por módulos que operam via permissões de aplicação — ex.: To
+// Do com Tasks.ReadWrite.All, lendo/escrevendo em /users/{microsoft_id}/todo de
+// qualquer usuário sem exigir login delegado.
+let appTokenCache = null; // { token, expiresAt }
+
 class MicrosoftAuthService {
 
     // ── State (CSRF) ─────────────────────────────────────────────────────────
@@ -99,6 +106,31 @@ class MicrosoftAuthService {
             { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
         return data;
+    }
+
+    // ── App-only token (client credentials) ──────────────────────────────────
+
+    /**
+     * Retorna um access_token de APLICAÇÃO (sem usuário), cacheado em memória.
+     * Renova ~5 min antes de expirar. Usado por MicrosoftGraphService.appCall()
+     * para operar em nome de qualquer usuário via /users/{microsoft_id}/...
+     */
+    async getAppToken() {
+        if (appTokenCache && appTokenCache.expiresAt > Date.now() + REFRESH_MARGIN_MS) {
+            return appTokenCache.token;
+        }
+        const { data } = await axios.post(
+            `https://login.microsoftonline.com/${MICROSOFT_TENANT_ID}/oauth2/v2.0/token`,
+            new URLSearchParams({
+                client_id: MICROSOFT_CLIENT_ID,
+                client_secret: MICROSOFT_CLIENT_SECRET,
+                grant_type: 'client_credentials',
+                scope: 'https://graph.microsoft.com/.default',
+            }),
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
+        appTokenCache = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
+        return data.access_token;
     }
 
     // ── Microsoft Graph /me ───────────────────────────────────────────────────

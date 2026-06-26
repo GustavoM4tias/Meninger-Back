@@ -135,6 +135,41 @@ class MicrosoftGraphService {
             return null; // sem foto cadastrada: retorna null sem erro
         }
     }
+
+    // ── App-only (sem usuário delegado) ───────────────────────────────────────
+    // Usa token de aplicação (client credentials) via getAppToken(). Necessário
+    // para operar em nome de QUALQUER usuário em /users/{microsoft_id}/... — é o
+    // caminho do módulo To Do (Tasks.ReadWrite.All já consentido pelo admin).
+
+    async appCall(method, path, { data, params, headers: extraHeaders } = {}) {
+        const token = await microsoftAuthService.getAppToken();
+        try {
+            const { data: result } = await axios({
+                method,
+                url: `${GRAPH_BASE}${path}`,
+                headers: { Authorization: `Bearer ${token}`, ...extraHeaders },
+                data,
+                params,
+            });
+            return result;
+        } catch (err) {
+            const status = err?.response?.status;
+            const graphError = err?.response?.data?.error;
+            if (status === 401) throw new Error('Falha de autenticação da aplicação Microsoft (app token).');
+            if (status === 403) throw new Error(`Permissão de aplicação insuficiente para esta operação. Código: ${graphError?.code || 'Forbidden'}`);
+            if (status === 404) throw new Error(graphError?.message || 'Recurso Microsoft não encontrado.');
+            throw err;
+        }
+    }
+
+    /** GET app-only /v1.0{path} */
+    appGet(path, params) { return this.appCall('get', path, { params }); }
+    /** POST app-only /v1.0{path} */
+    appPost(path, data) { return this.appCall('post', path, { data }); }
+    /** PATCH app-only /v1.0{path} */
+    appPatch(path, data) { return this.appCall('patch', path, { data }); }
+    /** DELETE app-only /v1.0{path} */
+    appDelete(path) { return this.appCall('delete', path); }
 }
 
 export default new MicrosoftGraphService();

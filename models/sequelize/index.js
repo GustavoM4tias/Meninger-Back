@@ -149,6 +149,9 @@ import WhatsappMessageDefine from './whatsapp/whatsappMessage.js';
 import WhatsappAutomationDefine from './whatsapp/whatsappAutomation.js';
 import WhatsappAutomationRunDefine from './whatsapp/whatsappAutomationRun.js';
 
+// Meta — credenciais de App compartilhadas (WhatsApp + Lead Ads)
+import MetaAppConfigDefine from './meta/metaAppConfig.js';
+
 // Alertas (gerenciados via Eme AI)
 import AlertRuleDefine         from './alerts/alertRule.js';
 import AlertTriggerLogDefine   from './alerts/alertTriggerLog.js';
@@ -191,6 +194,9 @@ import ChecklistSettingsDefine        from './checklist/checklistSettings.js';
 import ChecklistReminderRuleDefine    from './checklist/checklistReminderRule.js';
 import ChecklistAuthProfileDefine     from './checklist/checklistAuthProfile.js';
 import ChecklistTaskApprovalDefine    from './checklist/checklistTaskApproval.js';
+
+// To Do (Microsoft) — índice local de enriquecimento das tarefas
+import TodoTaskRefDefine from './todo/todoTaskRef.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -348,6 +354,9 @@ db.WhatsappMessage  = WhatsappMessageDefine(sequelize, DataTypes);
 db.WhatsappAutomation    = WhatsappAutomationDefine(sequelize, DataTypes);
 db.WhatsappAutomationRun = WhatsappAutomationRunDefine(sequelize, DataTypes);
 
+// Meta — App compartilhado (WhatsApp + Lead Ads)
+db.MetaAppConfig = MetaAppConfigDefine(sequelize, DataTypes);
+
 // Alertas
 db.AlertRule         = AlertRuleDefine(sequelize, DataTypes);
 db.AlertTriggerLog   = AlertTriggerLogDefine(sequelize, DataTypes);
@@ -390,6 +399,9 @@ db.ChecklistSettings        = ChecklistSettingsDefine(sequelize, DataTypes);
 db.ChecklistReminderRule    = ChecklistReminderRuleDefine(sequelize, DataTypes);
 db.ChecklistAuthProfile     = ChecklistAuthProfileDefine(sequelize, DataTypes);
 db.ChecklistTaskApproval    = ChecklistTaskApprovalDefine(sequelize, DataTypes);
+
+// To Do (Microsoft)
+db.TodoTaskRef = TodoTaskRefDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

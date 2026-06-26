@@ -37,6 +37,7 @@ import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
 import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
+import metaAppRoutes from './routes/metaAppRoutes.js';
 import alertRoutes from './routes/alertRoutes.js';
 import bolaoRoutes from './routes/bolaoRoutes.js';
 import bolaoPublicRoutes from './routes/bolaoPublicRoutes.js';
@@ -81,6 +82,7 @@ import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappT
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
 import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
+import { ensureTodoSchema } from './lib/ensureTodoSchema.js';
 import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
@@ -155,6 +157,7 @@ app.use('/api/marketing/webhook', marketingWebhookRoutes);
 app.use(express.json());
 
 app.use('/api/admin', admin);
+app.use('/api/meta-app', metaAppRoutes);   // credenciais de App Meta (compartilhadas WhatsApp + Lead Ads)
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
@@ -270,6 +273,7 @@ async function bootServer() {
 
   await seedInitialTypes();
   await ensureChecklistSchema(); // adiciona colunas novas (ex.: reminder_mode) em tabelas já existentes
+  await ensureTodoSchema(); // cria/ajusta todo_task_refs (índice local do módulo To Do)
   seedChecklist().catch(err => console.warn('⚠️  seedChecklist falhou:', err?.message || err)); // background: não bloqueia o boot
 
   // Provisiona template WhatsApp do boleto na Meta se faltar — assim em caso

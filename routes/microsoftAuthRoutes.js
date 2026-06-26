@@ -6,6 +6,7 @@ import MicrosoftTeamsController from '../controllers/microsoft/MicrosoftTeamsCon
 import MicrosoftTranscriptController from '../controllers/microsoft/MicrosoftTranscriptController.js';
 import MicrosoftOrgUsersController from '../controllers/microsoft/MicrosoftOrgUsersController.js';
 import MicrosoftPlannerController from '../controllers/microsoft/MicrosoftPlannerController.js';
+import MicrosoftTodoController from '../controllers/microsoft/MicrosoftTodoController.js';
 import InPersonMeetingController from '../controllers/InPersonMeetingController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
@@ -45,6 +46,25 @@ router.patch('/planner/tasks/:taskId',                      authenticate, pc.upd
 router.delete('/planner/tasks/:taskId',                     authenticate, pc.deleteTask);
 router.get('/planner/tasks/:taskId/details',                authenticate, pc.getTaskDetails);
 router.patch('/planner/tasks/:taskId/details',              authenticate, pc.updateTaskDetails);
+
+// ── To Do (pessoal, app-only por microsoft_id) ───────────────────────────────
+const todoC = MicrosoftTodoController;
+router.get('/todo/my',                                          authenticate, todoC.myTasks);
+router.get('/todo/lists',                                       authenticate, todoC.getLists);
+router.post('/todo/lists',                                      authenticate, todoC.createList);
+router.patch('/todo/lists/:listId',                             authenticate, todoC.updateList);
+router.delete('/todo/lists/:listId',                            authenticate, todoC.deleteList);
+router.get('/todo/lists/:listId/tasks',                         authenticate, todoC.getTasks);
+router.post('/todo/lists/:listId/tasks',                        authenticate, todoC.createTask);
+router.get('/todo/lists/:listId/tasks/:taskId',                 authenticate, todoC.getTask);
+router.patch('/todo/lists/:listId/tasks/:taskId',               authenticate, todoC.updateTask);
+router.post('/todo/lists/:listId/tasks/:taskId/complete',       authenticate, todoC.completeTask);
+router.delete('/todo/lists/:listId/tasks/:taskId',              authenticate, todoC.deleteTask);
+router.post('/todo/lists/:listId/tasks/:taskId/steps',          authenticate, todoC.createStep);
+router.patch('/todo/lists/:listId/tasks/:taskId/steps/:stepId', authenticate, todoC.updateStep);
+router.delete('/todo/lists/:listId/tasks/:taskId/steps/:stepId', authenticate, todoC.deleteStep);
+router.post('/todo/lists/:listId/tasks/:taskId/links',          authenticate, todoC.addLink);
+router.delete('/todo/lists/:listId/tasks/:taskId/links/:linkId', authenticate, todoC.deleteLink);
 
 // ── SharePoint: Leitura ───────────────────────────────────────────────────────
 router.get('/sharepoint/sites', authenticate, sharepointController.sites);

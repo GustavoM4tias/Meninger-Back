@@ -9,6 +9,7 @@
 
 import db from '../../models/sequelize/index.js';
 import { encrypt, decrypt } from '../../utils/encryption.js';
+import MetaAppConfigService from '../meta/MetaAppConfigService.js';
 
 const { WhatsappConfig } = db;
 
@@ -55,6 +56,23 @@ function rowToConfig(row, { withSecrets = false } = {}) {
     };
 }
 
+// Sobrepõe App Secret + versão Graph com a config central compartilhada (mesmo
+// App da Meta). Os campos PRÓPRIOS do WhatsApp (access token do Cloud API,
+// verify token, IDs do número/WABA) ficam intactos. Central > própria.
+async function applyCentralAppCreds(cfg, withSecrets) {
+    if (!cfg) return cfg;
+    try {
+        const central = await MetaAppConfigService.getConfig({ withSecrets });
+        if (!central) return cfg;
+        if (central.meta_graph_api_version) cfg.api_version = central.meta_graph_api_version;
+        if (central.has_meta_app_secret) {
+            cfg.has_app_secret = true;
+            if (withSecrets) cfg.app_secret = central.meta_app_secret;
+        }
+    } catch { /* central indisponível → mantém os valores próprios */ }
+    return cfg;
+}
+
 async function getConfig({ withSecrets = false, useCache = true } = {}) {
     if (useCache && _cache && Date.now() - _cacheAt < CACHE_TTL_MS) {
         return withSecrets ? _cache.full : _cache.publicCfg;
@@ -62,6 +80,8 @@ async function getConfig({ withSecrets = false, useCache = true } = {}) {
     const row = await loadRow();
     const full = rowToConfig(row, { withSecrets: true });
     const publicCfg = rowToConfig(row, { withSecrets: false });
+    await applyCentralAppCreds(full, true);
+    await applyCentralAppCreds(publicCfg, false);
     _cache = { full, publicCfg };
     _cacheAt = Date.now();
     return withSecrets ? full : publicCfg;
