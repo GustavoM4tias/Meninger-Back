@@ -8,6 +8,7 @@
 
 import db from '../../models/sequelize/index.js';
 import { encrypt, decrypt } from '../../utils/encryption.js';
+import MetaAppConfigService from '../meta/MetaAppConfigService.js';
 
 const SINGLETON_ID = 1;
 const CACHE_TTL_MS = 30_000;
@@ -91,6 +92,25 @@ function mergeWithEnv(cfg, withSecrets) {
     return out;
 }
 
+// Sobrepõe as credenciais de NÍVEL DE APP (app_id, app_secret, versão Graph) com
+// a config central compartilhada, quando ela tiver valor. Precedência:
+// central > própria (marketing_configs) > .env. Os campos PRÓPRIOS do Marketing
+// (access token do System User, verify token do leadgen) ficam intactos.
+async function applyCentralAppCreds(cfg, withSecrets) {
+    if (!cfg) return cfg;
+    try {
+        const central = await MetaAppConfigService.getConfig({ withSecrets });
+        if (!central) return cfg;
+        if (central.meta_app_id) cfg.meta_app_id = central.meta_app_id;
+        if (central.meta_graph_api_version) cfg.meta_graph_api_version = central.meta_graph_api_version;
+        if (central.has_meta_app_secret) {
+            cfg.has_meta_app_secret = true;
+            if (withSecrets) cfg.meta_app_secret = central.meta_app_secret;
+        }
+    } catch { /* central indisponível → mantém os valores próprios */ }
+    return cfg;
+}
+
 async function getConfig({ withSecrets = false, useCache = true } = {}) {
     if (useCache && _cache && Date.now() - _cacheAt < CACHE_TTL_MS) {
         return withSecrets ? _cache.full : _cache.publicCfg;
@@ -101,6 +121,8 @@ async function getConfig({ withSecrets = false, useCache = true } = {}) {
         const publicDb = rowToConfig(row, { withSecrets: false });
         const full = mergeWithEnv(fullDb, true);
         const publicCfg = mergeWithEnv(publicDb, false);
+        await applyCentralAppCreds(full, true);
+        await applyCentralAppCreds(publicCfg, false);
         _cache = { full, publicCfg };
         _cacheAt = Date.now();
         return withSecrets ? full : publicCfg;

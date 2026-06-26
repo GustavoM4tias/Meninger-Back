@@ -3,10 +3,10 @@
 // 2 jobs que mantêm os dados Meta atualizados automaticamente:
 //
 //   FULL — varre tudo (forms + campanhas + ads + leads históricos).
-//          Cron padrão: 06:20 → 18:20 a cada 2h ("20 6-18/2 * * *") = 7x/dia.
+//          Cron padrão: 06:20 → 22:20 a cada 2h ("20 6-22/2 * * *") = 9x/dia.
 //
 //   LIGHT — só refresca insights de campanhas (rápido).
-//          Cron padrão: 15 em 15 minutos ("*/15 * * * *").
+//          Cron padrão: 10 em 10 minutos ("*/10 * * * *").
 //
 // Liga/desliga via env: ENABLE_MARKETING_AUTO_SYNC (default 'true').
 // Override de cron:
@@ -22,8 +22,8 @@ import MetaAdService           from '../services/marketing/MetaAdService.js';
 import MetaHistoricalImportService from '../services/marketing/MetaHistoricalImportService.js';
 import LeadCampaignBackfillService from '../services/marketing/LeadCampaignBackfillService.js';
 
-const FULL_CRON  = process.env.MARKETING_FULL_SYNC_CRON  || '20 6-18/2 * * *';
-const LIGHT_CRON = process.env.MARKETING_LIGHT_SYNC_CRON || '*/15 * * * *';
+const FULL_CRON  = process.env.MARKETING_FULL_SYNC_CRON  || '20 6-22/2 * * *';
+const LIGHT_CRON = process.env.MARKETING_LIGHT_SYNC_CRON || '*/10 * * * *';
 const ENABLED    = process.env.ENABLE_MARKETING_AUTO_SYNC !== 'false';
 
 // Janela padrão pra puxar de campanhas e leads

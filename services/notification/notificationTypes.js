@@ -41,6 +41,7 @@ export const NotificationType = {
 
     // Marketing — Captação de Leads
     LEAD_DISPATCH_FAILED:    'lead.dispatch.failed',
+    LEAD_WEBHOOK_REJECTED:   'lead.webhook.rejected',
 
     // Bolão da Copa
     BOLAO_LOCKED:    'bolao.locked',
@@ -159,6 +160,15 @@ export const NOTIFICATION_CATALOG = {
         emailType: null,
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.LEAD_WEBHOOK_REJECTED]: {
+        label: 'Webhook de leads do Meta rejeitando',
+        group: 'Marketing',
+        description: 'Quando o webhook de leads do Meta passa a rejeitar eventos por assinatura inválida (App Secret dessincronizado) e novos leads param de entrar.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },
 
