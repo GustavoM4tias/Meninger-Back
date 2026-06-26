@@ -42,6 +42,7 @@ import bolaoRoutes from './routes/bolaoRoutes.js';
 import bolaoPublicRoutes from './routes/bolaoPublicRoutes.js';
 import comunicadoRoutes from './routes/comunicadoRoutes.js';
 import checklistRoutes from './routes/checklistRoutes.js';
+import organogramRoutes from './routes/organogramRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import seedChecklist from './services/checklist/seedChecklist.js';
@@ -80,6 +81,7 @@ import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappT
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
 import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
+import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
 import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
@@ -187,6 +189,7 @@ app.use('/api/marketing', marketingRoutes);
 app.use('/api/bolao', bolaoRoutes);
 app.use('/api/comunicados', comunicadoRoutes);
 app.use('/api/checklists', checklistRoutes);
+app.use('/api/organogram', organogramRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -263,6 +266,7 @@ async function bootServer() {
   await ensureViabilitySchema();
   await ensureDepartmentVisibilitySchema();
   await ensureComercialConditionsSchema();
+  await ensureOrganogramSchema();
 
   await seedInitialTypes();
   await ensureChecklistSchema(); // adiciona colunas novas (ex.: reminder_mode) em tabelas já existentes

@@ -9,6 +9,7 @@ import { dispatchLead } from '../../services/marketing/CvLeadDispatchService.js'
 import { recordLeadEvent } from '../../services/marketing/leadEventLog.js';
 import CvReconciliationService from '../../services/marketing/CvReconciliationService.js';
 import LeadCampaignBackfillService from '../../services/marketing/LeadCampaignBackfillService.js';
+import MarketingConfigService from '../../services/marketing/MarketingConfigService.js';
 
 const { InboundLead, InboundLeadEvent } = db;
 
@@ -380,9 +381,12 @@ export async function captureHealth(req, res) {
             ? Number((period_counts.delivered / deliveryBase * 100).toFixed(1))
             : null;
 
+        // Lê o modo sombra da config real (DB com fallback ao .env), não direto
+        // do env — senão o banner mente depois que o admin desliga pela tela.
+        const mktCfg = await MarketingConfigService.getConfig().catch(() => null);
         return res.json({
             ok: true,
-            dry_run: process.env.MARKETING_CAPTURE_DRY_RUN === 'true',
+            dry_run: mktCfg ? !!mktCfg.dry_run : (process.env.MARKETING_CAPTURE_DRY_RUN === 'true'),
             period,
             counts,                  // global
             dead_letter: deadLetter,

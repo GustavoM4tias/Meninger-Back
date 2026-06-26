@@ -14,6 +14,7 @@ export default (sequelize, DataTypes) => {
         is_active: { type: DataTypes.BOOLEAN, defaultValue: true },
 
         value: { type: DataTypes.DECIMAL(15, 2) },              // valor se aplicável
+        paid_by: { type: DataTypes.STRING(20), allowNull: true }, // 'menin' | 'client' | null — quem custeia (p/ relatório de custos)
         sort_order: { type: DataTypes.INTEGER, defaultValue: 0 },
 
         raw: { type: DataTypes.JSONB, defaultValue: {} },

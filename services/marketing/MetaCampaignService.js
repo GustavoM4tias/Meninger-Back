@@ -221,13 +221,11 @@ async function attachLeadStats(rows) {
         const spend = Number(plain.spend) || 0;
         const metaLeads = Number(plain.meta_leads_total) || 0;
 
-        // CAC preferido: usa nossa contagem se temos leads no banco; senão usa
-        // a contagem da Meta (cobre histórico que não passou pelo webhook).
-        const effectiveLeads = lead_stats.total > 0 ? lead_stats.total : metaLeads;
-        const cac = effectiveLeads > 0 ? +(spend / effectiveLeads).toFixed(2) : null;
-        const cac_source = lead_stats.total > 0 ? 'office' : (metaLeads > 0 ? 'meta' : null);
+        // CAC base Meta: gasto ÷ leads contados pela Meta. As telas Meta passaram
+        // a ser "só Meta" — sem o comparativo com a contagem do Office.
+        const cac = metaLeads > 0 ? +(spend / metaLeads).toFixed(2) : null;
 
-        return { ...plain, lead_stats, meta_leads_total: metaLeads, cac, cac_source };
+        return { ...plain, lead_stats, meta_leads_total: metaLeads, cac, cac_source: 'meta' };
     });
 }
 

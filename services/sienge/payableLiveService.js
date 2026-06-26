@@ -194,9 +194,15 @@ export async function listBills({ costCenterIds, startDate, endDate, debtorId } 
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Linhas de "expense" (uma por parcela) no período de COMPETÊNCIA (mês do vencimento,
- * fiel ao comportamento atual do Custos). Cada parcela é atribuída ao CENTRO DE CUSTO
- * PRINCIPAL do título (maior peparticipacao em ecpgapropfin) para não inflar totais.
+ * Linhas do Custos em regime de CAIXA: uma linha por título+parcela que teve
+ * PAGAMENTO no período (por data da baixa, dtpagto). Replica o relatório
+ * "Pagamentos e Adiantamentos" do Sienge: baixas tipo **Pagamento (1)** +
+ * **Adiantamento (10)**, excluindo Substituição (5, medição→NF) e Abatimento de
+ * Adiantamento (8), sem estornos. `amount` = LÍQUIDO pago (principal + juros + multa
+ * + correção − desconto), igual à coluna "Líquido" do relatório do Sienge.
+ * Cada parcela é atribuída ao CENTRO DE CUSTO PRINCIPAL do título (maior
+ * peapropriacao em ecpgapropfin). PCT é excluído naturalmente (suas baixas são
+ * tipo Substituição).
  *
  * Retorna linhas planas do backup (sem merge office-side de nome/categoria/oculto —
  * isso fica no expenseService, que reaproveita a resolução de nome existente).
@@ -219,28 +225,40 @@ export async function listExpenseRows({ startDate, endDate, costCenterId } = {})
   const cached = cacheGet(key);
   if (cached) return cached.map((r) => ({ ...r, bill: { ...r.bill } }));
 
-  // main_cc: o CC principal (view) de cada título — 1 linha por título.
   const sql = `
     WITH main_cc AS (
       SELECT af.nutitulo, e.cdempreendview AS cost_center_id
       FROM (
         SELECT DISTINCT ON (nutitulo) nutitulo, cdcentrocusto
-        FROM ecpgapropfin
-        ORDER BY nutitulo, peparticipacao DESC NULLS LAST
+        FROM ecpgapropfin ORDER BY nutitulo, peparticipacao DESC NULLS LAST
       ) af
       JOIN ecadempreend e ON e.cdempreend = af.cdcentrocusto
+    ),
+    pagamentos AS (
+      -- 1 linha por (titulo,parcela): soma dos pagamentos de CAIXA no período.
+      -- Tipos 1 (Pagamento) + 10 (Adiantamento); exclui 5 (Substituição) e 8
+      -- (Abatimento de Adiantamento), sem estornos.
+      -- valor_pago = LÍQUIDO desembolsado = principal + acréscimos (juros+multa+correção) − desconto
+      SELECT b.nutitulo, b.nuparcela,
+             SUM(b.vlpagto + COALESCE(b.vljuros,0) + COALESCE(b.vlmulta,0)
+                 + COALESCE(b.vlcormonetaria,0) - COALESCE(b.vldesconto,0)) AS valor_pago,
+             MAX(b.dtpagto) AS dt_pagto
+      FROM ecpgbaixa b
+      WHERE b.dtpagto BETWEEN $1::date AND $2::date
+        AND b.cdtipobaixa IN (1, 10)
+        AND b.nuseqestorno IS NULL
+      GROUP BY b.nutitulo, b.nuparcela
     )
     SELECT
-      p.nutitulo                         AS bill_id,
-      p.nuparcela                        AS installment_number,
+      pg.nutitulo                        AS bill_id,
+      pg.nuparcela                       AS installment_number,
       t.qtparcelas                       AS installments_number,
       main_cc.cost_center_id             AS cost_center_id,
-      p.vloriginal                       AS amount,
-      to_char(date_trunc('month', COALESCE(p.dtvencto, p.dtcompetencia, t.dtemissao)), 'YYYY-MM-DD') AS competence_month,
+      pg.valor_pago                      AS amount,
+      to_char(date_trunc('month', pg.dt_pagto), 'YYYY-MM-DD') AS competence_month,
       to_char(p.dtvencto, 'YYYY-MM-DD')  AS due_date,
-      ${PARCELA_STATUS_EXPR}             AS status,
-      to_char(bx.dtpagto, 'YYYY-MM-DD')  AS paid_at,
-      -- bill (título) embutido
+      'paid'                             AS status,
+      to_char(pg.dt_pagto, 'YYYY-MM-DD') AS paid_at,
       to_char(t.dtemissao, 'YYYY-MM-DD') AS bill_issue_date,
       TRIM(t.cddocumento)                AS bill_doc_id,
       t.nudocumento                      AS bill_doc_number,
@@ -250,9 +268,10 @@ export async function listExpenseRows({ startDate, endDate, costCenterId } = {})
       dep.main_department_id             AS department_id,
       dep.main_department_name           AS department_name,
       cr.cdcredor AS creditor_id, cr.nmcredor, cr.nmfantasia, cr.nucnpj, cr.nucpf, cr.flfisjur
-    FROM ecpgparcela p
-    JOIN main_cc ON main_cc.nutitulo = p.nutitulo
-    JOIN ecpgtitulo t ON t.nutitulo = p.nutitulo
+    FROM pagamentos pg
+    JOIN main_cc ON main_cc.nutitulo = pg.nutitulo
+    JOIN ecpgtitulo t ON t.nutitulo = pg.nutitulo
+    JOIN ecpgparcela p ON p.nutitulo = pg.nutitulo AND p.nuparcela = pg.nuparcela
     LEFT JOIN ecadcredor cr ON cr.cdcredor = t.cdcredor
     LEFT JOIN LATERAL (
       SELECT SUM(pp.vloriginal) AS total_invoice_amount FROM ecpgparcela pp WHERE pp.nutitulo = t.nutitulo
@@ -262,20 +281,10 @@ export async function listExpenseRows({ startDate, endDate, costCenterId } = {})
       FROM ecpgapropdepart d
       LEFT JOIN ecaddepartamento dd ON dd.cddepartamento = d.cddepartamento
       WHERE d.nutitulo = t.nutitulo
-      ORDER BY d.peapropriado DESC NULLS LAST
-      LIMIT 1
+      ORDER BY d.peapropriado DESC NULLS LAST LIMIT 1
     ) dep ON true
-    LEFT JOIN LATERAL (
-      SELECT MAX(b.dtpagto) AS dtpagto
-      FROM ecpgbaixa b
-      WHERE b.nutitulo = p.nutitulo AND b.nuparcela = p.nuparcela
-        AND b.flparcialtotal = 'T' AND b.nuseqestorno IS NULL
-    ) bx ON true
-    WHERE date_trunc('month', COALESCE(p.dtvencto, p.dtcompetencia, t.dtemissao))
-            BETWEEN date_trunc('month', $1::date) AND $2::date
-      AND TRIM(t.cddocumento) NOT IN (${BLOCKED_DOC_IDS.join(',')})
-      ${ccClause}
-    ORDER BY main_cc.cost_center_id, p.nutitulo, p.nuparcela
+    WHERE 1=1 ${ccClause}
+    ORDER BY main_cc.cost_center_id, pg.nutitulo, pg.nuparcela
   `;
 
   const { rows } = await siengeQuery(sql, params);

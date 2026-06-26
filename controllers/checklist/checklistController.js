@@ -149,7 +149,7 @@ const checklistController = {
         catch (err) { return fail(res, err, 400, 'updateTask'); }
     },
     async setTaskStatus(req, res) {
-        try { return res.json(await taskService.setTaskStatus({ id: req.params.id, statusId: req.body?.status_id, userId: req.user?.id })); }
+        try { return res.json(await taskService.setTaskStatus({ id: req.params.id, statusId: req.body?.status_id, userId: req.user?.id, isAdmin: isAdminReq(req) })); }
         catch (err) { return fail(res, err, 400, 'setTaskStatus'); }
     },
     async reorderTasks(req, res) {
@@ -171,7 +171,7 @@ const checklistController = {
         catch (err) { return fail(res, err, 400, 'listComments'); }
     },
     async addComment(req, res) {
-        try { return res.status(201).json(await taskService.addComment({ taskId: req.params.id, body: req.body?.body, image_url: req.body?.image_url, annotated_from_id: req.body?.annotated_from_id, userId: req.user?.id })); }
+        try { return res.status(201).json(await taskService.addComment({ taskId: req.params.id, body: req.body?.body, image_url: req.body?.image_url, annotated_from_id: req.body?.annotated_from_id, mentioned_user_ids: req.body?.mentioned_user_ids, userId: req.user?.id })); }
         catch (err) { return fail(res, err, 400, 'addComment'); }
     },
     async removeComment(req, res) {
@@ -185,7 +185,7 @@ const checklistController = {
         catch (err) { return fail(res, err, 400, 'addAttachment'); }
     },
     async removeAttachment(req, res) {
-        try { return res.json(await taskService.removeAttachment({ id: req.params.id })); }
+        try { return res.json(await taskService.removeAttachment({ id: req.params.id, userId: req.user?.id })); }
         catch (err) { return fail(res, err, 400, 'removeAttachment'); }
     },
 

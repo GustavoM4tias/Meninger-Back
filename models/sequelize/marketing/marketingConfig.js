@@ -11,7 +11,10 @@ export default (sequelize, DataTypes) => {
     id: { type: DataTypes.INTEGER, primaryKey: true, defaultValue: 1 },
 
     // ── Geral / dispatch ─────────────────────────────────────────────────────
-    dry_run: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    // Default segue o env: sem MARKETING_CAPTURE_DRY_RUN=true, nasce AO VIVO
+    // (Office é o caminho principal pro CV). Um ambiente que queira modo sombra
+    // seta o env. O valor efetivo é editável na tela de Configurações.
+    dry_run: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: process.env.MARKETING_CAPTURE_DRY_RUN === 'true' },
     retry_max_attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 6 },
     form_rate_limit_per_min: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 10 },
 

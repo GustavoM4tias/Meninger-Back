@@ -60,13 +60,15 @@ export default (sequelize, DataTypes) => {
         outros_contact_phone: { type: DataTypes.STRING(50), allowNull: true },
         cca_company_name: { type: DataTypes.STRING(200), allowNull: true },
         cca_cost: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
-        cca_charges_company: { type: DataTypes.BOOLEAN, defaultValue: false },
+        cca_charges_company: { type: DataTypes.BOOLEAN, defaultValue: false }, // legado — backfill p/ cca_paid_by
+        cca_paid_by: { type: DataTypes.STRING(20), allowNull: true }, // 'menin' | 'client' (uniforme; legado: charges_company=true => 'menin')
         correspondent_id: { type: DataTypes.INTEGER, allowNull: true },
         has_digital_cert: { type: DataTypes.BOOLEAN, defaultValue: false },
         digital_cert_provider: { type: DataTypes.STRING },
         digital_cert_contact: { type: DataTypes.STRING },
         digital_cert_has_cost: { type: DataTypes.BOOLEAN, defaultValue: false },
         digital_cert_cost: { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+        digital_cert_paid_by: { type: DataTypes.STRING(20), allowNull: true }, // 'menin' | 'client' (uniforme; legado: sempre 'menin')
         enterprise_files_url: { type: DataTypes.TEXT, allowNull: true }, // arquivos do empreendimento — gera QR Code
         notes: { type: DataTypes.TEXT },
 
@@ -75,6 +77,7 @@ export default (sequelize, DataTypes) => {
         cef_package_avg_value:       { type: DataTypes.DECIMAL(12, 2), allowNull: true },
         itbi_exempt:                 { type: DataTypes.BOOLEAN,        allowNull: true, defaultValue: false },
         itbi_avg_value:              { type: DataTypes.DECIMAL(12, 2), allowNull: true },
+        itbi_paid_by:                { type: DataTypes.STRING(20),     allowNull: true }, // 'client' | 'menin' (uniforme; default 'client')
         itbi_exemption_doc_url:      { type: DataTypes.TEXT,           allowNull: true },
         cartorio_prenotacao_value:   { type: DataTypes.DECIMAL(12, 2), allowNull: true },
         cartorio_registration_value: { type: DataTypes.DECIMAL(12, 2), allowNull: true },

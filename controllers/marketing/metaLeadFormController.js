@@ -59,18 +59,6 @@ export async function recentLeads(req, res) {
     }
 }
 
-/** Comparativo Meta × Office × CV pra esse form. */
-export async function comparison(req, res) {
-    try {
-        const { id } = req.params;
-        const data = await MetaLeadFormService.getComparison(id);
-        return res.json({ ok: true, ...data });
-    } catch (err) {
-        console.error(`❌ [meta-forms] comparison: ${err.message}`);
-        return res.status(500).json({ ok: false, error: err.message });
-    }
-}
-
 /** Exporta CSV dos leads desse form. */
 export async function exportCsv(req, res) {
     try {
@@ -115,6 +103,6 @@ export async function updateFieldMappings(req, res) {
 }
 
 export default {
-    list, sync, updateMapping, recentLeads, comparison, exportCsv,
+    list, sync, updateMapping, recentLeads, exportCsv,
     fieldMappingEditor, updateFieldMappings,
 };

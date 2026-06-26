@@ -2,6 +2,7 @@
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../../services/notification/NotificationService.js';
 import { NotificationType } from '../../services/notification/notificationTypes.js';
+import { computeModuleCostSummary, aggregateCostSummaries } from '../../services/comercial/conditionCostSummary.js';
 
 const {
     EnterpriseCondition,
@@ -101,6 +102,53 @@ function buildDiffNote(before, after) {
     }
     if (!changes.length) return null;
     return `Alterações: ${changes.join(', ')}`;
+}
+
+// ── Diff de MÓDULO para o histórico (o que mudou, em qual módulo) ──────────────
+const MODULE_DIFF_IGNORE = new Set([
+    'id', 'condition_id', 'sort_order', 'idetapa',
+    'createdAt', 'updatedAt', 'created_at', 'updated_at',
+    'unit_snapshot', 'appraisal_faixas',
+]);
+const MODULE_FIELD_LABELS = {
+    module_name: 'Nome', total_units: 'Unidades totais', min_demand: 'Demanda mínima', min_demand_note: 'Obs. demanda',
+    appraisal_value: 'Avaliação', appraisal_ceiling: 'Teto cidade', appraisal_note: 'Obs. avaliação', appraisal_file_url: 'Laudo',
+    commission_pct: 'Comissão %', commission_source: 'Fonte comissão', commission_note: 'Obs. comissão',
+    delivery_deadline_months: 'Prazo entrega (meses)', delivery_deadline_note: 'Obs. prazo',
+    max_entry_value: 'Entrada máx.', rp_installment_value: 'Parcela RP', act_installment_value: 'Parcela Ato',
+    min_installment_value: 'Parcela mín.', max_installments: 'Nº parcelas', rp_rule: 'Regra RP',
+    installment_until_habite_se: 'Reajuste pré-habite-se', installment_post_habite_se: 'Reajuste pós-habite-se',
+    has_state_subsidy: 'Subsídio estadual', state_subsidy_state: 'UF subsídio', state_subsidy_program: 'Programa subsídio',
+    state_subsidy_rules: 'Regras subsídio', state_subsidy_conditions: 'Condições subsídio',
+    cef_package_paid_by: 'CEF pagador', cef_package_avg_value: 'CEF valor',
+    itbi_exempt: 'ITBI isento', itbi_avg_value: 'ITBI valor', itbi_paid_by: 'ITBI pagador',
+    cartorio_prenotacao_value: 'Cartório prenotação', cartorio_registration_value: 'Cartório registro', cartorio_paid_by: 'Cartório pagador',
+    cca_company_name: 'Empresa CCA', cca_cost: 'CCA valor', cca_charges_company: 'CCA tem custo', cca_paid_by: 'CCA pagador',
+    correspondent_id: 'Correspondente',
+    has_digital_cert: 'Certificação', digital_cert_provider: 'Plataforma cert.', digital_cert_has_cost: 'Cert. tem custo',
+    digital_cert_cost: 'Cert. valor', digital_cert_paid_by: 'Cert. pagador',
+    manager_user_id: 'Gestor', manager_name: 'Gestor (nome)', manager_email: 'Gestor (e-mail)', manager_phone: 'Gestor (tel.)',
+    contract_registration_by: 'Registro por', enterprise_files_url: 'Arquivos', notes: 'Observações',
+    price_table_ids: 'Tabelas CV', manual_price_tables: 'Tabelas manuais', price_premise_note: 'Premissa de preço',
+};
+function buildModuleDiffNote(before, after, moduleName) {
+    const changes = [];
+    const norm = (v) => (v === undefined || v === '' ? null : v);
+    for (const [key, rawNew] of Object.entries(after)) {
+        if (MODULE_DIFF_IGNORE.has(key)) continue;
+        const o = norm(before[key]);
+        const n = norm(rawNew);
+        if (JSON.stringify(o) === JSON.stringify(n)) continue;
+        const label = MODULE_FIELD_LABELS[key] || key;
+        if ((o !== null && typeof o === 'object') || (n !== null && typeof n === 'object')) {
+            changes.push(`${label} alterado`);
+        } else {
+            changes.push(`${label}: ${o ?? '∅'} → ${n ?? '∅'}`);
+        }
+    }
+    if (!changes.length) return null;
+    const name = moduleName ? `"${moduleName}"` : 'Módulo';
+    return `${name} - ${changes.join('; ')}`;
 }
 
 // ─── validação de regras de negócio por módulo ───────────────────────────────
@@ -817,7 +865,8 @@ export const upsertModules = async (req, res) => {
         if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
 
         const { id } = req.params;
-        const { modules } = req.body;
+        const { modules, silent } = req.body;
+        const isSilent = silent === true; // auto-saves não registram diff de histórico
 
         const condition = await EnterpriseCondition.findByPk(id);
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
@@ -850,6 +899,7 @@ export const upsertModules = async (req, res) => {
             .map(m => m.module_name || 'Sem nome');
 
         // Operação atômica: módulos + campanhas na mesma transação
+        const moduleEditNotes = [];
         await sequelize.transaction(async (t) => {
             for (const mod of modules) {
                 const { campaigns, ...moduleFields } = mod;
@@ -879,7 +929,12 @@ export const upsertModules = async (req, res) => {
                         delete safeFields.idetapa;
                     }
 
+                    const beforeJson = existing.toJSON();
                     await existing.update(safeFields, { transaction: t });
+                    if (!isSilent) {
+                        const editNote = buildModuleDiffNote(beforeJson, safeFields, existing.module_name);
+                        if (editNote) moduleEditNotes.push(editNote);
+                    }
                     savedModule = existing;
                 } else {
                     savedModule = await EnterpriseConditionModule.create(
@@ -910,14 +965,17 @@ export const upsertModules = async (req, res) => {
             }
         });
 
-        // Registra módulos adicionados no histórico da ficha
-        if (newModuleNames.length) {
+        // Registra no histórico: módulos adicionados + edições de campo por módulo.
+        if (!isSilent && (newModuleNames.length || moduleEditNotes.length)) {
             const fresh = await EnterpriseCondition.findByPk(id);
-            const note = `Módulo(s) adicionado(s): ${newModuleNames.join(', ')}`;
-            await fresh.update({
-                approval_history: addHistory(fresh.approval_history, 'modules_updated', req, note),
-                updated_by: req.user?.id,
-            });
+            let hist = fresh.approval_history ?? [];
+            if (newModuleNames.length) {
+                hist = addHistory(hist, 'modules_updated', req, `Módulo(s) adicionado(s): ${newModuleNames.join(', ')}`);
+            }
+            for (const note of moduleEditNotes) {
+                hist = addHistory(hist, 'module_edited', req, note);
+            }
+            await fresh.update({ approval_history: hist, updated_by: req.user?.id });
         }
 
         // Retorna módulos com campaigns incluídos
@@ -1512,4 +1570,200 @@ export const cancelApproval = async (req, res) => {
 
 export const publishCondition = async (req, res) => {
     return submitForApproval(req, res);
+};
+
+// ─── custos: resumo por pagador (Menin x cliente) ─────────────────────────────
+// Fonte ÚNICA = services/comercial/conditionCostSummary.js (mesma regra do front).
+// Base dos relatórios de custo e da integração com a Eme.
+
+// Resumo de custo de UMA ficha: por módulo + agregado da ficha.
+export const getConditionCostSummary = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const condition = await EnterpriseCondition.findByPk(id, {
+            include: [{ model: EnterpriseConditionModule, as: 'modules', separate: true, order: [['sort_order', 'ASC']] }],
+        });
+        if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
+
+        // Mesmo controle de acesso do getCondition: comum só vê approved/closed da sua cidade.
+        if (!(await isPrivilegedViewer(req))) {
+            if (!['approved', 'closed'].includes(condition.status)) {
+                return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
+            }
+            const visibleIds = await getVisibleEnterpriseIdsForUser(req);
+            if (!visibleIds || !visibleIds.includes(Number(condition.idempreendimento))) {
+                return res.status(403).json({ error: 'Você não tem acesso a este empreendimento.' });
+            }
+        }
+
+        const modules = (condition.modules ?? []).map(m => m.toJSON());
+        const perModule = modules.map(m => ({
+            module_id: m.id,
+            module_name: m.module_name,
+            ...computeModuleCostSummary(m),
+        }));
+        const total = aggregateCostSummaries(modules);
+
+        return res.json({
+            condition_id: condition.id,
+            reference_month: condition.reference_month,
+            status: condition.status,
+            perModule,
+            total,
+        });
+    } catch (e) {
+        console.error('[conditions] getConditionCostSummary:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+// Relatório consolidado (uma linha por ficha) com totais Menin x cliente.
+// Restrito a visão privilegiada (gestão). Filtros: month, idempreendimento, status.
+export const getCostReport = async (req, res) => {
+    try {
+        if (!(await isPrivilegedViewer(req))) {
+            return res.status(403).json({ error: 'Relatório de custos restrito a gestores.' });
+        }
+
+        const { month, idempreendimento, status } = req.query;
+        const where = {};
+        if (month) where.reference_month = toMonth(month);
+        if (idempreendimento) where.idempreendimento = Number(idempreendimento);
+        if (status) where.status = status;
+
+        const conditions = await EnterpriseCondition.findAll({
+            where,
+            include: [
+                { model: CvEnterprise, as: 'enterprise', attributes: ['idempreendimento', 'nome', 'cidade'] },
+                { model: EnterpriseConditionModule, as: 'modules', separate: true },
+            ],
+            order: [['reference_month', 'DESC'], ['idempreendimento', 'ASC']],
+        });
+
+        const rows = conditions.map(c => {
+            const modules = (c.modules ?? []).map(m => m.toJSON());
+            const total = aggregateCostSummaries(modules);
+            return {
+                condition_id: c.id,
+                reference_month: c.reference_month,
+                idempreendimento: c.idempreendimento,
+                name: c.enterprise?.nome || c.display_name || `Ficha #${c.id}`,
+                cidade: c.enterprise?.cidade || null,
+                status: c.status,
+                totalMenin: total.totalMenin,
+                totalClient: total.totalClient,
+                menin: total.menin,
+                client: total.client,
+            };
+        });
+
+        const totals = {
+            menin: rows.reduce((s, r) => s + r.totalMenin, 0),
+            client: rows.reduce((s, r) => s + r.totalClient, 0),
+        };
+
+        return res.json({ count: rows.length, totals, rows });
+    } catch (e) {
+        console.error('[conditions] getCostReport:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+// ─── vincular avulsa ao CV — promove a SÉRIE INTEIRA ──────────────────────────
+// Todas as fichas da série (idempreendimento null + series_id) passam a ter o
+// idempreendimento alvo; os módulos são vinculados às etapas do CV pelo mapa
+// (por nome de módulo). Valida colisão de mês e registra no histórico. Não apaga nada.
+export const linkSeriesToCv = async (req, res) => {
+    try {
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
+
+        const { id } = req.params;
+        const { idempreendimento, moduleStageMap } = req.body || {};
+        const targetEmp = Number(idempreendimento);
+        if (!Number.isFinite(targetEmp) || targetEmp <= 0) {
+            return res.status(400).json({ error: 'Informe o empreendimento do CV (idempreendimento).' });
+        }
+
+        const condition = await EnterpriseCondition.findByPk(id, {
+            include: [{ model: EnterpriseConditionModule, as: 'modules', attributes: ['id', 'module_name'] }],
+        });
+        if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
+        if (condition.idempreendimento != null) {
+            return res.status(409).json({ error: 'Esta ficha já está vinculada a um empreendimento do CV.' });
+        }
+        if (condition.series_id == null) {
+            return res.status(409).json({ error: 'Ficha avulsa sem série definida; não é possível vincular.' });
+        }
+
+        const enterprise = await CvEnterprise.findByPk(targetEmp, { attributes: ['idempreendimento', 'nome'] });
+        if (!enterprise) return res.status(404).json({ error: 'Empreendimento do CV não encontrado.' });
+
+        const { Op } = db.Sequelize;
+
+        // Todas as fichas da série (a linha do tempo inteira migra junto).
+        const seriesFichas = await EnterpriseCondition.findAll({
+            where: { series_id: condition.series_id },
+            attributes: ['id', 'reference_month'],
+        });
+        const seriesIds = seriesFichas.map(f => f.id);
+        const months = [...new Set(seriesFichas.map(f => f.reference_month))];
+
+        // Colisão: o empreendimento alvo já tem ficha em algum desses meses (fora da série)?
+        const collisions = await EnterpriseCondition.findAll({
+            where: {
+                idempreendimento: targetEmp,
+                reference_month: { [Op.in]: months },
+                id: { [Op.notIn]: seriesIds },
+            },
+            attributes: ['reference_month'],
+        });
+        if (collisions.length) {
+            const list = [...new Set(collisions.map(c => String(c.reference_month).substring(0, 7)))].sort();
+            return res.status(409).json({
+                error: `O empreendimento "${enterprise.nome}" já tem ficha nos meses: ${list.join(', ')}. Resolva o conflito antes de vincular.`,
+                conflicts: list,
+            });
+        }
+
+        // Mapa nome-do-módulo -> idetapa, a partir do mapeamento explícito da ficha atual.
+        const map = (moduleStageMap && typeof moduleStageMap === 'object') ? moduleStageMap : {};
+        const nameToStage = new Map();
+        for (const mod of (condition.modules ?? [])) {
+            const raw = map[mod.id] ?? map[String(mod.id)];
+            const idetapa = raw != null ? Number(raw) : null;
+            if (idetapa) nameToStage.set((mod.module_name || '').trim().toLowerCase(), idetapa);
+        }
+
+        const note = `Vinculada ao empreendimento "${enterprise.nome}" (#${targetEmp})`;
+
+        await sequelize.transaction(async (t) => {
+            for (const f of seriesFichas) {
+                const fich = await EnterpriseCondition.findByPk(f.id, {
+                    include: [{ model: EnterpriseConditionModule, as: 'modules' }],
+                    transaction: t,
+                });
+                // Vincula módulos por nome -> idetapa e puxa total_units do CV quando ausente.
+                for (const mod of (fich.modules ?? [])) {
+                    const idetapa = nameToStage.get((mod.module_name || '').trim().toLowerCase());
+                    if (idetapa) {
+                        const totalUnits = await getUnitCountForStage(idetapa);
+                        await mod.update({
+                            idetapa,
+                            total_units: mod.total_units != null ? mod.total_units : totalUnits,
+                        }, { transaction: t });
+                    }
+                }
+                await fich.update({
+                    idempreendimento: targetEmp,
+                    approval_history: addHistory(fich.approval_history, 'linked_to_cv', req, note),
+                    updated_by: req.user?.id,
+                }, { transaction: t });
+            }
+        });
+
+        return res.json({ ok: true, idempreendimento: targetEmp, affected: seriesFichas.length });
+    } catch (e) {
+        console.error('[conditions] linkSeriesToCv:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
 };

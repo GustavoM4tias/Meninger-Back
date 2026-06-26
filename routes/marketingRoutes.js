@@ -28,7 +28,6 @@ import {
     sync as syncMetaForms,
     updateMapping as updateMetaFormMapping,
     recentLeads as metaFormRecentLeads,
-    comparison as metaFormComparison,
     exportCsv as metaFormExportCsv,
     fieldMappingEditor as metaFormFieldMappingEditor,
     updateFieldMappings as metaFormUpdateFieldMappings,
@@ -41,7 +40,7 @@ import {
     dailyBreakdown as metaCampaignDaily,
     update as updateMetaCampaign,
     importHistoricalLeads as importHistoricalMetaLeads,
-    reconcileHistoricalWithCv,
+    dispatchHistorical as dispatchHistoricalMetaLeads,
     reparseExistingLeads as reparseMetaLeads,
     migrateMappingsFormToCampaign,
     campaignAds as listMetaCampaignAds,
@@ -90,7 +89,6 @@ router.get('/meta-forms', listMetaForms);
 router.post('/meta-forms/sync', syncMetaForms);
 router.put('/meta-forms/:id/mapping', updateMetaFormMapping);
 router.get('/meta-forms/:id/leads', metaFormRecentLeads);
-router.get('/meta-forms/:id/comparison', metaFormComparison);
 router.get('/meta-forms/:id/leads.csv', metaFormExportCsv);
 router.get('/meta-forms/:id/field-mappings', metaFormFieldMappingEditor);
 router.put('/meta-forms/:id/field-mappings', metaFormUpdateFieldMappings);
@@ -103,7 +101,7 @@ router.get('/meta-campaigns/:id/leads', metaCampaignLeads);
 router.get('/meta-campaigns/:id/daily', metaCampaignDaily);
 router.put('/meta-campaigns/:id', updateMetaCampaign);
 router.post('/meta-campaigns/import-historical', importHistoricalMetaLeads);
-router.post('/meta-campaigns/reconcile-cv-batch', reconcileHistoricalWithCv);
+router.post('/meta-campaigns/dispatch-historical', dispatchHistoricalMetaLeads);
 router.post('/meta-campaigns/reparse-existing', reparseMetaLeads);
 router.post('/meta-campaigns/migrate-mappings', migrateMappingsFormToCampaign);
 router.get('/meta-ads', listAllMetaAds);                              // todos os ads (cache)

@@ -5,7 +5,7 @@
 
 import MetaCampaignService from '../../services/marketing/MetaCampaignService.js';
 import MetaHistoricalImportService from '../../services/marketing/MetaHistoricalImportService.js';
-import CvReconciliationService from '../../services/marketing/CvReconciliationService.js';
+import CvBacklogDispatchService from '../../services/marketing/CvBacklogDispatchService.js';
 import MetaAdService from '../../services/marketing/MetaAdService.js';
 import marketingSyncScheduler from '../../scheduler/marketingSyncScheduler.js';
 
@@ -113,16 +113,26 @@ export async function reparseExistingLeads(req, res) {
     }
 }
 
-/** Reconcilia em lote leads históricos com o CV. */
-export async function reconcileHistoricalWithCv(req, res) {
+/**
+ * Cutover: dispara pro CV o backlog (histórico + fila segurada pela sombra) a
+ * partir do corte. Body: { cutoff?: 'YYYY-MM-DD', preview?: boolean, limit?: number }
+ *  - preview:true → só conta (go/no-go), não envia.
+ *  - real        → exige modo sombra desligado; processa até `limit` (resumível).
+ */
+export async function dispatchHistorical(req, res) {
     try {
-        const limit = Math.min(Number(req.body?.limit) || 100, 500);
-        const result = await CvReconciliationService.reconcileBatch({
-            limit, channel: 'meta_lead_ads', status: 'historical',
-        });
+        const cutoff = req.body?.cutoff || CvBacklogDispatchService.DEFAULT_CUTOFF;
+        const preview = req.body?.preview === true;
+        if (preview) {
+            const result = await CvBacklogDispatchService.previewBacklogSince({ cutoff });
+            return res.json({ ok: true, ...result });
+        }
+        const limit = Math.min(Math.max(Number(req.body?.limit) || 500, 1), 1000);
+        const result = await CvBacklogDispatchService.dispatchBacklogSince({ cutoff, limit });
+        if (result?.blocked) return res.status(409).json({ ok: false, error: result.reason, ...result });
         return res.json({ ok: true, ...result });
     } catch (err) {
-        console.error(`❌ [meta-campaigns] reconcileHistoricalWithCv: ${err.message}`);
+        console.error(`❌ [meta-campaigns] dispatchHistorical: ${err.message}`);
         return res.status(500).json({ ok: false, error: err.message });
     }
 }
@@ -218,7 +228,7 @@ export async function runFullSync(req, res) {
 
 export default {
     list, sync, detail, campaignLeads, dailyBreakdown, update,
-    importHistoricalLeads, reconcileHistoricalWithCv, reparseExistingLeads,
+    importHistoricalLeads, dispatchHistorical, reparseExistingLeads,
     migrateMappingsFormToCampaign,
     campaignAds, syncCampaignAds, listAllAds,
     campaignAdSets,
