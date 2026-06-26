@@ -44,13 +44,14 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
             };
 
         case CONTEXTS.EVENT_IMAGE:
-            if (!referenceId) throw new Error('referenceId é obrigatório para imagem de evento');
+            // referenceId pode ainda não existir na criação do evento → usa 'draft'
+            // (mesmo padrão do PaymentFlow). O arquivo vai para o Supabase, não para o banco.
             if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype)) {
                 throw new Error('Imagem de evento aceita apenas PNG, JPG ou WEBP');
             }
             return {
                 bucket: STORAGE_BUCKET,
-                path: `office/marketing/events/${referenceId}/images/${timestamp}-${originalName}`,
+                path: `office/marketing/events/${referenceId || 'draft'}/images/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 

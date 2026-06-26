@@ -10,6 +10,7 @@ import authProfileService from './authProfileService.js';
 // Erros tipados do fluxo de autorização (o controller mapeia p/ HTTP 409).
 function approvalRequiredError() { const e = new Error('Esta tarefa precisa de autorização antes de avançar. Envie para aprovação.'); e.code = 'APPROVAL_REQUIRED'; e.httpStatus = 409; return e; }
 function lockedError() { const e = new Error('Tarefa em aprovação: edição bloqueada até a decisão.'); e.code = 'APPROVAL_LOCKED'; e.httpStatus = 409; return e; }
+function doneLockedError() { const e = new Error('Tarefa concluída não pode voltar para outra etapa.'); e.code = 'DONE_LOCKED'; e.httpStatus = 409; return e; }
 const statusById = (statusMap, id) => (id ? statusMap.get(Number(id)) : null);
 const roleStatusId = (statusMap, role) => { for (const s of statusMap.values()) if (s.approval_role === role) return s.id; return null; };
 
@@ -62,9 +63,13 @@ async function notifyCompleted({ task, actorId }) {
     } catch (err) { console.warn('[checklist.notifyCompleted]', err?.message || err); }
 }
 
-async function notifyComment({ task, body, actorId }) {
+async function notifyComment({ task, body, actorId, mentionedIds = [] }) {
     try {
         const recipients = new Set(assigneeIdsOf(task).filter((u) => u !== actorId));
+        // Menções explícitas: ids resolvidos no front a partir do NOME COMPLETO do usuário
+        // (o username pode ter espaço, então o regex @palavra sozinho não basta).
+        for (const id of (mentionedIds || []).map(Number).filter(Boolean)) if (id !== actorId) recipients.add(id);
+        // Fallback por @username (compat. com usernames sem espaço).
         const mentions = parseMentions(body || '');
         if (mentions.length) {
             const users = await db.User.findAll({ where: { username: mentions }, attributes: ['id'], raw: true });
@@ -178,7 +183,8 @@ export async function createTask({ checklistId, payload = {}, userId }) {
         priority: payload.priority || 'MEDIUM',
         value: payload.value ?? null,
         value_kind: payload.value_kind || null,
-        contracted_at: payload.contracted_at || null,
+        // Data de contratação: se não informada, assume a data de criação da tarefa (hoje).
+        contracted_at: payload.contracted_at || dayjs().format('YYYY-MM-DD'),
         due_date: payload.due_date || null,
         assignee_user_id: assigneeIdsFromPayload(payload)[0] || null,
         assignee_user_ids: assigneeIdsFromPayload(payload),
@@ -226,6 +232,10 @@ export async function updateTask({ id, payload = {}, userId, isAdmin = false }) 
     let statusMap = null;
     if ('status_id' in payload && allowed.includes('status_id')) {
         statusMap = await loadStatusMap();
+        // Concluído é terminal: não volta para outra etapa (admin pode corrigir).
+        const prevSc = task.previous('status_id') ? statusMap.get(Number(task.previous('status_id')))?.state_class : 'TODO';
+        const newSc = task.status_id ? statusMap.get(Number(task.status_id))?.state_class : 'TODO';
+        if (prevSc === 'DONE' && newSc !== 'DONE' && !isAdmin) throw doneLockedError();
         const target = statusById(statusMap, task.status_id);
         if (target?.requires_approval && task.needs_authorization && task.approval_status !== 'APPROVED') throw approvalRequiredError();
     }
@@ -253,7 +263,7 @@ export async function updateTask({ id, payload = {}, userId, isAdmin = false }) 
     return getTask({ id: task.id });
 }
 
-export async function setTaskStatus({ id, statusId, userId }) {
+export async function setTaskStatus({ id, statusId, userId, isAdmin = false }) {
     const task = await db.ChecklistTask.findByPk(Number(id));
     if (!task) throw new Error('Tarefa não encontrada.');
     const statusMap = await loadStatusMap();
@@ -264,6 +274,8 @@ export async function setTaskStatus({ id, statusId, userId }) {
     if (target?.requires_approval && task.needs_authorization && task.approval_status !== 'APPROVED') throw approvalRequiredError();
     const prevSc = task.status_id ? statusMap.get(task.status_id)?.state_class : 'TODO';
     const newSc = statusId ? statusMap.get(Number(statusId))?.state_class : 'TODO';
+    // Concluído é terminal: não volta para outra etapa (admin pode corrigir).
+    if (prevSc === 'DONE' && newSc !== 'DONE' && !isAdmin) throw doneLockedError();
     task.status_id = statusId || null;
     task.updated_by = userId || null;
     if (newSc === 'DONE' && prevSc !== 'DONE') task.completed_at = new Date();
@@ -286,11 +298,27 @@ export async function reorderTasks({ items = [], userId }) {
     return { ok: true };
 }
 
+// Remove os filhos que referenciam a tarefa (FKs sem ON DELETE CASCADE — ex.:
+// checklist_task_approvals) antes de apagá-la, senão o DELETE viola a constraint.
+async function purgeTaskChildren(taskIds) {
+    const ids = (taskIds || []).map(Number).filter(Boolean);
+    if (!ids.length) return;
+    await Promise.all([
+        db.ChecklistTaskApproval.destroy({ where: { task_id: ids } }),
+        db.ChecklistTaskComment.destroy({ where: { task_id: ids } }),
+        db.ChecklistTaskAttachment.destroy({ where: { task_id: ids } }),
+        db.ChecklistActivity.destroy({ where: { task_id: ids } }),
+    ]);
+}
+
 export async function removeTask({ id, userId }) {
     const task = await db.ChecklistTask.findByPk(Number(id), { attributes: ['id', 'checklist_id'] });
     if (!task) throw new Error('Tarefa não encontrada.');
     const checklistId = task.checklist_id;
-    await db.ChecklistTask.destroy({ where: { [Op.or]: [{ id: task.id }, { parent_task_id: task.id }] } }); // leva subtarefas junto
+    const subIds = (await db.ChecklistTask.findAll({ where: { parent_task_id: task.id }, attributes: ['id'], raw: true })).map((s) => s.id);
+    const allIds = [task.id, ...subIds]; // leva subtarefas junto
+    await purgeTaskChildren(allIds);
+    await db.ChecklistTask.destroy({ where: { id: allIds } });
     await recomputeProgress(checklistId);
     await logActivity({ checklistId, userId, action: 'task.removed' });
     return { ok: true };
@@ -335,7 +363,7 @@ export async function listComments({ taskId }) {
     return rows.map((r) => r.get({ plain: true }));
 }
 
-export async function addComment({ taskId, body, image_url = null, annotated_from_id = null, userId }) {
+export async function addComment({ taskId, body, image_url = null, annotated_from_id = null, mentioned_user_ids = [], userId }) {
     const text = (body || '').trim();
     if (!text && !image_url) throw new Error('Comentário vazio.');
     const task = await db.ChecklistTask.findByPk(Number(taskId), { attributes: ['id', 'checklist_id', 'title', 'assignee_user_id', 'assignee_user_ids'] });
@@ -345,7 +373,7 @@ export async function addComment({ taskId, body, image_url = null, annotated_fro
         image_url: image_url || null, annotated_from_id: annotated_from_id || null,
     });
     await logActivity({ checklistId: task.checklist_id, taskId: task.id, userId, action: image_url ? 'comment.annotated' : 'comment.added' });
-    await notifyComment({ task, body: text, actorId: userId });
+    await notifyComment({ task, body: text, actorId: userId, mentionedIds: mentioned_user_ids });
     const withAuthor = await db.ChecklistTaskComment.findByPk(comment.id, { include: [{ association: 'author', attributes: ['id', 'username'], required: false }] });
     return withAuthor.get({ plain: true });
 }
@@ -354,15 +382,19 @@ export async function removeComment({ id, userId, isAdmin = false }) {
     const c = await db.ChecklistTaskComment.findByPk(Number(id));
     if (!c) throw new Error('Comentário não encontrado.');
     if (!isAdmin && c.user_id !== userId) throw new Error('Só o autor pode remover o comentário.');
+    const t = await db.ChecklistTask.findByPk(c.task_id, { attributes: ['checklist_id'] });
     await c.destroy();
+    await logActivity({ checklistId: t?.checklist_id, taskId: c.task_id, userId, action: 'comment.removed' });
     return { ok: true };
 }
 
 // ── Anexos (metadados; o upload em si vai por /api/uploads) ────────────────────
 
 export async function addAttachment({ taskId, payload = {}, userId }) {
-    const task = await db.ChecklistTask.findByPk(Number(taskId), { attributes: ['id', 'checklist_id'] });
+    const task = await db.ChecklistTask.findByPk(Number(taskId), { attributes: ['id', 'checklist_id', 'approval_status'] });
     if (!task) throw new Error('Tarefa não encontrada.');
+    // Em aprovação (PENDING) os anexos ficam bloqueados como o resto da edição.
+    if (task.approval_status === 'PENDING') throw lockedError();
     if (!payload.url || !payload.file_name) throw new Error('url e file_name são obrigatórios.');
     // kind explícito (LINK = link externo: SharePoint, drive, etc.) ou auto pelo mime.
     const explicitKind = ['LINK', 'IMAGE', 'FILE'].includes(payload.kind) ? payload.kind : null;
@@ -382,10 +414,14 @@ export async function addAttachment({ taskId, payload = {}, userId }) {
     return att.get({ plain: true });
 }
 
-export async function removeAttachment({ id }) {
+export async function removeAttachment({ id, userId }) {
     const att = await db.ChecklistTaskAttachment.findByPk(Number(id));
     if (!att) throw new Error('Anexo não encontrado.');
+    const task = await db.ChecklistTask.findByPk(att.task_id, { attributes: ['id', 'checklist_id', 'approval_status'] });
+    // Em aprovação (PENDING): remover anexo também fica bloqueado.
+    if (task?.approval_status === 'PENDING') throw lockedError();
     await att.destroy();
+    await logActivity({ checklistId: task?.checklist_id, taskId: att.task_id, userId, action: 'attachment.removed', meta: { file: att.file_name } });
     return { ok: true };
 }
 
@@ -398,7 +434,10 @@ export async function bulkUpdate({ ids = [], patch = {}, userId }) {
     const checklistIds = new Set(tasks.map((t) => t.checklist_id));
 
     if (patch.delete) {
-        await db.ChecklistTask.destroy({ where: { [Op.or]: [{ id: numIds }, { parent_task_id: numIds }] } });
+        const subIds = (await db.ChecklistTask.findAll({ where: { parent_task_id: numIds }, attributes: ['id'], raw: true })).map((s) => s.id);
+        const allIds = [...new Set([...numIds, ...subIds])];
+        await purgeTaskChildren(allIds);
+        await db.ChecklistTask.destroy({ where: { id: allIds } });
         for (const cid of checklistIds) await recomputeProgress(cid);
         for (const cid of checklistIds) await logActivity({ checklistId: cid, userId, action: 'task.bulk_removed', meta: { count: numIds.length } });
         return { ok: true, updated: numIds.length, deleted: true };

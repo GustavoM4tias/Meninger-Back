@@ -61,7 +61,7 @@ function generateSecurePassword() {
 }
 
 export const registerUser = async (req, res) => {
-  const { username, password, email, position, city, birth_date } = req.body;
+  const { username, password, email, position, city, birth_date, phone, manager_id, status } = req.body;
   if (!username || !password || !email || !position || !city || !birth_date) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
@@ -92,6 +92,9 @@ export const registerUser = async (req, res) => {
       position: positionRecord.name,
       city: cityRecord.name,
       birth_date,
+      phone: phone || null,
+      manager_id: manager_id || null,
+      status: status ?? true,
     });
 
     const token = jwt.sign({

@@ -21,6 +21,7 @@ router.post('/', ctrl.createCondition);             // admin only (guard no cont
 router.get('/correspondents', ctrl.listCorrespondents);
 router.get('/correspondents/companies', ctrl.listCorrespondentCompanies);
 router.get('/office-users', ctrl.listOfficeUsers);
+router.get('/cost-report', ctrl.getCostReport);     // relatório consolidado Menin x cliente (gestão)
 router.get('/enterprise/:idempreendimento/price-tables', ctrl.getPriceTablesForEnterprise);
 router.get('/enterprise/:idempreendimento/price-distribution', ctrl.getPriceDistributionForEnterprise);
 router.get('/enterprise/:idempreendimento/modules', ctrl.listModulesForEnterprise);
@@ -29,6 +30,7 @@ router.get('/enterprise/:idempreendimento/stages/:idetapa/units', ctrl.getUnitsF
 
 // ── CRUD por ficha ────────────────────────────────────────────────────────────
 router.get('/:id(\\d+)', ctrl.getCondition);
+router.get('/:id(\\d+)/cost-summary', ctrl.getConditionCostSummary); // custos por pagador da ficha
 router.patch('/:id(\\d+)', ctrl.updateCondition);           // admin only, não-approved
 
 // ── Fluxo de aprovação ────────────────────────────────────────────────────────
@@ -36,6 +38,7 @@ router.post('/:id(\\d+)/submit', ctrl.submitForApproval);         // draft → p
 router.post('/:id(\\d+)/authorize', ctrl.authorizeCondition);     // pending_approval → approved (autorizador)
 router.post('/:id(\\d+)/cancel-approval', ctrl.cancelApproval);   // pending_approval → draft (editor/autorizador)
 router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved/closed → draft (autorizador)
+router.post('/:id(\\d+)/link-to-cv', ctrl.linkSeriesToCv);        // avulsa → CV (promove a série inteira)
 router.post('/:id(\\d+)/close', ctrl.closeCondition);             // any → closed (admin, dupla validação)
 router.post('/:id(\\d+)/publish', ctrl.publishCondition);         // legado → alias de /submit
 

@@ -2,7 +2,7 @@
 //
 // 2 jobs que mantêm os dados Meta atualizados automaticamente:
 //
-//   FULL — varre tudo (forms + campanhas + ads + leads históricos + reconciliação).
+//   FULL — varre tudo (forms + campanhas + ads + leads históricos).
 //          Cron padrão: 06:20 → 18:20 a cada 2h ("20 6-18/2 * * *") = 7x/dia.
 //
 //   LIGHT — só refresca insights de campanhas (rápido).
@@ -20,7 +20,6 @@ import MetaLeadFormService     from '../services/marketing/MetaLeadFormService.j
 import MetaCampaignService     from '../services/marketing/MetaCampaignService.js';
 import MetaAdService           from '../services/marketing/MetaAdService.js';
 import MetaHistoricalImportService from '../services/marketing/MetaHistoricalImportService.js';
-import CvReconciliationService from '../services/marketing/CvReconciliationService.js';
 import LeadCampaignBackfillService from '../services/marketing/LeadCampaignBackfillService.js';
 
 const FULL_CRON  = process.env.MARKETING_FULL_SYNC_CRON  || '20 6-18/2 * * *';
@@ -42,7 +41,6 @@ async function runFullSync(opts = {}) {
     // opts:
     //   sinceDays        — janela de campanhas (default FULL_SINCE_DAYS)
     //   historicalDays   — janela do import histórico (default 7)
-    //   reconcileLimit   — limite de reconciliação CV (default 100)
     //   adsAllStatuses   — true → sync ads de TODAS campanhas (não só ATIVAS)
     //                      Útil pra "Sincronizar tudo" manual.
     if (fullRunning) {
@@ -53,13 +51,12 @@ async function runFullSync(opts = {}) {
     const startedAt = Date.now();
     const sinceDays      = opts.sinceDays      ?? FULL_SINCE_DAYS;
     const historicalDays = opts.historicalDays ?? 7;
-    const reconcileLimit = opts.reconcileLimit ?? 100;
     const adsAllStatuses = !!opts.adsAllStatuses;
     console.log(`🔁 [marketing-full-sync] iniciando varredura completa Meta (${sinceDays}d${adsAllStatuses ? ', todas campanhas' : ', só ativas'})...`);
 
     const summary = {
         forms: null, campaigns: null, ads: null,
-        backfill: null, historical: null, reconciliation: null, errors: [],
+        backfill: null, historical: null, errors: [],
     };
 
     // 1) Forms (Meta Lead Forms)
@@ -124,17 +121,6 @@ async function runFullSync(opts = {}) {
     } catch (e) {
         summary.errors.push({ step: 'historical', error: e.message });
         console.error(`❌ [marketing-full-sync] histórico: ${e.message}`);
-    }
-
-    // 6) Reconciliação com CV — best-effort
-    try {
-        summary.reconciliation = await CvReconciliationService.reconcileBatch({
-            limit: reconcileLimit, channel: 'meta_lead_ads', status: 'historical',
-        });
-        console.log(`✅ [marketing-full-sync] CV-recon: ${summary.reconciliation.matched}/${summary.reconciliation.processed}`);
-    } catch (e) {
-        summary.errors.push({ step: 'reconciliation', error: e.message });
-        console.warn(`⚠️  [marketing-full-sync] reconciliação CV (não-fatal): ${e.message}`);
     }
 
     const tookMs = Date.now() - startedAt;

@@ -236,6 +236,96 @@ export function parseLeadFields(fieldData = [], { formMappings = null } = {}) {
     return data;
 }
 
+// ── Resolução de vínculo CV ─────────────────────────────────────────────────
+
+/**
+ * Resolve o vínculo CV de um lead Meta: prioriza a CAMPANHA, com fallback ao
+ * FORM (legado). É a MESMA lógica usada na captura ao vivo (processOneLead) e
+ * no disparo de backlog histórico (CvBacklogDispatchService) — mantém o
+ * roteamento idêntico nos dois caminhos.
+ *
+ * @returns {{ binding, attribution, cvExtraFields, resolvedCampaignId, mappingSource }}
+ *   binding:     { cv_origem, bound_empreendimentos?, midia_slug?, tags? }
+ *   attribution: { utm_source?, utm_medium?, utm_campaign?, utm_content?, utm_term? }
+ *   cvExtraFields: objeto a mesclar SOB os dados do lead (lead vence), ou null
+ *   resolvedCampaignId: campaignId final (já resolvido via ad→campanha se preciso)
+ *   mappingSource: string descritiva ou null (null = sem vínculo → 'held')
+ */
+export async function resolveLeadBinding({ campaignId = null, adId = null, formId = null, platformOrigem = 'FB' } = {}) {
+    const binding = { cv_origem: platformOrigem };
+    const attribution = {};
+    let cvExtraFields = null;
+    let mappingSource = null;
+    let resolvedCampaignId = campaignId != null ? String(campaignId) : null;
+
+    // Fallback: a Meta nem sempre devolve campaign_id (lead orgânico, campanha
+    // antiga, lead de teste). Se o ad_id veio, resolvemos via cache local de
+    // MetaAd — que tem campaign_id como FK lógica das campanhas sincronizadas.
+    if (!resolvedCampaignId && adId && db.MetaAd) {
+        try {
+            const ad = await db.MetaAd.findByPk(String(adId), { attributes: ['campaign_id'] });
+            if (ad?.campaign_id) resolvedCampaignId = String(ad.campaign_id);
+        } catch (e) {
+            console.warn(`⚠️  [marketing-capture] falha ao resolver campaign_id pelo ad ${adId}: ${e.message}`);
+        }
+    }
+
+    // 1) Tenta mapping da campanha
+    if (resolvedCampaignId) {
+        try {
+            const camp = await db.MetaCampaign.findByPk(resolvedCampaignId);
+            if (camp?.mapping_active && camp.midia_slug) {
+                binding.bound_empreendimentos = camp.bound_empreendimentos || null;
+                binding.midia_slug = camp.midia_slug;
+                binding.tags = camp.tags || null;
+                if (camp.cv_origem) binding.cv_origem = camp.cv_origem;
+                mappingSource = `campanha ${resolvedCampaignId}`;
+            }
+            if (camp) {
+                if (camp.default_utm_source)   attribution.utm_source   = camp.default_utm_source;
+                if (camp.default_utm_medium)   attribution.utm_medium   = camp.default_utm_medium;
+                if (camp.default_utm_campaign) attribution.utm_campaign = camp.default_utm_campaign;
+                if (camp.default_utm_content)  attribution.utm_content  = camp.default_utm_content;
+                if (camp.default_utm_term)     attribution.utm_term     = camp.default_utm_term;
+                if (camp.cv_extra_fields && typeof camp.cv_extra_fields === 'object') {
+                    cvExtraFields = { ...camp.cv_extra_fields };
+                }
+            }
+        } catch (e) {
+            console.warn(`⚠️  [marketing-capture] falha ao consultar mapping da campanha ${resolvedCampaignId}: ${e.message}`);
+        }
+    }
+
+    // 2) Fallback: mapping do form (legado)
+    if (!binding.midia_slug && formId) {
+        try {
+            const mapping = await MetaLeadFormService.findById(String(formId));
+            if (mapping?.mapping_active && mapping.midia_slug) {
+                binding.bound_empreendimentos = mapping.bound_empreendimentos || null;
+                binding.midia_slug = mapping.midia_slug;
+                binding.tags = mapping.tags || null;
+                if (mapping.cv_origem) binding.cv_origem = mapping.cv_origem;
+                mappingSource = `form ${formId} (fallback)`;
+            }
+            if (mapping) {
+                if (!attribution.utm_source   && mapping.default_utm_source)   attribution.utm_source   = mapping.default_utm_source;
+                if (!attribution.utm_medium   && mapping.default_utm_medium)   attribution.utm_medium   = mapping.default_utm_medium;
+                if (!attribution.utm_campaign && mapping.default_utm_campaign) attribution.utm_campaign = mapping.default_utm_campaign;
+                if (!attribution.utm_content  && mapping.default_utm_content)  attribution.utm_content  = mapping.default_utm_content;
+                if (!attribution.utm_term     && mapping.default_utm_term)     attribution.utm_term     = mapping.default_utm_term;
+                if (mapping.cv_extra_fields && typeof mapping.cv_extra_fields === 'object') {
+                    cvExtraFields = { ...mapping.cv_extra_fields, ...(cvExtraFields || {}) };
+                }
+            }
+        } catch (e) {
+            // Não bloqueia a captura — só perde a otimização do mapping.
+            console.warn(`⚠️  [marketing-capture] falha ao consultar mapping do form ${formId}: ${e.message}`);
+        }
+    }
+
+    return { binding, attribution, cvExtraFields, resolvedCampaignId, mappingSource };
+}
+
 // ── Processamento do payload ────────────────────────────────────────────────
 
 async function processOneLead(value) {
@@ -276,84 +366,17 @@ async function processOneLead(value) {
     const data = parseLeadFields(graphLead.field_data || [], { formMappings });
 
     // ── Mapping: prioriza CAMPANHA, fallback ao form (legado) ────────────────
-    // O vínculo CV mora agora na campanha (campanha = 1 empreendimento; um
-    // mesmo form pode rodar em N campanhas). Form mapping é fallback durante a
-    // transição — vamos remover quando migração estiver consolidada.
-    const binding = { cv_origem: platformOrigem };
-    const attribution = {};
-    let mappingSource = null;
-
-    let campaignId = graphLead.campaign_id != null ? String(graphLead.campaign_id) : null;
+    // Resolução centralizada em resolveLeadBinding (reusada no disparo de
+    // backlog histórico, pra rotear igual ao ao vivo).
     const adId = value.ad_id != null
         ? String(value.ad_id)
         : (graphLead.ad_id != null ? String(graphLead.ad_id) : null);
 
-    // Fallback: a Meta nem sempre devolve campaign_id (lead orgânico, campanha
-    // antiga, lead de teste). Se o ad_id veio, resolvemos via cache local de
-    // MetaAd — que tem campaign_id como FK lógica das campanhas sincronizadas.
-    if (!campaignId && adId) {
-        try {
-            const ad = await db.MetaAd.findByPk(adId, { attributes: ['campaign_id'] });
-            if (ad?.campaign_id) {
-                campaignId = String(ad.campaign_id);
-                console.log(`🔗 [marketing-capture] campaign_id resolvido via ad ${adId} → ${campaignId} (lead ${leadgenId}).`);
-            }
-        } catch (e) {
-            console.warn(`⚠️  [marketing-capture] falha ao resolver campaign_id pelo ad ${adId}: ${e.message}`);
-        }
-    }
-
-    // 1) Tenta mapping da campanha
-    if (campaignId) {
-        try {
-            const camp = await db.MetaCampaign.findByPk(campaignId);
-            if (camp?.mapping_active && camp.midia_slug) {
-                binding.bound_empreendimentos = camp.bound_empreendimentos || null;
-                binding.midia_slug = camp.midia_slug;
-                binding.tags = camp.tags || null;
-                if (camp.cv_origem) binding.cv_origem = camp.cv_origem;
-                mappingSource = `campanha ${campaignId}`;
-            }
-            if (camp) {
-                if (camp.default_utm_source)   attribution.utm_source   = camp.default_utm_source;
-                if (camp.default_utm_medium)   attribution.utm_medium   = camp.default_utm_medium;
-                if (camp.default_utm_campaign) attribution.utm_campaign = camp.default_utm_campaign;
-                if (camp.default_utm_content)  attribution.utm_content  = camp.default_utm_content;
-                if (camp.default_utm_term)     attribution.utm_term     = camp.default_utm_term;
-                if (camp.cv_extra_fields && typeof camp.cv_extra_fields === 'object') {
-                    data.extra_fields = { ...(camp.cv_extra_fields), ...(data.extra_fields || {}) };
-                }
-            }
-        } catch (e) {
-            console.warn(`⚠️  [marketing-capture] falha ao consultar mapping da campanha ${campaignId}: ${e.message}`);
-        }
-    }
-
-    // 2) Fallback: mapping do form (legado)
-    if (!binding.midia_slug && formId) {
-        try {
-            const mapping = await MetaLeadFormService.findById(formId);
-            if (mapping?.mapping_active && mapping.midia_slug) {
-                binding.bound_empreendimentos = mapping.bound_empreendimentos || null;
-                binding.midia_slug = mapping.midia_slug;
-                binding.tags = mapping.tags || null;
-                if (mapping.cv_origem) binding.cv_origem = mapping.cv_origem;
-                mappingSource = `form ${formId} (fallback)`;
-            }
-            if (mapping) {
-                if (!attribution.utm_source   && mapping.default_utm_source)   attribution.utm_source   = mapping.default_utm_source;
-                if (!attribution.utm_medium   && mapping.default_utm_medium)   attribution.utm_medium   = mapping.default_utm_medium;
-                if (!attribution.utm_campaign && mapping.default_utm_campaign) attribution.utm_campaign = mapping.default_utm_campaign;
-                if (!attribution.utm_content  && mapping.default_utm_content)  attribution.utm_content  = mapping.default_utm_content;
-                if (!attribution.utm_term     && mapping.default_utm_term)     attribution.utm_term     = mapping.default_utm_term;
-                if (mapping.cv_extra_fields && typeof mapping.cv_extra_fields === 'object') {
-                    data.extra_fields = { ...(mapping.cv_extra_fields), ...(data.extra_fields || {}) };
-                }
-            }
-        } catch (e) {
-            // Não bloqueia a captura — só perde a otimização do mapping.
-            console.warn(`⚠️  [marketing-capture] falha ao consultar mapping do form ${formId}: ${e.message}`);
-        }
+    const { binding, attribution, cvExtraFields, resolvedCampaignId, mappingSource } =
+        await resolveLeadBinding({ campaignId: graphLead.campaign_id, adId, formId, platformOrigem });
+    const campaignId = resolvedCampaignId;
+    if (cvExtraFields) {
+        data.extra_fields = { ...cvExtraFields, ...(data.extra_fields || {}) };
     }
 
     if (mappingSource) {

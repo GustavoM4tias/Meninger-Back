@@ -391,7 +391,7 @@ export async function removeStatus({ id }) {
 export async function listUsers() {
     const rows = await db.User.findAll({
         where: { status: true, external_organization_id: null },
-        attributes: ['id', 'username', 'email', 'position'],
+        attributes: ['id', 'username', 'email', 'position', 'phone'],
         order: [['username', 'ASC']],
     });
     return rows.map((r) => r.get({ plain: true }));

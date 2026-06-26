@@ -21,6 +21,7 @@ import ExpensePersonalizationDefine from './sienge/expensePersonalization.js';
 import CostCenterOverrideDefine from './costCenterOverride.js';
 import ExpenseDepartmentVisibilityDefine from './expenseDepartmentVisibility.js';
 import DepartmentVisibilityOverrideDefine from './departmentVisibilityOverride.js';
+import OrganogramOverrideDefine from './organogramOverride.js';
 
 // perto dos outros imports
 import LeadDefine from './cv/lead.js';
@@ -218,6 +219,7 @@ db.ExpensePersonalization = ExpensePersonalizationDefine(sequelize, DataTypes);
 db.CostCenterOverride = CostCenterOverrideDefine(sequelize, DataTypes);
 db.ExpenseDepartmentVisibility = ExpenseDepartmentVisibilityDefine(sequelize, DataTypes);
 db.DepartmentVisibilityOverride = DepartmentVisibilityOverrideDefine(sequelize, DataTypes);
+db.OrganogramOverride = OrganogramOverrideDefine(sequelize, DataTypes);
 
 // ... após definir outros modelos:
 db.Lead = LeadDefine(sequelize, DataTypes);

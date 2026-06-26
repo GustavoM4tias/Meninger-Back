@@ -20,10 +20,24 @@ async function optionalAuthenticate(req, res, next) {
     next();
 }
 
+// Multer com tratamento de erro limpo: estouro do limite de tamanho (10 MB) ou tipo
+// inválido retorna 400 legível em vez de estourar 500 — aparece no card do AttachmentPicker.
+function handleUpload(req, res, next) {
+    upload.single('file')(req, res, (err) => {
+        if (err) {
+            const msg = err.code === 'LIMIT_FILE_SIZE'
+                ? 'Arquivo muito grande. O limite é 10 MB.'
+                : (err.message || 'Falha no upload do arquivo.');
+            return res.status(400).json({ message: msg });
+        }
+        next();
+    });
+}
+
 router.post(
     '/',
     optionalAuthenticate,
-    upload.single('file'),
+    handleUpload,
     uploadFile
 );
 
