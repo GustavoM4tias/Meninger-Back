@@ -86,8 +86,10 @@ import { ensureTodoSchema } from './lib/ensureTodoSchema.js';
 import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
+import todoDigestScheduler from './scheduler/todoDigestScheduler.js';
 import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
 import seedBolaoPublico from './services/bolao/seedBolaoPublico.js';
+import seedBolaoJapao from './services/bolao/seedBolaoJapao.js';
 import { startAcademyDeadlineScheduler } from './scheduler/academyDeadlineScheduler.js';
 import { startAcademyRecertifyScheduler } from './scheduler/academyRecertifyScheduler.js';
 import { startAcademyOnboardingScheduler } from './scheduler/academyOnboardingScheduler.js';
@@ -303,6 +305,7 @@ async function bootServer() {
   boletoSituacaoApplyScheduler.start();   // 1min: aplica situações CV agendadas (delay lote Sienge)
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
   eventReminderScheduler.start();         // lembretes de evento (D-1) via NotificationService
+  if (process.env.ENABLE_TODO_DIGEST !== 'false') todoDigestScheduler.start(); // resumo diário do Microsoft To Do (07:00)
   startAcademyDeadlineScheduler();        // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
   startAcademyRecertifyScheduler();       // recertificação periódica (expira certificado + reassign mandatory)
   startAcademyOnboardingScheduler();      // aplica regras de onboarding (auto-atribui trilhas)
@@ -314,6 +317,9 @@ async function bootServer() {
   }
   if (process.env.SEED_BOLAO_PUBLICO === 'true') {
     seedBolaoPublico().catch(err => console.warn('⚠️  seedBolaoPublico falhou:', err.message));
+  }
+  if (process.env.SEED_BOLAO_JAPAO === 'true') {
+    seedBolaoJapao().catch(err => console.warn('⚠️  seedBolaoJapao falhou:', err.message));
   }
   await AlertEngine.boot();               // registra crons das alert_rules salvas
 

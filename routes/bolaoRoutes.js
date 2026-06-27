@@ -4,7 +4,7 @@ import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
 import {
   getOverview, getLive, getRanking, getRecap,
-  postResult, postLive, postParticipant, deleteParticipant, postPredictions, clearPredictions, postSeed, postSync,
+  postResult, postLive, postParticipant, deleteParticipant, postPredictions, postSelfPrediction, clearPredictions, postSeed, postSync,
 } from '../controllers/bolao/bolaoController.js';
 
 const router = express.Router();
@@ -14,6 +14,9 @@ router.get('/', authenticate, getOverview);
 router.get('/live', authenticate, getLive);
 router.get('/ranking', authenticate, getRanking);
 router.get('/recap', authenticate, getRecap);
+
+// Auto-palpite — a própria pessoa logada grava seu palpite (não exige admin).
+router.post('/predictions/self', authenticate, postSelfPrediction);
 
 // Operação — admin.
 router.post('/matches/:id/result', authenticate, requireAdmin, postResult); // resultado final

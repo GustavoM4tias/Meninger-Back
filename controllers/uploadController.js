@@ -16,6 +16,8 @@ const CONTEXTS = {
     SUPPORT_ATTACHMENT: 'support_attachment',     // Anexos de tickets de suporte
     // ── Checklist ───────────────────────────────────────────────────────────────
     CHECKLIST_ATTACHMENT: 'checklist_attachment', // Anexos de tarefa do checklist
+    // ── To Do (Microsoft) ────────────────────────────────────────────────────────
+    TODO_ATTACHMENT: 'todo_attachment',           // Anexos de tarefa do To Do
 };
 
 function sanitizeFileName(name = '') {
@@ -140,6 +142,25 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
             return {
                 bucket: STORAGE_BUCKET,
                 path: `office/checklist/tasks/${referenceId}/${timestamp}-${originalName}`,
+                isPublic: true,
+            };
+
+        // ── To Do: anexo de tarefa (PDF, imagem ou documento) ──────────────────
+        case CONTEXTS.TODO_ATTACHMENT:
+            if (!userId) throw new Error('Usuário não autenticado');
+            if (![
+                'application/pdf',
+                'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+                'application/msword',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.ms-excel',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ].includes(file.mimetype)) {
+                throw new Error('Anexo do To Do aceita PDF, imagem (PNG/JPG/WEBP/GIF) ou documento (DOC/DOCX/XLS/XLSX)');
+            }
+            return {
+                bucket: STORAGE_BUCKET,
+                path: `office/todo/${userId}/${referenceId || 'tasks'}/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 

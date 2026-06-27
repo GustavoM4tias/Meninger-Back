@@ -120,6 +120,40 @@ class MicrosoftTodoService {
             `${base(msId)}/lists/${listId}/tasks/${taskId}/linkedResources/${linkId}`
         );
     }
+
+    // Remove TODOS os linkedResources nativos da tarefa (o To Do só aceita 1).
+    async clearNativeLinks(msId, listId, taskId) {
+        const task = await this.getTask(msId, listId, taskId);
+        for (const lr of task?.linkedResources || []) {
+            try { await this.deleteLink(msId, listId, taskId, lr.id); } catch { /* ignora */ }
+        }
+    }
+
+    // Define o ÚNICO linkedResource nativo (usado para o link da reunião/Teams):
+    // limpa os existentes e adiciona este.
+    async setNativeLink(msId, listId, taskId, link) {
+        await this.clearNativeLinks(msId, listId, taskId);
+        return this.addLink(msId, listId, taskId, link);
+    }
+
+    // ── Agregação para o digest diário ────────────────────────────────────────────
+    // Tarefas ABERTAS com prazo de todas as listas. Retorna o mínimo necessário:
+    // { id, title, listName, dueStr } com dueStr no formato 'YYYY-MM-DD'.
+    async aggregateOpenWithDue(msId) {
+        const lists = await this.listLists(msId);
+        const out = [];
+        for (const l of lists) {
+            let tasks = [];
+            try { tasks = await this.listTasks(msId, l.id); } catch { continue; }
+            for (const t of tasks) {
+                if (t.status === 'completed') continue;
+                const dt = t.dueDateTime?.dateTime;
+                if (!dt) continue;
+                out.push({ id: t.id, title: t.title || '(sem título)', listName: l.displayName, dueStr: dt.slice(0, 10) });
+            }
+        }
+        return out;
+    }
 }
 
 export default new MicrosoftTodoService();

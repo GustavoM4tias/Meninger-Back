@@ -65,6 +65,10 @@ router.patch('/todo/lists/:listId/tasks/:taskId/steps/:stepId', authenticate, to
 router.delete('/todo/lists/:listId/tasks/:taskId/steps/:stepId', authenticate, todoC.deleteStep);
 router.post('/todo/lists/:listId/tasks/:taskId/links',          authenticate, todoC.addLink);
 router.delete('/todo/lists/:listId/tasks/:taskId/links/:linkId', authenticate, todoC.deleteLink);
+router.get('/todo/meetings/available',                          authenticate, todoC.availableMeetings);
+router.post('/todo/lists/:listId/tasks/:taskId/meeting',        authenticate, todoC.createMeeting);
+router.post('/todo/lists/:listId/tasks/:taskId/meeting/link',   authenticate, todoC.linkMeeting);
+router.delete('/todo/lists/:listId/tasks/:taskId/meeting',      authenticate, todoC.unlinkMeeting);
 
 // ── SharePoint: Leitura ───────────────────────────────────────────────────────
 router.get('/sharepoint/sites', authenticate, sharepointController.sites);
