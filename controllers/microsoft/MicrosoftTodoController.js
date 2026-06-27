@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 import db from '../../models/sequelize/index.js';
 import todo from '../../services/microsoft/MicrosoftTodoService.js';
+import teamsService from '../../services/microsoft/MicrosoftTeamsService.js';
 
 class MicrosoftTodoController {
 
@@ -204,6 +205,79 @@ class MicrosoftTodoController {
             }
             return res.status(204).end();
         } catch (err) { return this._err(res, err, 'deleteLink'); }
+    };
+
+    // ── Reuniões / Teams (Fase 2) ──────────────────────────────────────────────────
+    // A reunião é criada via MicrosoftTeamsService (DELEGADO — conta do usuário, que
+    // tem Calendars.ReadWrite/OnlineMeetings.ReadWrite) e o joinUrl ocupa o ÚNICO
+    // linkedResource nativo da tarefa + o índice local. É aqui que entra "convidar
+    // outra pessoa": como participante da REUNIÃO, não como dono da tarefa.
+
+    createMeeting = async (req, res) => {
+        const m = this._msId(req, res); if (!m) return;
+        try {
+            const { subject, start, end, attendees = [] } = req.body;
+            if (!start || !end) return res.status(400).json({ error: 'start e end são obrigatórios.' });
+            const event = await teamsService.createScheduledMeeting(req.user, {
+                subject: subject || 'Reunião',
+                start, end, attendees, isOnlineMeeting: true,
+            });
+            if (event.joinUrl) {
+                await todo.setNativeLink(m, req.params.listId, req.params.taskId, {
+                    webUrl: event.joinUrl,
+                    displayName: `Reunião: ${event.subject}`,
+                    applicationName: 'Microsoft Teams',
+                });
+            }
+            const ref = await this._ensureRef(req.user.id, req.params.listId, req.params.taskId);
+            await ref.update({ meeting_event_id: event.id, meeting_join_url: event.joinUrl, meeting_subject: event.subject });
+            return res.status(201).json({
+                eventId: event.id, joinUrl: event.joinUrl, subject: event.subject,
+                start: event.start, end: event.end, attendees: event.attendees,
+            });
+        } catch (err) { return this._err(res, err, 'createMeeting'); }
+    };
+
+    linkMeeting = async (req, res) => {
+        const m = this._msId(req, res); if (!m) return;
+        try {
+            const { eventId, joinUrl, subject } = req.body;
+            if (!joinUrl) return res.status(400).json({ error: 'joinUrl é obrigatório.' });
+            await todo.setNativeLink(m, req.params.listId, req.params.taskId, {
+                webUrl: joinUrl,
+                displayName: `Reunião: ${subject || 'Teams'}`,
+                applicationName: 'Microsoft Teams',
+            });
+            const ref = await this._ensureRef(req.user.id, req.params.listId, req.params.taskId);
+            await ref.update({ meeting_event_id: eventId || null, meeting_join_url: joinUrl, meeting_subject: subject || null });
+            return res.json({ eventId: eventId || null, joinUrl, subject: subject || null });
+        } catch (err) { return this._err(res, err, 'linkMeeting'); }
+    };
+
+    unlinkMeeting = async (req, res) => {
+        const m = this._msId(req, res); if (!m) return;
+        try {
+            await todo.clearNativeLinks(m, req.params.listId, req.params.taskId);
+            const ref = await db.TodoTaskRef.findOne({ where: { ms_task_id: req.params.taskId } });
+            if (ref) await ref.update({ meeting_event_id: null, meeting_join_url: null, meeting_subject: null });
+            return res.status(204).end();
+        } catch (err) { return this._err(res, err, 'unlinkMeeting'); }
+    };
+
+    // Reuniões online do calendário (janela de dias) para "vincular reunião existente".
+    availableMeetings = async (req, res) => {
+        const m = this._msId(req, res); if (!m) return;
+        try {
+            const days = Math.min(Number(req.query.days) || 14, 60);
+            const start = new Date(); start.setDate(start.getDate() - 1);
+            const end = new Date(); end.setDate(end.getDate() + days);
+            const events = await teamsService.getCalendarView(req.user, start.toISOString(), end.toISOString());
+            return res.json(
+                events
+                    .filter((e) => e.isOnlineMeeting && e.joinUrl && !e.isCancelled)
+                    .map((e) => ({ eventId: e.id, subject: e.subject, start: e.start, end: e.end, joinUrl: e.joinUrl }))
+            );
+        } catch (err) { return this._err(res, err, 'availableMeetings'); }
     };
 
     // ── Agregado "Minhas Tarefas" (todas as listas) + enriquecimento local ─────────

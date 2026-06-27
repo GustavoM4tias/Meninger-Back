@@ -56,6 +56,9 @@ async function listCampaignsForAccount({ token, base }, accountId, { since, unti
             'start_time', 'stop_time', 'updated_time',
             'daily_budget', 'lifetime_budget', 'budget_remaining',
             // insights agregados do período (inclui actions pra contagem de leads)
+            // Insights numa janela FIXA e ampla (~lifetime) - igual em todo sync
+            // (LIGHT/FULL) → "Investido"/leads consistentes. Antes pulava entre 30 e
+            // 90 dias conforme o último sync. A janela vem do sinceDate (abaixo).
             `insights.time_range({"since":"${since}","until":"${until}"}).fields(spend,impressions,clicks,reach,cpm,cpc,ctr,actions)`,
         ].join(','),
         limit: 100,
@@ -84,8 +87,11 @@ export async function syncFromMeta({ sinceDays = 90, until = new Date() } = {}) 
     const creds = await getCreds();
     const accounts = await listAdAccounts(creds);
 
+    // Janela FIXA e ampla pro insight da campanha (~lifetime), independente do
+    // sinceDays do sync → "Investido"/leads consistentes entre LIGHT e FULL.
+    // 730 dias cobrem as campanhas atuais e ficam dentro da retenção da Meta.
     const sinceDate = new Date(until);
-    sinceDate.setDate(sinceDate.getDate() - sinceDays);
+    sinceDate.setDate(sinceDate.getDate() - 730);
     const since = ymd(sinceDate);
     const untilStr = ymd(until);
 
