@@ -7,10 +7,16 @@ import axios from 'axios';
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import MarketingConfigService from './MarketingConfigService.js';
+import MetaCampaignsTokenService from '../meta/MetaCampaignsTokenService.js';
 
 const { MetaAd, MetaAdSet } = db;
 
 async function getCreds() {
+    // Mesmo token de gestão de campanhas do MetaCampaignService (admin, vê todas
+    // as contas). Fallback pro System User se não configurado.
+    const campaignsCreds = await MetaCampaignsTokenService.getCreds();
+    if (campaignsCreds) return campaignsCreds;
+
     const cfg = await MarketingConfigService.getConfig({ withSecrets: true, useCache: false });
     const token = cfg.meta_access_token;
     const version = cfg.meta_graph_api_version || 'v21.0';

@@ -21,6 +21,7 @@ import MetaCampaignService     from '../services/marketing/MetaCampaignService.j
 import MetaAdService           from '../services/marketing/MetaAdService.js';
 import MetaHistoricalImportService from '../services/marketing/MetaHistoricalImportService.js';
 import LeadCampaignBackfillService from '../services/marketing/LeadCampaignBackfillService.js';
+import MetaCampaignsTokenService from '../services/meta/MetaCampaignsTokenService.js';
 
 const FULL_CRON  = process.env.MARKETING_FULL_SYNC_CRON  || '20 6-22/2 * * *';
 const LIGHT_CRON = process.env.MARKETING_LIGHT_SYNC_CRON || '*/10 * * * *';
@@ -58,6 +59,14 @@ async function runFullSync(opts = {}) {
         forms: null, campaigns: null, ads: null,
         backfill: null, historical: null, errors: [],
     };
+
+    // 0) Token de gestão de campanhas: renova se perto de expirar + alerta se não
+    //    der. No-op se não configurado (usa fallback do System User). Não bloqueia.
+    try {
+        await MetaCampaignsTokenService.maybeRefreshAndAlert();
+    } catch (e) {
+        console.warn(`⚠️  [marketing-full-sync] refresh do token de campanhas: ${e.message}`);
+    }
 
     // 1) Forms (Meta Lead Forms)
     try {

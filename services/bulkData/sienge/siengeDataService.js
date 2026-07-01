@@ -65,18 +65,32 @@ export default class SiengeService {
     /**
      * Remove contratos órfãos duplicados do banco local.
      *
-     * Contexto: o Sienge pode criar um novo ID de contrato para o mesmo número de contrato
-     * dentro da mesma empresa quando um empreendimento é migrado/copiado entre módulos
-     * (ex: MOD. III → MOD. IV). O contrato antigo permanece "Emitido" no Sienge e o sync
-     * espelha ambos fielmente — gerando duplicatas locais.
+     * Roda duas passadas complementares:
      *
-     * Regra: dentro da mesma empresa (company_id), o número de contrato (number) deve ser
-     * único entre os registros não-cancelados. Quando há mais de um, mantemos o mais
-     * recentemente atualizado (updated_at DESC) e deletamos os demais.
+     * 1) Mesmo NÚMERO de contrato dentro da mesma empresa.
+     *    Contexto: o Sienge pode criar um novo ID de contrato para o mesmo número de contrato
+     *    dentro da mesma empresa quando um empreendimento é migrado/copiado entre módulos
+     *    (ex: MOD. III → MOD. IV). O contrato antigo permanece "Emitido" no Sienge e o sync
+     *    espelha ambos fielmente — gerando duplicatas locais.
+     *
+     * 2) Mesma UNIDADE + CLIENTE dentro do mesmo empreendimento (números diferentes).
+     *    Contexto: quando um contrato é EXCLUÍDO no Sienge (não cancelado) e reemitido com
+     *    um NÚMERO novo, a API de contratos simplesmente para de retornar o antigo. O delta
+     *    sync só faz upsert do que a API devolve e nunca aprende que o antigo sumiu, então o
+     *    registro obsoleto fica preso como "Emitido" para sempre. No Faturamento os dois
+     *    contratos caem na mesma venda (mesmo cliente+unidade+empreendimento) e os valores
+     *    são somados → total duplicado. A passada 1 não pega isso porque os números diferem.
+     *
+     * Regra (ambas): entre os registros NÃO-cancelados de uma mesma chave, mantemos o mais
+     * recentemente atualizado (updated_at DESC) e deletamos os demais. Um contrato realmente
+     * excluído no Sienge deixa de receber updates e envelhece; o vigente segue sendo
+     * sincronizado, então é o que sobrevive.
      */
     async deduplicateContracts() {
+        let removed = 0;
         try {
-            const [deleted] = await db.sequelize.query(`
+            // ── Passada 1: mesmo (company_id, number) ────────────────────────────
+            const [byNumber] = await db.sequelize.query(`
                 WITH ranked AS (
                     SELECT id,
                            number,
@@ -94,17 +108,75 @@ export default class SiengeService {
                 RETURNING id, number, company_id, enterprise_id
             `);
 
-            if (deleted.length > 0) {
+            if (byNumber.length > 0) {
+                removed += byNumber.length;
                 console.log(
-                    `🧹 [Sync] Deduplicação removeu ${deleted.length} contrato(s) órfão(s): ` +
-                    deleted.map(d => `id=${d.id} n°${d.number} emp=${d.enterprise_id}`).join(' | ')
+                    `🧹 [Sync] Dedup por número removeu ${byNumber.length} contrato(s) órfão(s): ` +
+                    byNumber.map(d => `id=${d.id} n°${d.number} emp=${d.enterprise_id}`).join(' | ')
                 );
             }
-            return deleted.length;
         } catch (err) {
-            console.warn(`⚠️  [Sync] deduplicateContracts falhou (não crítico): ${err.message}`);
-            return 0;
+            console.warn(`⚠️  [Sync] deduplicateContracts (passada 1) falhou (não crítico): ${err.message}`);
         }
+
+        try {
+            // ── Passada 2: mesmo (company_id, enterprise_id, unidade, cliente) ────
+            // Só considera registros com unidade E cliente identificáveis, para não
+            // colapsar contratos com dados incompletos por engano.
+            const [byUnit] = await db.sequelize.query(`
+                WITH keyed AS (
+                    SELECT
+                        id,
+                        number,
+                        company_id,
+                        enterprise_id,
+                        updated_at,
+                        COALESCE(
+                            (SELECT NULLIF(u ->> 'id','')::bigint
+                             FROM jsonb_array_elements(units) u
+                             WHERE (u ->> 'main')::boolean = true LIMIT 1),
+                            (SELECT NULLIF(u ->> 'id','')::bigint
+                             FROM jsonb_array_elements(units) u LIMIT 1)
+                        ) AS unit_id,
+                        COALESCE(
+                            (SELECT NULLIF(c ->> 'id','')::bigint
+                             FROM jsonb_array_elements(customers) c
+                             WHERE (c ->> 'main')::boolean = true LIMIT 1),
+                            (SELECT NULLIF(c ->> 'id','')::bigint
+                             FROM jsonb_array_elements(customers) c
+                             ORDER BY (c ->> 'id')::int NULLS LAST LIMIT 1)
+                        ) AS customer_id
+                    FROM contracts
+                    WHERE situation != 'Cancelado'
+                ),
+                ranked AS (
+                    SELECT id, number, company_id, enterprise_id, unit_id, customer_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY company_id, enterprise_id, unit_id, customer_id
+                               ORDER BY updated_at DESC, id DESC
+                           ) AS rn
+                    FROM keyed
+                    WHERE unit_id IS NOT NULL
+                      AND customer_id IS NOT NULL
+                )
+                DELETE FROM contracts
+                WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+                RETURNING id, number, company_id, enterprise_id
+            `);
+
+            if (byUnit.length > 0) {
+                removed += byUnit.length;
+                console.log(
+                    `🧹 [Sync] Dedup por unidade+cliente removeu ${byUnit.length} contrato(s) obsoleto(s) ` +
+                    `(reemitidos no Sienge com número novo): ` +
+                    byUnit.map(d => `id=${d.id} n°${d.number} emp=${d.enterprise_id}`).join(' | ')
+                );
+            }
+        } catch (err) {
+            console.warn(`⚠️  [Sync] deduplicateContracts (passada 2) falhou (não crítico): ${err.message}`);
+        }
+
+        return removed;
     }
 
     async upsertBatch(batch) {

@@ -20,6 +20,18 @@ export default (sequelize, DataTypes) => {
     last_test_at:    { type: DataTypes.DATE },
     last_test_ok:    { type: DataTypes.BOOLEAN },
     last_test_error: { type: DataTypes.TEXT },
+
+    // ── Token de GESTÃO DE CAMPANHAS (separado do token de leads) ────────────
+    // Token de usuário admin (vê TODAS as contas de anúncio de todos os BMs).
+    // Usado SÓ pelo sync de campanhas/ads (MetaCampaignService/MetaAdService),
+    // com fallback pro token do System User. Os leads NÃO usam este token.
+    meta_campaigns_token_enc:        { type: DataTypes.TEXT },     // AES-256-CBC
+    meta_campaigns_token_expires_at: { type: DataTypes.DATE },     // null = sem expiração conhecida
+    meta_campaigns_connected_name:   { type: DataTypes.STRING(255) },
+    meta_campaigns_connected_id:     { type: DataTypes.STRING(60) },
+    meta_campaigns_last_refresh_at:    { type: DataTypes.DATE },
+    meta_campaigns_last_refresh_ok:    { type: DataTypes.BOOLEAN },
+    meta_campaigns_last_refresh_error: { type: DataTypes.TEXT },
   }, {
     tableName: 'meta_app_configs',
     underscored: true,

@@ -38,6 +38,7 @@ import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import metaAppRoutes from './routes/metaAppRoutes.js';
+import { campaignsOAuthCallback as metaCampaignsOAuthCallback } from './controllers/meta/metaAppConfigController.js';
 import alertRoutes from './routes/alertRoutes.js';
 import bolaoRoutes from './routes/bolaoRoutes.js';
 import bolaoPublicRoutes from './routes/bolaoPublicRoutes.js';
@@ -160,6 +161,9 @@ app.use(express.json());
 
 app.use('/api/admin', admin);
 app.use('/api/meta-app', metaAppRoutes);   // credenciais de App Meta (compartilhadas WhatsApp + Lead Ads)
+// Callback PÚBLICO do OAuth de campanhas — a Meta redireciona o navegador (sem JWT do app);
+// segurança via `state` assinado, validado no controller.
+app.get('/api/meta-app-oauth/campaigns/callback', metaCampaignsOAuthCallback);
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
