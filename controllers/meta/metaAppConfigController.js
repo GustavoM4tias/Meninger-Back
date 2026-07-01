@@ -5,7 +5,14 @@
 // App Secret via client_credentials grant (gera um app access token).
 
 import axios from 'axios';
+import jwt from 'jsonwebtoken';
 import MetaAppConfigService from '../../services/meta/MetaAppConfigService.js';
+import MetaCampaignsTokenService from '../../services/meta/MetaCampaignsTokenService.js';
+
+// Redirect do OAuth de campanhas. Precisa estar cadastrado no App
+// (Facebook Login → URIs de redirecionamento OAuth válidos).
+const CAMPAIGNS_OAUTH_REDIRECT = process.env.META_OAUTH_REDIRECT_URI
+    || 'https://menin.up.railway.app/api/meta-app-oauth/campaigns/callback';
 
 export async function getConfig(req, res) {
     try {
@@ -75,4 +82,107 @@ export async function testAppSecret(req, res) {
     }
 }
 
-export default { getConfig, updateConfig, testAppSecret };
+// ── Token de gestão de campanhas ─────────────────────────────────────────────
+
+export async function campaignsStatus(req, res) {
+    try {
+        const st = await MetaCampaignsTokenService.status({ liveCount: true });
+        return res.json({ ok: true, status: st });
+    } catch (err) {
+        console.error(`❌ [meta-app] campaignsStatus: ${err.message}`);
+        return res.status(500).json({ ok: false, error: 'Erro ao ler o status do token de campanhas.' });
+    }
+}
+
+export async function connectCampaigns(req, res) {
+    try {
+        const token = (req.body?.token || '').trim();
+        if (!token) return res.status(400).json({ ok: false, error: 'Cole o token de acesso admin.' });
+        const result = await MetaCampaignsTokenService.connectFromToken(token);
+        return res.json({ ok: true, ...result });
+    } catch (err) {
+        const detail = err?.response?.data?.error?.message || err.message;
+        console.error(`❌ [meta-app] connectCampaigns: ${detail}`);
+        return res.status(400).json({ ok: false, error: detail });
+    }
+}
+
+export async function refreshCampaigns(req, res) {
+    try {
+        const r = await MetaCampaignsTokenService.refresh();
+        return res.json({ ok: r.refreshed !== false, ...r });
+    } catch (err) {
+        console.error(`❌ [meta-app] refreshCampaigns: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
+export async function disconnectCampaigns(req, res) {
+    try {
+        await MetaCampaignsTokenService.disconnect();
+        return res.json({ ok: true });
+    } catch (err) {
+        console.error(`❌ [meta-app] disconnectCampaigns: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
+/** Gera a URL do login OAuth com um `state` assinado (JWT). */
+export async function campaignsOAuthUrl(req, res) {
+    try {
+        const secret = process.env.JWT_SECRET;
+        if (!secret) return res.status(500).json({ ok: false, error: 'JWT_SECRET ausente no servidor.' });
+        const state = jwt.sign({ p: 'meta_campaigns_oauth', uid: req.user?.id || null }, secret, { expiresIn: '10m' });
+        const url = await MetaCampaignsTokenService.buildOAuthUrl({ redirectUri: CAMPAIGNS_OAUTH_REDIRECT, state });
+        return res.json({ ok: true, url, redirect_uri: CAMPAIGNS_OAUTH_REDIRECT });
+    } catch (err) {
+        console.error(`❌ [meta-app] campaignsOAuthUrl: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
+/**
+ * Callback PÚBLICO do OAuth — a Meta redireciona o NAVEGADOR pra cá (sem o JWT
+ * do app). Segurança via `state` assinado. Renderiza uma página simples.
+ */
+export async function campaignsOAuthCallback(req, res) {
+    const page = (ok, msg) => res.status(ok ? 200 : 400).send(oauthHtml(ok, msg));
+    try {
+        const { code, state, error, error_description } = req.query;
+        if (error) return page(false, error_description || String(error));
+        if (!code || !state) return page(false, 'Parâmetros ausentes no callback.');
+        try {
+            jwt.verify(String(state), process.env.JWT_SECRET);
+        } catch {
+            return page(false, 'Sessão de conexão inválida ou expirada. Refaça pelo Office.');
+        }
+        const result = await MetaCampaignsTokenService.connectFromCode(String(code), CAMPAIGNS_OAUTH_REDIRECT);
+        const extra = result.accounts_count != null ? ` ${result.accounts_count} contas de anúncio visíveis.` : '';
+        return page(true, `Conectado como ${result.name || 'admin'}.${extra}`);
+    } catch (err) {
+        const detail = err?.response?.data?.error?.message || err.message;
+        console.error(`❌ [meta-app] campaignsOAuthCallback: ${detail}`);
+        return page(false, detail);
+    }
+}
+
+function oauthHtml(ok, msg) {
+    const color = ok ? '#16a34a' : '#dc2626';
+    const title = ok ? '✅ Campanhas conectadas' : '❌ Falha ao conectar';
+    const safe = String(msg || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+    return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
+<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b1220;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">
+<div style="max-width:440px;text-align:center;padding:32px;background:#111827;border:1px solid #1f2937;border-radius:16px">
+<div style="font-size:20px;font-weight:600;color:${color};margin-bottom:10px">${title}</div>
+<div style="font-size:14px;color:#9ca3af;line-height:1.5">${safe}</div>
+<div style="font-size:12px;color:#6b7280;margin-top:18px">Pode fechar esta aba e voltar ao Office.</div>
+</div>
+<script>setTimeout(function(){try{window.close();}catch(e){}},2500);</script>
+</body></html>`;
+}
+
+export default {
+    getConfig, updateConfig, testAppSecret,
+    campaignsStatus, connectCampaigns, refreshCampaigns, disconnectCampaigns,
+    campaignsOAuthUrl, campaignsOAuthCallback,
+};

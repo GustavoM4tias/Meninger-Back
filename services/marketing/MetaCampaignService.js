@@ -8,10 +8,17 @@ import axios from 'axios';
 import { Op, fn, col, literal } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import MarketingConfigService from './MarketingConfigService.js';
+import MetaCampaignsTokenService from '../meta/MetaCampaignsTokenService.js';
 
 const { MetaCampaign, InboundLead } = db;
 
 async function getCreds() {
+    // Token de gestão de campanhas (admin, enxerga TODAS as contas de todos os
+    // BMs) tem prioridade. Se não estiver configurado, cai no token do System
+    // User — comportamento atual, sem mudança.
+    const campaignsCreds = await MetaCampaignsTokenService.getCreds();
+    if (campaignsCreds) return campaignsCreds;
+
     const cfg = await MarketingConfigService.getConfig({ withSecrets: true, useCache: false });
     const token = cfg.meta_access_token;
     const version = cfg.meta_graph_api_version || 'v21.0';

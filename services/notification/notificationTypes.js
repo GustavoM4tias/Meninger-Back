@@ -42,6 +42,7 @@ export const NotificationType = {
     // Marketing — Captação de Leads
     LEAD_DISPATCH_FAILED:    'lead.dispatch.failed',
     LEAD_WEBHOOK_REJECTED:   'lead.webhook.rejected',
+    META_CAMPAIGNS_TOKEN_EXPIRING: 'meta.campaigns.token_expiring',
 
     // Bolão da Copa
     BOLAO_LOCKED:    'bolao.locked',
@@ -169,6 +170,15 @@ export const NOTIFICATION_CATALOG = {
         label: 'Webhook de leads do Meta rejeitando',
         group: 'Marketing',
         description: 'Quando o webhook de leads do Meta passa a rejeitar eventos por assinatura inválida (App Secret dessincronizado) e novos leads param de entrar.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.META_CAMPAIGNS_TOKEN_EXPIRING]: {
+        label: 'Token de campanhas do Meta expirando',
+        group: 'Marketing',
+        description: 'Quando o token de gestão de campanhas do Meta está perto de expirar e não foi possível renovar automaticamente. O relatório de campanhas para de atualizar até reconectar (os leads não são afetados).',
         emailType: 'generic.notification',
         whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },

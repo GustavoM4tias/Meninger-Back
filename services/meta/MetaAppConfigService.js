@@ -35,11 +35,20 @@ function rowToConfig(row, { withSecrets = false } = {}) {
         last_test_ok: row.last_test_ok,
         last_test_error: row.last_test_error,
         updated_at: row.updated_at,
+        // Token de gestão de campanhas (flags/status, sem expor o valor)
+        has_meta_campaigns_token:        !!row.meta_campaigns_token_enc,
+        meta_campaigns_token_expires_at: row.meta_campaigns_token_expires_at,
+        meta_campaigns_connected_name:   row.meta_campaigns_connected_name,
+        meta_campaigns_connected_id:     row.meta_campaigns_connected_id,
+        meta_campaigns_last_refresh_at:    row.meta_campaigns_last_refresh_at,
+        meta_campaigns_last_refresh_ok:    row.meta_campaigns_last_refresh_ok,
+        meta_campaigns_last_refresh_error: row.meta_campaigns_last_refresh_error,
     };
     if (!withSecrets) return base;
     return {
         ...base,
         meta_app_secret: row.meta_app_secret_enc ? decrypt(row.meta_app_secret_enc) : null,
+        meta_campaigns_token: row.meta_campaigns_token_enc ? decrypt(row.meta_campaigns_token_enc) : null,
     };
 }
 
@@ -117,7 +126,55 @@ async function recordTest({ ok, error = null }) {
     }
 }
 
+// ── Token de gestão de campanhas ─────────────────────────────────────────────
+
+/** Token admin (decifrado) usado pelo sync de campanhas/ads. null se não setado. */
+async function getCampaignsToken() {
+    try { const c = await getConfig({ withSecrets: true }); return c?.meta_campaigns_token || null; }
+    catch { return null; }
+}
+
+/**
+ * Grava o token de campanhas (cifrado) + metadados. Passe null/'' pra manter o
+ * valor atual do token; passe '__CLEAR__' pra remover (desconectar).
+ */
+async function updateCampaignsToken({ token, expiresAt, connectedName, connectedId } = {}) {
+    const row = await loadRow();
+    if (token === '__CLEAR__') {
+        row.meta_campaigns_token_enc = null;
+        row.meta_campaigns_token_expires_at = null;
+        row.meta_campaigns_connected_name = null;
+        row.meta_campaigns_connected_id = null;
+    } else if (!(token === undefined || token === null || token === '')) {
+        row.meta_campaigns_token_enc = encrypt(String(token));
+    }
+    if (expiresAt !== undefined)     row.meta_campaigns_token_expires_at = expiresAt;
+    if (connectedName !== undefined) row.meta_campaigns_connected_name = connectedName;
+    if (connectedId !== undefined)   row.meta_campaigns_connected_id = connectedId;
+    await row.save();
+    invalidateCache();
+    return rowToConfig(row, { withSecrets: false });
+}
+
+/** Registra o resultado do último refresh do token (pro alerta anti-expiração). */
+async function recordCampaignsRefresh({ ok, error = null, expiresAt = undefined }) {
+    try {
+        const row = await loadRow();
+        row.meta_campaigns_last_refresh_at = new Date();
+        row.meta_campaigns_last_refresh_ok = !!ok;
+        row.meta_campaigns_last_refresh_error = ok ? null : (error || 'unknown');
+        if (ok && expiresAt !== undefined) row.meta_campaigns_token_expires_at = expiresAt;
+        await row.save();
+        invalidateCache();
+        return rowToConfig(row, { withSecrets: false });
+    } catch (err) {
+        console.error('[meta-app-config] recordCampaignsRefresh falhou:', err.message);
+        return null;
+    }
+}
+
 export default {
     getConfig, updateConfig, recordTest, invalidateCache,
     getAppSecret, getAppId, getGraphVersion,
+    getCampaignsToken, updateCampaignsToken, recordCampaignsRefresh,
 };
