@@ -152,6 +152,16 @@ import WhatsappAutomationRunDefine from './whatsapp/whatsappAutomationRun.js';
 // Meta — credenciais de App compartilhadas (WhatsApp + Lead Ads)
 import MetaAppConfigDefine from './meta/metaAppConfig.js';
 
+// Eme Atende — atendente IA de leads via WhatsApp
+import EmeAtendeSettingDefine      from './emeAtende/emeAtendeSetting.js';
+import EmeAtendeApiKeyDefine       from './emeAtende/emeAtendeApiKey.js';
+import EmeAtendeFlowDefine         from './emeAtende/emeAtendeFlow.js';
+import EmeAtendeFlowRuleDefine     from './emeAtende/emeAtendeFlowRule.js';
+import EmeAtendeLeadDefine         from './emeAtende/emeAtendeLead.js';
+import EmeAtendeConversationDefine from './emeAtende/emeAtendeConversation.js';
+import EmeAtendeMessageDefine      from './emeAtende/emeAtendeMessage.js';
+import EmeAtendeEventDefine        from './emeAtende/emeAtendeEvent.js';
+
 // Alertas (gerenciados via Eme AI)
 import AlertRuleDefine         from './alerts/alertRule.js';
 import AlertTriggerLogDefine   from './alerts/alertTriggerLog.js';
@@ -356,6 +366,26 @@ db.WhatsappAutomationRun = WhatsappAutomationRunDefine(sequelize, DataTypes);
 
 // Meta — App compartilhado (WhatsApp + Lead Ads)
 db.MetaAppConfig = MetaAppConfigDefine(sequelize, DataTypes);
+
+// Eme Atende — atendente IA de leads via WhatsApp
+db.EmeAtendeSetting      = EmeAtendeSettingDefine(sequelize, DataTypes);
+db.EmeAtendeApiKey       = EmeAtendeApiKeyDefine(sequelize, DataTypes);
+db.EmeAtendeFlow         = EmeAtendeFlowDefine(sequelize, DataTypes);
+db.EmeAtendeFlowRule     = EmeAtendeFlowRuleDefine(sequelize, DataTypes);
+db.EmeAtendeLead         = EmeAtendeLeadDefine(sequelize, DataTypes);
+db.EmeAtendeConversation = EmeAtendeConversationDefine(sequelize, DataTypes);
+db.EmeAtendeMessage      = EmeAtendeMessageDefine(sequelize, DataTypes);
+db.EmeAtendeEvent        = EmeAtendeEventDefine(sequelize, DataTypes);
+
+db.EmeAtendeFlow.hasMany(db.EmeAtendeFlowRule, { foreignKey: 'flow_id', as: 'rules' });
+db.EmeAtendeFlowRule.belongsTo(db.EmeAtendeFlow, { foreignKey: 'flow_id', as: 'flow' });
+db.EmeAtendeLead.belongsTo(db.EmeAtendeFlow, { foreignKey: 'flow_id', as: 'flow' });
+db.EmeAtendeConversation.belongsTo(db.EmeAtendeLead, { foreignKey: 'lead_id', as: 'lead' });
+db.EmeAtendeConversation.belongsTo(db.EmeAtendeFlow, { foreignKey: 'flow_id', as: 'flow' });
+db.EmeAtendeMessage.belongsTo(db.EmeAtendeConversation, { foreignKey: 'conversation_id', as: 'conversation' });
+db.EmeAtendeConversation.hasMany(db.EmeAtendeMessage, { foreignKey: 'conversation_id', as: 'messages' });
+db.EmeAtendeEvent.belongsTo(db.EmeAtendeLead, { foreignKey: 'lead_id', as: 'lead' });
+db.EmeAtendeLead.hasMany(db.EmeAtendeEvent, { foreignKey: 'lead_id', as: 'events' });
 
 // Alertas
 db.AlertRule         = AlertRuleDefine(sequelize, DataTypes);

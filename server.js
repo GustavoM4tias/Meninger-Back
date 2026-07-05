@@ -30,6 +30,9 @@ import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
 import officeBrainRoutes from './routes/officeBrainRoutes.js';
 import whatsappAutomationRoutes from './routes/whatsappAutomationRoutes.js';
+import emeAtendeRoutes from './routes/emeAtendeRoutes.js';
+import emeAtendePublicRoutes from './routes/emeAtendePublicRoutes.js';
+import { ensureEmeAtendeSeed } from './services/emeAtende/emeAtendeSeed.js';
 import academyChatRoutes from './routes/academyChatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
@@ -190,6 +193,8 @@ app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
 app.use('/api/office-brain', officeBrainRoutes);
 app.use('/api/whatsapp-automations', whatsappAutomationRoutes);
+app.use('/api/eme-atende/public', emeAtendePublicRoutes); // intake de leads (X-Api-Key)
+app.use('/api/eme-atende', emeAtendeRoutes);              // admin (JWT + admin)
 app.use('/api/academy-chat', academyChatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
@@ -251,6 +256,15 @@ async function bootServer() {
     ['SalesProjectionEnterprise', db.SalesProjectionEnterprise],
     // Personalização de custos (categoria + observação) — Títulos/Custos agora ao vivo do backup
     ['ExpensePersonalization', db.ExpensePersonalization],
+    // Eme Atende — atendente IA de leads (módulo novo em evolução)
+    ['EmeAtendeSetting', db.EmeAtendeSetting],
+    ['EmeAtendeApiKey', db.EmeAtendeApiKey],
+    ['EmeAtendeFlow', db.EmeAtendeFlow],
+    ['EmeAtendeFlowRule', db.EmeAtendeFlowRule],
+    ['EmeAtendeLead', db.EmeAtendeLead],
+    ['EmeAtendeConversation', db.EmeAtendeConversation],
+    ['EmeAtendeMessage', db.EmeAtendeMessage],
+    ['EmeAtendeEvent', db.EmeAtendeEvent],
   ]) {
     if (!model) continue;
     try {
@@ -271,6 +285,7 @@ async function bootServer() {
   await ensureMarketingCaptureSchema();
   await ensureEmeBrainSchema();
   await ensureWhatsappAutomationSchema();
+  await ensureEmeAtendeSeed();
   await ensureAlertSharesSchema();
   await ensureViabilitySchema();
   await ensureDepartmentVisibilitySchema();

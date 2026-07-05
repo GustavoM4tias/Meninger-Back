@@ -332,11 +332,17 @@ export default class ViabilityService {
         const { byMonth: soldByMonth, total: soldUnitsRealYtd } =
             await this.loadSalesLifetimeByMonth({ erpIds, endDate });
 
+        // ----- Boletagem: vendidas no CV que ainda não assinaram a instituição financeira -----
+        // Venda EFETIVA = regra do Faturamento (contrato com financial_institution_date). O CV
+        // marca a unidade como vendida no ato; enquanto a instituição financeira não assina, o
+        // cliente ainda está "em boletagem" e a unidade permanece no pool a trabalhar.
+        const boletagemUnits = Math.max(0, num(units.soldUnitsStock) - num(soldUnitsRealYtd));
+
         // ----- Estoque disponível p/ marketing -----
-        // Com mapa no CV: disponíveis + reservadas + bloqueadas liberadas (mesmo que dê 0 =
-        // tudo vendido, como mostra a tela de Projeção). SEM mapa no CV: cai para a projeção
-        // (planejado − vendido). Reservada sempre conta; bloqueada só a parcela liberada.
-        const cvAvailable = units.availableUnits + units.reservedUnits + blockedConsidered;
+        // Com mapa no CV: disponíveis + reservadas + bloqueadas liberadas + boletagem (mesmo que
+        // dê 0 = tudo com venda efetiva). SEM mapa no CV: cai para a projeção (planejado − venda
+        // efetiva). Reservada sempre conta; bloqueada só a parcela liberada.
+        const cvAvailable = units.availableUnits + units.reservedUnits + blockedConsidered + boletagemUnits;
         const projectionRemaining = Math.max(0, projectionFullUnits - soldUnitsRealYtd);
         const availableInventory = units.totalUnits > 0 ? cvAvailable : projectionRemaining;
 
@@ -395,12 +401,19 @@ export default class ViabilityService {
         });
 
         // ----- Status / categoria do empreendimento -----
-        // Concluído: nada a comercializar (sem disponível e sem projeção futura/atual).
-        // Senão: Em andamento (já gastou) ou Previsão Futura (ainda sem gasto). Admin pode forçar.
-        const hasActivity = availableInventory > 0 || projectedUnitsFuture > 0;
-        const autoStatus = !hasActivity ? 'concluido'
-            : spentTotal > 0 ? 'em_andamento'
-                : 'previsao_futura';
+        // A categoria é definida pelo MOMENTO da comercialização, não pelo gasto:
+        //  - Concluído: nada a comercializar (sem disponível e sem projeção futura/atual).
+        //  - Ainda não lançou (só tem projeção futura, sem venda realizada nem projeção
+        //    até o mês selecionado): Pré-lançamento se JÁ há gasto de marketing (marketing
+        //    antecipado), senão Previsão Futura.
+        //  - Em andamento: o resto (já vende ou já tem projeção corrente).
+        // Admin pode forçar via override.
+        const hasFuture = projectedUnitsFuture > 0;
+        const pastUnits = Math.max(0, projectionFullUnits - projectedUnitsFuture); // projeção antes do mês
+        const hasStarted = soldUnitsRealYtd > 0 || pastUnits > 0;
+        const autoStatus = (availableInventory <= 0 && !hasFuture) ? 'concluido'
+            : (hasFuture && !hasStarted) ? (spentTotal > 0 ? 'pre_lancamento' : 'previsao_futura')
+                : 'em_andamento';
         const statusOverride = resolver.statusOverride(company.companyId);
         const status = statusOverride || autoStatus;
 
@@ -429,6 +442,7 @@ export default class ViabilityService {
                 reservedUnits: units.reservedUnits,
                 blockedUnits: units.blockedUnits,
                 availableUnits: units.availableUnits,
+                boletagemUnits, // vendidas no CV sem venda efetiva (aguardando instituição financeira)
                 blockedConsideredAvailable: blockedConsidered,
                 availableInventory,
 

@@ -26,24 +26,60 @@ async function getCreds() {
     return { token, version, base: `https://graph.facebook.com/${version}` };
 }
 
-/** Lista contas de anúncio acessíveis pelo System User. */
-async function listAdAccounts({ token, base }) {
+/** Pagina um edge da Graph API (segue paging.next até acabar). */
+async function pageAll(url, params) {
     const all = [];
-    let url = `${base}/me/adaccounts`;
-    let params = {
-        access_token: token,
-        fields: 'id,account_id,name,currency,account_status',
-        limit: 100,
-    };
-    for (let i = 0; i < 5; i++) {
-        const r = await axios.get(url, { params, timeout: 20000 });
+    let u = url, p = params;
+    for (let i = 0; i < 8; i++) {
+        const r = await axios.get(u, { params: p, timeout: 20000 });
         const data = Array.isArray(r.data?.data) ? r.data.data : [];
         all.push(...data);
         const next = r.data?.paging?.next;
         if (!next) break;
-        url = next; params = {};
+        u = next; p = {};
     }
     return all;
+}
+
+/**
+ * Lista as contas de anúncio acessíveis pelo token. Une três fontes e deduplica
+ * por id:
+ *   - /me/adaccounts            (contas com papel DIRETO do usuário)
+ *   - /{bm}/owned_ad_accounts   (contas que a BM possui)
+ *   - /{bm}/client_ad_accounts  (contas de terceiros compartilhadas com a BM)
+ * para cada BM visível em /me/businesses.
+ *
+ * Motivo: com token de usuário admin, /me/adaccounts só traz as contas em que
+ * ele tem papel direto — perde as que a BM tem como owned/client. Enumerar pelas
+ * BMs pega todas (e contas novas compartilhadas na BM aparecem sozinhas). Erros
+ * de permissão por BM (agência de terceiro) são ignorados. Token de System User
+ * não lista businesses → cai só nas diretas (comportamento anterior preservado).
+ */
+async function listAdAccounts({ token, base }) {
+    const byId = new Map();
+    const add = (a) => { if (a?.id && !byId.has(a.id)) byId.set(a.id, a); };
+    const FIELDS = 'id,account_id,name,currency,account_status';
+
+    try {
+        (await pageAll(`${base}/me/adaccounts`, { access_token: token, fields: FIELDS, limit: 200 })).forEach(add);
+    } catch (e) {
+        console.warn(`[meta-campaigns] /me/adaccounts: ${e?.response?.data?.error?.message || e.message}`);
+    }
+
+    let businesses = [];
+    try {
+        businesses = await pageAll(`${base}/me/businesses`, { access_token: token, fields: 'id,name', limit: 100 });
+    } catch { /* System User não lista businesses — segue só com as diretas */ }
+
+    for (const b of businesses) {
+        for (const edge of ['owned_ad_accounts', 'client_ad_accounts']) {
+            try {
+                (await pageAll(`${base}/${b.id}/${edge}`, { access_token: token, fields: FIELDS, limit: 200 })).forEach(add);
+            } catch { /* sem permissão nessa BM (ex.: agência) — ignora */ }
+        }
+    }
+
+    return [...byId.values()];
 }
 
 /**
