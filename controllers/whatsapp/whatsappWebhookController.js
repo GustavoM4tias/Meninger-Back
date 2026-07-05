@@ -8,6 +8,33 @@
 // A montagem em routes usa express.raw() para esse path específico.
 
 import WhatsAppWebhookService from '../../services/whatsapp/WhatsAppWebhookService.js';
+import EmeAtendeWebhookRouter from '../../services/emeAtende/EmeAtendeWebhookRouter.js';
+import EmeAtendeConversationEngine from '../../services/emeAtende/EmeAtendeConversationEngine.js';
+
+// ── Eme Atende (atendente IA de leads, número COMPARTILHADO com o Office) ───────────
+// O EmeAtendeWebhookRouter divide o payload: mensagens de users internos e statuses
+// de wamids do Office seguem o fluxo atual (alertas/SIM intactos); mensagens
+// de EXTERNOS e statuses das mensagens da Eme Atende vão pro atendimento IA (a Eme Atende
+// substitui a auto-resposta de "canal só de saída" para externos).
+// Com eme_atende_settings.active=false (default) ou em QUALQUER erro do router,
+// tudo segue pro Office - comportamento idêntico ao anterior (fail-open).
+async function dispatchWithEmeAtende(payload) {
+    let routed;
+    try {
+        routed = await EmeAtendeWebhookRouter.route(payload);
+    } catch (err) {
+        console.error('[whatsapp/webhook] Eme Atende router falhou - processando tudo no Office:', err?.message || err);
+        routed = { officePayload: payload, emeAtendePayload: null };
+    }
+    if (routed.emeAtendePayload) {
+        EmeAtendeConversationEngine.handleWebhookPayload(routed.emeAtendePayload)
+            .catch(err => console.error('[whatsapp/webhook] Eme Atende engine:', err?.message || err));
+    }
+    if (routed.officePayload) {
+        WhatsAppWebhookService.processPayload(routed.officePayload)
+            .catch(err => console.error('[whatsapp/webhook/process]', err?.message || err));
+    }
+}
 
 /** GET — handshake */
 export const verify = async (req, res) => {
@@ -63,9 +90,9 @@ export const receive = async (req, res) => {
         // ACK rápido — Meta dá retry se demorar
         res.status(200).send('ok');
 
-        // processa em background
-        WhatsAppWebhookService.processPayload(payload)
-            .catch(err => console.error('[whatsapp/webhook/process]', err?.message || err));
+        // processa em background (router Eme Atende + fluxo Office)
+        dispatchWithEmeAtende(payload)
+            .catch(err => console.error('[whatsapp/webhook/dispatch]', err?.message || err));
     } catch (err) {
         console.error('[whatsapp/webhook/receive]', err);
         if (!res.headersSent) res.status(500).send('error');
