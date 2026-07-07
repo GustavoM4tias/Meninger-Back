@@ -123,11 +123,12 @@ export async function previewBacklogSince({ cutoff = DEFAULT_CUTOFF } = {}) {
  * Dispara o backlog a partir do corte. Processa até `limit` leads e é resumível.
  *
  * @param {object}  opts
- * @param {string}  opts.cutoff  'YYYY-MM-DD' (default 2026-06-01)
- * @param {boolean} opts.preview se true, só classifica (não escreve nem dispara)
- * @param {number}  opts.limit   teto de leads por execução (resumível)
+ * @param {string}  opts.cutoff      'YYYY-MM-DD' (default 2026-06-01)
+ * @param {boolean} opts.preview     se true, só classifica (não escreve nem dispara)
+ * @param {number}  opts.limit       teto de leads por execução (resumível)
+ * @param {number}  opts.concurrency envios simultâneos ao CV (o POST é o gargalo)
  */
-export async function dispatchBacklogSince({ cutoff = DEFAULT_CUTOFF, preview = false, limit = 500 } = {}) {
+export async function dispatchBacklogSince({ cutoff = DEFAULT_CUTOFF, preview = false, limit = 500, concurrency = 5 } = {}) {
     const cutoffDate = cutoffToDate(cutoff);
     const shadow = await isShadowMode();
 
@@ -164,15 +165,15 @@ export async function dispatchBacklogSince({ cutoff = DEFAULT_CUTOFF, preview = 
     summary.scanned = leads.length;
     summary.reached_limit = leads.length >= limit;
 
-    for (const lead of leads) {
+    async function processOne(lead) {
         const hasContact = !!lead.email || !!lead.telefone;
-        if (!hasContact) { summary.no_contact += 1; continue; }
+        if (!hasContact) { summary.no_contact += 1; return; }
 
         // Ao vivo segurado pelo dry-run: vínculo já resolvido, só re-dispara.
         if (lead.status === 'routed') {
             summary.routed_pending += 1;
             if (!preview) await runDispatch(lead, summary);
-            continue;
+            return;
         }
 
         // Histórico: resolve vínculo campanha-primeiro.
@@ -181,11 +182,11 @@ export async function dispatchBacklogSince({ cutoff = DEFAULT_CUTOFF, preview = 
             resolved = await applyBindingToHistorical(lead);
         } catch (e) {
             summary.errors.push({ lead_id: lead.id, error: e.message });
-            continue;
+            return;
         }
-        if (!resolved) { summary.historical_no_binding += 1; continue; }
+        if (!resolved) { summary.historical_no_binding += 1; return; }
         summary.historical_with_binding += 1;
-        if (preview) continue;
+        if (preview) return;
 
         // Promove histórico → routed (persiste o vínculo) e dispara.
         try {
@@ -199,10 +200,18 @@ export async function dispatchBacklogSince({ cutoff = DEFAULT_CUTOFF, preview = 
             });
         } catch (e) {
             summary.errors.push({ lead_id: lead.id, error: e.message });
-            continue;
+            return;
         }
         await runDispatch(lead, summary);
     }
+
+    // Pool de N leads em voo — o gargalo é o POST no CV (~2s cada); sequencial
+    // dava ~18min num lote de 500. Cada lead é independente do outro.
+    let next = 0;
+    const poolSize = Math.max(1, Math.min(concurrency, leads.length));
+    await Promise.all(Array.from({ length: poolSize }, async () => {
+        while (next < leads.length) await processOne(leads[next++]);
+    }));
 
     return summary;
 }

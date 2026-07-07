@@ -54,6 +54,24 @@ function backoffMs(attempts) {
     return Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_CAP_MS);
 }
 
+// ── Conversão ───────────────────────────────────────────────────────────────
+// Nome da conversão que aparece no CV. Sem o campo `conversao` no POST o CV
+// carimba "Painel Gestor" (como se fosse cadastro manual). Usamos o nome do
+// formulário onde a pessoa converteu (mais específico); fallback mídia/canal.
+async function resolveConversaoName(lead) {
+    try {
+        if (lead.meta_form_id && db.MetaLeadForm) {
+            const f = await db.MetaLeadForm.findByPk(String(lead.meta_form_id), { attributes: ['name'] });
+            if (f?.name) return f.name;
+        }
+        if (lead.source_form_id && db.LeadForm) {
+            const f = await db.LeadForm.findByPk(lead.source_form_id, { attributes: ['name'] });
+            if (f?.name) return f.name;
+        }
+    } catch { /* cai no fallback */ }
+    return lead.midia_slug || lead.channel || null;
+}
+
 // ── Re-entrada ──────────────────────────────────────────────────────────────
 // Mesma pessoa (email/telefone) que já foi entregue antes NÃO é duplicata —
 // é uma nova conversão. Não confundir com spam.
@@ -167,7 +185,8 @@ function buildCvPayload(lead) {
         if (lead.meta_form_id) p.idformulario = lead.meta_form_id;
     }
 
-    if (lead.is_reentry && lead.conversao_name) {
+    // Sempre enviar — sem `conversao` o CV registra o default "Painel Gestor".
+    if (lead.conversao_name) {
         p.conversao = lead.conversao_name;
     }
 
@@ -202,11 +221,15 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
     // Re-entrada: detecta antes de montar o payload.
     if (!lead.is_reentry && await detectReentry(lead)) {
         lead.is_reentry = true;
-        lead.conversao_name = lead.midia_slug || lead.channel;
         await recordLeadEvent({
             leadId: lead.id, type: 'reentry_detected', actor,
             message: 'Lead já existe na base — tratado como nova conversão (não é spam).',
         });
+    }
+
+    // Nome da conversão (form > mídia > canal) — vale pra lead novo e re-entrada.
+    if (!lead.conversao_name) {
+        lead.conversao_name = await resolveConversaoName(lead);
     }
 
     const payload    = buildCvPayload(lead);

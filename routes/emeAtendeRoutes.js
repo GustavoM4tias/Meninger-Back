@@ -14,6 +14,7 @@ import db from '../models/sequelize/index.js';
 import EmeAtendeSettingsService from '../services/emeAtende/EmeAtendeSettingsService.js';
 import EmeAtendeFlowService from '../services/emeAtende/EmeAtendeFlowService.js';
 import EmeAtendeConversationEngine from '../services/emeAtende/EmeAtendeConversationEngine.js';
+import EmeAtendeContextBuilder from '../services/emeAtende/EmeAtendeContextBuilder.js';
 import { runChat } from '../services/emeAtende/emeAtendeGeminiChat.js';
 
 const router = express.Router();
@@ -59,6 +60,7 @@ router.delete('/api-keys/:id', wrap(async (req, res) => {
 
 // ── Flows ────────────────────────────────────────────────────────────────────
 const FLOW_FIELDS = ['name', 'active', 'is_default', 'system_prompt', 'business_context',
+    'cv_enterprise_id', 'context_sources', 'images',
     'opener_template', 'opener_language', 'opener_variables', 'triggers', 'handoff', 'settings'];
 
 router.get('/flows', wrap(async (req, res) => {
@@ -132,6 +134,28 @@ router.get('/templates', wrap(async (req, res) => {
     const where = {};
     if (req.query.status) where.status = String(req.query.status).toUpperCase();
     res.json(await db.WhatsappTemplate.findAll({ where, order: [['name', 'ASC']] }));
+}));
+
+// ── Empreendimentos do CV (pro vínculo do fluxo por centro de custo) ─────────
+router.get('/enterprises', wrap(async (req, res) => {
+    res.json(await db.CvEnterprise.findAll({
+        attributes: ['idempreendimento', 'nome', 'cidade', 'estado', 'situacao_comercial_nome'],
+        order: [['nome', 'ASC']],
+    }));
+}));
+
+// ── Preview do contexto automático (CV + ficha comercial, ao vivo) ───────────
+// Aceita valores AINDA NÃO SALVOS (a tela manda o estado do editor).
+router.post('/context-preview', wrap(async (req, res) => {
+    const { flow_id, cv_enterprise_id, context_sources, business_context } = req.body || {};
+    const flow = flow_id ? await db.EmeAtendeFlow.findByPk(flow_id) : null;
+    const probe = {
+        cv_enterprise_id: cv_enterprise_id !== undefined ? cv_enterprise_id : (flow?.cv_enterprise_id ?? null),
+        context_sources: context_sources !== undefined ? context_sources : (flow?.context_sources ?? null),
+        business_context: business_context !== undefined ? business_context : (flow?.business_context ?? null),
+    };
+    const { text, meta } = await EmeAtendeContextBuilder.fullContext(probe);
+    res.json({ text, meta });
 }));
 
 // ── Leads ────────────────────────────────────────────────────────────────────
@@ -216,16 +240,24 @@ router.post('/test/ai', wrap(async (req, res) => {
     const flow = flow_id ? await db.EmeAtendeFlow.findByPk(flow_id) : await EmeAtendeFlowService.getDefaultFlow();
     if (!flow) return res.status(404).json({ error: 'fluxo não encontrado.' });
 
-    const fakeLead = { name: req.body?.lead_name || 'Lead de Teste', empreendimento: req.body?.empreendimento || null };
-    const persona = flow.system_prompt || '';
-    const context = flow.business_context ? `\n\nCONTEXTO DO NEGÓCIO:\n${flow.business_context}` : '';
-    const systemPrompt = `${persona}${context}\n\nDADOS DO LEAD: nome=${fakeLead.name}; empreendimento=${fakeLead.empreendimento || '-'}.\n(Modo sandbox de teste.)`;
+    // Mesmo prompt do atendimento real (persona + contexto CV/ficha ao vivo +
+    // imagens + regras duras) - o sandbox testa o que vai pro ar de verdade.
+    const fakeLead = {
+        name: req.body?.lead_name || 'Lead de Teste',
+        source: 'sandbox',
+        campaign: null,
+        empreendimento: req.body?.empreendimento || null,
+    };
+    const systemPrompt = `${await EmeAtendeConversationEngine.buildSystemPrompt(flow, fakeLead)}\n(Modo sandbox de teste - nenhuma mensagem é enviada.)`;
+    const hasImages = EmeAtendeConversationEngine.validImages(flow).length > 0;
 
     const result = await runChat({
         systemPrompt,
         history: history.map(h => ({ role: h.role, parts: [{ text: h.text }] })),
         userMessage: String(message),
-        functionDeclarations: EmeAtendeConversationEngine.FUNCTION_DECLARATIONS,
+        functionDeclarations: hasImages
+            ? [...EmeAtendeConversationEngine.FUNCTION_DECLARATIONS, EmeAtendeConversationEngine.IMAGE_TOOL]
+            : EmeAtendeConversationEngine.FUNCTION_DECLARATIONS,
         onTool: async () => ({ ok: true, info: 'sandbox - ação simulada' }),
     });
     res.json({ reply: result.text, tool_calls: result.toolCalls });

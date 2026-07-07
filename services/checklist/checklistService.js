@@ -164,11 +164,14 @@ export async function cloneChecklist({ id, userId, title }) {
         const ns = await db.ChecklistSection.create({ checklist_id: clone.id, name: s.name, color: s.color, position: s.position ?? 0 });
         secMap.set(s.id, ns.id);
     }
-    for (const t of tasks) {
+    // Pais primeiro, filhos depois: preserva a hierarquia de subtarefas no clone.
+    const taskMap = new Map();
+    const ordered = [...tasks.filter((t) => !t.parent_task_id), ...tasks.filter((t) => t.parent_task_id)];
+    for (const t of ordered) {
         const sectionId = secMap.get(t.section_id);
         if (!sectionId) continue;
-        await db.ChecklistTask.create({
-            checklist_id: clone.id, section_id: sectionId, parent_task_id: null,
+        const nt = await db.ChecklistTask.create({
+            checklist_id: clone.id, section_id: sectionId, parent_task_id: t.parent_task_id ? (taskMap.get(t.parent_task_id) || null) : null,
             category: t.category, title: t.title, description: t.description, status_id: t.status_id,
             priority: t.priority, value: t.value, value_kind: t.value_kind,
             contracted_at: t.contracted_at, due_date: t.due_date,
@@ -177,6 +180,7 @@ export async function cloneChecklist({ id, userId, title }) {
             approval_status: 'NONE', approval_round: 0,
             position: t.position ?? 0, created_by: userId || null, updated_by: userId || null,
         });
+        taskMap.set(t.id, nt.id);
     }
     await recomputeProgress(clone.id);
     await logActivity({ checklistId: clone.id, userId, action: 'checklist.created', meta: { cloned_from: src.id } });

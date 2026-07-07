@@ -18,6 +18,8 @@ const CONTEXTS = {
     CHECKLIST_ATTACHMENT: 'checklist_attachment', // Anexos de tarefa do checklist
     // ── To Do (Microsoft) ────────────────────────────────────────────────────────
     TODO_ATTACHMENT: 'todo_attachment',           // Anexos de tarefa do To Do
+    // ── Eme Atende ───────────────────────────────────────────────────────────────
+    EME_ATENDE_IMAGE: 'eme_atende_image',         // Imagens que a Eme envia ao lead (públicas)
 };
 
 function sanitizeFileName(name = '') {
@@ -161,6 +163,18 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
             return {
                 bucket: STORAGE_BUCKET,
                 path: `office/todo/${userId}/${referenceId || 'tasks'}/${timestamp}-${originalName}`,
+                isPublic: true,
+            };
+
+        // ── Eme Atende: imagem que a IA envia ao lead no WhatsApp ──────────────
+        // Precisa ser PÚBLICA (a Meta baixa a imagem pelo link na hora do envio).
+        case CONTEXTS.EME_ATENDE_IMAGE:
+            if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype)) {
+                throw new Error('Imagem do Eme Atende aceita apenas PNG, JPG ou WEBP');
+            }
+            return {
+                bucket: STORAGE_BUCKET,
+                path: `office/eme-atende/flows/${referenceId || 'draft'}/images/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 

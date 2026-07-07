@@ -17,6 +17,7 @@ import db from '../../models/sequelize/index.js';
 import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
 import EmeAtendeFlowService from './EmeAtendeFlowService.js';
 import EmeAtendeMessenger from './EmeAtendeMessenger.js';
+import EmeAtendeContextBuilder from './EmeAtendeContextBuilder.js';
 import { runChat, hasGeminiKey } from './emeAtendeGeminiChat.js';
 import { normalizePhone, phoneSuffix } from './emeAtendePhone.js';
 
@@ -51,6 +52,28 @@ const FUNCTION_DECLARATIONS = [
         },
     },
 ];
+
+// Tool só declarada quando o fluxo tem imagens cadastradas.
+const IMAGE_TOOL = {
+    name: 'enviar_imagem',
+    description: 'Envia ao lead uma das IMAGENS DISPONÍVEIS listadas no contexto (planta, fachada, book...). Use quando o lead pedir fotos/plantas ou quando a imagem ajudar a resposta. Informe o label EXATO da lista.',
+    parameters: {
+        type: 'object',
+        properties: { label: { type: 'string', description: 'Label exato da imagem, conforme a lista IMAGENS DISPONÍVEIS' } },
+        required: ['label'],
+    },
+};
+
+function validImages(flow) {
+    return (Array.isArray(flow?.images) ? flow.images : []).filter(i => i?.url && i?.label);
+}
+
+function findImage(images, label) {
+    const q = String(label || '').trim().toLowerCase();
+    return images.find(i => i.label.toLowerCase() === q)
+        || images.find(i => i.label.toLowerCase().includes(q) || q.includes(i.label.toLowerCase()))
+        || null;
+}
 
 // Guardas fixas do produto - concatenadas ao system_prompt editável do fluxo.
 const HARD_RULES = `
@@ -230,14 +253,22 @@ async function doHandoff({ conversation, lead, flow, reason }) {
 }
 
 // ── Rodada de IA ─────────────────────────────────────────────────────────────
-function buildSystemPrompt(flow, lead) {
+// Contexto do negócio = automático (CV + ficha comercial, ao vivo, via
+// EmeAtendeContextBuilder) + manual (business_context). Exportado pro sandbox
+// da tela usar exatamente o mesmo prompt do atendimento real.
+async function buildSystemPrompt(flow, lead) {
     const persona = flow?.system_prompt
         || 'Você é a Eme, assistente virtual de atendimento da construtora Menin. Seja simpática, objetiva e ajude o lead com informações sobre os empreendimentos.';
-    const context = flow?.business_context
-        ? `\n\nCONTEXTO DO NEGÓCIO (única fonte de verdade sobre produtos/valores):\n${flow.business_context}`
+    const { text: contextText } = await EmeAtendeContextBuilder.fullContext(flow);
+    const context = contextText
+        ? `\n\nCONTEXTO DO NEGÓCIO (única fonte de verdade sobre produtos/valores):\n${contextText}`
         : '\n\nCONTEXTO DO NEGÓCIO: nenhum detalhe de produto foi configurado - NÃO afirme nada sobre preços ou unidades; colete o interesse e transfira para humano quando o lead quiser detalhes.';
+    const images = validImages(flow);
+    const imageBlock = images.length
+        ? `\n\nIMAGENS DISPONÍVEIS (envie com a ferramenta enviar_imagem quando o lead pedir fotos/plantas ou quando ajudar a resposta; use o label exato):\n${images.map(i => `- "${i.label}"`).join('\n')}`
+        : '';
     const leadInfo = `\n\nDADOS DO LEAD: nome=${lead?.name || 'desconhecido'}; origem=${lead?.source || '-'}; campanha=${lead?.campaign || '-'}; empreendimento de interesse=${lead?.empreendimento || '-'}.`;
-    return `${persona}${context}${leadInfo}\n${HARD_RULES}`;
+    return `${persona}${context}${imageBlock}${leadInfo}\n${HARD_RULES}`;
 }
 
 async function buildHistory(conversationId) {
@@ -288,17 +319,25 @@ async function fireAI(conversationId) {
     const userMessage = history.pop().parts[0].text;
 
     const actions = { handoff: null, qualified: null, close: null };
+    const images = validImages(flow);
     let result;
     try {
         result = await runChat({
-            systemPrompt: buildSystemPrompt(flow, lead),
+            systemPrompt: await buildSystemPrompt(flow, lead),
             history,
             userMessage,
-            functionDeclarations: FUNCTION_DECLARATIONS,
+            functionDeclarations: images.length ? [...FUNCTION_DECLARATIONS, IMAGE_TOOL] : FUNCTION_DECLARATIONS,
             onTool: async ({ name, args }) => {
                 if (name === 'transferir_para_humano') { actions.handoff = args?.motivo || 'pedido da IA'; return { ok: true, info: 'Transferência registrada. Escreva uma despedida curta avisando que um consultor assume.' }; }
                 if (name === 'marcar_qualificado') { actions.qualified = args?.resumo || ''; return { ok: true, info: 'Lead marcado como qualificado. Continue a conversa normalmente.' }; }
                 if (name === 'encerrar_conversa') { actions.close = args?.motivo || ''; return { ok: true, info: 'Encerramento registrado. Escreva uma despedida curta e educada.' }; }
+                if (name === 'enviar_imagem') {
+                    const img = findImage(images, args?.label);
+                    if (!img) return { ok: false, error: `imagem "${args?.label}" não encontrada - use um label da lista.` };
+                    const sent = await EmeAtendeMessenger.sendImage({ conversation, url: img.url, label: img.label });
+                    await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'image_sent', { label: img.label, status: sent?.status });
+                    return { ok: true, info: `Imagem "${img.label}" enviada ao lead. Continue a resposta em texto SEM repetir o link.` };
+                }
                 return { ok: false, error: 'tool desconhecida' };
             },
         });
@@ -330,4 +369,4 @@ async function fireAI(conversationId) {
     }
 }
 
-export default { handleWebhookPayload, fireAI, FUNCTION_DECLARATIONS };
+export default { handleWebhookPayload, fireAI, buildSystemPrompt, validImages, FUNCTION_DECLARATIONS, IMAGE_TOOL };

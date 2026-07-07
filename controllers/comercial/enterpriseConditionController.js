@@ -15,6 +15,7 @@ const {
     CvEnterprisePriceTable,
     CvCorrespondent,
     ComercialSettings,
+    CampaignTemplate,
     User,
 } = db;
 
@@ -1665,6 +1666,169 @@ export const getCostReport = async (req, res) => {
         return res.json({ count: rows.length, totals, rows });
     } catch (e) {
         console.error('[conditions] getCostReport:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+// ─── biblioteca de campanhas (modelos reutilizáveis entre empreendimentos) ────
+// A campanha da ficha é uma cópia materializada apontando para o modelo via
+// template_id. Edição com propagate=true atualiza o modelo + instâncias em fichas
+// RASCUNHO (autorizadas/encerradas são história imutável e não mudam).
+
+const TEMPLATE_FIELDS = ['title', 'description', 'rules', 'start_date', 'end_date', 'value', 'paid_by'];
+
+export const listCampaignTemplates = async (req, res) => {
+    try {
+        const templates = await CampaignTemplate.findAll({
+            where: { archived: false },
+            order: [['title', 'ASC']],
+        });
+        const counts = await db.sequelize.query(
+            `SELECT template_id, COUNT(*)::int AS n
+               FROM enterprise_condition_campaigns
+              WHERE template_id IS NOT NULL
+              GROUP BY template_id`,
+            { type: db.Sequelize.QueryTypes.SELECT }
+        );
+        const byId = new Map(counts.map(c => [Number(c.template_id), Number(c.n)]));
+        return res.json(templates.map(t => ({ ...t.toJSON(), usage_count: byId.get(t.id) ?? 0 })));
+    } catch (e) {
+        console.error('[conditions] listCampaignTemplates:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+export const createCampaignTemplate = async (req, res) => {
+    try {
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
+
+        const { from_campaign_id } = req.body || {};
+        const payload = {};
+        for (const f of TEMPLATE_FIELDS) if (req.body[f] !== undefined) payload[f] = req.body[f];
+        if (!payload.title || !String(payload.title).trim()) {
+            return res.status(400).json({ error: 'Título do modelo é obrigatório.' });
+        }
+
+        const template = await CampaignTemplate.create({
+            ...payload,
+            title: String(payload.title).trim(),
+            created_by: req.user?.id,
+            updated_by: req.user?.id,
+        });
+
+        // "Salvar como modelo" a partir de uma campanha existente: vincula a origem.
+        if (from_campaign_id) {
+            await EnterpriseConditionCampaign.update(
+                { template_id: template.id },
+                { where: { id: Number(from_campaign_id) } }
+            );
+        }
+
+        return res.status(201).json(template);
+    } catch (e) {
+        console.error('[conditions] createCampaignTemplate:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+export const updateCampaignTemplate = async (req, res) => {
+    try {
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
+
+        const { id } = req.params;
+        const template = await CampaignTemplate.findByPk(id);
+        if (!template) return res.status(404).json({ error: 'Modelo de campanha não encontrado.' });
+
+        const patch = {};
+        for (const f of TEMPLATE_FIELDS) if (req.body[f] !== undefined) patch[f] = req.body[f];
+        if (req.body.archived !== undefined) patch.archived = !!req.body.archived;
+
+        let updatedInstances = 0;
+        let skippedLocked = 0;
+
+        await sequelize.transaction(async (t) => {
+            await template.update({ ...patch, updated_by: req.user?.id }, { transaction: t });
+
+            if (req.body.propagate !== true) return;
+
+            const campPatch = {};
+            for (const f of TEMPLATE_FIELDS) if (patch[f] !== undefined) campPatch[f] = patch[f];
+            if (!Object.keys(campPatch).length) return;
+
+            const instances = await EnterpriseConditionCampaign.findAll({
+                where: { template_id: template.id },
+                attributes: ['id', 'condition_id'],
+                transaction: t,
+            });
+            if (!instances.length) return;
+
+            const condIds = [...new Set(instances.map(i => i.condition_id))];
+            const conds = await EnterpriseCondition.findAll({
+                where: { id: condIds },
+                attributes: ['id', 'status', 'approval_history'],
+                transaction: t,
+            });
+            const draftIds = new Set(conds.filter(c => c.status === 'draft').map(c => c.id));
+            const targetIds = instances.filter(i => draftIds.has(i.condition_id)).map(i => i.id);
+            skippedLocked = instances.length - targetIds.length;
+            if (!targetIds.length) return;
+
+            [updatedInstances] = await EnterpriseConditionCampaign.update(
+                campPatch, { where: { id: targetIds }, transaction: t }
+            );
+
+            // Histórico (quem/quando/o quê) em cada ficha rascunho afetada.
+            const note = `Campanha "${template.title}" atualizada em massa via biblioteca`;
+            for (const c of conds) {
+                if (!draftIds.has(c.id)) continue;
+                await c.update({
+                    approval_history: addHistory(c.approval_history, 'campaign_template_updated', req, note),
+                    updated_by: req.user?.id,
+                }, { transaction: t });
+            }
+        });
+
+        return res.json({ ok: true, template, updatedInstances, skippedLocked });
+    } catch (e) {
+        console.error('[conditions] updateCampaignTemplate:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+// Onde o modelo é usado (para o modal "editar em todos" mostrar o alcance).
+export const getCampaignTemplateUsage = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const instances = await EnterpriseConditionCampaign.findAll({
+            where: { template_id: Number(id) },
+            attributes: ['id', 'condition_id'],
+        });
+        if (!instances.length) return res.json({ total: 0, editable: 0, rows: [] });
+
+        const condIds = [...new Set(instances.map(i => i.condition_id))];
+        const conds = await EnterpriseCondition.findAll({
+            where: { id: condIds },
+            attributes: ['id', 'reference_month', 'status', 'display_name', 'idempreendimento'],
+            include: [{ model: CvEnterprise, as: 'enterprise', attributes: ['nome'] }],
+            order: [['reference_month', 'DESC']],
+        });
+
+        const perCond = new Map();
+        for (const i of instances) perCond.set(i.condition_id, (perCond.get(i.condition_id) ?? 0) + 1);
+
+        return res.json({
+            total: instances.length,
+            editable: conds.filter(c => c.status === 'draft').length,
+            rows: conds.map(c => ({
+                condition_id: c.id,
+                name: c.enterprise?.nome || c.display_name || `Ficha #${c.id}`,
+                reference_month: c.reference_month,
+                status: c.status,
+                instances: perCond.get(c.id) ?? 0,
+            })),
+        });
+    } catch (e) {
+        console.error('[conditions] getCampaignTemplateUsage:', e);
         return res.status(500).json({ error: e?.message || String(e) });
     }
 };

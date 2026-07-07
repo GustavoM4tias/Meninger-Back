@@ -112,6 +112,7 @@ import EnterpriseConditionDefine from './comercial/enterpriseCondition.js';
 import EnterpriseConditionModuleDefine from './comercial/enterpriseConditionModule.js';
 import EnterpriseConditionCampaignDefine from './comercial/enterpriseConditionCampaign.js';
 import ComercialSettingsDefine from './comercial/comercialSettings.js';
+import CampaignTemplateDefine from './comercial/campaignTemplate.js';
 import McmvMunicipioDefine from './comercial/mcmvMunicipio.js';
 import McmvImportLogDefine from './comercial/mcmvImportLog.js';
 
@@ -327,6 +328,7 @@ db.EnterpriseCondition         = EnterpriseConditionDefine(sequelize, DataTypes)
 db.EnterpriseConditionModule   = EnterpriseConditionModuleDefine(sequelize, DataTypes);
 db.EnterpriseConditionCampaign = EnterpriseConditionCampaignDefine(sequelize, DataTypes);
 db.ComercialSettings           = ComercialSettingsDefine(sequelize, DataTypes);
+db.CampaignTemplate            = CampaignTemplateDefine(sequelize, DataTypes);
 db.McmvMunicipio               = McmvMunicipioDefine(sequelize, DataTypes);
 db.McmvImportLog               = McmvImportLogDefine(sequelize, DataTypes);
 

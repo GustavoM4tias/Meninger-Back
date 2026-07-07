@@ -128,7 +128,8 @@ export async function dispatchHistorical(req, res) {
             return res.json({ ok: true, ...result });
         }
         const limit = Math.min(Math.max(Number(req.body?.limit) || 500, 1), 1000);
-        const result = await CvBacklogDispatchService.dispatchBacklogSince({ cutoff, limit });
+        const concurrency = Math.min(Math.max(Number(req.body?.concurrency) || 5, 1), 10);
+        const result = await CvBacklogDispatchService.dispatchBacklogSince({ cutoff, limit, concurrency });
         if (result?.blocked) return res.status(409).json({ ok: false, error: result.reason, ...result });
         return res.json({ ok: true, ...result });
     } catch (err) {

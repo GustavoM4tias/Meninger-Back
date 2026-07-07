@@ -88,6 +88,7 @@ import { ensureComercialConditionsSchema } from './lib/ensureComercialConditions
 import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
 import { ensureTodoSchema } from './lib/ensureTodoSchema.js';
 import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
+import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
 import todoDigestScheduler from './scheduler/todoDigestScheduler.js';
@@ -207,16 +208,34 @@ app.use('/api/organogram', organogramRoutes);
 
 const PORT = process.env.PORT || 5000;
 
-// Academy: dedup + drop UNIQUE antiga ANTES do sync, para que os models novos
-// possam recriar a UNIQUE correta sem conflito com dados/índices antigos.
-ensureAcademyPreSync()
-  .catch(err => console.warn('⚠️  Academy pre-sync falhou:', err.message))
-  .finally(() => db.sequelize.sync({ alter: false }))
-  .then(async () => {
+// Gate de schema: só roda a fase de sync/patches se algo que define schema
+// mudou desde o último boot completo (fingerprint em lib/schemaSyncGate.js).
+// FORCE_DB_SYNC=true força; SKIP_DB_SYNC=true pula sempre.
+(async () => {
+  const gate = await shouldRunSchemaSync(db.sequelize);
+
+  if (!gate.run) {
+    console.log(`⚡ Fase de schema pulada (${gate.reason}) — FORCE_DB_SYNC=true para forçar.`);
+    try {
+      await db.sequelize.authenticate(); // fail-early: sem banco não sobe
+    } catch (err) {
+      console.error('Erro ao conectar no banco:', err);
+      return;
+    }
+    await bootServer({ syncSchema: false });
+    return;
+  }
+
+  console.log(`🔧 Fase de schema vai rodar (${gate.reason}).`);
+  try {
+    // Academy: dedup + drop UNIQUE antiga ANTES do sync, para que os models
+    // novos possam recriar a UNIQUE correta sem conflito com dados/índices antigos.
+    await ensureAcademyPreSync()
+      .catch(err => console.warn('⚠️  Academy pre-sync falhou:', err.message));
+    await db.sequelize.sync({ alter: false });
     console.log('Banco sincronizado com sucesso!');
-    await bootServer();
-  })
-  .catch(async (err) => {
+    await bootServer({ syncSchema: true, fingerprint: gate.fingerprint });
+  } catch (err) {
     // ECONNRESET em conexões remotas durante ALTER TABLE — tabelas críticas sincronizadas separadamente
     if (err?.parent?.code === 'ECONNRESET' || err?.original?.code === 'ECONNRESET') {
       console.warn('⚠️  Sync interrompido por ECONNRESET — forçando sync das tabelas críticas...');
@@ -228,14 +247,17 @@ ensureAcademyPreSync()
           console.warn(`⚠️  Falha ao sincronizar ${name}:`, e.message);
         }
       }
-      await bootServer();
+      // Sync incompleto — sem fingerprint, pro próximo boot re-rodar a fase toda.
+      await bootServer({ syncSchema: true, fingerprint: null });
     } else {
       console.error('Erro ao sincronizar o banco:', err);
     }
-  });
+  }
+})();
 
-async function bootServer() {
+async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
 
+  if (syncSchema) {
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
   // sync normal via db.sequelize.sync({ alter: false }) no boot, que cria
@@ -296,6 +318,11 @@ async function bootServer() {
   await ensureChecklistSchema(); // adiciona colunas novas (ex.: reminder_mode) em tabelas já existentes
   await ensureTodoSchema(); // cria/ajusta todo_task_refs (índice local do módulo To Do)
   seedChecklist().catch(err => console.warn('⚠️  seedChecklist falhou:', err?.message || err)); // background: não bloqueia o boot
+
+  // Fase de schema completa e sem erro fatal → grava o fingerprint; os
+  // próximos boots pulam tudo isso até algo mudar.
+  await recordSchemaSync(db.sequelize, fingerprint);
+  } // fim if (syncSchema)
 
   // Provisiona template WhatsApp do boleto na Meta se faltar — assim em caso
   // de perda/recriação da conta Meta o sistema se auto-recupera. Idempotente.

@@ -22,6 +22,12 @@ router.get('/correspondents', ctrl.listCorrespondents);
 router.get('/correspondents/companies', ctrl.listCorrespondentCompanies);
 router.get('/office-users', ctrl.listOfficeUsers);
 router.get('/cost-report', ctrl.getCostReport);     // relatório consolidado Menin x cliente (gestão)
+
+// ── Biblioteca de campanhas (modelos reutilizáveis) ──────────────────────────
+router.get('/campaign-templates', ctrl.listCampaignTemplates);
+router.post('/campaign-templates', ctrl.createCampaignTemplate);
+router.patch('/campaign-templates/:id(\\d+)', ctrl.updateCampaignTemplate);
+router.get('/campaign-templates/:id(\\d+)/usage', ctrl.getCampaignTemplateUsage);
 router.get('/enterprise/:idempreendimento/price-tables', ctrl.getPriceTablesForEnterprise);
 router.get('/enterprise/:idempreendimento/price-distribution', ctrl.getPriceDistributionForEnterprise);
 router.get('/enterprise/:idempreendimento/modules', ctrl.listModulesForEnterprise);
