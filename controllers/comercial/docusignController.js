@@ -115,12 +115,12 @@ export const oauthCallback = async (req, res) => {
         if (payload?.p !== 'ds_oauth' || !payload?.front) throw new Error('state inválido');
         front = payload.front;
 
-        if (!code) throw new Error('Autorização negada no DocuSign.');
-        const info = await Docusign.connectWithCode(String(code));
+        if (!code) throw new Error(`Autorização negada no DocuSign${req.query?.error ? ` (${req.query.error})` : ''}.`);
+        const info = await Docusign.connectWithCode(String(code), String(state || ''));
 
         return res.redirect(`${front}/settings/docusign?connected=1&email=${encodeURIComponent(info.email || '')}`);
     } catch (e) {
-        console.error('[docusign] oauthCallback:', e?.message);
+        console.error('[docusign] oauthCallback:', e?.message, e?.response?.data ?? '');
         if (front) {
             return res.redirect(`${front}/settings/docusign?ds_error=${encodeURIComponent(e?.message || 'Falha ao conectar')}`);
         }
