@@ -10,6 +10,11 @@ export default (sequelize, DataTypes) => {
         editor_user_ids:     { type: DataTypes.JSONB, defaultValue: [] },
         authorizer_user_ids: { type: DataTypes.JSONB, defaultValue: [] },
 
+        // ── Assinatura (DocuSign) das fichas autorizadas ──────────────────────
+        // { enabled: bool, signers: [{name,email,order}], placement: 'final'|'livre',
+        //   require_initials: bool (rubrica), auto_send: bool }
+        signature_config: { type: DataTypes.JSONB, allowNull: true },
+
         // ── Auto-geração mensal ───────────────────────────────────────────────
         // Se true, todo dia 1 gera automaticamente a ficha do mês para cada série
         // ativa (com ou sem CV), herdando da última ficha não-encerrada.

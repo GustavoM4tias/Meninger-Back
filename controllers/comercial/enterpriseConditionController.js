@@ -34,7 +34,8 @@ function isAdmin(req) {
 }
 
 // ── Permissões das fichas (admin + listas configuráveis em ComercialSettings) ──
-async function getComercialSettings() {
+// Exportados p/ reuso no docusignController (mesmas regras de acesso).
+export async function getComercialSettings() {
     let s = await ComercialSettings.findOne({ where: { id: 1 } });
     if (!s) s = await ComercialSettings.create({ id: 1 });
     return s;
@@ -51,7 +52,7 @@ async function canEditConditions(req) {
     const s = await getComercialSettings();
     return userIdInList(req, s.editor_user_ids);
 }
-async function canAuthorizeConditions(req) {
+export async function canAuthorizeConditions(req) {
     if (isAdmin(req)) return true;
     const s = await getComercialSettings();
     return userIdInList(req, s.authorizer_user_ids);
@@ -66,7 +67,7 @@ async function isPrivilegedViewer(req) {
 const EDIT_DENIED = 'Você não tem permissão para editar fichas comerciais.';
 const AUTHORIZE_DENIED = 'Você não tem permissão para autorizar fichas comerciais.';
 
-function addHistory(current = [], action, req, note = null) {
+export function addHistory(current = [], action, req, note = null) {
     return [
         ...current,
         {
@@ -1486,6 +1487,7 @@ export const getSettings = async (req, res) => {
             editor_user_ids: settings.editor_user_ids || [],
             authorizer_user_ids: settings.authorizer_user_ids || [],
             auto_generate_conditions: settings.auto_generate_conditions,
+            signature_config: settings.signature_config ?? null,
             users,
         });
     } catch (e) {
@@ -1498,7 +1500,7 @@ export const updateSettings = async (req, res) => {
     try {
         if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem alterar configurações.' });
 
-        const { editor_user_ids, authorizer_user_ids, auto_generate_conditions } = req.body;
+        const { editor_user_ids, authorizer_user_ids, auto_generate_conditions, signature_config } = req.body;
         const sanitizeIds = (v) => Array.isArray(v) ? [...new Set(v.map(Number).filter(Boolean))] : [];
 
         const settings = await getComercialSettings();
@@ -1506,6 +1508,7 @@ export const updateSettings = async (req, res) => {
             ...(editor_user_ids !== undefined && { editor_user_ids: sanitizeIds(editor_user_ids) }),
             ...(authorizer_user_ids !== undefined && { authorizer_user_ids: sanitizeIds(authorizer_user_ids) }),
             ...(auto_generate_conditions !== undefined && { auto_generate_conditions }),
+            ...(signature_config !== undefined && { signature_config }),
             updated_by: req.user?.id,
         });
 
