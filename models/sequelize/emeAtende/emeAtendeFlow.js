@@ -15,9 +15,19 @@ export default (sequelize, DataTypes) => {
         is_default: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         // persona/comportamento da IA
         system_prompt: { type: DataTypes.TEXT, allowNull: true },
-        // contexto de negócio: empreendimentos, condições, plantão (única fonte
-        // de verdade sobre produto - a IA é proibida de afirmar fora daqui)
+        // contexto de negócio MANUAL (complementa o automático do CV/ficha)
         business_context: { type: DataTypes.TEXT, allowNull: true },
+        // vínculo com o empreendimento do CV (cv_enterprises.idempreendimento):
+        // o contexto é montado AO VIVO a cada resposta (dados básicos + ficha
+        // comercial aprovada mais recente) - ficha mudou, a Eme muda junto.
+        cv_enterprise_id: { type: DataTypes.INTEGER, allowNull: true },
+        // quais seções entram no contexto automático:
+        // { basic, delivery, negotiation, subsidy, benefits, campaigns }
+        // Comissão NUNCA entra (informação interna).
+        context_sources: { type: DataTypes.JSONB, allowNull: true, defaultValue: { basic: true, delivery: true, negotiation: true, subsidy: true, benefits: true, campaigns: true } },
+        // imagens que a Eme pode enviar na conversa (tool enviar_imagem):
+        // [{ label: 'planta 2 quartos', url: 'https://...' }] - URL precisa ser pública
+        images: { type: DataTypes.JSONB, allowNull: true, defaultValue: [] },
         // template Meta APROVADO que abre a conversa (validado em whatsapp_templates)
         opener_template: { type: DataTypes.STRING(120), allowNull: true },
         opener_language: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'pt_BR' },

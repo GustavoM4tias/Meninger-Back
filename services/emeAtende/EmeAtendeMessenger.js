@@ -45,6 +45,23 @@ async function sendText({ conversation, body }) {
     }
 }
 
+/** Imagem por URL pública (tool enviar_imagem) - mesma janela de 24h do texto. */
+async function sendImage({ conversation, url, caption = null, label = null }) {
+    const body = `[imagem${label ? `: ${label}` : ''}] ${url}`;
+    const cfg = await EmeAtendeSettingsService.getConfig();
+    if (!cfg.active || cfg.dry_run) {
+        console.log(`[eme-atende/messenger] DRY_RUN image → ${conversation.phone}: ${body}`);
+        return persistOut({ conversation, type: 'image', body, status: 'dry_run' });
+    }
+    try {
+        const { id } = await WhatsAppService.sendImage({ to: conversation.phone, link: url, caption });
+        return persistOut({ conversation, type: 'image', body, wamid: id, status: 'sent' });
+    } catch (err) {
+        console.error(`[eme-atende/messenger] imagem falhou pra ${conversation.phone}:`, err?.message);
+        return persistOut({ conversation, type: 'image', body, status: 'failed', error: err?.message });
+    }
+}
+
 /**
  * Abertura de conversa: template aprovado (validado no cache whatsapp_templates
  * do Office - mesma WABA), variáveis vindas dos campos do lead.
@@ -102,4 +119,4 @@ async function sendOpener({ lead, conversation, flow }) {
     }
 }
 
-export default { sendText, sendOpener, logEvent };
+export default { sendText, sendImage, sendOpener, logEvent };

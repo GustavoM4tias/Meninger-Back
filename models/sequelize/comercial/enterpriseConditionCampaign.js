@@ -4,6 +4,9 @@ export default (sequelize, DataTypes) => {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         condition_id: { type: DataTypes.INTEGER, allowNull: false },
         module_id: { type: DataTypes.INTEGER, allowNull: true }, // FK para módulo (nullable para compat)
+        // Vínculo com a biblioteca (enterprise_campaign_templates). Soft ref, sem FK:
+        // a campanha é uma cópia materializada; null = campanha local/desvinculada.
+        template_id: { type: DataTypes.INTEGER, allowNull: true },
 
         title: { type: DataTypes.STRING, allowNull: false },
         description: { type: DataTypes.TEXT },

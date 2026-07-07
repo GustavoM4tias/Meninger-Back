@@ -289,6 +289,35 @@ async function sendText({ to, body, previewUrl = false }) {
 }
 
 /**
+ * Envia imagem por URL pública — só funciona dentro da janela de 24h (a Meta
+ * baixa a imagem do link, então a URL precisa ser acessível publicamente).
+ * Usado pelo Eme Atende (tool enviar_imagem); aditivo, nada do fluxo atual usa.
+ */
+async function sendImage({ to, link, caption = null }) {
+    const phone = normalizePhone(to);
+    if (!phone) throw new CloudApiError('Telefone inválido', { code: 'BAD_PHONE' });
+    if (!link) throw new CloudApiError('link obrigatório', { code: 'NO_LINK' });
+
+    const { client, cfg } = await getAxiosClient();
+    try {
+        const { data } = await client.post(`/${cfg.phone_number_id}/messages`, {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: phone,
+            type: 'image',
+            image: { link, ...(caption ? { caption } : {}) },
+        });
+        return { id: data?.messages?.[0]?.id || null, raw: data };
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            apiErr?.message || err.message || 'Falha no envio de imagem',
+            { status: err.response?.status, code: apiErr?.code, details: err.response?.data }
+        );
+    }
+}
+
+/**
  * Lista templates da conta WABA na Meta (paginado retornando até 200).
  * @returns {Promise<Array>}
  */
@@ -632,6 +661,7 @@ async function subscribeWaba() {
 export default {
     sendTemplate,
     sendText,
+    sendImage,
     fetchTemplates,
     createTemplate,
     deleteTemplate,
