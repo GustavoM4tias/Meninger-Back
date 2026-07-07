@@ -15,6 +15,7 @@
 // DocuSign converte o HTML em PDF e roteia por e-mail → refresh() acompanha →
 // completed → baixa o PDF combinado (com certificado) e salva no Supabase.
 
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
@@ -48,7 +49,15 @@ export async function isConfigured() {
     return oauthReady || jwtReady;
 }
 
-// ─── Modo SIMPLES: Authorization Code ("Conectar com DocuSign") ───────────────
+// ─── Modo SIMPLES: Authorization Code + PKCE ("Conectar com DocuSign") ────────
+
+// PKCE: code_verifier guardado por state (15min) entre o authorize e o callback.
+// Funciona com o app DocuSign exigindo PKCE ou não (enviar é sempre aceito).
+const pkceStore = new Map(); // state -> { verifier, exp }
+function prunePkce() {
+    const now = Date.now();
+    for (const [k, v] of pkceStore) if (v.exp < now) pkceStore.delete(k);
+}
 
 // URL de login do DocuSign (admin é redirecionado para cá).
 export async function getAuthorizeUrl(state, redirectUri) {
@@ -56,29 +65,59 @@ export async function getAuthorizeUrl(state, redirectUri) {
     if (!s.integration_key || !s.secret_key) {
         throw new Error('Informe e salve a Integration Key e a Secret Key primeiro.');
     }
+
+    const verifier = crypto.randomBytes(32).toString('base64url');
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+    prunePkce();
+    pkceStore.set(state, { verifier, exp: Date.now() + 15 * 60 * 1000 });
+
     const q = new URLSearchParams({
         response_type: 'code',
         scope: 'signature',
         client_id: s.integration_key,
         redirect_uri: redirectUri,
         state,
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
     });
     return `https://${s.oauth_base}/oauth/auth?${q}`;
 }
 
 // Troca o code por tokens, descobre a conta default e salva TUDO (fica conectado).
-export async function connectWithCode(code) {
+export async function connectWithCode(code, state = null) {
     const s = await getSettings();
-    const { data } = await axios.post(
-        `https://${s.oauth_base}/oauth/token`,
-        new URLSearchParams({ grant_type: 'authorization_code', code }).toString(),
-        { headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basicAuth(s)}` } }
-    );
+
+    const entry = state ? pkceStore.get(state) : null;
+    if (state) pkceStore.delete(state);
+
+    const params = { grant_type: 'authorization_code', code };
+    if (entry?.verifier) params.code_verifier = entry.verifier;
+
+    let data;
+    try {
+        ({ data } = await axios.post(
+            `https://${s.oauth_base}/oauth/token`,
+            new URLSearchParams(params).toString(),
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basicAuth(s)}` } }
+        ));
+    } catch (e) {
+        const body = e.response?.data;
+        const detail = body?.error_description || body?.error || e.message;
+        const hint = body?.error === 'invalid_grant'
+            ? ' (código expirado/reutilizado ou PKCE pendente — tente "Conectar com DocuSign" de novo)'
+            : '';
+        throw new Error(`DocuSign token: ${detail}${hint}`);
+    }
 
     // Descobre usuário + conta default (auto-preenche account_id e base_uri).
-    const { data: info } = await axios.get(`https://${s.oauth_base}/oauth/userinfo`, {
-        headers: { Authorization: `Bearer ${data.access_token}` },
-    });
+    let info;
+    try {
+        ({ data: info } = await axios.get(`https://${s.oauth_base}/oauth/userinfo`, {
+            headers: { Authorization: `Bearer ${data.access_token}` },
+        }));
+    } catch (e) {
+        throw new Error(`DocuSign userinfo: ${e.response?.data?.error_description || e.response?.status || e.message}`);
+    }
     const accounts = info?.accounts ?? [];
     const acct = accounts.find(a => a.is_default) || accounts[0];
     if (!acct) throw new Error('Nenhuma conta DocuSign disponível para este usuário.');
