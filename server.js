@@ -24,6 +24,7 @@ import uploadRoutes from './routes/uploadRoutes.js';
 import bucketUploadRoutes from './routes/bucketUploadRoutes.js';
 import permissionRoutes from './routes/permissionRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
+import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
 import shortLinkRoutes from './routes/shortLinkRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
@@ -205,6 +206,7 @@ app.use('/api/bolao', bolaoRoutes);
 app.use('/api/comunicados', comunicadoRoutes);
 app.use('/api/checklists', checklistRoutes);
 app.use('/api/organogram', organogramRoutes);
+app.use('/api/docusign-oauth', docusignOauthRoutes); // callback público do login DocuSign (state assinado)
 
 const PORT = process.env.PORT || 5000;
 

@@ -29,6 +29,8 @@ router.get('/docusign-settings', ds.getDocusignSettings);
 router.put('/docusign-settings', ds.updateDocusignSettings);
 router.get('/docusign/consent-url', ds.getDocusignConsentUrl);
 router.post('/docusign/test', ds.testDocusign);
+router.post('/docusign/oauth-url', ds.getDocusignOauthUrl);   // login "Conectar com DocuSign" (admin)
+router.post('/docusign/disconnect', ds.disconnectDocusign);   // limpa a sessão do login (admin)
 
 // ── Biblioteca de campanhas (modelos reutilizáveis) ──────────────────────────
 router.get('/campaign-templates', ctrl.listCampaignTemplates);
