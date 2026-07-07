@@ -2,6 +2,7 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
 import * as ctrl from '../controllers/comercial/enterpriseConditionController.js';
+import * as ds from '../controllers/comercial/docusignController.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -22,6 +23,12 @@ router.get('/correspondents', ctrl.listCorrespondents);
 router.get('/correspondents/companies', ctrl.listCorrespondentCompanies);
 router.get('/office-users', ctrl.listOfficeUsers);
 router.get('/cost-report', ctrl.getCostReport);     // relatório consolidado Menin x cliente (gestão)
+
+// ── DocuSign: settings (admin) + assinatura por ficha ────────────────────────
+router.get('/docusign-settings', ds.getDocusignSettings);
+router.put('/docusign-settings', ds.updateDocusignSettings);
+router.get('/docusign/consent-url', ds.getDocusignConsentUrl);
+router.post('/docusign/test', ds.testDocusign);
 
 // ── Biblioteca de campanhas (modelos reutilizáveis) ──────────────────────────
 router.get('/campaign-templates', ctrl.listCampaignTemplates);
@@ -45,6 +52,12 @@ router.post('/:id(\\d+)/authorize', ctrl.authorizeCondition);     // pending_app
 router.post('/:id(\\d+)/cancel-approval', ctrl.cancelApproval);   // pending_approval → draft (editor/autorizador)
 router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved/closed → draft (autorizador)
 router.post('/:id(\\d+)/link-to-cv', ctrl.linkSeriesToCv);        // avulsa → CV (promove a série inteira)
+
+// ── Assinatura (DocuSign) da ficha autorizada ─────────────────────────────────
+router.get('/:id(\\d+)/signature', ds.getConditionSignature);
+router.post('/:id(\\d+)/signature/send', ds.sendConditionSignature);
+router.post('/:id(\\d+)/signature/refresh', ds.refreshConditionSignature);
+router.post('/:id(\\d+)/signature/void', ds.voidConditionSignature);
 router.post('/:id(\\d+)/close', ctrl.closeCondition);             // any → closed (admin, dupla validação)
 router.post('/:id(\\d+)/publish', ctrl.publishCondition);         // legado → alias de /submit
 

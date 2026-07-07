@@ -113,6 +113,8 @@ import EnterpriseConditionModuleDefine from './comercial/enterpriseConditionModu
 import EnterpriseConditionCampaignDefine from './comercial/enterpriseConditionCampaign.js';
 import ComercialSettingsDefine from './comercial/comercialSettings.js';
 import CampaignTemplateDefine from './comercial/campaignTemplate.js';
+import DocusignSettingsDefine from './comercial/docusignSettings.js';
+import ConditionSignatureDefine from './comercial/conditionSignature.js';
 import McmvMunicipioDefine from './comercial/mcmvMunicipio.js';
 import McmvImportLogDefine from './comercial/mcmvImportLog.js';
 
@@ -329,6 +331,8 @@ db.EnterpriseConditionModule   = EnterpriseConditionModuleDefine(sequelize, Data
 db.EnterpriseConditionCampaign = EnterpriseConditionCampaignDefine(sequelize, DataTypes);
 db.ComercialSettings           = ComercialSettingsDefine(sequelize, DataTypes);
 db.CampaignTemplate            = CampaignTemplateDefine(sequelize, DataTypes);
+db.DocusignSettings            = DocusignSettingsDefine(sequelize, DataTypes);
+db.ConditionSignature          = ConditionSignatureDefine(sequelize, DataTypes);
 db.McmvMunicipio               = McmvMunicipioDefine(sequelize, DataTypes);
 db.McmvImportLog               = McmvImportLogDefine(sequelize, DataTypes);
 
