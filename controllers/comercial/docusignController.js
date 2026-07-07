@@ -235,17 +235,23 @@ export const sendConditionSignature = async (req, res) => {
             requireInitials: !!cfg.require_initials,
         });
 
+        const nowIso = new Date().toISOString();
         const sig = await ConditionSignature.create({
             condition_id: condition.id,
             envelope_id: envelopeId,
             status: 'sent',
             subject,
-            signers: orderedSigners.map(s => ({ ...s, status: 'sent' })),
+            signers: orderedSigners.map(s => ({
+                ...s, status: 'sent', last_sent_at: nowIso, delivered_at: null, signed_at: null,
+            })),
             placement: cfg.placement === 'livre' ? 'livre' : 'final',
             require_initials: !!cfg.require_initials,
             sent_by: req.user?.id,
             sent_at: new Date(),
-            raw: { routing },
+            raw: {
+                routing,
+                events: [{ type: 'sent', at: nowIso, by: req.user?.username, emails: orderedSigners.map(s => s.email) }],
+            },
         });
 
         await condition.update({
@@ -272,10 +278,31 @@ export const refreshConditionSignature = async (req, res) => {
         if (!sig?.envelope_id) return res.status(404).json({ error: 'Nenhum envelope para esta ficha.' });
 
         const info = await Docusign.getEnvelopeStatus(sig.envelope_id);
+
+        // Merge DocuSign → snapshot (preserva last_sent_at) + eventos novos por diff.
+        const prevByEmail = new Map((sig.signers ?? []).map(p => [String(p.email).toLowerCase(), p]));
+        const events = [...(sig.raw?.events ?? [])];
+        const mergedSigners = (info.signers?.length ? info.signers : (sig.signers ?? [])).map(ds => {
+            const old = prevByEmail.get(String(ds.email).toLowerCase()) ?? {};
+            if (ds.delivered_at && ds.delivered_at !== old.delivered_at) {
+                events.push({ type: 'delivered', at: ds.delivered_at, email: ds.email, name: ds.name });
+            }
+            if (ds.signed_at && !old.signed_at) {
+                events.push({ type: 'signed', at: ds.signed_at, email: ds.email, name: ds.name });
+            }
+            if (ds.status === 'declined' && old.status !== 'declined') {
+                events.push({ type: 'declined', at: new Date().toISOString(), email: ds.email, name: ds.name, note: ds.declined_reason || null });
+            }
+            return { ...old, ...ds, last_sent_at: old.last_sent_at ?? sig.sent_at };
+        });
+        if (info.status === 'completed' && sig.status !== 'completed') {
+            events.push({ type: 'completed', at: info.completedDateTime ?? new Date().toISOString() });
+        }
+
         const patch = {
             status: info.status,
-            signers: info.signers?.length ? info.signers : sig.signers,
-            raw: { ...sig.raw, last_status: info },
+            signers: mergedSigners,
+            raw: { ...sig.raw, last_status: info, events },
         };
 
         // Concluído agora e ainda sem PDF salvo → baixa o combinado e sobe no Supabase.
@@ -322,6 +349,20 @@ export const resendConditionSignature = async (req, res) => {
 
         const result = await Docusign.resendEnvelope(sig.envelope_id, emails);
 
+        // Atualiza o "enviado em" dos reenviados (o card mostra o envio mais recente)
+        // e registra o evento no histórico do processo.
+        const nowIso = new Date().toISOString();
+        const resentSet = new Set(result.resent.map(e => String(e).toLowerCase()));
+        await sig.update({
+            signers: (sig.signers ?? []).map(s =>
+                resentSet.has(String(s.email).toLowerCase()) ? { ...s, last_sent_at: nowIso } : s
+            ),
+            raw: {
+                ...sig.raw,
+                events: [...(sig.raw?.events ?? []), { type: 'resent', at: nowIso, by: req.user?.username, emails: result.resent }],
+            },
+        });
+
         const condition = await EnterpriseCondition.findByPk(sig.condition_id);
         if (condition) {
             await condition.update({
@@ -334,6 +375,34 @@ export const resendConditionSignature = async (req, res) => {
         return res.json({ ok: true, ...result });
     } catch (e) {
         console.error('[docusign] resendConditionSignature:', e?.message);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+// Documento do envelope: ?type=original (como enviado, sem certificado — disponível
+// a qualquer momento) | signed (PDF assinado salvo no Supabase, após conclusão).
+export const getSignatureDocument = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const type = req.query?.type === 'signed' ? 'signed' : 'original';
+
+        const sig = await ConditionSignature.findOne({
+            where: { condition_id: Number(id) },
+            order: [['id', 'DESC']],
+        });
+        if (!sig?.envelope_id) return res.status(404).json({ error: 'Nenhum envelope para esta ficha.' });
+
+        if (type === 'signed') {
+            if (!sig.signed_doc_url) return res.status(409).json({ error: 'Documento assinado ainda não disponível.' });
+            return res.redirect(sig.signed_doc_url);
+        }
+
+        const pdf = await Docusign.downloadCombinedPdf(sig.envelope_id, { certificate: false });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="ficha-${id}-original.pdf"`);
+        return res.send(pdf);
+    } catch (e) {
+        console.error('[docusign] getSignatureDocument:', e?.message);
         return res.status(500).json({ error: e?.message || String(e) });
     }
 };
@@ -355,7 +424,13 @@ export const voidConditionSignature = async (req, res) => {
         }
 
         await Docusign.voidEnvelope(sig.envelope_id, reason || 'Cancelado pelo emissor');
-        await sig.update({ status: 'voided' });
+        await sig.update({
+            status: 'voided',
+            raw: {
+                ...sig.raw,
+                events: [...(sig.raw?.events ?? []), { type: 'voided', at: new Date().toISOString(), by: req.user?.username, note: reason || null }],
+            },
+        });
 
         const condition = await EnterpriseCondition.findByPk(sig.condition_id);
         if (condition) {
