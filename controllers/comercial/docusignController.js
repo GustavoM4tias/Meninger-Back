@@ -303,6 +303,41 @@ export const refreshConditionSignature = async (req, res) => {
     }
 };
 
+// Reenvia o convite de assinatura (body.emails opcional: só para esses; sem body = todos elegíveis).
+export const resendConditionSignature = async (req, res) => {
+    try {
+        if (!(await canAuthorizeConditions(req))) return res.status(403).json({ error: AUTHORIZE_DENIED });
+
+        const { id } = req.params;
+        const emails = Array.isArray(req.body?.emails) ? req.body.emails.filter(Boolean) : null;
+
+        const sig = await ConditionSignature.findOne({
+            where: { condition_id: Number(id) },
+            order: [['id', 'DESC']],
+        });
+        if (!sig?.envelope_id) return res.status(404).json({ error: 'Nenhum envelope para esta ficha.' });
+        if (!['sent', 'delivered'].includes(sig.status)) {
+            return res.status(409).json({ error: `Envelope em "${sig.status}" não permite reenvio.` });
+        }
+
+        const result = await Docusign.resendEnvelope(sig.envelope_id, emails);
+
+        const condition = await EnterpriseCondition.findByPk(sig.condition_id);
+        if (condition) {
+            await condition.update({
+                approval_history: addHistory(condition.approval_history, 'signature_resent', req,
+                    `Convite reenviado para: ${result.resent.join(', ')}`),
+                updated_by: req.user?.id,
+            });
+        }
+
+        return res.json({ ok: true, ...result });
+    } catch (e) {
+        console.error('[docusign] resendConditionSignature:', e?.message);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
 // Cancela (void) o envelope em andamento.
 export const voidConditionSignature = async (req, res) => {
     try {
