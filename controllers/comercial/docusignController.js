@@ -214,6 +214,15 @@ export const sendConditionSignature = async (req, res) => {
             return res.status(409).json({ error: 'Configure os assinantes nas configurações das fichas.' });
         }
 
+        // Roteamento: 'sequential' = um após o outro (ordem da lista);
+        // 'parallel' = todos recebem juntos (mesmo routingOrder no DocuSign).
+        const routing = cfg.routing === 'parallel' ? 'parallel' : 'sequential';
+        const orderedSigners = signers.map((s, i) => ({
+            name: s.name,
+            email: s.email,
+            order: routing === 'parallel' ? 1 : (i + 1),
+        }));
+
         const name = condition.enterprise?.nome || condition.display_name || `Ficha #${condition.id}`;
         const monthLabel = String(condition.reference_month).substring(0, 7);
         const subject = `Ficha Comercial - ${name} - ${monthLabel}`;
@@ -221,7 +230,7 @@ export const sendConditionSignature = async (req, res) => {
         const { envelopeId } = await Docusign.createEnvelope({
             html,
             subject,
-            signers,
+            signers: orderedSigners,
             placement: cfg.placement === 'livre' ? 'livre' : 'final',
             requireInitials: !!cfg.require_initials,
         });
@@ -231,11 +240,12 @@ export const sendConditionSignature = async (req, res) => {
             envelope_id: envelopeId,
             status: 'sent',
             subject,
-            signers: signers.map(s => ({ ...s, status: 'sent' })),
+            signers: orderedSigners.map(s => ({ ...s, status: 'sent' })),
             placement: cfg.placement === 'livre' ? 'livre' : 'final',
             require_initials: !!cfg.require_initials,
             sent_by: req.user?.id,
             sent_at: new Date(),
+            raw: { routing },
         });
 
         await condition.update({
