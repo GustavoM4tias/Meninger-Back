@@ -384,16 +384,19 @@ export async function getEnvelopeStatus(envelopeId) {
             email: s.email,
             order: Number(s.routingOrder) || null,
             status: s.status,                                // created|sent|delivered|completed|declined
+            delivered_at: s.deliveredDateTime ?? null,       // quando abriu/recebeu (mais recente)
             signed_at: s.signedDateTime ?? null,
+            declined_reason: s.declinedReason ?? null,
         })),
     };
 }
 
-// PDF combinado (todas as páginas + certificado de conclusão).
-export async function downloadCombinedPdf(envelopeId) {
+// PDF combinado. certificate=true (padrão) inclui o certificado de conclusão;
+// certificate=false serve p/ baixar o documento ORIGINAL (mesmo em andamento).
+export async function downloadCombinedPdf(envelopeId, { certificate = true } = {}) {
     const client = await api();
     const { data } = await client.get(`/envelopes/${envelopeId}/documents/combined`, {
-        params: { certificate: 'true' },
+        params: { certificate: certificate ? 'true' : 'false' },
         responseType: 'arraybuffer',
     });
     return Buffer.from(data);
