@@ -59,6 +59,7 @@ router.post('/:id(\\d+)/link-to-cv', ctrl.linkSeriesToCv);        // avulsa → 
 router.get('/:id(\\d+)/signature', ds.getConditionSignature);
 router.post('/:id(\\d+)/signature/send', ds.sendConditionSignature);
 router.post('/:id(\\d+)/signature/refresh', ds.refreshConditionSignature);
+router.post('/:id(\\d+)/signature/resend', ds.resendConditionSignature);
 router.post('/:id(\\d+)/signature/void', ds.voidConditionSignature);
 router.post('/:id(\\d+)/close', ctrl.closeCondition);             // any → closed (admin, dupla validação)
 router.post('/:id(\\d+)/publish', ctrl.publishCondition);         // legado → alias de /submit

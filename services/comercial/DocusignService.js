@@ -399,6 +399,37 @@ export async function downloadCombinedPdf(envelopeId) {
     return Buffer.from(data);
 }
 
+// Reenvia o convite por e-mail. emails=null → todos os elegíveis; senão só os
+// informados. Elegível = status sent/delivered (quem ainda não chegou a vez —
+// 'created' na sequência — não recebe e-mail; quem já assinou também não).
+export async function resendEnvelope(envelopeId, emails = null) {
+    const client = await api();
+    const { data: rec } = await client.get(`/envelopes/${envelopeId}/recipients`);
+    const all = rec.signers ?? [];
+
+    const wanted = Array.isArray(emails) && emails.length
+        ? new Set(emails.map(e => String(e).toLowerCase()))
+        : null;
+
+    const eligible = all.filter(s =>
+        ['sent', 'delivered'].includes(s.status) &&
+        (!wanted || wanted.has(String(s.email).toLowerCase()))
+    );
+    const skipped = all
+        .filter(s => !eligible.includes(s) && (!wanted || wanted.has(String(s.email).toLowerCase())))
+        .map(s => ({ email: s.email, status: s.status }));
+
+    if (!eligible.length) {
+        throw new Error('Nenhum assinante elegível para reenvio agora (quem já assinou não recebe; na sequência, quem ainda não chegou a vez só recebe no seu turno).');
+    }
+
+    await client.put(`/envelopes/${envelopeId}/recipients?resend_envelope=true`, {
+        signers: eligible.map(s => ({ recipientId: s.recipientId, name: s.name, email: s.email })),
+    });
+
+    return { resent: eligible.map(s => s.email), skipped };
+}
+
 export async function voidEnvelope(envelopeId, reason = 'Cancelado pelo emissor') {
     const client = await api();
     await client.put(`/envelopes/${envelopeId}`, { status: 'voided', voidedReason: reason.substring(0, 200) });
@@ -418,5 +449,5 @@ export async function uploadSignedPdf(buffer, conditionId, envelopeId) {
 export default {
     isConfigured, consentUrl, testConnection,
     getAuthorizeUrl, connectWithCode, disconnect,
-    createEnvelope, getEnvelopeStatus, downloadCombinedPdf, voidEnvelope, uploadSignedPdf,
+    createEnvelope, getEnvelopeStatus, downloadCombinedPdf, voidEnvelope, uploadSignedPdf, resendEnvelope,
 };
