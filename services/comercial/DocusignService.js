@@ -1,14 +1,19 @@
 // services/comercial/DocusignService.js
 //
-// Integração DocuSign eSignature (JWT Grant) para assinatura das Fichas Comerciais.
+// Integração DocuSign eSignature para assinatura das Fichas Comerciais.
 // Credenciais em docusign_settings (singleton, admin em /settings/docusign).
 //
-// Fluxo: ficha autorizada → createEnvelope(html, assinantes) → DocuSign converte o
-// HTML em PDF e roteia por e-mail → refresh() acompanha status → completed →
-// baixa o PDF combinado (com certificado) e salva no Supabase (padrão do Boleto).
+// DOIS modos de autenticação (o service escolhe sozinho):
+//  1) SIMPLES — "Conectar com DocuSign" (Authorization Code + refresh token):
+//     admin informa Integration Key + Secret Key, clica Conectar e loga no
+//     DocuSign. O refresh token (rotativo) fica salvo e renova sozinho a cada
+//     uso; se ficar ~30 dias sem uso, expira e basta clicar Conectar de novo.
+//  2) AVANÇADO — JWT Grant (RSA): conexão de servidor que nunca expira.
+//     Exige User ID + private key + consentimento one-time (consentUrl).
 //
-// Consentimento (one-time): o admin abre a consentUrl() no navegador logado no
-// DocuSign e aprova o app — sem isso o token JWT retorna consent_required.
+// Fluxo de assinatura: ficha autorizada → createEnvelope(html, assinantes) →
+// DocuSign converte o HTML em PDF e roteia por e-mail → refresh() acompanha →
+// completed → baixa o PDF combinado (com certificado) e salva no Supabase.
 
 import jwt from 'jsonwebtoken';
 import axios from 'axios';
@@ -23,9 +28,8 @@ const supabase = createClient(
 );
 const BUCKET = process.env.SUPABASE_BUCKET || 'Office Bucket';
 
-// Cache do token (expira em ~1h; renova com folga) e do base_uri por conta.
-let tokenCache = { token: null, exp: 0, key: null };
-let baseUriCache = { uri: null, key: null };
+// Cache do token JWT (modo avançado; o modo OAuth persiste no banco).
+let jwtTokenCache = { token: null, exp: 0, key: null };
 
 async function getSettings() {
     let s = await DocusignSettings.findOne({ where: { id: 1 } });
@@ -33,16 +37,102 @@ async function getSettings() {
     return s;
 }
 
-function cacheKey(s) {
-    return `${s.integration_key}|${s.ds_user_id}|${s.oauth_base}`;
+function basicAuth(s) {
+    return Buffer.from(`${s.integration_key}:${s.secret_key}`).toString('base64');
 }
 
 export async function isConfigured() {
     const s = await getSettings();
-    return !!(s.integration_key && s.ds_user_id && s.account_id && s.private_key);
+    const oauthReady = !!(s.refresh_token && s.account_id);
+    const jwtReady = !!(s.integration_key && s.ds_user_id && s.account_id && s.private_key);
+    return oauthReady || jwtReady;
 }
 
-// URL de consentimento one-time do app (admin abre logado no DocuSign).
+// ─── Modo SIMPLES: Authorization Code ("Conectar com DocuSign") ───────────────
+
+// URL de login do DocuSign (admin é redirecionado para cá).
+export async function getAuthorizeUrl(state, redirectUri) {
+    const s = await getSettings();
+    if (!s.integration_key || !s.secret_key) {
+        throw new Error('Informe e salve a Integration Key e a Secret Key primeiro.');
+    }
+    const q = new URLSearchParams({
+        response_type: 'code',
+        scope: 'signature',
+        client_id: s.integration_key,
+        redirect_uri: redirectUri,
+        state,
+    });
+    return `https://${s.oauth_base}/oauth/auth?${q}`;
+}
+
+// Troca o code por tokens, descobre a conta default e salva TUDO (fica conectado).
+export async function connectWithCode(code) {
+    const s = await getSettings();
+    const { data } = await axios.post(
+        `https://${s.oauth_base}/oauth/token`,
+        new URLSearchParams({ grant_type: 'authorization_code', code }).toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basicAuth(s)}` } }
+    );
+
+    // Descobre usuário + conta default (auto-preenche account_id e base_uri).
+    const { data: info } = await axios.get(`https://${s.oauth_base}/oauth/userinfo`, {
+        headers: { Authorization: `Bearer ${data.access_token}` },
+    });
+    const accounts = info?.accounts ?? [];
+    const acct = accounts.find(a => a.is_default) || accounts[0];
+    if (!acct) throw new Error('Nenhuma conta DocuSign disponível para este usuário.');
+
+    await s.update({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        token_expires_at: new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
+        connected_email: info?.email ?? null,
+        connected_name: info?.name ?? null,
+        account_id: acct.account_id,
+        base_uri: acct.base_uri,
+        last_test_at: new Date(),
+        last_test_ok: true,
+    });
+
+    return { email: info?.email, name: info?.name, account_id: acct.account_id };
+}
+
+export async function disconnect() {
+    const s = await getSettings();
+    await s.update({
+        access_token: null, refresh_token: null, token_expires_at: null,
+        connected_email: null, connected_name: null,
+    });
+}
+
+// Renova o access token via refresh token (ROTATIVO: salva o novo refresh).
+async function refreshOauthToken(s) {
+    try {
+        const { data } = await axios.post(
+            `https://${s.oauth_base}/oauth/token`,
+            new URLSearchParams({ grant_type: 'refresh_token', refresh_token: s.refresh_token }).toString(),
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basicAuth(s)}` } }
+        );
+        await s.update({
+            access_token: data.access_token,
+            refresh_token: data.refresh_token ?? s.refresh_token,
+            token_expires_at: new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
+        });
+        return data.access_token;
+    } catch (e) {
+        const err = e.response?.data?.error;
+        if (err === 'invalid_grant') {
+            // Refresh expirou (>30 dias sem uso) ou foi revogado — exige novo login.
+            await s.update({ access_token: null, refresh_token: null, token_expires_at: null });
+            throw new Error('A conexão com o DocuSign expirou. Abra Configurações → DocuSign e clique em "Conectar com DocuSign" novamente.');
+        }
+        throw new Error(`DocuSign refresh falhou: ${e.response?.data?.error_description || err || e.message}`);
+    }
+}
+
+// ─── Modo AVANÇADO: JWT Grant ─────────────────────────────────────────────────
+
 export async function consentUrl() {
     const s = await getSettings();
     if (!s.integration_key) throw new Error('Configure a Integration Key primeiro.');
@@ -50,15 +140,11 @@ export async function consentUrl() {
     return `https://${s.oauth_base}/oauth/auth?response_type=code&scope=signature%20impersonation&client_id=${s.integration_key}&redirect_uri=${redirect}`;
 }
 
-async function getAccessToken() {
-    const s = await getSettings();
-    if (!(s.integration_key && s.ds_user_id && s.private_key)) {
-        throw new Error('Integração DocuSign não configurada (Integration Key, User ID e Private Key).');
-    }
-    const key = cacheKey(s);
+async function getJwtToken(s) {
+    const key = `${s.integration_key}|${s.ds_user_id}|${s.oauth_base}`;
     const now = Math.floor(Date.now() / 1000);
-    if (tokenCache.token && tokenCache.key === key && tokenCache.exp - 60 > now) {
-        return tokenCache.token;
+    if (jwtTokenCache.token && jwtTokenCache.key === key && jwtTokenCache.exp - 60 > now) {
+        return jwtTokenCache.token;
     }
 
     const assertion = jwt.sign({
@@ -79,23 +165,46 @@ async function getAccessToken() {
             }).toString(),
             { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
-        tokenCache = { token: data.access_token, exp: now + (data.expires_in ?? 3600), key };
+        jwtTokenCache = { token: data.access_token, exp: now + (data.expires_in ?? 3600), key };
         return data.access_token;
     } catch (e) {
         const body = e.response?.data;
         if (body?.error === 'consent_required') {
-            throw new Error('DocuSign: consentimento pendente. Abra a URL de consentimento (botão nas configurações) logado no DocuSign e aprove o app.');
+            throw new Error('DocuSign: consentimento pendente. Abra a URL de consentimento (modo avançado) logado no DocuSign e aprove o app.');
         }
-        throw new Error(`DocuSign token falhou: ${body?.error_description || body?.error || e.message}`);
+        throw new Error(`DocuSign token (JWT) falhou: ${body?.error_description || body?.error || e.message}`);
     }
 }
 
-// base_uri da conta (via /oauth/userinfo) — ex.: https://na4.docusign.net
+// ─── Token unificado + client da API ──────────────────────────────────────────
+
+async function getAccessToken() {
+    const s = await getSettings();
+
+    // 1) Modo simples (login): renova sozinho pelo refresh token.
+    if (s.refresh_token) {
+        const validUntil = s.token_expires_at ? new Date(s.token_expires_at).getTime() : 0;
+        if (s.access_token && validUntil - 60000 > Date.now()) return s.access_token;
+        return await refreshOauthToken(s);
+    }
+
+    // 2) Modo avançado (JWT).
+    if (s.integration_key && s.ds_user_id && s.private_key) {
+        return await getJwtToken(s);
+    }
+
+    throw new Error('DocuSign não conectado. Abra Configurações → DocuSign e clique em "Conectar com DocuSign".');
+}
+
 async function getApiBase() {
     const s = await getSettings();
-    const key = cacheKey(s) + `|${s.account_id}`;
-    if (baseUriCache.uri && baseUriCache.key === key) return baseUriCache.uri;
 
+    // base_uri salvo no connect (modo simples) — caminho direto.
+    if (s.base_uri && s.account_id) {
+        return `${s.base_uri}/restapi/v2.1/accounts/${s.account_id}`;
+    }
+
+    // Modo JWT: descobre via userinfo.
     const token = await getAccessToken();
     const { data } = await axios.get(`https://${s.oauth_base}/oauth/userinfo`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -104,9 +213,8 @@ async function getApiBase() {
     const acct = accounts.find(a => a.account_id === s.account_id) || accounts.find(a => a.is_default) || accounts[0];
     if (!acct) throw new Error('DocuSign: nenhuma conta disponível para este usuário.');
 
-    const uri = `${acct.base_uri}/restapi/v2.1/accounts/${s.account_id || acct.account_id}`;
-    baseUriCache = { uri, key };
-    return uri;
+    await s.update({ base_uri: acct.base_uri, account_id: s.account_id || acct.account_id });
+    return `${acct.base_uri}/restapi/v2.1/accounts/${s.account_id || acct.account_id}`;
 }
 
 async function api() {
@@ -119,12 +227,11 @@ async function api() {
     });
 }
 
-// Testa credenciais (token + userinfo) e grava o resultado nas settings.
+// Testa a conexão (qualquer modo) e grava o resultado nas settings.
 export async function testConnection(userId = null) {
     const s = await getSettings();
     try {
-        tokenCache = { token: null, exp: 0, key: null };
-        baseUriCache = { uri: null, key: null };
+        jwtTokenCache = { token: null, exp: 0, key: null };
         await getApiBase();
         await s.update({ last_test_at: new Date(), last_test_ok: true, updated_by: userId });
         return { ok: true };
@@ -133,6 +240,8 @@ export async function testConnection(userId = null) {
         return { ok: false, error: e.message };
     }
 }
+
+// ─── Envelopes ────────────────────────────────────────────────────────────────
 
 // Página de assinaturas anexada ao fim do documento (placement 'final'):
 // âncoras invisíveis /sigN/ (+ /iniN/ p/ rubrica) posicionam os campos do DocuSign.
@@ -269,5 +378,6 @@ export async function uploadSignedPdf(buffer, conditionId, envelopeId) {
 
 export default {
     isConfigured, consentUrl, testConnection,
+    getAuthorizeUrl, connectWithCode, disconnect,
     createEnvelope, getEnvelopeStatus, downloadCombinedPdf, voidEnvelope, uploadSignedPdf,
 };

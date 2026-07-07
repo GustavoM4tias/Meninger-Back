@@ -3,6 +3,7 @@
 //  - Settings (admin): credenciais JWT + consentimento + teste.
 //  - Assinatura por ficha (autorizador): enviar envelope após autorização,
 //    acompanhar status, baixar/salvar o PDF assinado, cancelar (void).
+import jwt from 'jsonwebtoken';
 import db from '../../models/sequelize/index.js';
 import Docusign from '../../services/comercial/DocusignService.js';
 import { canAuthorizeConditions, getComercialSettings, addHistory } from './enterpriseConditionController.js';
@@ -32,7 +33,12 @@ export const getDocusignSettings = async (req, res) => {
             ds_user_id: s.ds_user_id,
             account_id: s.account_id,
             oauth_base: s.oauth_base,
-            has_private_key: !!s.private_key,   // a chave nunca volta pela API
+            has_private_key: !!s.private_key,   // segredos nunca voltam pela API
+            has_secret_key: !!s.secret_key,
+            connected: !!s.refresh_token,       // modo simples (login) ativo
+            connected_email: s.connected_email,
+            connected_name: s.connected_name,
+            auth_mode: s.refresh_token ? 'oauth' : (s.private_key ? 'jwt' : null),
             last_test_at: s.last_test_at,
             last_test_ok: s.last_test_ok,
         });
@@ -45,15 +51,16 @@ export const getDocusignSettings = async (req, res) => {
 export const updateDocusignSettings = async (req, res) => {
     try {
         if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores.' });
-        const { integration_key, ds_user_id, account_id, oauth_base, private_key } = req.body || {};
+        const { integration_key, ds_user_id, account_id, oauth_base, private_key, secret_key } = req.body || {};
         const s = await getDsSettings();
         await s.update({
             ...(integration_key !== undefined && { integration_key: integration_key || null }),
             ...(ds_user_id !== undefined && { ds_user_id: ds_user_id || null }),
             ...(account_id !== undefined && { account_id: account_id || null }),
             ...(oauth_base !== undefined && { oauth_base: oauth_base || 'account.docusign.com' }),
-            // private_key só é sobrescrita quando enviada não-vazia (permite editar o resto sem re-colar)
+            // Segredos só são sobrescritos quando enviados não-vazios (edita o resto sem re-colar)
             ...(private_key ? { private_key } : {}),
+            ...(secret_key ? { secret_key } : {}),
             updated_by: req.user?.id,
         });
         return res.json({ ok: true });
@@ -69,6 +76,66 @@ export const getDocusignConsentUrl = async (req, res) => {
         return res.json({ url: await Docusign.consentUrl() });
     } catch (e) {
         return res.status(400).json({ error: e?.message || String(e) });
+    }
+};
+
+// ── "Conectar com DocuSign" (login OAuth) ─────────────────────────────────────
+
+// Monta a URL de login + o state assinado (anti-forgery). O front redireciona o
+// navegador para a URL; o DocuSign volta no callback público abaixo.
+export const getDocusignOauthUrl = async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores.' });
+
+        const front = String(req.body?.front || '').replace(/\/+$/, '');
+        if (!/^https?:\/\//.test(front)) {
+            return res.status(400).json({ error: 'Origem do front inválida.' });
+        }
+
+        const proto = (req.headers['x-forwarded-proto']?.split(',')[0]) || req.protocol || 'https';
+        const redirectUri = `${proto}://${req.get('host')}/api/docusign-oauth/callback`;
+
+        const state = jwt.sign({ p: 'ds_oauth', front }, process.env.JWT_SECRET, { expiresIn: '15m' });
+        const url = await Docusign.getAuthorizeUrl(state, redirectUri);
+
+        return res.json({ url, redirect_uri: redirectUri });
+    } catch (e) {
+        console.error('[docusign] getOauthUrl:', e);
+        return res.status(400).json({ error: e?.message || String(e) });
+    }
+};
+
+// Callback PÚBLICO do DocuSign (navegador chega aqui após o login). O state
+// assinado garante que o fluxo foi iniciado por um admin do Office.
+export const oauthCallback = async (req, res) => {
+    const { code, state } = req.query || {};
+    let front = null;
+    try {
+        const payload = jwt.verify(String(state || ''), process.env.JWT_SECRET);
+        if (payload?.p !== 'ds_oauth' || !payload?.front) throw new Error('state inválido');
+        front = payload.front;
+
+        if (!code) throw new Error('Autorização negada no DocuSign.');
+        const info = await Docusign.connectWithCode(String(code));
+
+        return res.redirect(`${front}/settings/docusign?connected=1&email=${encodeURIComponent(info.email || '')}`);
+    } catch (e) {
+        console.error('[docusign] oauthCallback:', e?.message);
+        if (front) {
+            return res.redirect(`${front}/settings/docusign?ds_error=${encodeURIComponent(e?.message || 'Falha ao conectar')}`);
+        }
+        return res.status(400).send('DocuSign: retorno inválido. Refaça a conexão pelo Office.');
+    }
+};
+
+// Desconecta o modo login (limpa tokens; credenciais do app ficam).
+export const disconnectDocusign = async (req, res) => {
+    try {
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores.' });
+        await Docusign.disconnect();
+        return res.json({ ok: true });
+    } catch (e) {
+        return res.status(500).json({ error: e?.message || String(e) });
     }
 };
 
