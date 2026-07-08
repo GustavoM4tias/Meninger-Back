@@ -27,6 +27,7 @@ router.patch('/profiles/:id(\\d+)', ...admin, ctrl.updateProfile);
 router.get('/', ...internal, ctrl.list);
 router.post('/', ...internal, ctrl.create);
 router.get('/:id(\\d+)', ...internal, ctrl.getOne);
+router.get('/:id(\\d+)/pdf', ...internal, ctrl.downloadPdf);
 router.post('/:id(\\d+)/decision', ...internal, ctrl.decide);
 router.post('/:id(\\d+)/cancel', ...internal, ctrl.cancel);
 router.post('/:id(\\d+)/attachments', ...internal, ctrl.addAttachment);
