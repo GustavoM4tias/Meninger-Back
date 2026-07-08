@@ -156,6 +156,31 @@ function buildModuleDiffNote(before, after, moduleName) {
 
 // ─── validação de regras de negócio por módulo ───────────────────────────────
 
+// Converte "" e valores não-numéricos para null nos campos numéricos do model.
+// Sem isso, um DECIMAL/INTEGER vazio vindo do form gera no Postgres o erro
+// "invalid input syntax for type numeric". Genérico: lê os tipos do próprio model.
+const NUMERIC_TYPE_KEYS = new Set(['INTEGER', 'BIGINT', 'SMALLINT', 'DECIMAL', 'FLOAT', 'DOUBLE PRECISION', 'REAL', 'NUMERIC']);
+function sanitizeNumericFields(Model, obj) {
+    const attrs = Model.rawAttributes || {};
+    for (const key of Object.keys(obj)) {
+        const attr = attrs[key];
+        if (!attr) continue;
+        const typeKey = attr.type?.key || String(attr.type || '').toUpperCase();
+        if (!NUMERIC_TYPE_KEYS.has(typeKey)) continue;
+
+        const v = obj[key];
+        if (v === '' || v === undefined) {
+            obj[key] = null;
+        } else if (typeof v === 'string') {
+            const n = Number(v.replace(',', '.'));
+            obj[key] = Number.isFinite(n) ? n : null;
+        } else if (typeof v === 'number' && !Number.isFinite(v)) {
+            obj[key] = null;
+        }
+    }
+    return obj;
+}
+
 function validateModuleRules(mod) {
     const errors = [];
     const name = mod.module_name ? `"${mod.module_name}"` : `Módulo`;
@@ -961,6 +986,7 @@ export const upsertModules = async (req, res) => {
                         delete safeFields.idetapa;
                     }
 
+                    sanitizeNumericFields(EnterpriseConditionModule, safeFields);
                     const beforeJson = existing.toJSON();
                     await existing.update(safeFields, { transaction: t });
                     if (!isSilent) {
@@ -970,7 +996,7 @@ export const upsertModules = async (req, res) => {
                     savedModule = existing;
                 } else {
                     savedModule = await EnterpriseConditionModule.create(
-                        { ...moduleFields, condition_id: Number(id) },
+                        sanitizeNumericFields(EnterpriseConditionModule, { ...moduleFields, condition_id: Number(id) }),
                         { transaction: t }
                     );
                 }
@@ -984,7 +1010,7 @@ export const upsertModules = async (req, res) => {
 
                     if (campaigns.length) {
                         await EnterpriseConditionCampaign.bulkCreate(
-                            campaigns.map(({ id: _id, condition_id: _cid, module_id: _mid, createdAt: _cr, updatedAt: _up, ...rest }, i) => ({
+                            campaigns.map(({ id: _id, condition_id: _cid, module_id: _mid, createdAt: _cr, updatedAt: _up, ...rest }, i) => sanitizeNumericFields(EnterpriseConditionCampaign, {
                                 ...rest,
                                 condition_id: Number(id),
                                 module_id: savedModule.id,
