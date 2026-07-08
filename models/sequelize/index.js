@@ -180,6 +180,7 @@ import MetaLeadFormDefine     from './marketing/metaLeadForm.js';
 import MetaCampaignDefine     from './marketing/metaCampaign.js';
 import MetaAdDefine           from './marketing/metaAd.js';
 import MetaAdSetDefine        from './marketing/metaAdSet.js';
+import MetaInsightDailyDefine from './marketing/metaInsightDaily.js';
 
 // Bolão da Copa
 import BolaoDefine            from './bolao/bolao.js';
@@ -408,6 +409,7 @@ db.MetaLeadForm     = MetaLeadFormDefine(sequelize, DataTypes);
 db.MetaCampaign     = MetaCampaignDefine(sequelize, DataTypes);
 db.MetaAd           = MetaAdDefine(sequelize, DataTypes);
 db.MetaAdSet        = MetaAdSetDefine(sequelize, DataTypes);
+db.MetaInsightDaily = MetaInsightDailyDefine(sequelize, DataTypes);
 
 // Bolão da Copa
 db.Bolao            = BolaoDefine(sequelize, DataTypes);

@@ -20,6 +20,7 @@ import MetaLeadFormService     from '../services/marketing/MetaLeadFormService.j
 import MetaCampaignService     from '../services/marketing/MetaCampaignService.js';
 import MetaAdService           from '../services/marketing/MetaAdService.js';
 import MetaHistoricalImportService from '../services/marketing/MetaHistoricalImportService.js';
+import MetaInsightsDailyService from '../services/marketing/MetaInsightsDailyService.js';
 import LeadCampaignBackfillService from '../services/marketing/LeadCampaignBackfillService.js';
 import MetaCampaignsTokenService from '../services/meta/MetaCampaignsTokenService.js';
 
@@ -123,6 +124,19 @@ async function runFullSync(opts = {}) {
         console.warn(`⚠️  [marketing-full-sync] backfill (não-fatal): ${e.message}`);
     }
 
+    // 4b) Série diária (relatórios por período) — 3 níveis, janela de 35 dias.
+    //     A Meta corrige números até ~28d pra trás; 35d re-grava com folga.
+    //     Backfills maiores (90/365d) são manuais via POST /meta-report/backfill.
+    try {
+        summary.insights_daily = await MetaInsightsDailyService.syncDaily({
+            sinceDays: 35, levels: ['campaign', 'adset', 'ad'],
+        });
+        console.log(`✅ [marketing-full-sync] série diária: ${summary.insights_daily.rows_written} linhas (${summary.insights_daily.errors.length} erros)`);
+    } catch (e) {
+        summary.errors.push({ step: 'insights_daily', error: e.message });
+        console.warn(`⚠️  [marketing-full-sync] série diária (não-fatal): ${e.message}`);
+    }
+
     // 5) Import histórico (janela configurável) — já usa lookup ad→campaign no insert
     try {
         summary.historical = await MetaHistoricalImportService.importHistorical({ sinceDays: historicalDays });
@@ -153,8 +167,17 @@ async function runLightSync() {
     const startedAt = Date.now();
     try {
         const result = await MetaCampaignService.syncFromMeta({ sinceDays: LIGHT_SINCE_DAYS });
+        // Frescor da série diária no nível campanha (KPIs/gráfico do relatório).
+        // Só 3 dias — barato; adset/ad ficam pro FULL (rate limit).
+        let dailyRows = 0;
+        try {
+            const daily = await MetaInsightsDailyService.syncDaily({ sinceDays: 3, levels: ['campaign'] });
+            dailyRows = daily.rows_written;
+        } catch (e) {
+            console.warn(`⚠️  [marketing-light-sync] série diária: ${e.message}`);
+        }
         const tookSec = ((Date.now() - startedAt) / 1000).toFixed(1);
-        console.log(`🔃 [marketing-light-sync] ${result.campaigns_total} campanha(s) em ${tookSec}s`);
+        console.log(`🔃 [marketing-light-sync] ${result.campaigns_total} campanha(s), ${dailyRows} linhas diárias em ${tookSec}s`);
     } catch (e) {
         console.warn(`⚠️  [marketing-light-sync] falhou: ${e.message}`);
     } finally {

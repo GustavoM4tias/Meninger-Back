@@ -12,7 +12,7 @@ import MetaCampaignsTokenService from '../meta/MetaCampaignsTokenService.js';
 
 const { MetaCampaign, InboundLead } = db;
 
-async function getCreds() {
+export async function getCreds() {
     // Token de gestão de campanhas (admin, enxerga TODAS as contas de todos os
     // BMs) tem prioridade. Se não estiver configurado, cai no token do System
     // User — comportamento atual, sem mudança.
@@ -55,7 +55,7 @@ async function pageAll(url, params) {
  * de permissão por BM (agência de terceiro) são ignorados. Token de System User
  * não lista businesses → cai só nas diretas (comportamento anterior preservado).
  */
-async function listAdAccounts({ token, base }) {
+export async function listAdAccounts({ token, base }) {
     const byId = new Map();
     const add = (a) => { if (a?.id && !byId.has(a.id)) byId.set(a.id, a); };
     const FIELDS = 'id,account_id,name,currency,account_status';
@@ -551,4 +551,5 @@ export async function migrateFormMappingsToCampaigns() {
 export default {
     syncFromMeta, getAll, getById, listCampaignLeads, getDailyBreakdown, updateInternal,
     migrateFormMappingsToCampaigns,
+    getCreds, listAdAccounts,
 };
