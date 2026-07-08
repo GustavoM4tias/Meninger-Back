@@ -196,12 +196,11 @@ export const sendConditionSignature = async (req, res) => {
             where: { condition_id: condition.id },
             order: [['id', 'DESC']],
         });
-        if (active && ['sent', 'delivered', 'completed'].includes(active.status)) {
-            return res.status(409).json({
-                error: active.status === 'completed'
-                    ? 'Esta ficha já tem documento assinado. Cancele/anule antes de reenviar.'
-                    : 'Já existe um envelope em andamento para esta ficha.',
-            });
+        // Bloqueia só envelope ATIVO. Concluído fica preservado no histórico e um
+        // novo pode ser enviado (ex.: ficha corrigida e reautorizada após assinar —
+        // envelope concluído não é anulável no DocuSign).
+        if (active && ['sent', 'delivered'].includes(active.status)) {
+            return res.status(409).json({ error: 'Já existe um envelope em andamento para esta ficha. Anule-o antes de enviar outro.' });
         }
 
         const settings = await getComercialSettings();

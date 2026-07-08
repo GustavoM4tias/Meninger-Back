@@ -449,6 +449,38 @@ export async function voidEnvelope(envelopeId, reason = 'Cancelado pelo emissor'
     await client.put(`/envelopes/${envelopeId}`, { status: 'voided', voidedReason: reason.substring(0, 200) });
 }
 
+// Anula o envelope ATIVO (sent/delivered) da ficha, se houver — usado quando a
+// autorização é cancelada/desbloqueada ou a ficha é encerrada, para ninguém
+// assinar documento que deixou de valer. Envelope concluído NÃO é anulável
+// (DocuSign não permite) e fica preservado como histórico.
+// Retorna: null (nada ativo) | { voided: true } | { failed: true, error }.
+export async function voidActiveForCondition(conditionId, reason) {
+    const { ConditionSignature } = db;
+    const sig = await ConditionSignature.findOne({
+        where: { condition_id: Number(conditionId) },
+        order: [['id', 'DESC']],
+    });
+    if (!sig?.envelope_id || !['sent', 'delivered'].includes(sig.status)) return null;
+
+    try {
+        await voidEnvelope(sig.envelope_id, reason);
+    } catch (e) {
+        // Não marca voided localmente: o envelope segue vivo no DocuSign —
+        // quem chamou registra o aviso e o autorizador pode anular pela aba.
+        console.error('[docusign] voidActiveForCondition falhou:', e?.message);
+        return { failed: true, error: e?.message };
+    }
+
+    await sig.update({
+        status: 'voided',
+        raw: {
+            ...sig.raw,
+            events: [...(sig.raw?.events ?? []), { type: 'voided', at: new Date().toISOString(), note: reason }],
+        },
+    });
+    return { voided: true };
+}
+
 // Salva o PDF assinado no Supabase (mesmo padrão do Boleto). Retorna { path, url }.
 export async function uploadSignedPdf(buffer, conditionId, envelopeId) {
     const filePath = `conditions/signatures/${conditionId}/${envelopeId}.pdf`;
@@ -464,4 +496,5 @@ export default {
     isConfigured, consentUrl, testConnection,
     getAuthorizeUrl, connectWithCode, disconnect,
     createEnvelope, getEnvelopeStatus, downloadCombinedPdf, voidEnvelope, uploadSignedPdf, resendEnvelope,
+    voidActiveForCondition,
 };
