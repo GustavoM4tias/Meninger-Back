@@ -181,6 +181,12 @@ import MetaCampaignDefine     from './marketing/metaCampaign.js';
 import MetaAdDefine           from './marketing/metaAd.js';
 import MetaAdSetDefine        from './marketing/metaAdSet.js';
 import MetaInsightDailyDefine from './marketing/metaInsightDaily.js';
+import MarketingApprovalRequestDefine     from './marketing/marketingApprovalRequest.js';
+import MarketingApprovalAuthProfileDefine from './marketing/marketingApprovalAuthProfile.js';
+import MarketingApprovalDecisionDefine    from './marketing/marketingApprovalDecision.js';
+import MarketingApprovalAttachmentDefine  from './marketing/marketingApprovalAttachment.js';
+import MarketingApprovalWaMessageDefine   from './marketing/marketingApprovalWaMessage.js';
+import MarketingApprovalSettingsDefine    from './marketing/marketingApprovalSettings.js';
 
 // Bolão da Copa
 import BolaoDefine            from './bolao/bolao.js';
@@ -410,6 +416,14 @@ db.MetaCampaign     = MetaCampaignDefine(sequelize, DataTypes);
 db.MetaAd           = MetaAdDefine(sequelize, DataTypes);
 db.MetaAdSet        = MetaAdSetDefine(sequelize, DataTypes);
 db.MetaInsightDaily = MetaInsightDailyDefine(sequelize, DataTypes);
+
+// Marketing — Aprovações (tickets p/ diretoria)
+db.MarketingApprovalRequest     = MarketingApprovalRequestDefine(sequelize, DataTypes);
+db.MarketingApprovalAuthProfile = MarketingApprovalAuthProfileDefine(sequelize, DataTypes);
+db.MarketingApprovalDecision    = MarketingApprovalDecisionDefine(sequelize, DataTypes);
+db.MarketingApprovalAttachment  = MarketingApprovalAttachmentDefine(sequelize, DataTypes);
+db.MarketingApprovalWaMessage   = MarketingApprovalWaMessageDefine(sequelize, DataTypes);
+db.MarketingApprovalSettings    = MarketingApprovalSettingsDefine(sequelize, DataTypes);
 
 // Bolão da Copa
 db.Bolao            = BolaoDefine(sequelize, DataTypes);

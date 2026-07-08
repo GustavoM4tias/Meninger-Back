@@ -186,6 +186,30 @@ async function runLightSync() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Auto-backfill da série diária (1x na vida)
+// ────────────────────────────────────────────────────────────────────────────
+// Na primeira subida com a feature, `meta_insights_daily` está VAZIA → os
+// relatórios de períodos passados apareceriam vazios até alguém clicar em
+// "Preencher série diária". Em vez disso, se a tabela estiver vazia, disparamos
+// UMA carga de 90 dias (3 níveis) em background, sem travar o boot. Gated na
+// tabela vazia: roda uma única vez; nas próximas subidas é no-op instantâneo.
+const AUTO_BACKFILL_DAYS = Number(process.env.MARKETING_DAILY_BACKFILL_DAYS) || 90;
+
+async function backfillDailyIfEmpty() {
+    try {
+        const count = await db.MetaInsightDaily.count();
+        if (count > 0) return;   // já populada — nada a fazer
+        console.log(`🌱 [insights-daily] tabela vazia → backfill inicial de ${AUTO_BACKFILL_DAYS}d (3 níveis) em background...`);
+        // NÃO await — não bloqueia o boot. Erros são só logados.
+        MetaInsightsDailyService.syncDaily({ sinceDays: AUTO_BACKFILL_DAYS, levels: ['campaign', 'adset', 'ad'] })
+            .then(r => console.log(`🌱 [insights-daily] backfill inicial concluído: ${r.rows_written} linhas (${r.errors.length} erros)`))
+            .catch(e => console.warn(`⚠️  [insights-daily] backfill inicial falhou: ${e.message}`));
+    } catch (e) {
+        console.warn(`⚠️  [insights-daily] checagem de backfill inicial falhou: ${e.message}`);
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Boot
 // ────────────────────────────────────────────────────────────────────────────
 function start() {
@@ -208,6 +232,9 @@ function start() {
 
     console.log(`📅 [marketing-sync] FULL  → "${FULL_CRON}" (TZ ${process.env.TIMEZONE || 'America/Sao_Paulo'})`);
     console.log(`📅 [marketing-sync] LIGHT → "${LIGHT_CRON}"`);
+
+    // Popula a série diária na primeira subida (1x). Background, não bloqueia boot.
+    backfillDailyIfEmpty();
 }
 
 export default { start, runFullSync, runLightSync };

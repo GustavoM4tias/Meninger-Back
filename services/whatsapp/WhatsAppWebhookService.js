@@ -154,10 +154,22 @@ async function handleIncomingMessage(m, fromPhone) {
     console.log(`[whatsapp/webhook] inbound full payload:`, JSON.stringify({
         id: m.id, type: m.type, button: m.button, text: m.text, interactive: m.interactive, context: m.context,
     }));
+    // Aprovações de Marketing primeiro: casa pelo wamid do template enviado
+    // (sem ambiguidade). Se consumir, não repassa ao fluxo de alertas.
+    let consumed = false;
     try {
-        await AlertReplyHandler.handleInbound({ fromPhone, body, contextId });
+        const { handleButtonReply } = await import('../marketing/marketingApprovalWhatsApp.js');
+        consumed = await handleButtonReply({ fromPhone, body, contextId });
     } catch (err) {
-        console.error('[whatsapp/webhook] AlertReplyHandler erro:', err?.message || err);
+        console.error('[whatsapp/webhook] marketingApproval erro:', err?.message || err);
+    }
+
+    if (!consumed) {
+        try {
+            await AlertReplyHandler.handleInbound({ fromPhone, body, contextId });
+        } catch (err) {
+            console.error('[whatsapp/webhook] AlertReplyHandler erro:', err?.message || err);
+        }
     }
 
     // Auto-resposta pra remetentes externos (não-users) — fire-and-forget.

@@ -44,6 +44,10 @@ export const NotificationType = {
     LEAD_WEBHOOK_REJECTED:   'lead.webhook.rejected',
     META_CAMPAIGNS_TOKEN_EXPIRING: 'meta.campaigns.token_expiring',
 
+    // Marketing — Aprovações (tickets p/ diretoria)
+    MARKETING_APPROVAL_REQUESTED: 'marketing.approval.requested',
+    MARKETING_APPROVAL_DECIDED:   'marketing.approval.decided',
+
     // Bolão da Copa
     BOLAO_LOCKED:    'bolao.locked',
     BOLAO_PREMATCH:  'bolao.prematch',
@@ -411,6 +415,34 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },
         // Resultado direcionado ao responsável: sempre chega.
+        userOptional: false,
+    },
+
+    // ── Marketing — Aprovações (tickets p/ diretoria) ──────────────────────────
+    [NotificationType.MARKETING_APPROVAL_REQUESTED]: {
+        label: 'Solicitação de marketing aguardando sua aprovação',
+        group: 'Marketing',
+        description: 'Quando uma solicitação entra em um perfil de autorização seu.',
+        emailType: 'generic.notification',
+        // WhatsApp deste tipo é enviado pelo marketingApprovalWhatsApp.js (template
+        // com botões + rastreio de wamid p/ aprovar pela resposta) — não pelo canal genérico.
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.MARKETING_APPROVAL_DECIDED]: {
+        label: 'Resultado da sua solicitação de marketing',
+        group: 'Marketing',
+        description: 'Quando sua solicitação é aprovada, aprovada com ressalva ou reprovada.',
+        emailType: 'generic.notification',
+        whatsapp: {
+            template: 'marketing_approval_decided_v1',
+            language: 'pt_BR',
+            category: 'UTILITY',
+            variables: ['protocol', 'resultLabel', 'note'],
+        },
+        // Resultado direcionado ao solicitante: sempre chega.
+        defaults: { inapp: true, email: true, whatsapp: true },
         userOptional: false,
     },
 

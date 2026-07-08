@@ -41,6 +41,7 @@ import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
 import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
+import marketingApprovalRoutes from './routes/marketingApprovalRoutes.js';
 import metaAppRoutes from './routes/metaAppRoutes.js';
 import { campaignsOAuthCallback as metaCampaignsOAuthCallback } from './controllers/meta/metaAppConfigController.js';
 import alertRoutes from './routes/alertRoutes.js';
@@ -84,6 +85,7 @@ import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibili
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
+import { ensureMarketingApprovalWhatsappTemplates } from './lib/ensureMarketingApprovalWhatsappTemplates.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
 import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
@@ -202,6 +204,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/marketing', marketingRoutes);
+app.use('/api/marketing-approvals', marketingApprovalRoutes);
 app.use('/api/bolao', bolaoRoutes);
 app.use('/api/comunicados', comunicadoRoutes);
 app.use('/api/checklists', checklistRoutes);
@@ -289,6 +292,13 @@ async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
     ['EmeAtendeConversation', db.EmeAtendeConversation],
     ['EmeAtendeMessage', db.EmeAtendeMessage],
     ['EmeAtendeEvent', db.EmeAtendeEvent],
+    // Aprovações de Marketing (módulo novo em evolução)
+    ['MarketingApprovalRequest', db.MarketingApprovalRequest],
+    ['MarketingApprovalAuthProfile', db.MarketingApprovalAuthProfile],
+    ['MarketingApprovalDecision', db.MarketingApprovalDecision],
+    ['MarketingApprovalAttachment', db.MarketingApprovalAttachment],
+    ['MarketingApprovalWaMessage', db.MarketingApprovalWaMessage],
+    ['MarketingApprovalSettings', db.MarketingApprovalSettings],
   ]) {
     if (!model) continue;
     try {
@@ -332,6 +342,8 @@ async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
       console.warn('⚠️  ensureBoletoWhatsappTemplate falhou:', err.message));
   ensureChecklistWhatsappTemplates().catch(err =>
       console.warn('⚠️  ensureChecklistWhatsappTemplates falhou:', err.message));
+  ensureMarketingApprovalWhatsappTemplates().catch(err =>
+      console.warn('⚠️  ensureMarketingApprovalWhatsappTemplates falhou:', err.message));
 
   if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') contractValidatorScheduler.start();
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractSiengeScheduler.start();
