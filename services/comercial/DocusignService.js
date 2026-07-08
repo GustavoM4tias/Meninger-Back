@@ -286,19 +286,22 @@ export async function testConnection(userId = null) {
 // âncoras invisíveis /sigN/ (+ /iniN/ p/ rubrica) posicionam os campos do DocuSign.
 function buildSignaturePage(signers, requireInitials, subject) {
     const blocks = signers.map((sg, i) => `
-        <div style="margin-top:64px;">
+        <div style="margin-top:52px;page-break-inside:avoid;">
+            <p style="font-size:11px;color:#6b7280;margin:0 0 2px;">Assinante ${i + 1}${signers.length > 1 ? ` de ${signers.length}` : ''}</p>
             <span style="color:#ffffff;font-size:8px;">/sig${i + 1}/</span>
             ${requireInitials ? `<span style="color:#ffffff;font-size:8px;margin-left:220px;">/ini${i + 1}/</span>` : ''}
-            <div style="border-top:1px solid #111827;width:360px;margin-top:44px;padding-top:6px;">
-                <strong style="font-size:13px;">${escapeHtml(sg.name || '')}</strong><br/>
-                <span style="font-size:11px;color:#4b5563;">${escapeHtml(sg.email || '')}</span>
+            <div style="border-top:1.5px solid #111827;width:380px;margin-top:48px;padding-top:8px;">
+                <strong style="font-size:14px;">${escapeHtml(sg.name || '')}</strong><br/>
+                <span style="font-size:11px;color:#4b5563;">${escapeHtml(sg.email || '')}</span><br/>
+                <span style="font-size:10px;color:#9ca3af;">Assinado em: <span style="color:#ffffff;font-size:8px;">/dt${i + 1}/</span></span>
             </div>
         </div>`).join('');
 
     return `
     <div style="page-break-before:always;padding:48px 40px;font-family:Arial,Helvetica,sans-serif;">
-        <h2 style="font-size:18px;margin:0 0 4px;">Assinaturas</h2>
-        <p style="font-size:12px;color:#6b7280;margin:0 0 8px;">${escapeHtml(subject || 'Ficha Comercial')}</p>
+        <h2 style="font-size:20px;margin:0 0 4px;color:#111827;">Página de Assinaturas</h2>
+        <p style="font-size:12px;color:#6b7280;margin:0 0 6px;">${escapeHtml(subject || 'Ficha Comercial')}</p>
+        <p style="font-size:11px;color:#9ca3af;margin:0 0 10px;">Assine no campo indicado com o seu nome. O DocuSign leva você automaticamente até ele; a data é preenchida na assinatura.</p>
         ${blocks}
     </div>`;
 }
@@ -337,6 +340,13 @@ export async function createEnvelope({ html, subject, signers, placement = 'fina
                     anchorYOffset: '4',
                     anchorIgnoreIfNotPresent: 'true',
                 }],
+                dateSignedTabs: [{
+                    anchorString: `/dt${i + 1}/`,
+                    anchorUnits: 'pixels',
+                    anchorXOffset: '0',
+                    anchorYOffset: '-2',
+                    anchorIgnoreIfNotPresent: 'true',
+                }],
                 ...(requireInitials ? {
                     initialHereTabs: [{
                         anchorString: `/ini${i + 1}/`,
@@ -355,6 +365,7 @@ export async function createEnvelope({ html, subject, signers, placement = 'fina
     const client = await api();
     const { data } = await client.post('/envelopes', {
         emailSubject: subject?.substring(0, 100) || 'Ficha Comercial para assinatura',
+        emailBlurb: `Você foi definido como assinante do documento "${subject || 'Ficha Comercial'}" da Menin Engenharia. Abra pelo botão abaixo e assine no campo com o seu nome, na Página de Assinaturas ao final do documento.`.substring(0, 500),
         documents: [{
             documentBase64: Buffer.from(documentHtml, 'utf8').toString('base64'),
             name: `${subject || 'Ficha Comercial'}.html`,
