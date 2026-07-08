@@ -667,6 +667,8 @@ export const updateCondition = async (req, res) => {
         const { modules, campaigns, ...fields } = req.body;
         // Impede mudança manual de status por esta rota
         delete fields.status;
+        const renameSeries = fields.rename_series === true;
+        delete fields.rename_series;
 
         // Gera diff para o histórico
         const before = condition.toJSON();
@@ -686,6 +688,15 @@ export const updateCondition = async (req, res) => {
             ...(diffNote ? { approval_history: newHistory } : {}),
             updated_by: userId,
         });
+
+        // Renomear a SÉRIE avulsa inteira: o novo nome vale para todos os meses
+        // (o título é o identificador da série; renomear só um mês confundiria).
+        if (renameSeries && fields.display_name !== undefined && condition.series_id) {
+            await EnterpriseCondition.update(
+                { display_name: fields.display_name },
+                { where: { series_id: condition.series_id } }
+            );
+        }
 
         return res.json({ ok: true });
     } catch (e) {
