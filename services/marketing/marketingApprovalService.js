@@ -569,10 +569,22 @@ export async function removeAttachment({ attachmentId, user }) {
     return { ok: true };
 }
 
+// PDF de autorização — só p/ ficha aprovada (com ou sem ressalva). getOne já
+// aplica o gate de acesso (requester/aprovador/admin) e traz decisões+requester.
+export async function generateAuthorizationPdf({ id, user }) {
+    const request = await getOne({ id, user });
+    if (!['approved', 'approved_with_notes'].includes(request.status)) {
+        throw httpError('O PDF de autorização só fica disponível após a aprovação.', 409);
+    }
+    const { default: pdfService } = await import('./marketingApprovalPdfService.js');
+    const buffer = await pdfService.render({ request });
+    return { buffer, protocol: request.protocol };
+}
+
 export default {
     getSettings, updateSettings, listActiveTypes,
     listProfiles, createProfile, updateProfile, profilesForUser, approvalMe, listUsers,
     listCostCenters,
     createRequest, list, getOne, decide, cancel,
-    addAttachment, removeAttachment,
+    addAttachment, removeAttachment, generateAuthorizationPdf,
 };

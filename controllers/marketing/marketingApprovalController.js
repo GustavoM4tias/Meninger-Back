@@ -79,6 +79,15 @@ export default {
         catch (err) { fail(res, err); }
     },
 
+    async downloadPdf(req, res) {
+        try {
+            const { buffer, protocol } = await svc.generateAuthorizationPdf({ id: req.params.id, user: req.user });
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `inline; filename="Autorizacao_${protocol}.pdf"`);
+            return res.end(buffer);
+        } catch (err) { fail(res, err); }
+    },
+
     async addAttachment(req, res) {
         try { res.status(201).json(await svc.addAttachment({ id: req.params.id, payload: req.body, user: req.user })); }
         catch (err) { fail(res, err); }
