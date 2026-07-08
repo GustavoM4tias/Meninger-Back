@@ -3,6 +3,7 @@ import db from '../../models/sequelize/index.js';
 import NotificationService from '../../services/notification/NotificationService.js';
 import { NotificationType } from '../../services/notification/notificationTypes.js';
 import { computeModuleCostSummary, aggregateCostSummaries } from '../../services/comercial/conditionCostSummary.js';
+import Docusign from '../../services/comercial/DocusignService.js';
 
 const {
     EnterpriseCondition,
@@ -787,7 +788,17 @@ export const unlockCondition = async (req, res) => {
         }
 
         const { note } = req.body;
-        const newHistory = addHistory(condition.approval_history, 'unlocked', req, note || null);
+        let newHistory = addHistory(condition.approval_history, 'unlocked', req, note || null);
+
+        // Coerência ficha × assinatura: desbloquear cancela a autorização — um
+        // envelope em andamento não pode continuar colhendo assinaturas de um
+        // documento que deixou de valer. (Concluído fica preservado no histórico.)
+        const sigVoid = await Docusign.voidActiveForCondition(condition.id, 'Autorização da ficha cancelada no Office (desbloqueio para edição)');
+        if (sigVoid?.voided) {
+            newHistory = addHistory(newHistory, 'signature_voided', req, 'Envelope de assinatura anulado automaticamente ao desbloquear a ficha');
+        } else if (sigVoid?.failed) {
+            newHistory = addHistory(newHistory, 'signature_voided', req, 'ATENÇÃO: não foi possível anular o envelope automaticamente — anule pela aba Assinatura');
+        }
 
         await condition.update({
             status: 'draft',
@@ -845,7 +856,15 @@ export const closeCondition = async (req, res) => {
             }
         }
 
-        const newHistory = addHistory(condition.approval_history, 'closed', req, note || null);
+        let newHistory = addHistory(condition.approval_history, 'closed', req, note || null);
+
+        // Encerrar congela a ficha — envelope em andamento é anulado junto.
+        const sigVoid = await Docusign.voidActiveForCondition(condition.id, 'Empreendimento encerrado no Office');
+        if (sigVoid?.voided) {
+            newHistory = addHistory(newHistory, 'signature_voided', req, 'Envelope de assinatura anulado automaticamente ao encerrar o empreendimento');
+        } else if (sigVoid?.failed) {
+            newHistory = addHistory(newHistory, 'signature_voided', req, 'ATENÇÃO: não foi possível anular o envelope automaticamente — anule pela aba Assinatura');
+        }
 
         await condition.update({
             status: 'closed',
@@ -1552,14 +1571,23 @@ export const cancelApproval = async (req, res) => {
             return res.status(409).json({ error: 'Apenas fichas em autorização podem ter a autorização cancelada.' });
         }
 
+        // Defensivo: se sobrou envelope ativo de um ciclo anterior, anula junto.
+        let cancelHistory = addHistory(
+            condition.approval_history ?? [],
+            'approval_cancelled',
+            req,
+            req.body?.note || 'Autorização cancelada.'
+        );
+        const sigVoid = await Docusign.voidActiveForCondition(condition.id, 'Autorização da ficha cancelada no Office');
+        if (sigVoid?.voided) {
+            cancelHistory = addHistory(cancelHistory, 'signature_voided', req, 'Envelope de assinatura anulado automaticamente ao cancelar a autorização');
+        } else if (sigVoid?.failed) {
+            cancelHistory = addHistory(cancelHistory, 'signature_voided', req, 'ATENÇÃO: não foi possível anular o envelope automaticamente — anule pela aba Assinatura');
+        }
+
         await condition.update({
             status: 'draft',
-            approval_history: addHistory(
-                condition.approval_history ?? [],
-                'approval_cancelled',
-                req,
-                req.body?.note || 'Autorização cancelada.'
-            ),
+            approval_history: cancelHistory,
             updated_by: req.user?.id,
         });
 
