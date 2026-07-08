@@ -49,6 +49,11 @@ import {
     campaignAdSets as listMetaCampaignAdSets,
     runFullSync as runMetaFullSync,
 } from '../controllers/marketing/metaCampaignController.js';
+import {
+    report as metaReport,
+    coverage as metaReportCoverage,
+    backfill as metaReportBackfill,
+} from '../controllers/marketing/metaReportController.js';
 
 const router = express.Router();
 
@@ -94,6 +99,11 @@ router.get('/meta-forms/:id/field-mappings', metaFormFieldMappingEditor);
 router.put('/meta-forms/:id/field-mappings', metaFormUpdateFieldMappings);
 
 // Campanhas Meta (cache local + insights de gasto/leads/CAC)
+// Relatório de desempenho por período (série diária local)
+router.get('/meta-report', metaReport);
+router.get('/meta-report/coverage', metaReportCoverage);
+router.post('/meta-report/backfill', metaReportBackfill);
+
 router.get('/meta-campaigns', listMetaCampaigns);
 router.post('/meta-campaigns/sync', syncMetaCampaigns);
 router.get('/meta-campaigns/:id', metaCampaignDetail);
