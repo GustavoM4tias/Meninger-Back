@@ -131,8 +131,33 @@ function summarizeCvBody(data) {
     try { return JSON.stringify(data).slice(0, 300); } catch { return '<corpo não-serializável>'; }
 }
 
+/**
+ * O campo de mensagem do CV é utf8 (3 bytes) e TRUNCA a mensagem no primeiro
+ * caractere de 4 bytes (emoji do plano astral, ex.: 🔁 📋 💰 🕒 🔗). Isso fazia a
+ * mensagem chegar cortada na 1ª linha — e VAZIA quando começava com um emoji
+ * desses. Removemos esses emojis (mantendo ✅ ❌ ⚠️ ℹ️, que são BMP/3 bytes) para
+ * que a mensagem inteira apareça no CV.
+ */
+function sanitizeCvMessage(mensagem) {
+    // Remove emojis de 4 bytes (plano astral) + seletor de variacao/ZWJ, engolindo
+    // 1 espaco a frente do emoji removido. Mantem simbolos BMP (3 bytes) como
+    // os check/x/aviso. Iteramos por code point pra tratar surrogate pairs.
+    const src = String(mensagem ?? '');
+    let out = '';
+    let skipNextSpace = false;
+    for (const ch of src) {
+        const cp = ch.codePointAt(0);
+        if (cp >= 0x10000 || cp === 0xFE0F || cp === 0x200D) { skipNextSpace = true; continue; }
+        if (skipNextSpace && ch === ' ') { skipNextSpace = false; continue; }
+        skipNextSpace = false;
+        out += ch;
+    }
+    return out.replace(/[ 	]+$/gm, '').trim();
+}
+
 async function sendCvMessage(idreserva, mensagem) {
     const tag = `[BOLETO][CV-MSG][reserva ${idreserva}]`;
+    mensagem = sanitizeCvMessage(mensagem);
     console.log(`${tag} Enviando mensagem (${mensagem.length} chars)...`);
     try {
         const resp = await apiCv.post('/v2/comercial/reservas/mensagens', { idreserva, mensagem });
