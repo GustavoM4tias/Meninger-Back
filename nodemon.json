@@ -1,0 +1,15 @@
+{
+  "watch": ["server.js", "controllers", "routes", "services", "models", "middlewares", "lib", "scheduler", "email", "utils", "validatorAI", "config"],
+  "ext": "js,json,mjs,hbs",
+  "ignore": [
+    "node_modules/**",
+    "uploads/**",
+    "temp/**",
+    "assets/**",
+    "playwright/.cache/**",
+    "*.log",
+    "_tmp_*",
+    "scripts/**"
+  ],
+  "delay": 800
+}
