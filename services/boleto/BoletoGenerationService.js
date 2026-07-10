@@ -258,8 +258,19 @@ async function attachToCV(idreserva, buffer, settings) {
  * Processa um webhook recebido do CV: busca dados da reserva, emite boleto no
  * Ecobrança, anexa na reserva do CV e registra tudo no histórico interno.
  */
-export async function processBoletoWebhook({ idreserva, idtransacao }) {
-    console.log(`[BOLETO] Iniciando processamento — reserva ${idreserva}`);
+/**
+ * @param {object}  params
+ * @param {number}  params.idreserva
+ * @param {string} [params.idtransacao]
+ * @param {boolean} [params.manual=false] - Reemissão disparada manualmente pelo
+ *   admin no modal (ex.: boleto baixado, ou boleto em aberto cuja condição do
+ *   Recurso Próprio à Vista mudou). Emite o boleto, salva no Supabase, anexa no
+ *   CV e **envia ao cliente normalmente** (email/WhatsApp). A ÚNICA diferença
+ *   para o fluxo do webhook é que **não altera a etapa/situação no CV** — uma
+ *   ação manual não deve mover a reserva de etapa como o lote do Sienge faz.
+ */
+export async function processBoletoWebhook({ idreserva, idtransacao, manual = false }) {
+    console.log(`[BOLETO] Iniciando processamento — reserva ${idreserva}${manual ? ' (geração interna manual — sem envio ao cliente)' : ''}`);
 
     const settings = await getSettings();
 
@@ -774,6 +785,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         // documento, o cliente ainda recebe o link do PDF via canais próprios.
         // Passa o pdfBuffer pra anexar direto (email) e enviar no header do
         // template (WhatsApp) sem precisar baixar do Supabase de novo.
+        // O boleto vai ao cliente (email + WhatsApp) inclusive na reemissão
+        // manual — quando um boleto é reemitido por mudança de condição, o antigo
+        // é cancelado e o cliente precisa receber o novo automaticamente.
         const envio = await sendBoletoToTitular({
             titular,
             dadosBoleto: {
@@ -825,8 +839,11 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         // antes do lote rodar, o cliente nunca seria enviado. Gravamos o ID
         // alvo + instante alinhado ao próximo múltiplo de 5 min + buffer.
         // O `boletoSituacaoApplyScheduler` (cron 1 min) processa quando madura.
+        // No modo manual a etapa do CV NÃO é tocada — a reserva já saiu do fluxo
+        // de "Envio Sienge" (boleto foi baixado) e forçar a situação de sucesso
+        // moveria o cliente indevidamente. O admin trata a etapa manualmente.
         let situacaoAgendadaPara = null;
-        if (settings.situacao_sucesso_id) {
+        if (!manual && settings.situacao_sucesso_id) {
             situacaoAgendadaPara = await agendarSituacaoCv(history, settings.situacao_sucesso_id, settings);
             await EventLogger.log({
                 historyId: history.id, idreserva,
@@ -863,11 +880,13 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
                 ? `⊘ Anexo no CV pulado: ${anexoWarn.erro}`
                 : `❌ Anexo no CV: ${anexoWarn?.erro || 'falhou'}`);
 
-        const linhaSituacao = !settings.situacao_sucesso_id
-            ? '⊘ Situação não alterada (situacao_sucesso_id não configurado)'
-            : situacaoAgendadaPara
-                ? `🕒 Situação ${settings.situacao_sucesso_id} agendada para ${situacaoAgendadaPara.toLocaleString('pt-BR')} (mantém cliente em "Envio Sienge" para o lote do ERP capturar)`
-                : `❌ Situação no CV: ${situacaoWarn?.erro || 'falhou'}`;
+        const linhaSituacao = manual
+            ? '⊘ Etapa no CV mantida (geração interna — situação não alterada)'
+            : !settings.situacao_sucesso_id
+                ? '⊘ Situação não alterada (situacao_sucesso_id não configurado)'
+                : situacaoAgendadaPara
+                    ? `🕒 Situação ${settings.situacao_sucesso_id} agendada para ${situacaoAgendadaPara.toLocaleString('pt-BR')} (mantém cliente em "Envio Sienge" para o lote do ERP capturar)`
+                    : `❌ Situação no CV: ${situacaoWarn?.erro || 'falhou'}`;
 
         const linhaEmail = envio.email.ok
             ? `✅ E-mail enviado para ${envio.email.to}`
@@ -885,7 +904,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao }) {
         const erroDeEtapa = (etapa) => warnDe(etapa)?.erro || '';
 
         const msgSucesso = [
-            '✅ Boleto Caixa emitido com sucesso!',
+            manual
+                ? '🔁 Boleto Caixa reemitido com a condição atualizada (enviado ao cliente; etapa do CV mantida).'
+                : '✅ Boleto Caixa emitido com sucesso!',
             '',
             `📋 Empreendimento: ${unidade.empreendimento}`,
             `🏠 Unidade: ${unidade.unidade || unidade.bloco || '-'}`,
