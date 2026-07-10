@@ -12,8 +12,10 @@ import {
     getHistoryFacets,
     getHistoryItem,
     listHistoryEvents,
+    listReservaTimeline,
     checkPaymentNow,
     retryHistoryItem,
+    regenerateHistoryItem,
     resendBoletoToTitular,
     listComissionRules,
     createComissionRule,
@@ -51,7 +53,9 @@ router.get('/history-stats', authenticate, getHistoryStats);
 router.get('/history-facets', authenticate, getHistoryFacets);
 router.get('/history/:id', authenticate, getHistoryItem);
 router.get('/history/:id/events', authenticate, listHistoryEvents);
+router.get('/history/:id/reserva-timeline', authenticate, listReservaTimeline);
 router.post('/history/:id/retry', authenticate, requireAdmin, retryHistoryItem);
+router.post('/history/:id/regenerate', authenticate, requireAdmin, regenerateHistoryItem);
 router.post('/history/:id/resend', authenticate, requireAdmin, resendBoletoToTitular);
 router.post('/history/:id/check-payment', authenticate, requireAdmin, checkPaymentNow);
 

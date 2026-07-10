@@ -69,4 +69,18 @@ export async function listByHistory(historyId, { limit = 200 } = {}) {
     });
 }
 
-export default { log, listByHistory };
+/**
+ * Lista TODOS os eventos de uma reserva (de todas as tentativas/boletos) em
+ * ordem cronológica crescente. Usado pela timeline consolidada do modal, que
+ * junta o histórico de todos os boletos emitidos para o mesmo cliente/reserva.
+ */
+export async function listByReserva(idreserva, { limit = 2000 } = {}) {
+    if (!idreserva) return [];
+    return BoletoEvent.findAll({
+        where: { idreserva },
+        order: [['created_at', 'ASC'], ['id', 'ASC']],
+        limit: Math.min(Math.max(1, Number(limit) || 2000), 5000),
+    });
+}
+
+export default { log, listByHistory, listByReserva };

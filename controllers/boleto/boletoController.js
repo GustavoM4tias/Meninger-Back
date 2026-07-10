@@ -375,6 +375,36 @@ export async function listHistoryEvents(req, res) {
 }
 
 /**
+ * Timeline CONSOLIDADA da reserva: junta todas as tentativas (boletos emitidos
+ * para o mesmo cliente/reserva) + todos os eventos de cada uma, num único
+ * conjunto cronológico. Alimenta a aba Timeline do modal, que centraliza o
+ * histórico completo (emissões, reemissões, baixas, envios ao cliente) em vez
+ * de mostrar só o boleto isolado.
+ */
+export async function listReservaTimeline(req, res) {
+    try {
+        const item = await db.BoletoHistory.findByPk(req.params.id);
+        if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
+
+        const idreserva = item.idreserva;
+        const attempts = await db.BoletoHistory.findAll({
+            where: { idreserva },
+            order: [['created_at', 'ASC'], ['id', 'ASC']],
+        });
+        const events = await EventLogger.listByReserva(idreserva, { limit: 3000 });
+
+        return res.json({
+            idreserva,
+            history: item,
+            attempts: attempts.map(a => a.get({ plain: true })),
+            events: events.map(e => e.get({ plain: true })),
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
  * Força a verificação de pagamento de UM boleto específico AGORA (sem
  * esperar o scheduler das 8h). Admin only.
  *
@@ -489,6 +519,31 @@ export async function retryHistoryItem(req, res) {
 
         processBoletoWebhook({ idreserva: Number(item.idreserva), idtransacao: item.idtransacao || null })
             .catch(err => console.error('[BOLETO_RETRY] Erro no re-disparo:', err.message));
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
+ * Regera INTERNAMENTE o boleto de uma reserva (admin only), tipicamente quando o
+ * boleto anterior foi baixado e a condição da série mudou. Diferente do
+ * `/retry`: roda em modo `manual` — emite o novo boleto, salva o PDF e anexa no
+ * CV, mas **NÃO envia ao cliente** (email/WhatsApp) e **NÃO altera a etapa/
+ * situação no CV**. O admin envia depois via "Reenviar ao cliente" se quiser.
+ *
+ * Como a decisão de re-trigger só procura boleto anterior `payment_status=pending`,
+ * um boleto baixado (cancelled) não é tocado — o fluxo relê a série fresca do CV
+ * e gera um novo boleto com as condições atuais.
+ */
+export async function regenerateHistoryItem(req, res) {
+    try {
+        const item = await db.BoletoHistory.findByPk(req.params.id);
+        if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
+
+        res.status(200).json({ regenerating: true, idreserva: item.idreserva });
+
+        processBoletoWebhook({ idreserva: Number(item.idreserva), idtransacao: item.idtransacao || null, manual: true })
+            .catch(err => console.error('[BOLETO_REGEN] Erro na geração interna:', err.message));
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
