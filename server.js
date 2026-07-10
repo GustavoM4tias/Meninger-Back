@@ -345,6 +345,20 @@ async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
   ensureMarketingApprovalWhatsappTemplates().catch(err =>
       console.warn('⚠️  ensureMarketingApprovalWhatsappTemplates falhou:', err.message));
 
+  // ── Gate de schedulers ────────────────────────────────────────────────────
+  // Produção: cada cron mantém o comportamento histórico. DEV (local): NENHUM
+  // cron inicia por padrão — evita rodar automação contra CV/Meta/Supabase/
+  // notificações de PRODUÇÃO a partir da máquina local. Para ligar um específico
+  // em dev, defina a env ENABLE_* correspondente = 'true' no .env.
+  const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+  const schedulerOn = (envVar, onByDefaultInProd = true) => {
+    const v = process.env[envVar];
+    if (v === 'true') return true;      // opt-in explícito (vale inclusive em dev)
+    if (v === 'false') return false;    // opt-out explícito (vale inclusive em prod)
+    return IS_PROD && onByDefaultInProd; // sem flag: comportamento histórico só em produção
+  };
+
+  // Crons opt-in (já eram OFF por padrão em qualquer ambiente):
   if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') contractValidatorScheduler.start();
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractSiengeScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCvScheduler.start();
@@ -354,24 +368,26 @@ async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
   if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') landScheduler.start();
   if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') enterpriseCvScheduler.start();
   if (process.env.ENABLE_CV_PRECADASTRO_SCHEDULE === 'true') precadastroCvScheduler.start();
-  creditorPollingScheduler.start();
-  contractApprovalScheduler.start();
-  supabaseKeepAliveScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
-  if (process.env.ENABLE_CV_EXTRAS_SCHEDULE !== 'false') cvExtrasScheduler.start(); // ativo por padrão
-  conditionAutoGenerateScheduler.start(); // auto-geração mensal de fichas (com e sem CV)
-  boletoCleanupScheduler.start();         // remove boletos expirados do Supabase
-  boletoPaymentCheckScheduler.start();    // 8h: verifica pagamento/baixa de boletos no Ecobrança
-  boletoSituacaoApplyScheduler.start();   // 1min: aplica situações CV agendadas (delay lote Sienge)
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
-  eventReminderScheduler.start();         // lembretes de evento (D-1) via NotificationService
-  if (process.env.ENABLE_TODO_DIGEST !== 'false') todoDigestScheduler.start(); // resumo diário do Microsoft To Do (07:00)
-  startAcademyDeadlineScheduler();        // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
-  startAcademyRecertifyScheduler();       // recertificação periódica (expira certificado + reassign mandatory)
-  startAcademyOnboardingScheduler();      // aplica regras de onboarding (auto-atribui trilhas)
-  if (process.env.ENABLE_MARKETING_CAPTURE !== 'false') marketingDispatchScheduler.start(); // re-tenta despacho de leads ao CV
-  marketingSyncScheduler.start(); // sync Meta (forms/campanhas/ads/leads) — full a cada 2h em horário comercial + light 15/15min
-  if (process.env.ENABLE_BOLAO_LIVE !== 'false') bolaoLiveScheduler.start(); // placar ao vivo do bolão (poll ESPN na janela do jogo)
+
+  // Crons que antes ligavam sempre / por padrão — agora gated (prod = igual, dev = off):
+  if (schedulerOn('ENABLE_CREDITOR_POLLING')) creditorPollingScheduler.start();
+  if (schedulerOn('ENABLE_CONTRACT_APPROVAL')) contractApprovalScheduler.start();
+  if (schedulerOn('ENABLE_SUPABASE_KEEPALIVE')) supabaseKeepAliveScheduler.start();
+  if (schedulerOn('ENABLE_CV_EXTRAS_SCHEDULE')) cvExtrasScheduler.start(); // extras do CV
+  if (schedulerOn('ENABLE_CONDITION_AUTOGEN')) conditionAutoGenerateScheduler.start(); // auto-geração mensal de fichas (com e sem CV)
+  if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase
+  if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
+  if (schedulerOn('ENABLE_BOLETO_SITUACAO_APPLY')) boletoSituacaoApplyScheduler.start(); // 1min: aplica situações CV agendadas (delay lote Sienge)
+  if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
+  if (schedulerOn('ENABLE_TODO_DIGEST')) todoDigestScheduler.start(); // resumo diário do Microsoft To Do (07:00)
+  if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
+  if (schedulerOn('ENABLE_ACADEMY_RECERTIFY')) startAcademyRecertifyScheduler(); // recertificação periódica (expira certificado + reassign mandatory)
+  if (schedulerOn('ENABLE_ACADEMY_ONBOARDING')) startAcademyOnboardingScheduler(); // aplica regras de onboarding (auto-atribui trilhas)
+  if (schedulerOn('ENABLE_MARKETING_CAPTURE')) marketingDispatchScheduler.start(); // re-tenta despacho de leads ao CV
+  if (schedulerOn('ENABLE_MARKETING_AUTO_SYNC')) marketingSyncScheduler.start(); // sync Meta (forms/campanhas/ads/leads) — full a cada 2h em horário comercial + light 15/15min
+  if (schedulerOn('ENABLE_BOLAO_LIVE')) bolaoLiveScheduler.start(); // placar ao vivo do bolão (poll ESPN na janela do jogo)
   if (process.env.SEED_BOLAO_COPA === 'true') {
     seedBolaoCopa2026().catch(err => console.warn('⚠️  seedBolaoCopa2026 falhou:', err.message));
   }
@@ -381,7 +397,10 @@ async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
   if (process.env.SEED_BOLAO_JAPAO === 'true') {
     seedBolaoJapao().catch(err => console.warn('⚠️  seedBolaoJapao falhou:', err.message));
   }
-  await AlertEngine.boot();               // registra crons das alert_rules salvas
+  if (schedulerOn('ENABLE_ALERT_ENGINE')) await AlertEngine.boot(); // registra crons das alert_rules salvas
+  if (!IS_PROD) {
+    console.log('[BOOT] DEV: schedulers desligados por padrão. Ligue um específico com ENABLE_*=true no .env.');
+  }
 
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta: ${PORT}`);
