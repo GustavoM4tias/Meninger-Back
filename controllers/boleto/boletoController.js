@@ -181,6 +181,41 @@ export async function listHistory(req, res) {
         }
 
         const offset = (Number(page) - 1) * Number(limit);
+
+        // groupByReserva: 1 linha por reserva (a tentativa MAIS RECENTE que casa
+        // com o filtro), em vez de 1 linha por boleto. Evita o mesmo cliente
+        // aparecer várias vezes na listagem quando houve reemissões — o histórico
+        // completo fica no modal (timeline consolidada).
+        if (String(req.query.groupByReserva || '') === 'true') {
+            const grouped = await db.BoletoHistory.findAll({
+                where,
+                attributes: [
+                    'idreserva',
+                    [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
+                    [db.sequelize.fn('MAX', db.sequelize.col('created_at')), 'last_created'],
+                    [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'attempts'],
+                ],
+                group: ['idreserva'],
+                raw: true,
+            });
+            const total = grouped.length;
+            grouped.sort((a, b) => new Date(b.last_created) - new Date(a.last_created));
+            const pageSlice = grouped.slice(offset, offset + Number(limit));
+            const attemptsById = new Map(pageSlice.map(g => [Number(g.max_id), Number(g.attempts)]));
+            const ids = pageSlice.map(g => Number(g.max_id));
+            const found = ids.length
+                ? await db.BoletoHistory.findAll({ where: { id: { [Op.in]: ids } } })
+                : [];
+            const rows = found
+                .map(r => {
+                    const j = r.toJSON();
+                    j.attempts_count = attemptsById.get(r.id) || 1;
+                    return j;
+                })
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            return res.json({ total, page: Number(page), limit: Number(limit), rows, grouped: true });
+        }
+
         const { count, rows } = await db.BoletoHistory.findAndCountAll({
             where,
             order: [['created_at', 'DESC']],
