@@ -7,10 +7,25 @@
 //
 // Uso: const buffer = await marketingApprovalPdfService.render({ request });
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dayjs from 'dayjs';
 import 'dayjs/locale/pt-br.js';
 
 dayjs.locale('pt-br');
+
+// Logo preta oficial (mesma dos e-mails) embutida como data URI — o PDF fica
+// autocontido, sem depender de rede na hora de renderizar. Lido uma vez.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LOGO_DATA_URI = (() => {
+    try {
+        const buf = fs.readFileSync(path.resolve(__dirname, '../../assets/logo-menin-black.png'));
+        return `data:image/png;base64,${buf.toString('base64')}`;
+    } catch {
+        return null;
+    }
+})();
 
 const BRAND_PRIMARY = '#0F172A'; // slate-900
 const BRAND_ACCENT = '#0EA5E9';  // sky-500
@@ -75,6 +90,7 @@ function buildHtml(request) {
   .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid ${BRAND_PRIMARY}; padding-bottom: 10px; margin-bottom: 16px; }
   .brand { font-size: 15pt; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
   .brand small { display: block; font-size: 8pt; font-weight: 400; opacity: .6; letter-spacing: 1px; margin-top: 3px; }
+  .brand .logo { height: 34px; width: auto; display: block; margin-bottom: 4px; }
   .doc-title { text-align: right; }
   .doc-title .proto { font-family: 'Courier New', monospace; font-size: 16pt; font-weight: 700; }
   .doc-title .kicker { font-size: 8pt; letter-spacing: 3px; text-transform: uppercase; opacity: .55; }
@@ -96,7 +112,9 @@ function buildHtml(request) {
 </style></head>
 <body>
   <div class="head">
-    <div class="brand">Menin<small>Marketing · Autorização de Solicitação</small></div>
+    <div class="brand">${LOGO_DATA_URI
+        ? `<img class="logo" src="${LOGO_DATA_URI}" alt="Menin" />`
+        : 'Menin'}<small>Marketing · Autorização de Solicitação</small></div>
     <div class="doc-title">
       <div class="kicker">Protocolo</div>
       <div class="proto">${escapeHtml(request.protocol)}</div>
