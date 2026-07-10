@@ -16,6 +16,7 @@ import {
     checkPaymentNow,
     retryHistoryItem,
     regenerateHistoryItem,
+    getTitularContact,
     resendBoletoToTitular,
     listComissionRules,
     createComissionRule,
@@ -56,6 +57,7 @@ router.get('/history/:id/events', authenticate, listHistoryEvents);
 router.get('/history/:id/reserva-timeline', authenticate, listReservaTimeline);
 router.post('/history/:id/retry', authenticate, requireAdmin, retryHistoryItem);
 router.post('/history/:id/regenerate', authenticate, requireAdmin, regenerateHistoryItem);
+router.get('/history/:id/titular-contact', authenticate, requireAdmin, getTitularContact);
 router.post('/history/:id/resend', authenticate, requireAdmin, resendBoletoToTitular);
 router.post('/history/:id/check-payment', authenticate, requireAdmin, checkPaymentNow);
 

@@ -1,7 +1,7 @@
 // controllers/boleto/boletoController.js
 import db from '../../models/sequelize/index.js';
 import { processBoletoWebhook } from '../../services/boleto/BoletoGenerationService.js';
-import { sendBoletoToTitular, WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANG } from '../../services/boleto/BoletoNotifyService.js';
+import BoletoNotify, { sendBoletoToTitular, WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANG } from '../../services/boleto/BoletoNotifyService.js';
 import EventLogger from '../../services/boleto/BoletoEventLogger.js';
 import { runDailyCheck } from '../../services/boleto/BoletoPaymentCheckService.js';
 import EcoLock from '../../services/boleto/BoletoEcoLockService.js';
@@ -446,6 +446,48 @@ export async function checkPaymentNow(req, res) {
 }
 
 /**
+ * Retorna os dados de contato do titular (e-mail + telefone) buscados AO VIVO
+ * do CV, junto com o status do último envio ao cliente. Usado pelo modal de
+ * confirmação de reenvio, que mostra pra quem vai antes de disparar — evitando
+ * reenvios cegos/duplicados.
+ */
+export async function getTitularContact(req, res) {
+    try {
+        const item = await db.BoletoHistory.findByPk(req.params.id);
+        if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
+
+        let titular = null;
+        try {
+            const reservaResp = await apiCv.get(`/v1/comercial/reservas/${item.idreserva}`);
+            titular = reservaResp.data?.[item.idreserva]?.titular || null;
+        } catch (err) {
+            console.warn(`[BOLETO_CONTACT] Falha buscando titular ${item.idreserva}: ${err.message}`);
+        }
+        if (!titular) {
+            return res.status(400).json({ error: 'Não foi possível buscar os dados do titular no CV. Tente novamente.' });
+        }
+
+        const email = BoletoNotify._internal.pickEmail(titular.email);
+        const picked = BoletoNotify._internal.pickTitularPhone(titular);
+
+        return res.json({
+            nome: titular.nome || null,
+            email,                              // e-mail válido (ou null)
+            email_raw: titular.email || null,   // o que veio do CV (pra debug/exibição)
+            phone: picked?.phone || null,       // E.164 só dígitos (ou null)
+            phone_source: picked?.source || null, // telefone | celular | whatsapp
+            phone_raw: picked?.raw || null,
+            has_pdf: !!item.boleto_supabase_url,
+            cliente_email_enviado: item.cliente_email_enviado,
+            cliente_whatsapp_enviado: item.cliente_whatsapp_enviado,
+            cliente_envio_em: item.cliente_envio_em,
+        });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
  * Reenvia o boleto pro titular (email + WhatsApp) sem regerar o PDF.
  * Usa o PDF já salvo no Supabase. Atualiza os flags `cliente_*` no histórico.
  *
@@ -493,6 +535,27 @@ export async function resendBoletoToTitular(req, res) {
             cliente_email_enviado: envio.email.ok || item.cliente_email_enviado,
             cliente_whatsapp_enviado: envio.whatsapp.ok || item.cliente_whatsapp_enviado,
             cliente_envio_em: new Date(),
+        });
+
+        // Registra o reenvio na timeline — antes o resend não gravava nada, então
+        // o admin não tinha como confirmar que foi enviado (e reenviava por medo).
+        await EventLogger.log({
+            historyId: item.id, idreserva: item.idreserva,
+            type: envio.email.ok ? 'client_email' : 'client_email_skipped',
+            severity: envio.email.ok ? 'success' : (envio.email.skipped ? 'warning' : 'error'),
+            message: envio.email.ok
+                ? `Reenvio manual — e-mail enviado para ${envio.email.to}`
+                : `Reenvio manual — e-mail não enviado${envio.email.to ? ` (${envio.email.to})` : ''}: ${envio.email.error}`,
+            data: { to: envio.email.to, resend: true, by: req.user?.id || null },
+        });
+        await EventLogger.log({
+            historyId: item.id, idreserva: item.idreserva,
+            type: envio.whatsapp.ok ? 'client_whatsapp' : 'client_whatsapp_skipped',
+            severity: envio.whatsapp.ok ? 'success' : (envio.whatsapp.skipped ? 'warning' : 'error'),
+            message: envio.whatsapp.ok
+                ? `Reenvio manual — WhatsApp enviado para +${envio.whatsapp.to}`
+                : `Reenvio manual — WhatsApp não enviado${envio.whatsapp.to ? ` (+${envio.whatsapp.to})` : ''}: ${envio.whatsapp.error}`,
+            data: { to: envio.whatsapp.to, resend: true, by: req.user?.id || null },
         });
 
         return res.json({
