@@ -647,6 +647,41 @@ export async function regenerateHistoryItem(req, res) {
     }
 }
 
+/**
+ * Marca um boleto pendente como BAIXADO manualmente (admin), sem passar pelo
+ * Playwright. Usado quando a baixa automática no Ecobrança falha (flakiness) e o
+ * admin já baixou o título no portal: sincroniza o nosso sistema para que o
+ * "Gerar novo boleto" emita uma nova via SEM tentar a baixa automática (que
+ * abortaria a emissão). NÃO baixa nada no banco/Ecobrança — apenas reflete no
+ * nosso histórico o que o admin já fez lá.
+ */
+export async function markHistoryCancelled(req, res) {
+    try {
+        const item = await db.BoletoHistory.findByPk(req.params.id);
+        if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
+        if (item.status !== 'success' || item.payment_status !== 'pending') {
+            return res.status(400).json({
+                error: 'Só é possível marcar como baixado um boleto emitido e ainda pendente.',
+            });
+        }
+        await item.update({
+            payment_status: 'cancelled',
+            cancelled_at: new Date(),
+            last_checked_at: new Date(),
+            last_check_situation: 'BAIXADO (manual)',
+        });
+        await EventLogger.log({
+            historyId: item.id, idreserva: item.idreserva,
+            type: 'baixa_confirmed', severity: 'warning',
+            message: `Baixa manual — boleto ${item.nosso_numero || ''} marcado como cancelado pelo admin (baixa feita diretamente no Ecobrança).`,
+            data: { manual: true, by: req.user?.id || null },
+        });
+        return res.json({ ok: true, item });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
 // ── Comission Rules (admin) ───────────────────────────────────────────────────
 
 export async function listComissionRules(req, res) {
