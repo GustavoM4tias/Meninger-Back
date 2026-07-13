@@ -231,20 +231,24 @@ async function alertMissingBindings() {
 // ────────────────────────────────────────────────────────────────────────────
 // Auto-backfill da série diária (1x na vida)
 // ────────────────────────────────────────────────────────────────────────────
-// Na primeira subida com a feature, `meta_insights_daily` está VAZIA → os
-// relatórios de períodos passados apareceriam vazios até alguém clicar em
-// "Preencher série diária". Em vez disso, se a tabela estiver vazia, disparamos
-// UMA carga de 90 dias (3 níveis) em background, sem travar o boot. Gated na
-// tabela vazia: roda uma única vez; nas próximas subidas é no-op instantâneo.
-const AUTO_BACKFILL_DAYS = Number(process.env.MARKETING_DAILY_BACKFILL_DAYS) || 90;
+// Na primeira subida com a feature, `meta_insights_daily` está VAZIA → o
+// relatório apareceria vazio até alguém clicar em "Preencher série diária".
+// Se a tabela estiver vazia, disparamos em background UMA carga LEVE (só nível
+// CAMPANHA, 30 dias) — o suficiente pros KPIs/gráfico do relatório funcionarem
+// já no primeiro boot, SEM o peso do nível de anúncio (que gera muitos
+// registros e podia dar pico de memória/DB logo após o deploy).
+// Os níveis conjunto/anúncio e janelas maiores ficam pro FULL sync (que roda
+// aos poucos) ou pro botão manual "Preencher série diária". Gated na tabela
+// vazia: roda uma única vez; nas próximas subidas é no-op instantâneo.
+const AUTO_BACKFILL_DAYS = Number(process.env.MARKETING_DAILY_BACKFILL_DAYS) || 30;
 
 async function backfillDailyIfEmpty() {
     try {
         const count = await db.MetaInsightDaily.count();
         if (count > 0) return;   // já populada — nada a fazer
-        console.log(`🌱 [insights-daily] tabela vazia → backfill inicial de ${AUTO_BACKFILL_DAYS}d (3 níveis) em background...`);
+        console.log(`🌱 [insights-daily] tabela vazia → backfill inicial LEVE de ${AUTO_BACKFILL_DAYS}d (só campanha) em background...`);
         // NÃO await — não bloqueia o boot. Erros são só logados.
-        MetaInsightsDailyService.syncDaily({ sinceDays: AUTO_BACKFILL_DAYS, levels: ['campaign', 'adset', 'ad'] })
+        MetaInsightsDailyService.syncDaily({ sinceDays: AUTO_BACKFILL_DAYS, levels: ['campaign'] })
             .then(r => console.log(`🌱 [insights-daily] backfill inicial concluído: ${r.rows_written} linhas (${r.errors.length} erros)`))
             .catch(e => console.warn(`⚠️  [insights-daily] backfill inicial falhou: ${e.message}`));
     } catch (e) {

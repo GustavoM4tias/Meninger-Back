@@ -116,7 +116,9 @@ export async function syncDaily({ sinceDays = 3, until = new Date(), levels = ['
                     console.warn(`⚠️  [insights-daily] ${acct.id}/${level}: 60 páginas atingidas — janela truncada. Reduza sinceDays.`);
                 }
 
-                // Regrava a janela da conta+nível atomicamente.
+                // Regrava a janela da conta+nível atomicamente. bulkCreate em
+                // lotes de 500 pra não montar um INSERT gigante (memória/DB) —
+                // nível de anúncio em janelas longas gera muitos registros.
                 await sequelize.transaction(async (t) => {
                     await MetaInsightDaily.destroy({
                         where: {
@@ -126,8 +128,8 @@ export async function syncDaily({ sinceDays = 3, until = new Date(), levels = ['
                         },
                         transaction: t,
                     });
-                    if (records.length) {
-                        await MetaInsightDaily.bulkCreate(records, { transaction: t });
+                    for (let i = 0; i < records.length; i += 500) {
+                        await MetaInsightDaily.bulkCreate(records.slice(i, i + 500), { transaction: t });
                     }
                 });
                 rowsWritten += records.length;
