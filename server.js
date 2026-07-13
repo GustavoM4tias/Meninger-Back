@@ -213,25 +213,62 @@ app.use('/api/docusign-oauth', docusignOauthRoutes); // callback público do log
 
 const PORT = process.env.PORT || 5000;
 
+// Timeout de segurança da fase de schema (em background). Se estourar, o
+// servidor SEGUE NO AR — só loga. Override por env SCHEMA_PHASE_TIMEOUT_MS.
+const SCHEMA_PHASE_TIMEOUT_MS = Number(process.env.SCHEMA_PHASE_TIMEOUT_MS) || 10 * 60 * 1000;
+
+function withTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`timeout de ${ms}ms na ${label}`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
+// ── Boot LISTEN-FIRST ───────────────────────────────────────────────────────
+// O servidor abre a porta ANTES da fase pesada de schema. Assim um sync lento
+// ou travado nunca mais derruba o servidor inteiro (incidente 2026-07-13): a
+// fase de schema roda em segundo plano, com timeout. O único custo: numa
+// janela de segundos logo após um deploy com mudança de schema, uma tela que
+// dependa de coluna recém-criada pode hesitar até o sync terminar.
+(async () => {
+  // 1) Banco: fail-early — sem conexão não adianta subir.
+  try {
+    await db.sequelize.authenticate();
+  } catch (err) {
+    console.error('Erro ao conectar no banco:', err);
+    return; // não escuta; Railway reinicia.
+  }
+
+  // 2) SOBE A PORTA JÁ — o site responde antes da fase de schema.
+  app.listen(PORT, () => console.log(`Servidor rodando na porta: ${PORT}`));
+
+  // 3) Fase de schema + serviços de background, DEPOIS do listen (não bloqueia).
+  initBackground().catch(err => console.error('❌ init em background falhou:', err.message));
+})();
+
+async function initBackground() {
+  try {
+    await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
+  } catch (err) {
+    console.error('⚠️  Fase de schema falhou/estourou o tempo — o servidor SEGUE NO AR. '
+      + 'Telas que dependem de schema recém-criado podem hesitar até resolver:', err.message);
+  }
+  // Schedulers + templates rodam de qualquer forma (operam em tabelas já existentes).
+  await startBackgroundServices();
+}
+
 // Gate de schema: só roda a fase de sync/patches se algo que define schema
 // mudou desde o último boot completo (fingerprint em lib/schemaSyncGate.js).
 // FORCE_DB_SYNC=true força; SKIP_DB_SYNC=true pula sempre.
-(async () => {
+async function runSchemaPhase() {
   const gate = await shouldRunSchemaSync(db.sequelize);
-
   if (!gate.run) {
     console.log(`⚡ Fase de schema pulada (${gate.reason}) — FORCE_DB_SYNC=true para forçar.`);
-    try {
-      await db.sequelize.authenticate(); // fail-early: sem banco não sobe
-    } catch (err) {
-      console.error('Erro ao conectar no banco:', err);
-      return;
-    }
-    await bootServer({ syncSchema: false });
     return;
   }
 
-  console.log(`🔧 Fase de schema vai rodar (${gate.reason}).`);
+  console.log(`🔧 Fase de schema vai rodar (${gate.reason}) — em segundo plano.`);
   try {
     // Academy: dedup + drop UNIQUE antiga ANTES do sync, para que os models
     // novos possam recriar a UNIQUE correta sem conflito com dados/índices antigos.
@@ -239,7 +276,7 @@ const PORT = process.env.PORT || 5000;
       .catch(err => console.warn('⚠️  Academy pre-sync falhou:', err.message));
     await db.sequelize.sync({ alter: false });
     console.log('Banco sincronizado com sucesso!');
-    await bootServer({ syncSchema: true, fingerprint: gate.fingerprint });
+    await syncModelsAndPatches(gate.fingerprint);
   } catch (err) {
     // ECONNRESET em conexões remotas durante ALTER TABLE — tabelas críticas sincronizadas separadamente
     if (err?.parent?.code === 'ECONNRESET' || err?.original?.code === 'ECONNRESET') {
@@ -253,16 +290,16 @@ const PORT = process.env.PORT || 5000;
         }
       }
       // Sync incompleto — sem fingerprint, pro próximo boot re-rodar a fase toda.
-      await bootServer({ syncSchema: true, fingerprint: null });
+      await syncModelsAndPatches(null);
     } else {
-      console.error('Erro ao sincronizar o banco:', err);
+      throw err; // capturado por initBackground — não derruba o servidor.
     }
   }
-})();
+}
 
-async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
-
-  if (syncSchema) {
+// Alters por model em evolução + patches ensure* + seeds + grava fingerprint.
+// Roda em SEGUNDO PLANO (depois do listen), com timeout — ver runSchemaPhase.
+async function syncModelsAndPatches(fingerprint) {
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
   // sync normal via db.sequelize.sync({ alter: false }) no boot, que cria
@@ -334,8 +371,11 @@ async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
   // Fase de schema completa e sem erro fatal → grava o fingerprint; os
   // próximos boots pulam tudo isso até algo mudar.
   await recordSchemaSync(db.sequelize, fingerprint);
-  } // fim if (syncSchema)
+}
 
+// WhatsApp templates + schedulers. Roda depois do listen (não bloqueia o boot).
+// Opera só em tabelas já existentes, então roda mesmo se a fase de schema falhar.
+async function startBackgroundServices() {
   // Provisiona template WhatsApp do boleto na Meta se faltar — assim em caso
   // de perda/recriação da conta Meta o sistema se auto-recupera. Idempotente.
   ensureBoletoWhatsappTemplate().catch(err =>
@@ -401,10 +441,6 @@ async function bootServer({ syncSchema = true, fingerprint = null } = {}) {
   if (!IS_PROD) {
     console.log('[BOOT] DEV: schedulers desligados por padrão. Ligue um específico com ENABLE_*=true no .env.');
   }
-
-  app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta: ${PORT}`);
-  });
 }
 
 //   | Ambiente        | Método recomendado            | Observações                             |
