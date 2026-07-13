@@ -181,8 +181,6 @@ export async function createTask({ checklistId, payload = {}, userId }) {
         description: payload.description || null,
         status_id: payload.status_id || null,
         priority: payload.priority || 'MEDIUM',
-        value: payload.value ?? null,
-        value_kind: payload.value_kind || null,
         // Data de contratação: se não informada, assume a data de criação da tarefa (hoje).
         contracted_at: payload.contracted_at || dayjs().format('YYYY-MM-DD'),
         due_date: payload.due_date || null,
@@ -211,7 +209,7 @@ export async function updateTask({ id, payload = {}, userId, isAdmin = false }) 
     // Permissão por papel: usuário normal só edita anotações, etapa e subtarefas
     // (anexos/comentários têm endpoints próprios). Admin edita tudo. Campos fora do
     // permitido são ignorados em silêncio (não bloqueiam a edição válida).
-    const ADMIN_FIELDS = ['section_id', 'parent_task_id', 'category', 'title', 'priority', 'value', 'value_kind', 'contracted_at', 'due_date', 'started_at', 'assignee_user_id', 'assignee_user_ids', 'assignee_label', 'needs_authorization', 'auth_profile_ids', 'position'];
+    const ADMIN_FIELDS = ['section_id', 'parent_task_id', 'category', 'title', 'priority', 'contracted_at', 'due_date', 'started_at', 'assignee_user_id', 'assignee_user_ids', 'assignee_label', 'needs_authorization', 'auth_profile_ids', 'position'];
     const USER_FIELDS = ['description', 'status_id', 'checklist_items'];
     const allowed = isAdmin ? [...ADMIN_FIELDS, ...USER_FIELDS] : USER_FIELDS;
 
@@ -293,7 +291,9 @@ export async function reorderTasks({ items = [], userId }) {
         const patch = {};
         if ('section_id' in it) patch.section_id = it.section_id;
         if ('position' in it) patch.position = it.position;
-        if (Object.keys(patch).length) await db.ChecklistTask.update(patch, { where: { id: Number(it.id) } });
+        // Arraste entre categorias: a categoria também acompanha a tarefa.
+        if ('category' in it) patch.category = it.category || null;
+        if (Object.keys(patch).length) { patch.updated_by = userId || null; await db.ChecklistTask.update(patch, { where: { id: Number(it.id) } }); }
     }
     return { ok: true };
 }
@@ -456,7 +456,7 @@ export async function bulkUpdate({ ids = [], patch = {}, userId }) {
     }
 
     // Campos uniformes aplicados aos selecionados.
-    const allowed = ['section_id', 'category', 'status_id', 'priority', 'due_date', 'contracted_at', 'assignee_user_id', 'assignee_label', 'value', 'value_kind'];
+    const allowed = ['section_id', 'category', 'status_id', 'priority', 'due_date', 'contracted_at', 'assignee_user_id', 'assignee_label'];
     const data = {};
     for (const f of allowed) if (f in patch) data[f] = patch[f];
     // Atribuição em lote sincroniza o array de responsáveis (multi-responsável).
