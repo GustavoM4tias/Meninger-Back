@@ -21,6 +21,13 @@ const LEAD_STATUSES = [
 // Janelas suportadas pelo health (em horas). 0 = sem corte (tudo).
 const HEALTH_PERIODS = { '24h': 24, '7d': 168, '30d': 720, 'all': 0 };
 
+// Converte 'YYYY-MM-DD' em bordas de dia em America/Sao_Paulo (UTC-3 fixo —
+// o Brasil não tem mais horário de verão). Sem isso, new Date('YYYY-MM-DD')
+// vira meia-noite UTC (21h do dia anterior em SP) e as contagens divergem das
+// telas Meta/Leads nas bordas do período.
+function spDayStart(ymd) { return new Date(`${ymd}T00:00:00.000-03:00`); }
+function spDayEnd(ymd)   { return new Date(`${ymd}T23:59:59.999-03:00`); }
+
 // Lista paginada com enriquecimento (nome de campanha/form/page + data de entrada
 // na Meta extraída do raw_payload via literal SQL).
 export async function listInboundLeads(req, res) {
@@ -48,12 +55,8 @@ export async function listInboundLeads(req, res) {
         }
         if (period_start || period_end) {
             where.created_at = {};
-            if (period_start) where.created_at[Op.gte] = new Date(period_start);
-            if (period_end) {
-                const end = new Date(period_end);
-                end.setHours(23, 59, 59, 999);
-                where.created_at[Op.lte] = end;
-            }
+            if (period_start) where.created_at[Op.gte] = spDayStart(String(period_start).slice(0, 10));
+            if (period_end)   where.created_at[Op.lte] = spDayEnd(String(period_end).slice(0, 10));
         }
         if (q && String(q).trim()) {
             const term = `%${String(q).trim()}%`;
@@ -301,11 +304,15 @@ export async function unmarkSpam(req, res) {
     }
 }
 
-// Painel de saúde + KPIs agregados por período (?period=24h|7d|30d|all).
+// Painel de saúde + KPIs agregados por período.
+// Preferencial: ?since=YYYY-MM-DD&until=YYYY-MM-DD (mesmo PeriodPicker das
+// outras telas de marketing). Legado: ?period=24h|7d|30d|all.
 // Devolve contadores globais e, separadamente, os agregados do período pra
 // alimentar os KPIs/visualizações da tela de captação.
 export async function captureHealth(req, res) {
     try {
+        const since = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since || '')) ? String(req.query.since) : null;
+        const until = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.until || '')) ? String(req.query.until) : null;
         const period = String(req.query.period || '7d').toLowerCase();
         const hours = HEALTH_PERIODS[period] ?? HEALTH_PERIODS['7d'];
 
@@ -320,17 +327,23 @@ export async function captureHealth(req, res) {
         for (const row of grouped) counts[row.status] = Number(row.count);
 
         const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const [deadLetter, failed24h, oldestHeld, oldestFailed] = await Promise.all([
+        const [deadLetter, failed24h, oldestHeld, oldestFailed, pendingFetch] = await Promise.all([
             InboundLead.count({ where: { status: 'failed', next_retry_at: { [Op.is]: null } } }),
             InboundLead.count({ where: { status: 'failed', last_dispatch_at: { [Op.gte]: since24h } } }),
             InboundLead.findOne({ where: { status: 'held' }, order: [['created_at', 'ASC']] }),
             InboundLead.findOne({ where: { status: 'failed' }, order: [['created_at', 'ASC']] }),
+            // Webhook chegou mas o fetch dos dados na Graph falhou (stub re-tentável).
+            InboundLead.count({ where: { status: 'received', error_code: 'graph_fetch_failed' } }),
         ]);
 
         // ── Período: KPIs do recorte selecionado ─────────────────────────────────
-        const periodWhere = hours > 0
-            ? { created_at: { [Op.gte]: new Date(Date.now() - hours * 60 * 60 * 1000) } }
-            : {};
+        // since/until (bordas de dia em America/Sao_Paulo) tem prioridade sobre
+        // o period legado por horas.
+        const periodWhere = (since && until)
+            ? { created_at: { [Op.between]: [spDayStart(since), spDayEnd(until)] } }
+            : hours > 0
+                ? { created_at: { [Op.gte]: new Date(Date.now() - hours * 60 * 60 * 1000) } }
+                : {};
 
         const periodGrouped = await InboundLead.findAll({
             where: periodWhere,
@@ -388,11 +401,13 @@ export async function captureHealth(req, res) {
             ok: true,
             dry_run: mktCfg ? !!mktCfg.dry_run : (process.env.MARKETING_CAPTURE_DRY_RUN === 'true'),
             period,
+            period_range: (since && until) ? { since, until } : null,
             counts,                  // global
             dead_letter: deadLetter,
             failed_24h: failed24h,
             oldest_held: oldestHeld,
             oldest_failed: oldestFailed,
+            pending_fetch: pendingFetch,
             // recorte:
             period_counts,
             period_total,

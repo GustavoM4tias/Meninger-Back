@@ -31,6 +31,10 @@ export default (sequelize, DataTypes) => {
         clicks:      { type: DataTypes.INTEGER, defaultValue: 0 },
         reach:       { type: DataTypes.INTEGER, defaultValue: 0 },      // não-aditivo entre dias — não somar em totais
         meta_leads:  { type: DataTypes.INTEGER, defaultValue: 0 },
+        // Desdobramento: formulário Meta × pixel (form + pixel = meta_leads).
+        // Linhas antigas (antes do desdobramento) ficam com 0/0 até re-sync.
+        meta_leads_form:  { type: DataTypes.INTEGER, defaultValue: 0 },
+        meta_leads_pixel: { type: DataTypes.INTEGER, defaultValue: 0 },
     }, {
         tableName: 'meta_insights_daily',
         underscored: true,

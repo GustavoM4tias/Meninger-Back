@@ -14,6 +14,7 @@ import cron from 'node-cron';
 import { Op } from 'sequelize';
 import db from '../models/sequelize/index.js';
 import { dispatchLead } from '../services/marketing/CvLeadDispatchService.js';
+import { retryPendingGraphFetches } from '../services/marketing/MetaLeadAdsService.js';
 import { recordLeadEvent } from '../services/marketing/leadEventLog.js';
 import MarketingConfigService from '../services/marketing/MarketingConfigService.js';
 
@@ -32,6 +33,15 @@ const BATCH = 50;
 
 async function runCycle() {
     const { InboundLead } = db;
+
+    // 0) Re-tenta fetch na Graph API de stubs pendentes (webhook chegou mas a
+    //    busca dos dados falhou — antes esses leads eram perdidos em silêncio).
+    try {
+        const refetched = await retryPendingGraphFetches({ limit: 20 });
+        if (refetched > 0) console.log(`🔁 [MarketingDispatch] ${refetched} fetch(es) pendente(s) da Graph re-tentado(s).`);
+    } catch (err) {
+        console.error(`❌ [MarketingDispatch] retry de fetches pendentes: ${err.message}`);
+    }
 
     // 1) Recupera leads presos em 'dispatching' (crash no meio do POST).
     const stuckCutoff = new Date(Date.now() - STUCK_DISPATCHING_MIN * 60 * 1000);
