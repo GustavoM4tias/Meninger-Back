@@ -20,7 +20,6 @@ export function stateClassOf(task, statusMap) {
 // Agregados a partir das tarefas + catálogo. CANCELLED sai do denominador.
 export function computeProgress(tasks, statusMap, { today = dayjs().format('YYYY-MM-DD') } = {}) {
     let total = 0, done = 0, in_progress = 0, blocked = 0, todo = 0, overdue = 0;
-    let budget = 0, budget_monthly = 0;
     for (const t of tasks) {
         const sc = stateClassOf(t, statusMap);
         if (sc === 'CANCELLED') continue;
@@ -30,11 +29,9 @@ export function computeProgress(tasks, statusMap, { today = dayjs().format('YYYY
         else if (sc === 'IN_PROGRESS') in_progress++;
         else todo++;
         if (t.due_date && sc !== 'DONE' && String(t.due_date) < today) overdue++;
-        const v = Number(t.value) || 0;
-        if (t.value_kind === 'MONTHLY') budget_monthly += v; else budget += v;
     }
     const pct = total ? Math.round((done / total) * 100) : 0;
-    return { total, done, in_progress, blocked, todo, overdue, pct, budget, budget_monthly };
+    return { total, done, in_progress, blocked, todo, overdue, pct };
 }
 
 // Recalcula e persiste o cache de progresso do checklist.
@@ -42,7 +39,7 @@ export async function recomputeProgress(checklistId) {
     const [tasks, statusMap] = await Promise.all([
         db.ChecklistTask.findAll({
             where: { checklist_id: checklistId },
-            attributes: ['id', 'status_id', 'due_date', 'value', 'value_kind'],
+            attributes: ['id', 'status_id', 'due_date'],
             raw: true,
         }),
         loadStatusMap(),

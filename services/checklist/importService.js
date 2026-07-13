@@ -1,6 +1,6 @@
 // services/checklist/importService.js
 // Importa um checklist a partir de um .xlsx no formato dos checklists atuais
-// (1 aba = 1 seção; colunas TAREFA/CATEGORIA/STATUS/VALORES/DATAS/RESPONSÁVEL/ANOTAÇÕES).
+// (1 aba = 1 seção; colunas TAREFA/CATEGORIA/STATUS/DATAS/RESPONSÁVEL/ANOTAÇÕES).
 import XLSX from 'xlsx';
 import db from '../../models/sequelize/index.js';
 import { loadStatusMap, recomputeProgress, logActivity } from './lib.js';
@@ -15,7 +15,6 @@ const COLMAP = {
     'CATEGORIA': 'category',
     'STATUS': 'status',
     'PRIORIDADE': 'priority',
-    'VALORES': 'value', 'VALOR': 'value',
     'DATA DE CONTRATACAO': 'contracted_at', 'DATA CONTRATACAO': 'contracted_at',
     'DATA PARA ENTREGA': 'due_date', 'DATA DE ENTREGA': 'due_date', 'ENTREGA': 'due_date',
     'RESPONSAVEL': 'assignee_label',
@@ -33,15 +32,6 @@ function toDateOnly(v) {
     }
     const d = new Date(s);
     return isNaN(d) ? null : d.toISOString().slice(0, 10);
-}
-
-function toNumber(v) {
-    if (v === null || v === undefined || v === '') return null;
-    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-    // "R$ 1.200,50" -> 1200.50
-    const cleaned = String(v).replace(/[^\d.,-]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
-    const n = Number(cleaned);
-    return Number.isFinite(n) ? n : null;
 }
 
 export async function importFromExcel({ buffer, fileName, title, userId }) {
@@ -108,7 +98,6 @@ export async function importFromExcel({ buffer, fileName, title, userId }) {
                 description: rec.description ? String(rec.description).trim() : null,
                 status_id: rec.status ? (statusByNorm.get(norm(rec.status)) || null) : null,
                 priority: 'MEDIUM',
-                value: toNumber(rec.value),
                 contracted_at: toDateOnly(rec.contracted_at),
                 due_date: toDateOnly(rec.due_date),
                 assignee_label: rec.assignee_label ? String(rec.assignee_label).trim() : null,

@@ -123,7 +123,7 @@ export async function createChecklist({ payload = {}, userId }) {
         status: 'active',
         created_by: userId || null,
         updated_by: userId || null,
-        progress_cache: { total: 0, done: 0, pct: 0, overdue: 0, budget: 0 },
+        progress_cache: { total: 0, done: 0, pct: 0, overdue: 0 },
     });
     await logActivity({ checklistId: checklist.id, userId, action: 'checklist.created', meta: { title } });
     return getChecklistFull({ id: checklist.id });
@@ -156,7 +156,7 @@ export async function cloneChecklist({ id, userId, title }) {
         kind: src.kind, idempreendimento: src.idempreendimento, display_name: src.display_name,
         cost_center: src.cost_center, key_dates: src.key_dates || [], owner_user_id: userId || src.owner_user_id || null,
         color: src.color, reminder_mode: src.reminder_mode, status: 'draft',
-        progress_cache: { total: 0, done: 0, pct: 0, overdue: 0, budget: 0 },
+        progress_cache: { total: 0, done: 0, pct: 0, overdue: 0 },
         created_by: userId || null, updated_by: userId || null,
     });
     const secMap = new Map();
@@ -173,7 +173,7 @@ export async function cloneChecklist({ id, userId, title }) {
         const nt = await db.ChecklistTask.create({
             checklist_id: clone.id, section_id: sectionId, parent_task_id: t.parent_task_id ? (taskMap.get(t.parent_task_id) || null) : null,
             category: t.category, title: t.title, description: t.description, status_id: t.status_id,
-            priority: t.priority, value: t.value, value_kind: t.value_kind,
+            priority: t.priority,
             contracted_at: t.contracted_at, due_date: t.due_date,
             assignee_user_id: t.assignee_user_id, assignee_user_ids: t.assignee_user_ids || [], assignee_label: t.assignee_label,
             checklist_items: t.checklist_items || [], needs_authorization: t.needs_authorization, auth_profile_ids: t.auth_profile_ids || [],
@@ -241,7 +241,7 @@ export async function dashboard({ userId, isAdmin = true }) {
     const tasks = ids.length ? await db.ChecklistTask.findAll({
         where: { checklist_id: ids },
         include: [{ association: 'assignee', attributes: ['id', 'username'], required: false }],
-        attributes: ['id', 'checklist_id', 'status_id', 'priority', 'due_date', 'value', 'value_kind', 'assignee_user_id', 'assignee_user_ids', 'assignee_label', 'title'],
+        attributes: ['id', 'checklist_id', 'status_id', 'priority', 'due_date', 'assignee_user_id', 'assignee_user_ids', 'assignee_label', 'title'],
     }) : [];
 
     // Mapa de nomes p/ todos os responsáveis (multi-responsável).
@@ -254,7 +254,7 @@ export async function dashboard({ userId, isAdmin = true }) {
     const today = dayjs().format('YYYY-MM-DD');
     const weekEnd = dayjs().add(7, 'day').format('YYYY-MM-DD');
 
-    let totalTasks = 0, totalDone = 0, totalOverdue = 0, totalBudget = 0, totalMonthly = 0;
+    let totalTasks = 0, totalDone = 0, totalOverdue = 0;
     const byStatus = { TODO: 0, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 };
     const byAssignee = new Map();
     const dueSoon = [];
@@ -267,11 +267,9 @@ export async function dashboard({ userId, isAdmin = true }) {
         totalTasks++;
         if (byStatus[sc] !== undefined) byStatus[sc]++;
         if (sc === 'DONE') totalDone++;
-        const v = Number(t.value) || 0;
-        if (t.value_kind === 'MONTHLY') totalMonthly += v; else totalBudget += v;
 
         const isOverdue = t.due_date && sc !== 'DONE' && String(t.due_date) < today;
-        const item = { id: t.id, title: t.title, checklist_id: t.checklist_id, checklistTitle: checklistTitle.get(t.checklist_id), due_date: t.due_date, assignee: t.assignee?.username || t.assignee_label || null, priority: t.priority, state_class: sc, status_label: t.status_id ? (statusMap.get(t.status_id)?.label || null) : null, value: t.value };
+        const item = { id: t.id, title: t.title, checklist_id: t.checklist_id, checklistTitle: checklistTitle.get(t.checklist_id), due_date: t.due_date, assignee: t.assignee?.username || t.assignee_label || null, priority: t.priority, state_class: sc, status_label: t.status_id ? (statusMap.get(t.status_id)?.label || null) : null };
         if (isOverdue) { totalOverdue++; overdue.push(item); }
         else if (sc !== 'DONE' && t.due_date && t.due_date >= today && t.due_date <= weekEnd) dueSoon.push(item);
 
@@ -299,7 +297,7 @@ export async function dashboard({ userId, isAdmin = true }) {
     return {
         summary: {
             checklists: checklists.length,
-            totalTasks, totalDone, totalOverdue, totalBudget, totalMonthly,
+            totalTasks, totalDone, totalOverdue,
             pct: totalTasks ? Math.round((totalDone / totalTasks) * 100) : 0,
         },
         byStatus,

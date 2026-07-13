@@ -9,7 +9,6 @@ export default (sequelize, DataTypes) => {
         title: { type: DataTypes.STRING(300), allowNull: false },
         category: { type: DataTypes.STRING(120), allowNull: true },
         default_priority: { type: DataTypes.STRING(20), allowNull: true, defaultValue: 'MEDIUM' },
-        default_value: { type: DataTypes.DECIMAL(15, 2), allowNull: true },
         // Dica de responsável (cargo/papel) a mapear para um usuário no instantiate.
         default_assignee_role: { type: DataTypes.STRING(120), allowNull: true },
         // Responsável padrão (usuário real) — vai direto p/ a tarefa criada.

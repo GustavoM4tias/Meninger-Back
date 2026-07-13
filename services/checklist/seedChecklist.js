@@ -207,13 +207,10 @@ async function seedLaunchTemplate() {
                 title: it.title,
                 category: it.category || null,
                 default_priority: 'MEDIUM',
-                default_value: it.value ?? null,
                 default_assignee_role: it.assignee || null,
                 due_anchor: it.anchor || null,
                 due_offset_days: it.offset ?? null,
-                notes_template: it.notes
-                    ? (it.valueKind === 'MONTHLY' ? `${it.notes} (valor mensal)` : it.notes)
-                    : (it.valueKind === 'MONTHLY' ? 'Valor mensal' : null),
+                notes_template: it.notes || null,
                 position: iPos,
             });
         }

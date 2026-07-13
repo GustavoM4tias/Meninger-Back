@@ -92,7 +92,6 @@ export async function instantiate({ templateId, payload = {}, userId }) {
             description: it.notes_template || null,
             status_id: defaultStatus?.id || null,
             priority: it.default_priority || 'MEDIUM',
-            value: it.default_value ?? null,
             due_date: due,
             assignee_user_id: mapped || null,
             assignee_user_ids: mapped ? [mapped] : [],
@@ -164,7 +163,7 @@ export async function removeTemplateSection({ id }) {
     return { ok: true };
 }
 
-const ITEM_FIELDS = ['section_id', 'title', 'category', 'default_priority', 'default_value', 'default_assignee_role', 'default_assignee_user_id', 'due_anchor', 'due_offset_days', 'notes_template', 'position'];
+const ITEM_FIELDS = ['section_id', 'title', 'category', 'default_priority', 'default_assignee_role', 'default_assignee_user_id', 'due_anchor', 'due_offset_days', 'notes_template', 'position'];
 export async function saveTemplateItem({ templateId, payload = {} }) {
     if (payload.id) {
         const it = await db.ChecklistTemplateItem.findByPk(Number(payload.id));

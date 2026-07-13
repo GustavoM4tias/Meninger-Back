@@ -10,9 +10,6 @@ export default (sequelize, DataTypes) => {
         status_id: { type: DataTypes.INTEGER, allowNull: true },
         // LOW | MEDIUM | HIGH | URGENT
         priority: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'MEDIUM' },
-        value: { type: DataTypes.DECIMAL(15, 2), allowNull: true },
-        // ONE_TIME | MONTHLY (custos recorrentes do Excel: "MENSAL")
-        value_kind: { type: DataTypes.STRING(20), allowNull: true },
         contracted_at: { type: DataTypes.DATEONLY, allowNull: true }, // data de contratação/cadastro
         due_date: { type: DataTypes.DATEONLY, allowNull: true },      // data para entrega/prevista
         started_at: { type: DataTypes.DATEONLY, allowNull: true },
