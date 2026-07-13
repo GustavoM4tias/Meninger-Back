@@ -12,10 +12,14 @@
 
 import crypto from 'crypto';
 import axios from 'axios';
+import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { captureLead } from './LeadCaptureService.js';
+import { recordLeadEvent } from './leadEventLog.js';
 import MarketingConfigService from './MarketingConfigService.js';
 import MetaLeadFormService from './MetaLeadFormService.js';
+import NotificationService from '../notification/NotificationService.js';
+import { NotificationType } from '../notification/notificationTypes.js';
 
 // Lê config do banco (com fallback pro .env). Cache interno do service.
 async function getMetaCfg() {
@@ -326,23 +330,140 @@ export async function resolveLeadBinding({ campaignId = null, adId = null, formI
     return { binding, attribution, cvExtraFields, resolvedCampaignId, mappingSource };
 }
 
+// ── Fetch resiliente ────────────────────────────────────────────────────────
+// O Meta NÃO reenvia o webhook depois do nosso ACK 200 — se o fetch na Graph
+// API falhar (token, timeout, rate limit), o lead evaporava sem registro nem
+// alerta (a Meta contava, o Office nunca via). Agora a falha vira um STUB
+// re-tentável em inbound_leads (status 'received' + error_code
+// 'graph_fetch_failed') que o marketingDispatchScheduler re-busca com backoff.
+
+const FETCH_MAX_ATTEMPTS = Number(process.env.MARKETING_FETCH_MAX_ATTEMPTS) || 6;
+
+function fetchBackoffMs(attempts) {
+    // 5, 10, 20, 40, 80 min... cap 2h.
+    return Math.min(5 * 60_000 * 2 ** Math.max(0, attempts - 1), 2 * 60 * 60_000);
+}
+
+async function alertFetchDead(lead) {
+    try {
+        const admins = await db.User.findAll({ where: { role: 'admin', status: true }, attributes: ['id'] });
+        const userIds = admins.map(u => u.id);
+        if (!userIds.length) return;
+        await NotificationService.notify({
+            type: NotificationType.LEAD_DISPATCH_FAILED,
+            recipients: { users: userIds },
+            title: 'Lead da Meta sem dados após várias tentativas',
+            body: `O webhook recebeu o lead ${lead.meta_leadgen_id}, mas a busca dos dados na Graph API falhou ${FETCH_MAX_ATTEMPTS}x (${lead.last_error || 'erro desconhecido'}). Verifique o token da Meta em Configurações › Meta e use "Sincronizar Meta" na Captação pra importar o histórico.`,
+            link: `/marketing/captacao?lead=${lead.id}`,
+            importance: 8,
+        });
+    } catch (e) {
+        console.error(`[marketing-capture] falha ao alertar fetch dead-letter: ${e.message}`);
+    }
+}
+
+/** Registra (ou atualiza) o stub de um leadgen cujo fetch falhou. */
+async function persistPendingFetch(value, err, pendingLead = null) {
+    const leadgenId = String(value?.leadgen_id || '');
+    try {
+        if (!pendingLead) {
+            pendingLead = await db.InboundLead.create({
+                channel: 'meta_lead_ads',
+                status: 'received',
+                error_code: 'graph_fetch_failed',
+                last_error: err.message,
+                next_retry_at: new Date(Date.now() + fetchBackoffMs(1)),
+                meta_leadgen_id: leadgenId || null,
+                meta_form_id: value?.form_id != null ? String(value.form_id) : null,
+                meta_page_id: value?.page_id != null ? String(value.page_id) : null,
+                meta_ad_id:   value?.ad_id   != null ? String(value.ad_id)   : null,
+                raw_payload: { webhook: value, fetch_attempts: 1 },
+            });
+            await recordLeadEvent({
+                leadId: pendingLead.id, type: 'received', statusTo: 'received',
+                message: `Webhook recebido, mas a busca dos dados na Graph API falhou: ${err.message}. Re-tentativa automática agendada.`,
+            });
+            console.warn(`⚠️  [marketing-capture] fetch do leadgen ${leadgenId} falhou (${err.message}) — stub re-tentável criado (${pendingLead.id}).`);
+        } else {
+            const attempts = (Number(pendingLead.raw_payload?.fetch_attempts) || 1) + 1;
+            pendingLead.raw_payload = { ...(pendingLead.raw_payload || {}), fetch_attempts: attempts };
+            pendingLead.last_error = err.message;
+            if (attempts >= FETCH_MAX_ATTEMPTS) {
+                pendingLead.next_retry_at = null;   // esgotou — requer ação manual
+                await pendingLead.save();
+                await recordLeadEvent({
+                    leadId: pendingLead.id, type: 'dispatch_failed', actor: 'scheduler',
+                    message: `Fetch na Graph API falhou ${attempts}x — sem novas tentativas automáticas. Último erro: ${err.message}`,
+                });
+                await alertFetchDead(pendingLead);
+                console.error(`❌ [marketing-capture] leadgen ${leadgenId}: fetch esgotou ${attempts} tentativas.`);
+            } else {
+                pendingLead.next_retry_at = new Date(Date.now() + fetchBackoffMs(attempts));
+                await pendingLead.save();
+                console.warn(`⚠️  [marketing-capture] fetch do leadgen ${leadgenId} falhou de novo (${attempts}/${FETCH_MAX_ATTEMPTS}).`);
+            }
+        }
+    } catch (e) {
+        console.error(`❌ [marketing-capture] falha ao persistir pendência de fetch do leadgen ${leadgenId}: ${e.message}`);
+    }
+}
+
+/**
+ * Re-tenta o fetch dos stubs pendentes (chamado pelo marketingDispatchScheduler).
+ * @returns {number} quantos stubs foram processados
+ */
+export async function retryPendingGraphFetches({ limit = 20 } = {}) {
+    const due = await db.InboundLead.findAll({
+        where: {
+            status: 'received',
+            error_code: 'graph_fetch_failed',
+            next_retry_at: { [Op.lte]: new Date() },
+        },
+        order: [['next_retry_at', 'ASC']],
+        limit,
+    });
+    for (const lead of due) {
+        const value = lead.raw_payload?.webhook || {
+            leadgen_id: lead.meta_leadgen_id,
+            form_id: lead.meta_form_id,
+            ad_id: lead.meta_ad_id,
+            page_id: lead.meta_page_id,
+        };
+        try {
+            await processOneLead(value, { pendingLead: lead });
+        } catch (err) {
+            console.error(`❌ [marketing-capture] retry de fetch do lead ${lead.id}: ${err.message}`);
+        }
+    }
+    return due.length;
+}
+
 // ── Processamento do payload ────────────────────────────────────────────────
 
-async function processOneLead(value) {
+async function processOneLead(value, { pendingLead = null } = {}) {
     const leadgenId = value?.leadgen_id;
     if (!leadgenId) return;
 
-    // Idempotência: o Meta pode reenviar o mesmo evento.
-    const already = await db.InboundLead.findOne({
-        where: { meta_leadgen_id: String(leadgenId) },
-        attributes: ['id'],
-    });
-    if (already) {
-        console.log(`ℹ️  [marketing-capture] leadgen ${leadgenId} já capturado — ignorado.`);
-        return;
+    // Idempotência: o Meta pode reenviar o mesmo evento. (No retry de um stub,
+    // o registro existente É o próprio stub — não é duplicata.)
+    if (!pendingLead) {
+        const already = await db.InboundLead.findOne({
+            where: { meta_leadgen_id: String(leadgenId) },
+            attributes: ['id'],
+        });
+        if (already) {
+            console.log(`ℹ️  [marketing-capture] leadgen ${leadgenId} já capturado — ignorado.`);
+            return;
+        }
     }
 
-    const graphLead = await fetchLead(leadgenId);
+    let graphLead;
+    try {
+        graphLead = await fetchLead(leadgenId);
+    } catch (err) {
+        await persistPendingFetch(value, err, pendingLead);
+        return;
+    }
     const platform = norm(graphLead.platform);
     const platformOrigem = (platform === 'ig' || platform === 'instagram') ? 'IG' : 'FB';
 
@@ -398,8 +519,9 @@ async function processOneLead(value) {
             campaign_id: campaignId,           // já pode ter sido resolvido via fallback ad→campanha
         },
         rawPayload: { webhook: value, graph: graphLead },
+        existingLead: pendingLead,             // stub de fetch falho → completa em vez de criar
     });
-    console.log(`✅ [marketing-capture] lead Meta ${leadgenId} capturado.`);
+    console.log(`✅ [marketing-capture] lead Meta ${leadgenId} capturado${pendingLead ? ' (recuperado após falha de fetch)' : ''}.`);
 }
 
 /**
@@ -420,4 +542,4 @@ export async function processLeadgenPayload(payload) {
     }
 }
 
-export default { verifySignature, verifyHandshake, fetchLead, parseLeadFields, processLeadgenPayload };
+export default { verifySignature, verifyHandshake, fetchLead, parseLeadFields, processLeadgenPayload, retryPendingGraphFetches };

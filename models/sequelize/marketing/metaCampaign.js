@@ -41,6 +41,11 @@ export default (sequelize, DataTypes) => {
     // Útil pra ver histórico de campanhas antigas que não passaram pelo nosso
     // webhook. Separado de lead_stats.total (que vem do nosso inbound_leads).
     meta_leads_total: { type: DataTypes.INTEGER, defaultValue: 0 },
+    // Desdobramento do total: formulário Meta (chega pelo webhook de Lead Ads)
+    // × pixel (conversão no site/LP — nunca passa pelo webhook). form + pixel
+    // = total; ver services/marketing/metaLeadExtract.js.
+    meta_leads_form:  { type: DataTypes.INTEGER, defaultValue: 0 },
+    meta_leads_pixel: { type: DataTypes.INTEGER, defaultValue: 0 },
 
     // ── Sync metadata ────────────────────────────────────────────────────────
     last_synced_at:   { type: DataTypes.DATE },

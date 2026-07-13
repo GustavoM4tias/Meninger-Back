@@ -31,13 +31,29 @@ const EDITABLE = [
     'cv_extra_fields',
 ];
 
-/** Anexa stats agregados de inbound_leads (total, 30d, delivered, held, etc.) por form. */
-async function attachStats(forms) {
+// Bordas de dia em America/Sao_Paulo (UTC-3 fixo) — mesmo critério da tela de
+// Captação, pra contagem bater entre telas.
+function spDayStart(ymd) { return new Date(`${ymd}T00:00:00.000-03:00`); }
+function spDayEnd(ymd)   { return new Date(`${ymd}T23:59:59.999-03:00`); }
+
+/**
+ * Anexa stats agregados de inbound_leads por form.
+ * Sem período: total lifetime + last_30d (legado).
+ * Com { since, until }: as MESMAS métricas recortadas no período — a tela usa
+ * o PeriodPicker padrão e as colunas passam a responder ao período.
+ */
+async function attachStats(forms, { since = null, until = null } = {}) {
     if (!forms.length) return forms;
     const ids = forms.map(f => f.id);
 
+    const where = { source_form_id: { [Op.in]: ids } };
+    const hasPeriod = !!(since && until);
+    if (hasPeriod) {
+        where.created_at = { [Op.between]: [spDayStart(since), spDayEnd(until)] };
+    }
+
     const stats = await InboundLead.findAll({
-        where: { source_form_id: { [Op.in]: ids } },
+        where,
         attributes: [
             ['source_form_id', 'source_form_id'],
             [fn('COUNT', col('id')), 'total'],
@@ -69,6 +85,7 @@ async function attachStats(forms) {
         const plain = f.get({ plain: true });
         return {
             ...plain,
+            stats_period: hasPeriod ? { since, until } : null,
             stats: byFormId.get(plain.id) || {
                 total: 0, last_30d: 0, delivered: 0, held: 0, spam: 0, failed: 0, last_lead_at: null,
             },
@@ -78,8 +95,10 @@ async function attachStats(forms) {
 
 export async function listLeadForms(req, res) {
     try {
+        const since = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since || '')) ? String(req.query.since) : null;
+        const until = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.until || '')) ? String(req.query.until) : null;
         const forms = await LeadForm.findAll({ order: [['id', 'DESC']] });
-        const withStats = await attachStats(forms);
+        const withStats = await attachStats(forms, { since, until });
         return res.json({ ok: true, results: withStats });
     } catch (err) {
         console.error(`❌ [marketing-capture] listLeadForms: ${err.message}`);

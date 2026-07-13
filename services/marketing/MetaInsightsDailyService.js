@@ -19,27 +19,11 @@ import axios from 'axios';
 import { Op, fn, col, literal } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { getCreds, listAdAccounts } from './MetaCampaignService.js';
+import { extractLeadBreakdown } from './metaLeadExtract.js';
 
 const { MetaInsightDaily, MetaCampaign, MetaAdSet, MetaAd, sequelize } = db;
 
 const LEVELS = ['campaign', 'adset', 'ad'];
-
-// Mesmos action_types de lead do MetaCampaignService.
-const LEAD_ACTION_TYPES = [
-    'lead',
-    'onsite_conversion.lead_grouped',
-    'leadgen.other',
-    'offsite_conversion.fb_pixel_lead',
-];
-
-function extractLeads(actions) {
-    if (!Array.isArray(actions)) return 0;
-    for (const t of LEAD_ACTION_TYPES) {
-        const f = actions.find(a => a.action_type === t);
-        if (f && Number(f.value) > 0) return Number(f.value);
-    }
-    return 0;
-}
 
 function ymd(d) { return d.toISOString().slice(0, 10); }
 
@@ -93,6 +77,7 @@ export async function syncDaily({ sinceDays = 3, until = new Date(), levels = ['
                     for (const row of data) {
                         const entityId = row[ENTITY_ID_FIELD[level]];
                         if (!entityId || !row.date_start) continue;
+                        const bd = extractLeadBreakdown(row.actions);
                         records.push({
                             entity_level: level,
                             entity_id:    String(entityId),
@@ -104,7 +89,9 @@ export async function syncDaily({ sinceDays = 3, until = new Date(), levels = ['
                             impressions:  Number(row.impressions) || 0,
                             clicks:       Number(row.clicks) || 0,
                             reach:        Number(row.reach) || 0,
-                            meta_leads:   extractLeads(row.actions),
+                            meta_leads:       bd.total,
+                            meta_leads_form:  bd.form,
+                            meta_leads_pixel: bd.pixel,
                         });
                     }
                     const next = r.data?.paging?.next;
@@ -166,10 +153,12 @@ function buildWhere({ level, since, until, accountIds, campaignId, adsetId }) {
 }
 
 const SUM_ATTRS = [
-    [fn('SUM', col('spend')),       'spend'],
-    [fn('SUM', col('impressions')), 'impressions'],
-    [fn('SUM', col('clicks')),      'clicks'],
-    [fn('SUM', col('meta_leads')),  'meta_leads'],
+    [fn('SUM', col('spend')),            'spend'],
+    [fn('SUM', col('impressions')),      'impressions'],
+    [fn('SUM', col('clicks')),           'clicks'],
+    [fn('SUM', col('meta_leads')),       'meta_leads'],
+    [fn('SUM', col('meta_leads_form')),  'meta_leads_form'],
+    [fn('SUM', col('meta_leads_pixel')), 'meta_leads_pixel'],
 ];
 
 /** Deriva CTR/CPM/CPC/CAC a partir das somas do período. */
@@ -182,6 +171,10 @@ function derive(m) {
         spend: +spend.toFixed(2),
         impressions, clicks,
         meta_leads_total: leads,
+        // Desdobramento form × pixel. Linhas sincronizadas antes do desdobramento
+        // têm 0/0 — o front só exibe o breakdown quando form + pixel > 0.
+        meta_leads_form:  Number(m.meta_leads_form)  || 0,
+        meta_leads_pixel: Number(m.meta_leads_pixel) || 0,
         ctr: impressions > 0 ? +((clicks / impressions) * 100).toFixed(4) : null,
         cpm: impressions > 0 ? +((spend / impressions) * 1000).toFixed(2) : null,
         cpc: clicks > 0 ? +(spend / clicks).toFixed(2) : null,
@@ -317,6 +310,8 @@ export async function getReport({ since, until, level = 'campaign', accountIds =
         impressions: Number(s.impressions) || 0,
         clicks: Number(s.clicks) || 0,
         meta_leads: Number(s.meta_leads) || 0,
+        meta_leads_form: Number(s.meta_leads_form) || 0,
+        meta_leads_pixel: Number(s.meta_leads_pixel) || 0,
     }));
 
     // ── Totais do período + período anterior (mesma duração, pros deltas) ──
@@ -325,7 +320,9 @@ export async function getReport({ since, until, level = 'campaign', accountIds =
         impressions: acc.impressions + (Number(g.impressions) || 0),
         clicks: acc.clicks + (Number(g.clicks) || 0),
         meta_leads: acc.meta_leads + (Number(g.meta_leads) || 0),
-    }), { spend: 0, impressions: 0, clicks: 0, meta_leads: 0 }));
+        meta_leads_form: acc.meta_leads_form + (Number(g.meta_leads_form) || 0),
+        meta_leads_pixel: acc.meta_leads_pixel + (Number(g.meta_leads_pixel) || 0),
+    }), { spend: 0, impressions: 0, clicks: 0, meta_leads: 0, meta_leads_form: 0, meta_leads_pixel: 0 }));
     totals.entities = grouped.length;
 
     const dSince = new Date(`${since}T00:00:00Z`);

@@ -9,6 +9,7 @@ import { Op, fn, col, literal } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import MarketingConfigService from './MarketingConfigService.js';
 import MetaCampaignsTokenService from '../meta/MetaCampaignsTokenService.js';
+import { extractLeadBreakdown } from './metaLeadExtract.js';
 
 const { MetaCampaign, InboundLead } = db;
 
@@ -157,25 +158,9 @@ export async function syncFromMeta({ sinceDays = 90, until = new Date() } = {}) 
             campaignsTotal += 1;
             const ins = (Array.isArray(c.insights?.data) && c.insights.data[0]) || {};
 
-            // Contagem de leads pela Meta — examina actions[]. Os action_types
-            // que representam leads (em ordem de preferência): lead, leadgen.other,
-            // onsite_conversion.lead_grouped. Pega o primeiro disponível.
-            const LEAD_ACTION_TYPES = [
-                'lead',
-                'onsite_conversion.lead_grouped',
-                'leadgen.other',
-                'offsite_conversion.fb_pixel_lead',
-            ];
-            let metaLeadsTotal = 0;
-            if (Array.isArray(ins.actions)) {
-                for (const t of LEAD_ACTION_TYPES) {
-                    const found = ins.actions.find(a => a.action_type === t);
-                    if (found && Number(found.value) > 0) {
-                        metaLeadsTotal = Number(found.value);
-                        break;
-                    }
-                }
-            }
+            // Contagem de leads pela Meta — extrator único (form × pixel).
+            // Ver services/marketing/metaLeadExtract.js.
+            const leadBreakdown = extractLeadBreakdown(ins.actions);
 
             const payload = {
                 id:                 String(c.id),
@@ -200,7 +185,9 @@ export async function syncFromMeta({ sinceDays = 90, until = new Date() } = {}) 
                 cpm:                ins.cpm ? Number(ins.cpm) : null,
                 cpc:                ins.cpc ? Number(ins.cpc) : null,
                 ctr:                ins.ctr ? Number(ins.ctr) : null,
-                meta_leads_total:   metaLeadsTotal,
+                meta_leads_total:   leadBreakdown.total,
+                meta_leads_form:    leadBreakdown.form,
+                meta_leads_pixel:   leadBreakdown.pixel,
                 last_synced_at:     new Date(),
                 last_insights_at:   new Date(),
                 insights_since:     since,
@@ -423,22 +410,19 @@ export async function getDailyBreakdown(campaignId, { days = 30, since = null, u
         const r = await axios.get(url, { params, timeout: 30000 });
         const data = Array.isArray(r.data?.data) ? r.data.data : [];
 
-        const LEAD_TYPES = ['lead', 'onsite_conversion.lead_grouped', 'leadgen.other'];
         for (const row of data) {
             const day = row.date_start;
-            let metaLeads = 0;
-            if (Array.isArray(row.actions)) {
-                for (const t of LEAD_TYPES) {
-                    const a = row.actions.find(x => x.action_type === t);
-                    if (a && Number(a.value) > 0) { metaLeads = Number(a.value); break; }
-                }
-            }
+            // Mesmo extrator do sync — antes este modal ignorava leads de pixel
+            // e divergia dos totais da tela.
+            const bd = extractLeadBreakdown(row.actions);
             byDay.set(day, {
                 day,
                 spend: Number(row.spend) || 0,
                 impressions: Number(row.impressions) || 0,
                 clicks: Number(row.clicks) || 0,
-                meta_leads: metaLeads,
+                meta_leads: bd.total,
+                meta_leads_form: bd.form,
+                meta_leads_pixel: bd.pixel,
                 office_leads: 0,
                 delivered: 0,
             });
@@ -467,7 +451,9 @@ export async function getDailyBreakdown(campaignId, { days = 30, since = null, u
     for (const r of officeRows) {
         const day = String(r.day).slice(0, 10);
         const existing = byDay.get(day) || {
-            day, spend: 0, impressions: 0, clicks: 0, meta_leads: 0, office_leads: 0, delivered: 0,
+            day, spend: 0, impressions: 0, clicks: 0,
+            meta_leads: 0, meta_leads_form: 0, meta_leads_pixel: 0,
+            office_leads: 0, delivered: 0,
         };
         existing.office_leads = Number(r.count) || 0;
         existing.delivered = Number(r.delivered) || 0;

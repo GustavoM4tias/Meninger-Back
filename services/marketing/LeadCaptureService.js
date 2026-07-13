@@ -31,8 +31,9 @@ export async function captureLead({
     sourceFormId = null,
     spam = false,       // honeypot já detectado pelo chamador
     spamReasons = null,
+    existingLead = null, // stub re-tentável (fetch da Graph falhou na 1ª vez) — atualiza em vez de criar
 }) {
-    const lead = await InboundLead.create({
+    const values = {
         channel,
         status: 'received',
         nome:           data.nome || null,
@@ -79,12 +80,28 @@ export async function captureLead({
 
         raw_payload:    rawPayload,
         source_form_id: sourceFormId,
-    });
+    };
 
-    await recordLeadEvent({
-        leadId: lead.id, type: 'received', statusTo: 'received',
-        message: `Lead recebido via ${channel}.`,
-    });
+    let lead;
+    if (existingLead) {
+        // Stub criado quando o fetch na Graph API falhou — agora com os dados
+        // reais em mãos, completa o registro e segue o fluxo normal.
+        Object.assign(existingLead, values, {
+            last_error: null, error_code: null, next_retry_at: null,
+        });
+        await existingLead.save();
+        lead = existingLead;
+        await recordLeadEvent({
+            leadId: lead.id, type: 'received', statusTo: 'received',
+            message: 'Dados do lead recuperados da Graph API após falha — captura retomada.',
+        });
+    } else {
+        lead = await InboundLead.create(values);
+        await recordLeadEvent({
+            leadId: lead.id, type: 'received', statusTo: 'received',
+            message: `Lead recebido via ${channel}.`,
+        });
+    }
 
     // ── Anti-spam: honeypot detectado pelo chamador ─────────────────────────
     if (spam) {
