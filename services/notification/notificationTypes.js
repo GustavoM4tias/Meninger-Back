@@ -42,6 +42,7 @@ export const NotificationType = {
     // Marketing — Captação de Leads
     LEAD_DISPATCH_FAILED:    'lead.dispatch.failed',
     LEAD_WEBHOOK_REJECTED:   'lead.webhook.rejected',
+    LEAD_BINDING_MISSING:    'lead.binding.missing',
     META_CAMPAIGNS_TOKEN_EXPIRING: 'meta.campaigns.token_expiring',
 
     // Marketing — Aprovações (tickets p/ diretoria)
@@ -183,6 +184,15 @@ export const NOTIFICATION_CATALOG = {
         label: 'Token de campanhas do Meta expirando',
         group: 'Marketing',
         description: 'Quando o token de gestão de campanhas do Meta está perto de expirar e não foi possível renovar automaticamente. O relatório de campanhas para de atualizar até reconectar (os leads não são afetados).',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.LEAD_BINDING_MISSING]: {
+        label: 'Campanha sem vínculo represando leads',
+        group: 'Marketing',
+        description: 'Quando há campanhas do Meta sem vínculo com o CV acumulando leads represados (held) — esses leads não chegam ao CRM até a campanha ser vinculada.',
         emailType: 'generic.notification',
         whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },

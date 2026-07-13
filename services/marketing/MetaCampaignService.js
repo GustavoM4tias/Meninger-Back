@@ -362,10 +362,14 @@ function computeExecutiveMetrics(c) {
     };
 }
 
-/** Leads dessa campanha (Meta). */
-export async function listCampaignLeads(campaignId, { limit = 50 } = {}) {
+/** Leads dessa campanha (Meta). Opcionalmente recortados por período (since/until). */
+export async function listCampaignLeads(campaignId, { limit = 50, since = null, until = null } = {}) {
+    const where = { meta_campaign_id: String(campaignId) };
+    if (since && until) {
+        where.created_at = { [Op.between]: [new Date(`${since}T00:00:00`), new Date(`${until}T23:59:59.999`)] };
+    }
     const leads = await InboundLead.findAll({
-        where: { meta_campaign_id: String(campaignId) },
+        where,
         attributes: [
             'id', 'nome', 'email', 'telefone', 'channel', 'status',
             'midia_slug', 'cv_origem', 'meta_form_id', 'meta_ad_id',
@@ -385,11 +389,24 @@ export async function listCampaignLeads(campaignId, { limit = 50 } = {}) {
  * Faz 1 chamada de insights na Meta + 1 query no DB. Resultado: array de
  * { day, spend, impressions, clicks, meta_leads, office_leads, delivered }.
  */
-export async function getDailyBreakdown(campaignId, { days = 30 } = {}) {
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-    const sinceStr = since.toISOString().slice(0, 10);
-    const untilStr = new Date().toISOString().slice(0, 10);
+export async function getDailyBreakdown(campaignId, { days = 30, since = null, until = null } = {}) {
+    // Período explícito (since/until do relatório) tem prioridade; senão usa a
+    // janela relativa de `days` (comportamento legado). Assim o gráfico do modal
+    // acompanha o período selecionado em vez de mostrar sempre os últimos 30d.
+    let sinceStr, untilStr, sinceDate, untilDate;
+    if (since && until) {
+        sinceStr = since;
+        untilStr = until;
+        sinceDate = new Date(`${since}T00:00:00`);
+        untilDate = new Date(`${until}T23:59:59.999`);
+    } else {
+        const s = new Date();
+        s.setDate(s.getDate() - days);
+        sinceStr = s.toISOString().slice(0, 10);
+        untilStr = new Date().toISOString().slice(0, 10);
+        sinceDate = s;
+        untilDate = new Date();
+    }
 
     // ── Insights diários da Meta ────────────────────────────────────────────
     const byDay = new Map();
@@ -435,7 +452,7 @@ export async function getDailyBreakdown(campaignId, { days = 30 } = {}) {
     const officeRows = await InboundLead.findAll({
         where: {
             meta_campaign_id: String(campaignId),
-            created_at: { [Op.gte]: since },
+            created_at: { [Op.between]: [sinceDate, untilDate] },
         },
         attributes: [
             [fn('DATE', col('created_at')), 'day'],

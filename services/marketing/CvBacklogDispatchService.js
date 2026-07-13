@@ -216,4 +216,98 @@ export async function dispatchBacklogSince({ cutoff = DEFAULT_CUTOFF, preview = 
     return summary;
 }
 
-export default { DEFAULT_CUTOFF, previewBacklogSince, dispatchBacklogSince };
+/**
+ * Envia ao CV os leads REPRESADOS (held) que HOJE já têm vínculo resolvível —
+ * "represados recuperáveis". Diferente do backlog histórico: aqui o lead ficou
+ * held porque no momento da captura a campanha não tinha vínculo; agora tem.
+ * Pra cada held: resolve o vínculo (campanha/form), e se resolver, promove
+ * held → routed e dispara. Se não resolver (campanha ainda sem vínculo), pula.
+ *
+ * @param {object}  opts
+ * @param {string}  opts.cutoff      'YYYY-MM-DD' (default cutover)
+ * @param {boolean} opts.preview     true = só conta quantos são recuperáveis
+ * @param {number}  opts.limit       teto por execução (resumível)
+ * @param {number}  opts.concurrency envios simultâneos ao CV
+ */
+export async function dispatchRecoverableHeld({ cutoff = DEFAULT_CUTOFF, preview = false, limit = 500, concurrency = 5 } = {}) {
+    const cutoffDate = cutoffToDate(cutoff);
+    const shadow = await isShadowMode();
+
+    const summary = {
+        cutoff,
+        shadow_mode: shadow,
+        scanned: 0,
+        recoverable: 0,        // held que resolveram vínculo
+        no_binding: 0,         // held cuja campanha ainda não tem vínculo
+        no_contact: 0,
+        dispatched: 0,
+        delivered: 0,
+        failed: 0,
+        reached_limit: false,
+        errors: [],
+        preview,
+    };
+
+    if (!preview && shadow) {
+        return {
+            ...summary,
+            blocked: true,
+            reason: 'Modo sombra (dry-run) ainda está ligado. Desligue em Configurações antes de enviar, senão nada é enviado ao CV.',
+        };
+    }
+
+    const leads = await InboundLead.findAll({
+        where: {
+            channel: 'meta_lead_ads',
+            status: 'held',
+            created_at: { [Op.gte]: cutoffDate },
+        },
+        order: [['created_at', 'ASC']],
+        limit,
+    });
+    summary.scanned = leads.length;
+    summary.reached_limit = leads.length >= limit;
+
+    async function processOne(lead) {
+        const hasContact = !!lead.email || !!lead.telefone;
+        if (!hasContact) { summary.no_contact += 1; return; }
+
+        // Resolve o vínculo com o estado ATUAL (campanha agora pode ter binding).
+        let resolved = false;
+        try {
+            resolved = await applyBindingToHistorical(lead);
+        } catch (e) {
+            summary.errors.push({ lead_id: lead.id, error: e.message });
+            return;
+        }
+        if (!resolved) { summary.no_binding += 1; return; }
+        summary.recoverable += 1;
+        if (preview) return;
+
+        // Promove held → routed (persiste o vínculo) e dispara.
+        try {
+            lead.status = 'routed';
+            await lead.save();
+            await recordLeadEvent({
+                leadId: lead.id, type: 'routed', actor: 'recover-held',
+                statusFrom: 'held', statusTo: 'routed',
+                message: 'Represado recuperado: vínculo resolvido e roteado ao CV.',
+                detail: { midia: lead.midia_slug, origem: lead.cv_origem, empreendimentos: lead.bound_empreendimentos },
+            });
+        } catch (e) {
+            summary.errors.push({ lead_id: lead.id, error: e.message });
+            return;
+        }
+        await runDispatch(lead, summary);
+    }
+
+    let next = 0;
+    const poolSize = Math.max(1, Math.min(concurrency, leads.length || 1));
+    await Promise.all(Array.from({ length: poolSize }, async () => {
+        while (next < leads.length) await processOne(leads[next++]);
+    }));
+
+    return summary;
+}
+
+export default { DEFAULT_CUTOFF, previewBacklogSince, dispatchBacklogSince, dispatchRecoverableHeld };

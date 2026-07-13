@@ -54,6 +54,10 @@ import {
     coverage as metaReportCoverage,
     backfill as metaReportBackfill,
 } from '../controllers/marketing/metaReportController.js';
+import {
+    overview as cvBindingOverview,
+    dispatchRecoverable as cvBindingDispatchRecoverable,
+} from '../controllers/marketing/cvBindingController.js';
 
 const router = express.Router();
 
@@ -99,6 +103,10 @@ router.get('/meta-forms/:id/field-mappings', metaFormFieldMappingEditor);
 router.put('/meta-forms/:id/field-mappings', metaFormUpdateFieldMappings);
 
 // Campanhas Meta (cache local + insights de gasto/leads/CAC)
+// Central de Vínculos CV (saúde da entrega + campanhas sem vínculo)
+router.get('/cv-binding/overview', cvBindingOverview);
+router.post('/cv-binding/dispatch-recoverable', cvBindingDispatchRecoverable);
+
 // Relatório de desempenho por período (série diária local)
 router.get('/meta-report', metaReport);
 router.get('/meta-report/coverage', metaReportCoverage);
