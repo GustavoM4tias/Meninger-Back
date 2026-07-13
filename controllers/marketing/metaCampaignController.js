@@ -54,7 +54,9 @@ export async function campaignLeads(req, res) {
     try {
         const { id } = req.params;
         const limit = Math.min(Number(req.query.limit) || 50, 500);
-        const leads = await MetaCampaignService.listCampaignLeads(id, { limit });
+        const since = req.query.since || null;
+        const until = req.query.until || null;
+        const leads = await MetaCampaignService.listCampaignLeads(id, { limit, since, until });
         return res.json({ ok: true, results: leads });
     } catch (err) {
         console.error(`❌ [meta-campaigns] leads: ${err.message}`);
@@ -66,7 +68,9 @@ export async function dailyBreakdown(req, res) {
     try {
         const { id } = req.params;
         const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 365);
-        const data = await MetaCampaignService.getDailyBreakdown(id, { days });
+        const since = req.query.since || null;
+        const until = req.query.until || null;
+        const data = await MetaCampaignService.getDailyBreakdown(id, { days, since, until });
         return res.json({ ok: true, results: data });
     } catch (err) {
         console.error(`❌ [meta-campaigns] daily: ${err.message}`);

@@ -21,6 +21,9 @@ import MetaCampaignService     from '../services/marketing/MetaCampaignService.j
 import MetaAdService           from '../services/marketing/MetaAdService.js';
 import MetaHistoricalImportService from '../services/marketing/MetaHistoricalImportService.js';
 import MetaInsightsDailyService from '../services/marketing/MetaInsightsDailyService.js';
+import CvBindingHealthService from '../services/marketing/CvBindingHealthService.js';
+import NotificationService from '../services/notification/NotificationService.js';
+import { NotificationType } from '../services/notification/notificationTypes.js';
 import LeadCampaignBackfillService from '../services/marketing/LeadCampaignBackfillService.js';
 import MetaCampaignsTokenService from '../services/meta/MetaCampaignsTokenService.js';
 
@@ -146,6 +149,13 @@ async function runFullSync(opts = {}) {
         console.error(`❌ [marketing-full-sync] histórico: ${e.message}`);
     }
 
+    // 6) Alerta de vínculo: campanhas sem binding represando leads (throttle ~20h).
+    try {
+        await alertMissingBindings();
+    } catch (e) {
+        console.warn(`⚠️  [marketing-full-sync] alerta de vínculo (não-fatal): ${e.message}`);
+    }
+
     const tookMs = Date.now() - startedAt;
     summary.duration_ms = tookMs;
     summary.duration_sec = +(tookMs / 1000).toFixed(1);
@@ -183,6 +193,39 @@ async function runLightSync() {
     } finally {
         lightRunning = false;
     }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Alerta: campanhas sem vínculo represando leads
+// ────────────────────────────────────────────────────────────────────────────
+// Avisa os admins quando há campanhas Meta sem vínculo com o CV acumulando leads
+// em 'held' — esses leads não chegam ao CRM até alguém vincular. Throttle de ~20h
+// pra alertar no máximo 1x/dia (o FULL sync roda ~9x/dia).
+let _lastBindingAlertAt = 0;
+const BINDING_ALERT_THROTTLE_MS = 20 * 60 * 60 * 1000;
+
+async function alertMissingBindings() {
+    const signal = await CvBindingHealthService.getAlertSignal();
+    if (!signal.should_alert) return;
+
+    const now = Date.now();
+    if (now - _lastBindingAlertAt < BINDING_ALERT_THROTTLE_MS) return;
+    _lastBindingAlertAt = now;
+
+    const admins = await db.User.findAll({ where: { role: 'admin', status: true }, attributes: ['id'] });
+    const userIds = admins.map(u => u.id);
+    if (!userIds.length) return;
+
+    const topList = signal.top.map(t => `• ${t.name} (${t.held} lead${t.held === 1 ? '' : 's'})`).join('\n');
+    await NotificationService.notify({
+        type: NotificationType.LEAD_BINDING_MISSING,
+        recipients: { users: userIds },
+        title: `${signal.unbound_count} campanha(s) sem vínculo represando ${signal.leads_at_risk} lead(s)`,
+        body: `Há leads captados que não chegam ao CV porque a campanha não tem vínculo configurado.\n\n${topList}\n\nVincule em Marketing › Vínculos CV.`,
+        link: '/marketing/vinculos',
+        importance: 8,
+    });
+    console.warn(`🔔 [marketing-full-sync] alerta de vínculo enviado: ${signal.unbound_count} campanha(s), ${signal.leads_at_risk} lead(s) represado(s).`);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
