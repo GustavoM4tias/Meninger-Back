@@ -35,14 +35,9 @@ export default (sequelize, DataTypes) => {
         tableName: 'meta_insights_daily',
         underscored: true,
         timestamps: true,
-        indexes: [
-            // Tabela NOVA: índices declarados aqui são criados junto com a tabela
-            // no sync (o problema de índice em alter só afeta tabela existente).
-            { unique: true, fields: ['entity_level', 'entity_id', 'date'] },
-            { fields: ['entity_level', 'date'] },
-            { fields: ['campaign_id', 'date'] },
-            { fields: ['account_id'] },
-        ],
+        // NÃO declarar índices aqui: índices no model fazem o sync({alter}) TRAVAR
+        // o boot (visto em produção 2026-07-13, derrubou o servidor inteiro).
+        // Os índices são criados via SQL idempotente em lib/ensureMarketingDailySchema.js.
     });
 
     return MetaInsightDaily;
