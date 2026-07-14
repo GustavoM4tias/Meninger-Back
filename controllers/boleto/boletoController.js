@@ -325,14 +325,14 @@ export async function getHistoryStats(req, res) {
         // Normaliza buckets — facilita o frontend não precisar buscar.
         const stats = {
             total: { qty: 0, valor: 0 },
-            emitidos: { qty: 0, valor: 0 },     // status='success'
+            emitidos: { qty: 0, valor: 0 },     // via FINAL (success mais recente) por reserva
             processing: { qty: 0, valor: 0 },
-            errors: { qty: 0, valor: 0 },       // status='error'
+            errors: { qty: 0, valor: 0 },       // status='error' (todas as tentativas)
             skipped: { qty: 0, valor: 0 },      // status='skipped' (sem série de Ato)
-            paid: { qty: 0, valor: 0 },         // emitidos + paid
-            pending: { qty: 0, valor: 0 },      // emitidos + pending
-            cancelled: { qty: 0, valor: 0 },    // emitidos + cancelled (baixado)
-            checkErrors: { qty: 0, valor: 0 },  // emitidos + payment_status=error
+            paid: { qty: 0, valor: 0 },         // via final + paid
+            pending: { qty: 0, valor: 0 },      // via final + pending
+            cancelled: { qty: 0, valor: 0 },    // via final + cancelled (baixado sem reemissão)
+            checkErrors: { qty: 0, valor: 0 },  // via final + payment_status=error
         };
 
         for (const r of rows) {
@@ -341,24 +341,7 @@ export async function getHistoryStats(req, res) {
             stats.total.qty += qty;
             stats.total.valor += valor;
 
-            if (r.status === 'success') {
-                stats.emitidos.qty += qty;
-                stats.emitidos.valor += valor;
-                if (r.payment_status === 'paid') {
-                    stats.paid.qty += qty;
-                    stats.paid.valor += valor;
-                } else if (r.payment_status === 'cancelled') {
-                    stats.cancelled.qty += qty;
-                    stats.cancelled.valor += valor;
-                } else if (r.payment_status === 'error') {
-                    stats.checkErrors.qty += qty;
-                    stats.checkErrors.valor += valor;
-                } else {
-                    // pending (ou null tratado como pending)
-                    stats.pending.qty += qty;
-                    stats.pending.valor += valor;
-                }
-            } else if (r.status === 'error') {
+            if (r.status === 'error') {
                 stats.errors.qty += qty;
                 stats.errors.valor += valor;
             } else if (r.status === 'skipped') {
@@ -367,6 +350,55 @@ export async function getHistoryStats(req, res) {
             } else if (r.status === 'processing') {
                 stats.processing.qty += qty;
                 stats.processing.valor += valor;
+            }
+        }
+
+        // Buckets de pagamento consideram só a VIA FINAL de cada reserva (o
+        // success mais recente dentro do filtro): boleto baixado e substituído
+        // por outro (pago/pendente) não conta em emitidos/baixados — só a via
+        // final entra nos números. Baixados SEM reemissão continuam contando
+        // como baixados (a via final da reserva ainda é a baixada).
+        const statusArr = status
+            ? String(status).split(',').map(s => s.trim()).filter(Boolean)
+            : null;
+        const includeSuccess = !statusArr || statusArr.includes('success');
+        if (includeSuccess) {
+            const successWhere = { ...where, status: 'success' };
+            const grouped = await db.BoletoHistory.findAll({
+                where: successWhere,
+                attributes: [
+                    'idreserva',
+                    [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
+                ],
+                group: ['idreserva'],
+                raw: true,
+            });
+            const finalIds = grouped.map(g => Number(g.max_id));
+            const finais = finalIds.length
+                ? await db.BoletoHistory.findAll({
+                    where: { id: { [Op.in]: finalIds } },
+                    attributes: ['payment_status', 'valor'],
+                    raw: true,
+                })
+                : [];
+            for (const f of finais) {
+                const valor = Number(f.valor) || 0;
+                stats.emitidos.qty += 1;
+                stats.emitidos.valor += valor;
+                if (f.payment_status === 'paid') {
+                    stats.paid.qty += 1;
+                    stats.paid.valor += valor;
+                } else if (f.payment_status === 'cancelled') {
+                    stats.cancelled.qty += 1;
+                    stats.cancelled.valor += valor;
+                } else if (f.payment_status === 'error') {
+                    stats.checkErrors.qty += 1;
+                    stats.checkErrors.valor += valor;
+                } else {
+                    // pending (ou null tratado como pending)
+                    stats.pending.qty += 1;
+                    stats.pending.valor += valor;
+                }
             }
         }
 
