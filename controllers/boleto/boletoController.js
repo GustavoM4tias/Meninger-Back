@@ -182,37 +182,72 @@ export async function listHistory(req, res) {
 
         const offset = (Number(page) - 1) * Number(limit);
 
-        // groupByReserva: 1 linha por reserva (a tentativa MAIS RECENTE que casa
-        // com o filtro), em vez de 1 linha por boleto. Evita o mesmo cliente
-        // aparecer várias vezes na listagem quando houve reemissões — o histórico
-        // completo fica no modal (timeline consolidada).
+        // groupByReserva: 1 linha por reserva (a tentativa ATUAL = mais recente),
+        // em vez de 1 linha por boleto. Evita o mesmo cliente aparecer várias
+        // vezes na listagem quando houve reemissões — o histórico completo fica
+        // no modal (timeline consolidada).
+        //
+        // Os filtros de status/paymentStatus são avaliados sobre a tentativa
+        // ATUAL da reserva, não sobre tentativas antigas — senão uma reserva com
+        // baixa retroativa aparecia ao filtrar por "baixado" mesmo com o boleto
+        // atual pendente. Os demais filtros (empreendimento, datas, busca livre)
+        // continuam definindo o ESCOPO: qualquer tentativa que case coloca a
+        // reserva na lista.
         if (String(req.query.groupByReserva || '') === 'true') {
+            const scopeWhere = { ...where };
+            delete scopeWhere.status;
+            delete scopeWhere.payment_status;
+
             const grouped = await db.BoletoHistory.findAll({
-                where,
+                where: scopeWhere,
                 attributes: [
                     'idreserva',
-                    [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
-                    [db.sequelize.fn('MAX', db.sequelize.col('created_at')), 'last_created'],
                     [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'attempts'],
                 ],
                 group: ['idreserva'],
                 raw: true,
             });
-            const total = grouped.length;
-            grouped.sort((a, b) => new Date(b.last_created) - new Date(a.last_created));
-            const pageSlice = grouped.slice(offset, offset + Number(limit));
-            const attemptsById = new Map(pageSlice.map(g => [Number(g.max_id), Number(g.attempts)]));
-            const ids = pageSlice.map(g => Number(g.max_id));
+            const attemptsByReserva = new Map(grouped.map(g => [Number(g.idreserva), Number(g.attempts)]));
+            const reservaIds = grouped.map(g => Number(g.idreserva));
+
+            // Tentativa atual = MAX(id) por reserva SEM filtro de data/status,
+            // pra refletir o estado de agora mesmo que a última tentativa tenha
+            // ficado fora do range de datas do escopo.
+            const currents = reservaIds.length
+                ? await db.BoletoHistory.findAll({
+                    where: { idreserva: { [Op.in]: reservaIds } },
+                    attributes: [
+                        'idreserva',
+                        [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
+                    ],
+                    group: ['idreserva'],
+                    raw: true,
+                })
+                : [];
+            const ids = currents.map(c => Number(c.max_id));
             const found = ids.length
                 ? await db.BoletoHistory.findAll({ where: { id: { [Op.in]: ids } } })
                 : [];
-            const rows = found
+
+            const statusArr = status
+                ? String(status).split(',').map(s => s.trim()).filter(Boolean)
+                : null;
+            const payArr = paymentStatus
+                ? String(paymentStatus).split(',').map(s => s.trim()).filter(Boolean)
+                : null;
+
+            const filtered = found
+                .filter(r => (!statusArr || statusArr.includes(r.status))
+                    && (!payArr || payArr.includes(r.payment_status)))
                 .map(r => {
                     const j = r.toJSON();
-                    j.attempts_count = attemptsById.get(r.id) || 1;
+                    j.attempts_count = attemptsByReserva.get(Number(r.idreserva)) || 1;
                     return j;
                 })
                 .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            const total = filtered.length;
+            const rows = filtered.slice(offset, offset + Number(limit));
             return res.json({ total, page: Number(page), limit: Number(limit), rows, grouped: true });
         }
 
