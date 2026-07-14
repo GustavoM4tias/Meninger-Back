@@ -91,7 +91,16 @@ export default class expenseService {
   async loadPersonalizations(billIds) {
     const ids = [...new Set((billIds || []).map(Number).filter(Number.isFinite))];
     if (!ids.length) return new Map();
-    const rows = await ExpensePersonalization.findAll({ where: { nutitulo: { [Op.in]: ids } } });
+    // Em períodos longos a lista de títulos chega a dezenas de milhares e o IN
+    // gigante custa mais do que ler a tabela inteira — ela só contém as parcelas
+    // personalizadas manualmente. Acima do corte, busca tudo e filtra em memória.
+    let rows;
+    if (ids.length > 2000) {
+      const wanted = new Set(ids);
+      rows = (await ExpensePersonalization.findAll()).filter(r => wanted.has(Number(r.nutitulo)));
+    } else {
+      rows = await ExpensePersonalization.findAll({ where: { nutitulo: { [Op.in]: ids } } });
+    }
     const map = new Map();
     for (const r of rows) map.set(`${r.nutitulo}-${r.nuparcela}`, r);
     return map;

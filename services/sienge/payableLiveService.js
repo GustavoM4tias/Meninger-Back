@@ -225,16 +225,12 @@ export async function listExpenseRows({ startDate, endDate, costCenterId } = {})
   const cached = cacheGet(key);
   if (cached) return cached.map((r) => ({ ...r, bill: { ...r.bill } }));
 
+  // Todos os CTEs auxiliares são restritos aos títulos com pagamento no período
+  // (CTE `tit`): sem isso o DISTINCT ON de ecpgapropfin varria/ordenava a tabela
+  // INTEIRA a cada consulta. Soma de parcelas e departamento principal são
+  // agregados UMA vez por título (hash join), em vez de LATERAL por linha.
   const sql = `
-    WITH main_cc AS (
-      SELECT af.nutitulo, e.cdempreendview AS cost_center_id
-      FROM (
-        SELECT DISTINCT ON (nutitulo) nutitulo, cdcentrocusto
-        FROM ecpgapropfin ORDER BY nutitulo, peparticipacao DESC NULLS LAST
-      ) af
-      JOIN ecadempreend e ON e.cdempreend = af.cdcentrocusto
-    ),
-    pagamentos AS (
+    WITH pagamentos AS (
       -- 1 linha por (titulo,parcela): soma dos pagamentos de CAIXA no período.
       -- Tipos 1 (Pagamento) + 10 (Adiantamento); exclui 5 (Substituição) e 8
       -- (Abatimento de Adiantamento), sem estornos.
@@ -248,6 +244,35 @@ export async function listExpenseRows({ startDate, endDate, costCenterId } = {})
         AND b.cdtipobaixa IN (1, 10)
         AND b.nuseqestorno IS NULL
       GROUP BY b.nutitulo, b.nuparcela
+    ),
+    tit AS (
+      SELECT DISTINCT nutitulo FROM pagamentos
+    ),
+    main_cc AS (
+      SELECT af.nutitulo, e.cdempreendview AS cost_center_id
+      FROM (
+        SELECT DISTINCT ON (nutitulo) nutitulo, cdcentrocusto
+        FROM ecpgapropfin
+        WHERE nutitulo IN (SELECT nutitulo FROM tit)
+        ORDER BY nutitulo, peparticipacao DESC NULLS LAST
+      ) af
+      JOIN ecadempreend e ON e.cdempreend = af.cdcentrocusto
+    ),
+    tt AS (
+      SELECT pp.nutitulo, SUM(pp.vloriginal) AS total_invoice_amount
+      FROM ecpgparcela pp
+      WHERE pp.nutitulo IN (SELECT nutitulo FROM tit)
+      GROUP BY pp.nutitulo
+    ),
+    dep AS (
+      SELECT DISTINCT ON (d.nutitulo)
+             d.nutitulo,
+             d.cddepartamento   AS main_department_id,
+             dd.nmdepartamento  AS main_department_name
+      FROM ecpgapropdepart d
+      LEFT JOIN ecaddepartamento dd ON dd.cddepartamento = d.cddepartamento
+      WHERE d.nutitulo IN (SELECT nutitulo FROM tit)
+      ORDER BY d.nutitulo, d.peapropriado DESC NULLS LAST
     )
     SELECT
       pg.nutitulo                        AS bill_id,
@@ -273,16 +298,8 @@ export async function listExpenseRows({ startDate, endDate, costCenterId } = {})
     JOIN ecpgtitulo t ON t.nutitulo = pg.nutitulo
     JOIN ecpgparcela p ON p.nutitulo = pg.nutitulo AND p.nuparcela = pg.nuparcela
     LEFT JOIN ecadcredor cr ON cr.cdcredor = t.cdcredor
-    LEFT JOIN LATERAL (
-      SELECT SUM(pp.vloriginal) AS total_invoice_amount FROM ecpgparcela pp WHERE pp.nutitulo = t.nutitulo
-    ) tt ON true
-    LEFT JOIN LATERAL (
-      SELECT d.cddepartamento AS main_department_id, dd.nmdepartamento AS main_department_name
-      FROM ecpgapropdepart d
-      LEFT JOIN ecaddepartamento dd ON dd.cddepartamento = d.cddepartamento
-      WHERE d.nutitulo = t.nutitulo
-      ORDER BY d.peapropriado DESC NULLS LAST LIMIT 1
-    ) dep ON true
+    LEFT JOIN tt ON tt.nutitulo = pg.nutitulo
+    LEFT JOIN dep ON dep.nutitulo = pg.nutitulo
     WHERE 1=1 ${ccClause}
     ORDER BY main_cc.cost_center_id, pg.nutitulo, pg.nuparcela
   `;
