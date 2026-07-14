@@ -51,6 +51,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const GRANTS_SQL_PATH = path.join(__dirname, '..', '..', 'scripts', 'sienge-grants.sql');
 
+// Índices de performance do Office (Custos/Títulos ao vivo) reaplicados após
+// cada swap — o restore recria o banco e derruba qualquer índice extra.
+const PERF_INDEXES_SQL_PATH = path.join(__dirname, '..', '..', 'scripts', 'sienge-perf-indexes.sql');
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function siengeAuthHeader() {
@@ -418,6 +422,51 @@ async function applyGrants(targetUrl) {
 }
 
 /**
+ * Aplica scripts/sienge-perf-indexes.sql (se existir) contra o database
+ * recém-promovido. Diferente do applyGrants, roda statement a statement
+ * (best-effort): um índice que falhe não impede os demais. Exportado para o
+ * ensure de boot do server (caso o deploy aconteça depois do restore do dia).
+ *
+ * NÃO falha o restore inteiro se der erro aqui (banco já foi promovido).
+ */
+export async function applyPerfIndexes(targetUrl) {
+  if (!existsSync(PERF_INDEXES_SQL_PATH)) {
+    return { skipped: true, reason: 'arquivo scripts/sienge-perf-indexes.sql não existe' };
+  }
+  const raw = (await readFile(PERF_INDEXES_SQL_PATH, 'utf8')).trim();
+  if (!raw) return { skipped: true, reason: 'arquivo de índices vazio' };
+
+  // Remove comentários de linha e divide por ';' — o script só tem statements
+  // simples (CREATE INDEX / ANALYZE), sem funções ou strings com ';'.
+  const statements = raw
+    .split('\n').filter(l => !l.trim().startsWith('--')).join('\n')
+    .split(';').map(s => s.trim()).filter(Boolean);
+
+  const client = new pg.Client(PG_CLIENT_OPTS(targetUrl));
+  await client.connect();
+  const failed = [];
+  try {
+    for (const stmt of statements) {
+      try {
+        await client.query(stmt);
+      } catch (e) {
+        failed.push({ stmt: stmt.slice(0, 80), error: e.message });
+        console.warn(`[SiengeBackup] perf index falhou (ignorado): ${e.message}`);
+      }
+    }
+  } finally {
+    await client.end().catch(() => {});
+  }
+  return { skipped: false, applied: statements.length - failed.length, failed };
+}
+
+/** Ensure de boot: aplica os índices no banco de produção atual (fire-and-forget). */
+export async function ensurePerfIndexes() {
+  const { targetUrl } = buildPgUrls();
+  return applyPerfIndexes(targetUrl);
+}
+
+/**
  * Roda `pg_restore -l` no dump e categoriza cada item do TOC. Usado pelo
  * frontend pra calcular % de progresso por fase. Devolve os totais — barato
  * (<200ms num dump de 1.5GB).
@@ -699,6 +748,15 @@ async function restoreIntoPostgres(dmpcPath, log) {
     }
   } catch (e) {
     console.warn(`[SiengeBackup] applyCustomViews falhou (banco já promovido, ignorando): ${e.message}`);
+  }
+
+  // ── 7. Índices de performance do Office (Custos/Títulos ao vivo). Best-effort:
+  //       o banco já foi promovido; sem eles tudo funciona, só mais lento. ──
+  try {
+    const idxResult = await applyPerfIndexes(targetUrl);
+    console.log(`[SiengeBackup] perf indexes:`, idxResult);
+  } catch (e) {
+    console.warn(`[SiengeBackup] applyPerfIndexes falhou (banco já promovido, ignorando): ${e.message}`);
   }
 
   const finishedAt = new Date();

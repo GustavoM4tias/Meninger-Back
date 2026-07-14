@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 import db from './models/sequelize/index.js';
 import authRoutes from './routes/authRoutes.js'; 
 import eventRoutes from './routes/eventRoutes.js';
@@ -125,6 +126,11 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   crossOriginEmbedderPolicy: false,
 }));
+
+// Compressão gzip/brotli das respostas. Essencial para os endpoints que devolvem
+// JSON grande (ex.: /api/expenses em períodos longos — dezenas de MB caem ~90%).
+// Só comprime a partir de 1KB e respeita Accept-Encoding do cliente.
+app.use(compression({ threshold: 1024 }));
 
 // Bolão da torcida — endpoints PÚBLICOS (menin.com.br/bolao). Montado ANTES do
 // CORS global de propósito: a página pública pode rodar em QUALQUER domínio
@@ -410,6 +416,19 @@ async function startBackgroundServices() {
   if (process.env.ENABLE_CV_PRECADASTRO_SCHEDULE === 'true') precadastroCvScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
+
+  // Índices de performance no backup do Sienge (Custos/Títulos ao vivo). O restore
+  // diário já os reaplica; este ensure cobre deploy feito DEPOIS do restore do dia.
+  // Deferido e fire-and-forget: não bloqueia o boot; CREATE INDEX IF NOT EXISTS é
+  // no-op quando já existem.
+  if (schedulerOn('ENABLE_SIENGE_PERF_INDEXES')) {
+    setTimeout(() => {
+      import('./services/sienge/SiengeBackupService.js')
+        .then(m => m.ensurePerfIndexes())
+        .then(r => console.log('[BOOT] sienge perf indexes:', JSON.stringify(r)))
+        .catch(err => console.warn('⚠️  ensurePerfIndexes falhou (segue sem índices extras):', err.message));
+    }, 30_000);
+  }
 
   // Crons que antes ligavam sempre / por padrão — agora gated (prod = igual, dev = off):
   if (schedulerOn('ENABLE_CREDITOR_POLLING')) creditorPollingScheduler.start();
