@@ -8,9 +8,10 @@
 //
 // Como funciona por baixo:
 //   - O jogo entra com is_tiebreaker=true. O porteiro público (enter/submit) só
-//     libera esses jogos para quem tiverem o total MÁXIMO de pontos contando
-//     apenas os jogos normais (BolaoScoringService.tiebreakerEligibleIds) — o
-//     grupo NÃO muda entre a semifinal e a final.
+//     libera esses jogos para quem tem o total MÁXIMO de pontos no ranking
+//     oficial COMPLETO (BolaoScoringService.tiebreakerEligibleIds) — o grupo
+//     AFUNILA a cada jogo: semi com os 6 empatados, final só com quem seguiu
+//     empatado na ponta.
 //   - Os pontos do desempate somam no ranking normalmente: é assim que resolve.
 //   - O poller de placar ao vivo casa o jogo pela sigla/eventId — sem fiação extra.
 //
@@ -22,10 +23,12 @@
 //
 // Rodar:  node services/bolao/addDesempatePublico.js
 //
-// ─── Rodada atual: SEMIFINAL — Inglaterra x Argentina ────────────────────────
-// Dados confirmados na API da ESPN (fifa.world) em 2026-07-15:
-//   eventId 760515 · Inglaterra (casa) x Argentina · 2026-07-15T19:00Z = 15/07 16:00 BRT
-//   Local: Mercedes-Benz Stadium, Atlanta.
+// ─── Rodada atual: FINAL — Espanha x Argentina ───────────────────────────────
+// Dados confirmados na API da ESPN (fifa.world) em 2026-07-15 (pós-semis):
+//   eventId 760517 · Espanha (casa) x Argentina · 2026-07-19T19:00Z = 19/07 16:00 BRT
+//   Local: MetLife Stadium, East Rutherford (NJ).
+// A semi (ENG 1x2 ARG) afunilou os 6 líderes para 3 (todos cravaram: 10 pts):
+// a elegibilidade agora sai do ranking completo, então só os 3 palpitam a final.
 
 import db from '../../models/sequelize/index.js';
 import { PUBLIC_SLUG } from './seedBolaoPublico.js';
@@ -35,17 +38,17 @@ const { Bolao, BolaoMatch } = db;
 
 // EDITAR A CADA RODADA DE DESEMPATE: o jogo novo (match_order = próximo livre).
 const MATCH = {
-  match_order: 5,
-  home_team: 'Inglaterra', away_team: 'Argentina',
-  home_code: 'ENG', away_code: 'ARG',
-  home_country: 'gb-eng', away_country: 'ar',
-  kickoff_at: '2026-07-15T16:00:00-03:00',  // 19:00Z
-  provider_fixture_id: '760515',
+  match_order: 6,
+  home_team: 'Espanha', away_team: 'Argentina',
+  home_code: 'ESP', away_code: 'ARG',
+  home_country: 'es', away_country: 'ar',
+  kickoff_at: '2026-07-19T16:00:00-03:00',  // 19:00Z
+  provider_fixture_id: '760517',
 };
-// EDITAR A CADA RODADA: cutoff dos palpites (jogo é hoje — 15 min antes do apito).
-const DEADLINE = '2026-07-15T15:45:00-03:00';
+// EDITAR A CADA RODADA: cutoff dos palpites (15 min antes do apito).
+const DEADLINE = '2026-07-19T15:45:00-03:00';
 
-const DESCRIPTION = 'Desempate dos líderes! Quem está empatado na ponta palpita na semifinal e na final da Copa 2026 para decidir os ganhadores. 3 pontos por placar exato (cravada), 1 por acertar o resultado.';
+const DESCRIPTION = 'Desempate dos líderes na FINAL da Copa 2026! Quem segue empatado na ponta palpita no jogo decisivo para definir os ganhadores. 3 pontos por placar exato (cravada), 1 por acertar o resultado.';
 
 export async function addDesempatePublico() {
   // Garante a coluna nova mesmo antes do sync alter do boot (idempotente).
@@ -74,7 +77,7 @@ export async function addDesempatePublico() {
 
   // Mostra quem está no desempate (conferência do operador).
   const elig = await tiebreakerEligibleIds(bolao.id);
-  const payload = await buildRanking(bolao.id, { mode: 'official', ignoreTiebreakers: true });
+  const payload = await buildRanking(bolao.id, { mode: 'official' });
   const names = (payload?.ranking || []).filter(r => elig.has(r.participant.id)).map(r => `${r.participant.display_name} (${r.total} pts)`);
 
   console.log(`[addDesempatePublico] OK — bolão #${bolao.id} (${PUBLIC_SLUG})`);
