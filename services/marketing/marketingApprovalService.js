@@ -569,16 +569,90 @@ export async function removeAttachment({ attachmentId, user }) {
     return { ok: true };
 }
 
-// PDF de autorização — só p/ ficha aprovada (com ou sem ressalva). getOne já
-// aplica o gate de acesso (requester/aprovador/admin) e traz decisões+requester.
+// PDF de autorização. Aprovada (com ou sem ressalva) → comprovante com as
+// decisões. Pendente → versão p/ coleta de assinatura presencial (quadros em
+// branco por perfil; ver registerSignedDocument). getOne já aplica o gate de
+// acesso (requester/aprovador/admin) e traz decisões+requester+profiles_state.
 export async function generateAuthorizationPdf({ id, user }) {
     const request = await getOne({ id, user });
-    if (!['approved', 'approved_with_notes'].includes(request.status)) {
-        throw httpError('O PDF de autorização só fica disponível após a aprovação.', 409);
+    if (!['pending', 'approved', 'approved_with_notes'].includes(request.status)) {
+        throw httpError('PDF indisponível para solicitações reprovadas ou canceladas.', 409);
     }
     const { default: pdfService } = await import('./marketingApprovalPdfService.js');
     const buffer = await pdfService.render({ request });
     return { buffer, protocol: request.protocol };
+}
+
+// ── Autorização assinada fora do sistema ──────────────────────────────────────
+// Fluxo: o solicitante imprime o PDF pendente, colhe as assinaturas em papel e
+// anexa o documento assinado (qualquer arquivo) como comprovante. O anexo
+// aprova TODOS os perfis pendentes de uma vez, em nome de quem anexou
+// (via='signature', anexo vinculado como evidência). O registro guarda quem
+// pediu e quem anexou — não quem assinou no papel.
+
+export async function registerSignedDocument({ id, payload = {}, user }) {
+    const request = await getOne({ id, user }); // gate de acesso
+    if (!request.viewer.isRequester && !request.viewer.isAdmin) {
+        throw httpError('Só o solicitante pode anexar o documento de autorização.', 403);
+    }
+    if (request.status !== 'pending') {
+        throw httpError(`Solicitação já ${STATUS_LABEL[request.status]?.toLowerCase() || 'decidida'}.`, 409, 'ALREADY_DECIDED');
+    }
+
+    const att = normalizeAttachment(payload, user.id);
+    if (!att) throw httpError('Anexo inválido (url e file_name são obrigatórios).', 400);
+    att.kind = 'SIGNED_DOCUMENT';
+
+    const result = await db.sequelize.transaction(async (t) => {
+        const row = await db.MarketingApprovalRequest.findByPk(Number(id), {
+            transaction: t, lock: t.LOCK.UPDATE,
+        });
+        if (!row || row.status !== 'pending') {
+            throw httpError('Solicitação já decidida.', 409, 'ALREADY_DECIDED');
+        }
+
+        const authIds = normIds(row.auth_profile_ids);
+        const existing = await db.MarketingApprovalDecision.findAll({
+            where: { request_id: row.id }, raw: true, transaction: t,
+        });
+        const decidedSet = new Set(existing.map((d) => Number(d.profile_id)));
+        const pendingIds = authIds.filter((pid) => !decidedSet.has(pid));
+        if (!pendingIds.length) throw httpError('Não há autorizações pendentes nesta solicitação.', 409);
+
+        const evidence = await db.MarketingApprovalAttachment.create(
+            { ...att, request_id: row.id }, { transaction: t },
+        );
+
+        const comment = 'Autorização assinada fora do sistema — documento anexado como comprovante.';
+        await db.MarketingApprovalDecision.bulkCreate(pendingIds.map((pid) => ({
+            request_id: row.id,
+            profile_id: pid,
+            user_id: user.id,
+            decision: 'approved',
+            comment,
+            via: 'signature',
+            attachment_id: evidence.id,
+        })), { transaction: t });
+
+        const now = new Date();
+        row.status = existing.some((d) => d.decision === 'approved_with_notes')
+            ? 'approved_with_notes' : 'approved';
+        row.finalized_at = now;
+        row.approval_history = [...(row.approval_history || []), {
+            action: 'signed', user_id: user.id, username: user.username,
+            at: now.toISOString(), note: att.file_name,
+        }];
+        row.changed('approval_history', true);
+        await row.save({ transaction: t });
+        return plain(row);
+    });
+
+    await notifyDecided({ request: result, note: null });
+    await db.MarketingApprovalWaMessage.update(
+        { status: 'expired' },
+        { where: { request_id: result.id, status: 'sent' } },
+    ).catch(() => {});
+    return getOne({ id, user });
 }
 
 export default {
@@ -586,5 +660,5 @@ export default {
     listProfiles, createProfile, updateProfile, profilesForUser, approvalMe, listUsers,
     listCostCenters,
     createRequest, list, getOne, decide, cancel,
-    addAttachment, removeAttachment, generateAuthorizationPdf,
+    addAttachment, removeAttachment, generateAuthorizationPdf, registerSignedDocument,
 };

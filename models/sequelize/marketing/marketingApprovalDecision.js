@@ -10,8 +10,10 @@ export default (sequelize, DataTypes) => {
         decision: { type: DataTypes.STRING(30), allowNull: false },
         // Obrigatório p/ approved_with_notes (a ressalva) e rejected (a justificativa).
         comment: { type: DataTypes.TEXT, allowNull: true },
-        // office | whatsapp
+        // office | whatsapp | signature (autorização assinada fora do sistema)
         via: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'office' },
+        // Evidência da decisão via signature: o anexo (documento assinado).
+        attachment_id: { type: DataTypes.INTEGER, allowNull: true },
     }, {
         tableName: 'marketing_approval_decisions',
         timestamps: true,

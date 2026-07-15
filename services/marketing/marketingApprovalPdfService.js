@@ -1,9 +1,13 @@
 // services/marketing/marketingApprovalPdfService.js
 //
-// PDF de autorização de uma solicitação de marketing aprovada. Renderiza
-// HTML → PDF via Playwright (mesmo padrão do certificatePdfService do Academy).
-// Serve como comprovante formal: dados da ficha, itens com valores e o bloco
-// de autorização com cada perfil, quem decidiu, quando e a ressalva (se houver).
+// PDF de autorização de uma solicitação de marketing. Renderiza HTML → PDF via
+// Playwright (mesmo padrão do certificatePdfService do Academy).
+// - Aprovada: comprovante formal com o bloco de autorização (quem decidiu,
+//   quando e a ressalva, se houver).
+// - Pendente: versão p/ coleta de assinatura PRESENCIAL — um quadro de
+//   assinatura por perfil ainda sem decisão. O documento assinado é anexado
+//   de volta na solicitação como comprovante e aprova os perfis pendentes
+//   (registerSignedDocument no service).
 //
 // Uso: const buffer = await marketingApprovalPdfService.render({ request });
 
@@ -71,7 +75,7 @@ function buildHtml(request) {
     const decisionRows = (request.decisions || []).map((d) => `
         <tr>
           <td>${escapeHtml(d.profile?.name || '-')}</td>
-          <td>${escapeHtml(DECISION_LABEL[d.decision] || d.decision)}</td>
+          <td>${escapeHtml(DECISION_LABEL[d.decision] || d.decision)}${d.via === 'signature' ? ' · doc. anexado' : ''}</td>
           <td>${escapeHtml(d.user?.username || '-')}</td>
           <td>${escapeHtml(fmtDateTime(d.created_at || d.createdAt))}</td>
           <td class="muted">${escapeHtml(d.comment || '-')}</td>
@@ -79,6 +83,16 @@ function buildHtml(request) {
 
     const statusLabel = STATUS_LABEL[request.status] || request.status;
     const isApproved = request.status === 'approved' || request.status === 'approved_with_notes';
+    const isPending = request.status === 'pending';
+
+    // Quadros de assinatura presencial: um por perfil ainda sem decisão.
+    const pendingProfiles = (request.profiles_state || []).filter((p) => !p.decision);
+    const signatureBlocks = pendingProfiles.map((p) => `
+        <div class="sig-block">
+          <div class="sig-profile">${escapeHtml(p.name)}</div>
+          <div class="sig-line"></div>
+          <div class="sig-meta"><span>Assinatura</span><span>Nome legível: _______________________</span><span>Data: ____/____/______</span></div>
+        </div>`).join('');
 
     return `<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8" />
@@ -107,6 +121,11 @@ function buildHtml(request) {
   td.muted { opacity: .7; }
   .total-row td { font-weight: 700; border-top: 2px solid ${BRAND_PRIMARY}; border-bottom: none; font-size: 11pt; }
   .accent { color: ${BRAND_ACCENT}; }
+  .sig-block { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 16px 8px; margin-top: 10px; page-break-inside: avoid; }
+  .sig-profile { font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+  .sig-line { border-bottom: 1.5px solid ${BRAND_PRIMARY}; height: 42px; margin: 6px 0 5px; }
+  .sig-meta { display: flex; justify-content: space-between; gap: 12px; font-size: 8pt; opacity: .6; }
+  .sig-note { margin-top: 10px; font-size: 8.5pt; opacity: .7; background: #f1f5f9; border-radius: 6px; padding: 8px 10px; }
   .footer { position: fixed; bottom: 8mm; left: 16mm; right: 16mm; display: flex; justify-content: space-between;
             font-size: 7.5pt; opacity: .55; border-top: 1px solid #e5e7eb; padding-top: 4px; }
 </style></head>
@@ -142,11 +161,18 @@ function buildHtml(request) {
 
   ${request.justification ? `<h2>Justificativa</h2><div>${escapeHtml(request.justification)}</div>` : ''}
 
+  ${(!isPending || decisionRows) ? `
   <h2>Autorização</h2>
   <table>
     <thead><tr><th>Perfil</th><th>Decisão</th><th>Responsável</th><th>Data</th><th>Observações / Ressalva</th></tr></thead>
     <tbody>${decisionRows || '<tr><td colspan="5" class="muted">Sem decisões registradas.</td></tr>'}</tbody>
-  </table>
+  </table>` : ''}
+
+  ${isPending && signatureBlocks ? `
+  <h2>Assinaturas — coleta presencial</h2>
+  ${signatureBlocks}
+  <div class="sig-note">Após a coleta das assinaturas, anexe este documento assinado (foto ou digitalização) na solicitação
+  (protocolo ${escapeHtml(request.protocol)}) no Menin Office. O anexo fica registrado como comprovante da autorização.</div>` : ''}
 
   <div class="footer">
     <span>Documento gerado eletronicamente pelo Menin Office.</span>
