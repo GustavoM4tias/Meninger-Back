@@ -1435,11 +1435,14 @@ export const getPriceDistributionForEnterprise = async (req, res) => {
 
 export const getPriceTablesForEnterprise = async (req, res) => {
     try {
-        const { idempreendimento } = req.params;
+        const eid = Number(req.params.idempreendimento);
+        // Ficha avulsa não tem empreendimento — o front pode chamar com null/undefined.
+        // Number('null') vira NaN e o Sequelize gera SQL inválido (column "nan").
+        if (!Number.isInteger(eid)) return res.json([]);
         const today = new Date();
 
         const tables = await CvEnterprisePriceTable.findAll({
-            where: { idempreendimento: Number(idempreendimento), ativo_painel: true },
+            where: { idempreendimento: eid, ativo_painel: true },
             attributes: ['idtabela', 'nome', 'ativo_painel', 'aprovado', 'data_vigencia_de', 'data_vigencia_ate', 'porcentagem_comissao', 'maximo_parcelas', 'quantidade_parcelas_min', 'quantidade_parcelas_max', 'forma', 'juros_mes', 'raw'],
             order: [['data_vigencia_de', 'DESC']],
         });

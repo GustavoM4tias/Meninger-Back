@@ -170,7 +170,9 @@ app.use('/api/marketing/public', marketingPublicRoutes);
 // Webhook do Meta Lead Ads — precisa do raw body para validar o HMAC.
 app.use('/api/marketing/webhook', marketingWebhookRoutes);
 
-app.use(express.json());
+// Limite padrão (100kb) é pouco para o envio de assinatura: o body leva o HTML
+// completo da ficha com QR codes em data URL e estourava em 413 Payload Too Large.
+app.use(express.json({ limit: '10mb' }));
 
 app.use('/api/admin', admin);
 app.use('/api/meta-app', metaAppRoutes);   // credenciais de App Meta (compartilhadas WhatsApp + Lead Ads)
