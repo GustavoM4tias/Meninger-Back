@@ -1,5 +1,6 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
+import requireAdmin from '../middlewares/requireAdmin.js';
 import db from '../models/sequelize/index.js';
 
 import { fetchRepasses, fetchRepasseWorkflow } from '../controllers/cv/repasses.js'
@@ -90,7 +91,7 @@ router.get('/workflow-grupos/segments', fetchListSegments);
 router.get('/workflow-grupos/:id/projecoes', authenticate, fetchGroupProjections);
 
 // ─── Sync extras ──────────────────────────────────────────────────────────────
-router.post('/price-tables/sync', authenticate, async (req, res) => {
+router.post('/price-tables/sync', authenticate, requireAdmin, async (req, res) => {
     try {
         const svc = new PriceTableSyncService();
         await svc.syncAll();
@@ -100,7 +101,7 @@ router.post('/price-tables/sync', authenticate, async (req, res) => {
     }
 });
 
-router.post('/price-tables/sync/:idempreendimento', authenticate, async (req, res) => {
+router.post('/price-tables/sync/:idempreendimento', authenticate, requireAdmin, async (req, res) => {
     try {
         const svc = new PriceTableSyncService();
         const n = await svc.syncForEnterprise(Number(req.params.idempreendimento));
