@@ -21,7 +21,7 @@
 // LiveScoreService), então pontuação e atualização ao vivo são idênticas.
 
 import db from '../../models/sequelize/index.js';
-import { buildRanking } from '../../services/bolao/BolaoScoringService.js';
+import { buildRanking, tiebreakerEligibleIds } from '../../services/bolao/BolaoScoringService.js';
 import { isValidCPF, onlyDigits } from '../../utils/cpf.js';
 import { PUBLIC_SLUG } from '../../services/bolao/seedBolaoPublico.js';
 
@@ -48,6 +48,7 @@ function matchMeta(m) {
     home_score: m.home_score, away_score: m.away_score,
     live_home: m.live_home, live_away: m.live_away,
     live_minute: m.live_minute, live_period: m.live_period,
+    is_tiebreaker: !!m.is_tiebreaker,
   };
 }
 
@@ -82,6 +83,20 @@ async function openFutureMatches(bolaoId) {
   return all.filter(m => m.status !== 'finished' && new Date(m.kickoff_at).getTime() > now);
 }
 
+// DESEMPATE: dos jogos abertos, corta os marcados com is_tiebreaker quando o
+// participante NÃO está entre os líderes empatados. Devolve também se algo foi
+// cortado, para dar a mensagem certa ("não está no desempate" ≠ "já palpitou").
+const MSG_NOT_IN_TIEBREAKER = 'Esta rodada é o desempate dos líderes: só quem está empatado na ponta do ranking pode palpitar. Seu CPF não está nesse grupo — mas sua posição no ranking continua valendo!';
+async function matchesAllowedFor(bolaoId, participantId, openMatches) {
+  if (!openMatches.some(m => m.is_tiebreaker)) {
+    return { allowed: openMatches, cutFromTiebreaker: false };
+  }
+  const elig = await tiebreakerEligibleIds(bolaoId);
+  if (elig.has(participantId)) return { allowed: openMatches, cutFromTiebreaker: false };
+  const allowed = openMatches.filter(m => !m.is_tiebreaker);
+  return { allowed, cutFromTiebreaker: allowed.length !== openMatches.length };
+}
+
 // Dos jogos abertos, quais este participante ainda NÃO palpitou.
 async function pendingMatches(participantId, openMatches) {
   if (!openMatches.length) return [];
@@ -109,6 +124,14 @@ export async function getPublicOverview(req, res) {
     });
     const payload = await buildRanking(bolao.id, { mode: 'official' });
 
+    // Fase de desempate: informa quem está no grupo (ids são públicos no ranking)
+    // para o front avisar/marcar. Só existe se houver jogo is_tiebreaker.
+    let tiebreaker = null;
+    if (matches.some(m => m.is_tiebreaker)) {
+      const elig = await tiebreakerEligibleIds(bolao.id);
+      tiebreaker = { active: true, eligible_ids: [...elig] };
+    }
+
     return res.json({
       bolao: {
         slug: bolao.slug, name: bolao.name, description: bolao.description,
@@ -119,6 +142,7 @@ export async function getPublicOverview(req, res) {
       closed: isClosed(bolao),
       matches: matches.map(matchMeta),
       ranking: payload?.ranking || [],
+      tiebreaker,
     });
   } catch (err) {
     console.error('[bolaoPublic getOverview]', err);
@@ -145,10 +169,15 @@ export async function postEnter(req, res) {
     if (!participant) return res.json({ ok: true, notRegistered: true });
 
     const open = await openFutureMatches(bolao.id);
-    const pending = await pendingMatches(participant.id, open);
+    const { allowed, cutFromTiebreaker } = await matchesAllowedFor(bolao.id, participant.id, open);
+    const pending = await pendingMatches(participant.id, allowed);
     const who = { id: participant.id, name: participant.display_name };
 
-    if (!pending.length) return res.json({ ok: true, alreadyPlayedRound: true, participant: who });
+    if (!pending.length) {
+      // Não tem jogo pra ele PORQUE a rodada é só dos líderes empatados.
+      if (cutFromTiebreaker) return res.status(409).json({ ok: false, notInTiebreaker: true, participant: who, error: MSG_NOT_IN_TIEBREAKER });
+      return res.json({ ok: true, alreadyPlayedRound: true, participant: who });
+    }
     return res.json({ ok: true, participant: who, matches: pending.map(matchMeta) });
   } catch (err) {
     console.error('[bolaoPublic enter]', err);
@@ -172,8 +201,12 @@ export async function postSubmit(req, res) {
     if (!participant) return res.status(409).json({ ok: false, notRegistered: true, error: 'Esse CPF não está no bolão. Só quem palpitou na 1ª fase pode jogar.' });
 
     const open = await openFutureMatches(bolao.id);
-    const pending = await pendingMatches(participant.id, open);
-    if (!pending.length) return res.status(409).json({ ok: false, alreadyPlayedRound: true, error: 'Você já palpitou neste jogo.' });
+    const { allowed, cutFromTiebreaker } = await matchesAllowedFor(bolao.id, participant.id, open);
+    const pending = await pendingMatches(participant.id, allowed);
+    if (!pending.length) {
+      if (cutFromTiebreaker) return res.status(409).json({ ok: false, notInTiebreaker: true, error: MSG_NOT_IN_TIEBREAKER });
+      return res.status(409).json({ ok: false, alreadyPlayedRound: true, error: 'Você já palpitou neste jogo.' });
+    }
 
     const pendingById = new Map(pending.map(m => [m.id, m]));
 

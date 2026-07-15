@@ -87,16 +87,19 @@ function initialsFrom(name = '') {
 // Monta o ranking.
 //   mode='official'    → conta só jogos encerrados (placar oficial).
 //   mode='provisional' → conta também o placar AO VIVO ("se acabar agora").
-export async function buildRanking(bolaoId, { mode = 'official' } = {}) {
+//   ignoreTiebreakers  → desconsidera os jogos de desempate (usado para saber
+//                        quem estava empatado na ponta ANTES do desempate).
+export async function buildRanking(bolaoId, { mode = 'official', ignoreTiebreakers = false } = {}) {
   const bolao = await Bolao.findByPk(bolaoId);
   if (!bolao) return null;
   const pe = bolao.points_exact, pw = bolao.points_winner;
 
-  const [participants, matches, predictions] = await Promise.all([
+  const [participants, allMatches, predictions] = await Promise.all([
     BolaoParticipant.findAll({ where: { bolao_id: bolaoId }, order: [['id', 'ASC']] }),
     BolaoMatch.findAll({ where: { bolao_id: bolaoId }, order: [['match_order', 'ASC'], ['kickoff_at', 'ASC']] }),
     BolaoPrediction.findAll({ where: { bolao_id: bolaoId } }),
   ]);
+  const matches = ignoreTiebreakers ? allMatches.filter(m => !m.is_tiebreaker) : allMatches;
 
   const predByPart = new Map();
   for (const p of predictions) {
@@ -180,4 +183,16 @@ export async function buildRanking(bolaoId, { mode = 'official' } = {}) {
   };
 }
 
-export default { outcome, computePoints, scoreMatchAndPersist, refreshBolaoStatus, buildRanking };
+// DESEMPATE — quem pode palpitar nos jogos marcados com is_tiebreaker: somente
+// os participantes empatados com MAIS pontos, contando só os jogos normais
+// (assim o grupo não muda entre a semifinal e a final). Devolve um Set de ids.
+export async function tiebreakerEligibleIds(bolaoId) {
+  const payload = await buildRanking(bolaoId, { mode: 'official', ignoreTiebreakers: true });
+  const rows = payload?.ranking || [];
+  if (!rows.length) return new Set();
+  const top = rows[0].total;
+  if (top <= 0) return new Set(rows.map(r => r.participant.id)); // ninguém pontuou → sem restrição
+  return new Set(rows.filter(r => r.total === top).map(r => r.participant.id));
+}
+
+export default { outcome, computePoints, scoreMatchAndPersist, refreshBolaoStatus, buildRanking, tiebreakerEligibleIds };
