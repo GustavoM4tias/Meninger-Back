@@ -184,10 +184,11 @@ export async function buildRanking(bolaoId, { mode = 'official', ignoreTiebreake
 }
 
 // DESEMPATE — quem pode palpitar nos jogos marcados com is_tiebreaker: somente
-// os participantes empatados com MAIS pontos, contando só os jogos normais
-// (assim o grupo não muda entre a semifinal e a final). Devolve um Set de ids.
+// os participantes empatados com MAIS pontos no ranking oficial COMPLETO
+// (desempates anteriores contam). Assim o grupo AFUNILA a cada jogo: a semi
+// abriu para os 6 empatados, a final só para os que seguiram empatados na ponta.
 export async function tiebreakerEligibleIds(bolaoId) {
-  const payload = await buildRanking(bolaoId, { mode: 'official', ignoreTiebreakers: true });
+  const payload = await buildRanking(bolaoId, { mode: 'official' });
   const rows = payload?.ranking || [];
   if (!rows.length) return new Set();
   const top = rows[0].total;
