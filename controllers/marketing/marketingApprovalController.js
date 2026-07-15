@@ -88,6 +88,11 @@ export default {
         } catch (err) { fail(res, err); }
     },
 
+    async registerSignedDocument(req, res) {
+        try { res.status(201).json(await svc.registerSignedDocument({ id: req.params.id, payload: req.body, user: req.user })); }
+        catch (err) { fail(res, err); }
+    },
+
     async addAttachment(req, res) {
         try { res.status(201).json(await svc.addAttachment({ id: req.params.id, payload: req.body, user: req.user })); }
         catch (err) { fail(res, err); }

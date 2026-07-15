@@ -31,6 +31,8 @@ router.get('/:id(\\d+)/pdf', ...internal, ctrl.downloadPdf);
 router.post('/:id(\\d+)/decision', ...internal, ctrl.decide);
 router.post('/:id(\\d+)/cancel', ...internal, ctrl.cancel);
 router.post('/:id(\\d+)/attachments', ...internal, ctrl.addAttachment);
+// Documento de autorização assinado fora do sistema → aprova com o anexo como comprovante.
+router.post('/:id(\\d+)/signed-document', ...internal, ctrl.registerSignedDocument);
 router.delete('/attachments/:id(\\d+)', ...internal, ctrl.removeAttachment);
 
 export default router;
