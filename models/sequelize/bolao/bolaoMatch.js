@@ -39,6 +39,11 @@ export default (sequelize, DataTypes) => {
     // ID do evento no provider (ESPN event id) para casar o jogo no poll.
     provider_fixture_id: { type: DataTypes.STRING(40), allowNull: true },
 
+    // Jogo de DESEMPATE: só os participantes empatados com MAIS pontos (contando
+    // apenas os jogos normais) podem palpitar. Os pontos dele somam no ranking
+    // normalmente — é assim que o empate se resolve.
+    is_tiebreaker: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+
     finished_at: { type: DataTypes.DATE, allowNull: true },
   }, {
     tableName: 'bolao_match',
