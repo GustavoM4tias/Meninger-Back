@@ -701,8 +701,13 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       (acc[s.kind || 'number'] = acc[s.kind || 'number'] || []).push(s.value);
       return acc;
     }, {});
-    console.warn('[Eme] Possíveis alucinações:', byKind,
-      '| message:', fullAssistantText.slice(0, 200));
+    // Log só com EME_DEBUG=true — em operação normal isso dispara com frequência
+    // (inclusive falsos positivos) e polui o console; o aviso já vai ao usuário
+    // via SSE e fica persistido em metadata.warning / EmeInsights.
+    if (process.env.EME_DEBUG === 'true') {
+      console.warn('[Eme] Possíveis alucinações:', byKind,
+        '| message:', fullAssistantText.slice(0, 200));
+    }
 
     // Monta mensagem específica por tipo de problema
     const parts = [];
