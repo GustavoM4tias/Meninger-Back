@@ -8,6 +8,7 @@ import { buildAcademyTutorPrompt } from './academyTutorPrompt.js';
 import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
 import { TOOL_DECLARATIONS as COMERCIAL_DECLARATIONS, executeTool as comercialExecuteTool } from './ComercialTools.js';
 import { TOOL_DECLARATIONS as ALERT_DECLARATIONS,     executeTool as alertExecuteTool }     from './AlertTools.js';
+import { TOOL_DECLARATIONS as CONDITION_DECLARATIONS, executeTool as conditionExecuteTool } from './ConditionTools.js';
 // Dual-context (E3): tools do Academy + runner seguro.
 // O import de AcademyTools dispara o auto-registro das tools no ToolRegistry.
 import './AcademyTools.js';
@@ -22,6 +23,7 @@ function registerTools(declarations, executor) {
 registerTools(MARKETING_DECLARATIONS, marketingExecuteTool);
 registerTools(COMERCIAL_DECLARATIONS, comercialExecuteTool);
 registerTools(ALERT_DECLARATIONS,     alertExecuteTool);
+registerTools(CONDITION_DECLARATIONS, conditionExecuteTool);
 
 const TOOL_DECLARATIONS = [...TOOLS.values()].map(t => t.declaration);
 
