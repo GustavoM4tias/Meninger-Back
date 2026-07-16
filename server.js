@@ -40,6 +40,8 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
 import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
+import realEstateRoutes from './routes/realEstateRoutes.js';
+import realEstatePublicRoutes from './routes/realEstatePublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import marketingApprovalRoutes from './routes/marketingApprovalRoutes.js';
@@ -167,6 +169,10 @@ app.use('/api/whatsapp/webhook', whatsappWebhookRoutes);
 // Montado ANTES do express.json() global; o router traz seus próprios parsers.
 app.use('/api/marketing/public', marketingPublicRoutes);
 
+// Cadastro de imobiliária via link público — mesmo padrão (CORS aberto +
+// parsers próprios + rate limit; segurança = token de convite de uso único).
+app.use('/api/realestate/public', realEstatePublicRoutes);
+
 // Webhook do Meta Lead Ads — precisa do raw body para validar o HMAC.
 app.use('/api/marketing/webhook', marketingWebhookRoutes);
 
@@ -196,6 +202,7 @@ app.use('/api/academy', academyRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/bucket-upload', bucketUploadRoutes);
 app.use('/api/permissions', permissionRoutes);
+app.use('/api/realestate', realEstateRoutes); // cadastro de imobiliárias (CV)
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
 // Encurtador de URL público — rota fora de /api por elegância.
