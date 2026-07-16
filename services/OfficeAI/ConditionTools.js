@@ -88,15 +88,15 @@ const TOOL_DECLARATIONS = [
     {
         name: 'compare_condition_sheets',
         description:
-            'Compara Fichas Comerciais do MESMO empreendimento entre meses: o que mudou campo a campo (ficha, módulos, campanhas, tabelas de preço, custos Menin × Cliente). Dois modos: (1) comparação entre dois meses — passe mes_a e mes_b (ou omita para comparar os dois meses mais recentes); (2) evolução ao longo de um período — passe de e ate (YYYY-MM) para uma linha do tempo mês a mês dos principais indicadores. Use quando pedirem "o que mudou", "compare", "evolução", "histórico das condições".',
+            'Compara Fichas Comerciais do MESMO empreendimento entre meses: o que mudou campo a campo (ficha, módulos, campanhas, tabelas de preço, custos Menin × Cliente). Dois modos: (1) comparação entre dois meses — passe mes_a e mes_b (ou omita tudo para comparar os dois meses mais recentes); (2) evolução ao longo de um período — passe de e/ou ate (YYYY-MM) para linha do tempo mês a mês + mudanças acumuladas entre o primeiro e o último mês do período. Para "o que mudou no ano" use de = janeiro do ano; para "desde o início" passe só ate (ou só de bem antigo) — o de omitido vira o primeiro mês da série. Use quando pedirem "o que mudou", "compare", "evolução", "histórico das condições".',
         parameters: {
             type: 'OBJECT',
             properties: {
                 empreendimento: { type: 'STRING', description: 'Nome do empreendimento (CV) ou do produto avulso. Busca parcial, sem acento.' },
                 mes_a: { type: 'STRING', description: 'Primeiro mês da comparação (YYYY-MM).' },
                 mes_b: { type: 'STRING', description: 'Segundo mês da comparação (YYYY-MM).' },
-                de:    { type: 'STRING', description: 'Início do período de evolução (YYYY-MM). Usar junto com `ate`.' },
-                ate:   { type: 'STRING', description: 'Fim do período de evolução (YYYY-MM). Usar junto com `de`.' },
+                de:    { type: 'STRING', description: 'Início do período de evolução (YYYY-MM). Se omitido (com `ate` presente), usa o PRIMEIRO mês da série — bom para "desde o início".' },
+                ate:   { type: 'STRING', description: 'Fim do período de evolução (YYYY-MM). Se omitido (com `de` presente), usa o mês mais recente.' },
             },
             required: ['empreendimento'],
         },
@@ -633,10 +633,8 @@ const COND_DIFF_FIELDS = {
 };
 
 const diffVal = (v) => {
+    if (typeof v === 'boolean') return v ? 'Sim' : 'Não'; // antes do numOrNull (Number(true) = 1)
     const n = numOrNull(v);
-    if (typeof n === 'boolean') return n ? 'Sim' : 'Não';
-    if (n === true) return 'Sim';
-    if (n === false) return 'Não';
     return PAYER_LABEL[n] ?? n;
 };
 
@@ -714,6 +712,44 @@ function matchModules(condA, condB) {
     return pairs;
 }
 
+// Diff completo entre duas fichas da mesma série (ficha + módulos + campanhas + custos).
+// Usado no modo mes_a/mes_b e nas mudanças acumuladas do modo evolução.
+async function buildDiff(condA, condB) {
+    const fichaDiff = diffFields(condA.toJSON(), condB.toJSON(), COND_DIFF_FIELDS);
+
+    const ptMap = await loadPriceTableMap([condA, condB]);
+    const modulosDiff = {};
+    for (const { a, b } of matchModules(condA, condB)) {
+        const nome = (b || a).module_name;
+        if (a && !b) { modulosDiff[nome] = { removido: true }; continue; }
+        if (!a && b) { modulosDiff[nome] = { adicionado: true }; continue; }
+        const ch = diffFields(a.toJSON(), b.toJSON(), MOD_DIFF_FIELDS);
+        const tabelasA = priceTableNames(a.price_table_ids, ptMap).sort().join(', ');
+        const tabelasB = priceTableNames(b.price_table_ids, ptMap).sort().join(', ');
+        if (tabelasA !== tabelasB) ch['Tabelas de preço'] = { antes: tabelasA || EMPTY, depois: tabelasB || EMPTY };
+        if (Object.keys(ch).length) modulosDiff[nome] = ch;
+    }
+
+    const custoA = costTotals(condA);
+    const custoB = costTotals(condB);
+    const total =
+        Object.keys(fichaDiff).length +
+        Object.values(modulosDiff).reduce((s, m) => s + (m.adicionado || m.removido ? 1 : Object.keys(m).length), 0);
+
+    return {
+        total,
+        mudancas: clean({
+            ficha: fichaDiff,
+            modulos: modulosDiff,
+            campanhas: diffCampaigns(condA, condB),
+            custos: {
+                menin: { antes: custoA.menin, depois: custoB.menin, diferenca: round2(custoB.menin - custoA.menin) },
+                cliente: { antes: custoA.cliente, depois: custoB.cliente, diferenca: round2(custoB.cliente - custoA.cliente) },
+            },
+        }) || {},
+    };
+}
+
 async function executeCompareSheets(args, user) {
     if (!args?.empreendimento) return { error: 'Informe o nome do empreendimento ou do produto.' };
 
@@ -734,16 +770,18 @@ async function executeCompareSheets(args, user) {
     const conditions = await loadSeriesConditions(serie, scope, { full: true });
     if (!conditions.length) return { error: `Não há fichas visíveis para "${serie.nome}".` };
 
-    // ── Modo evolução (de/ate): linha do tempo dos principais indicadores ──
-    if (args.de && args.ate) {
-        if (!/^\d{4}-\d{2}$/.test(args.de) || !/^\d{4}-\d{2}$/.test(args.ate)) {
-            return { error: 'Período inválido: use de/ate no formato YYYY-MM.' };
+    // ── Modo evolução (de/ate): linha do tempo + mudanças acumuladas do período ──
+    // de omitido = primeiro mês da série ("desde o início"); ate omitido = mais recente.
+    if (args.de || args.ate) {
+        for (const v of [args.de, args.ate]) {
+            if (v && !/^\d{4}-\d{2}$/.test(v)) return { error: 'Período inválido: use de/ate no formato YYYY-MM.' };
         }
-        const range = conditions
-            .filter(c => monthOf(c.reference_month) >= args.de && monthOf(c.reference_month) <= args.ate)
-            .sort((x, y) => monthOf(x.reference_month) < monthOf(y.reference_month) ? -1 : 1);
+        const asc = [...conditions].sort((x, y) => monthOf(x.reference_month) < monthOf(y.reference_month) ? -1 : 1);
+        const de = args.de || monthOf(asc[0].reference_month);
+        const ate = args.ate || monthOf(asc[asc.length - 1].reference_month);
+        const range = asc.filter(c => monthOf(c.reference_month) >= de && monthOf(c.reference_month) <= ate);
         if (!range.length) {
-            return { error: `Sem fichas visíveis entre ${args.de} e ${args.ate}. Meses disponíveis: ${buildMesesDisponiveis(conditions)}.` };
+            return { error: `Sem fichas visíveis entre ${de} e ${ate}. Meses disponíveis: ${buildMesesDisponiveis(conditions)}.` };
         }
 
         const rows = range.map(c => {
@@ -761,6 +799,17 @@ async function executeCompareSheets(args, user) {
                 custo_cliente: custo.cliente || 0,
             };
         });
+
+        // Mudanças acumuladas: primeiro × último mês do período ("o que mudou no ano/desde o início")
+        let acumuladas;
+        if (range.length >= 2) {
+            const diff = await buildDiff(range[0], range[range.length - 1]);
+            acumuladas = {
+                periodo: `${fmtMonth(range[0].reference_month)} → ${fmtMonth(range[range.length - 1].reference_month)}`,
+                total_mudancas: diff.total,
+                ...diff.mudancas,
+            };
+        }
 
         return {
             type: 'table',
@@ -780,7 +829,8 @@ async function executeCompareSheets(args, user) {
                 source: 'conditions',
                 empreendimento: serie.nome,
                 evolucao: Object.fromEntries(rows.map(r => [r.mes, `status ${r.status}, comissão ${r.comissao_pct ?? '-'}%, campanhas ${r.campanhas}, custo Menin ${r.custo_menin}, custo Cliente ${r.custo_cliente}`])),
-                dica: 'Para o detalhe do que mudou entre dois meses específicos, use compare_condition_sheets com mes_a e mes_b.',
+                mudancas_acumuladas: acumuladas,
+                dica: 'A tabela de evolução já está na UI. Narre as mudancas_acumuladas (o que mudou do primeiro ao último mês) citando os meses e status. Para detalhe entre dois meses específicos, use mes_a e mes_b.',
             },
         };
     }
@@ -804,46 +854,16 @@ async function executeCompareSheets(args, user) {
         [condB, condA] = [conditions[0], conditions[1]]; // lista em DESC
     }
 
-    // Diff nível ficha
-    const fichaDiff = diffFields(condA.toJSON(), condB.toJSON(), COND_DIFF_FIELDS);
-
-    // Diff nível módulo (+ tabelas de preço por módulo)
-    const ptMap = await loadPriceTableMap([condA, condB]);
-    const modulosDiff = {};
-    for (const { a, b } of matchModules(condA, condB)) {
-        const nome = (b || a).module_name;
-        if (a && !b) { modulosDiff[nome] = { removido: true }; continue; }
-        if (!a && b) { modulosDiff[nome] = { adicionado: true }; continue; }
-        const ch = diffFields(a.toJSON(), b.toJSON(), MOD_DIFF_FIELDS);
-        const tabelasA = priceTableNames(a.price_table_ids, ptMap).sort().join(', ');
-        const tabelasB = priceTableNames(b.price_table_ids, ptMap).sort().join(', ');
-        if (tabelasA !== tabelasB) ch['Tabelas de preço'] = { antes: tabelasA || null, depois: tabelasB || null };
-        if (Object.keys(ch).length) modulosDiff[nome] = ch;
-    }
-
-    const custoA = costTotals(condA);
-    const custoB = costTotals(condB);
-
-    const totalMudancas =
-        Object.keys(fichaDiff).length +
-        Object.values(modulosDiff).reduce((s, m) => s + (m.adicionado || m.removido ? 1 : Object.keys(m).length), 0);
+    const diff = await buildDiff(condA, condB);
 
     return {
         type: 'condition_compare',
         empreendimento: serie.nome,
         fonte_antes: buildFonte(condA, serie.nome),
         fonte_depois: buildFonte(condB, serie.nome),
-        mudancas: clean({
-            ficha: fichaDiff,
-            modulos: modulosDiff,
-            campanhas: diffCampaigns(condA, condB),
-            custos: {
-                menin: { antes: custoA.menin, depois: custoB.menin, diferenca: round2(custoB.menin - custoA.menin) },
-                cliente: { antes: custoA.cliente, depois: custoB.cliente, diferenca: round2(custoB.cliente - custoA.cliente) },
-            },
-        }) || {},
-        total_mudancas: totalMudancas,
-        message: totalMudancas
+        mudancas: diff.mudancas,
+        total_mudancas: diff.total,
+        message: diff.total
             ? `Comparação ${fmtMonth(condA.reference_month)} (${STATUS_LABEL[condA.status]}) → ${fmtMonth(condB.reference_month)} (${STATUS_LABEL[condB.status]}). Cite sempre os dois meses e status na resposta. Valores em R$.`
             : `Nenhuma diferença relevante entre ${fmtMonth(condA.reference_month)} (${STATUS_LABEL[condA.status]}) e ${fmtMonth(condB.reference_month)} (${STATUS_LABEL[condB.status]}) nos campos comparados.`,
         context: { source: 'conditions' },
