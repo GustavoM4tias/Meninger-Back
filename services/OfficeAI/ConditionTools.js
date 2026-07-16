@@ -8,9 +8,10 @@
 //   - Usuário comum: só fichas 'approved'/'closed' de empreendimentos da SUA cidade
 //     (enterprise_cities). Avulsas ficam fora (idempreendimento null), igual à tela.
 //
-// PRIORIDADE DE SELEÇÃO quando o usuário não pede um mês específico:
-//   mês mais recente com status Autorizada > Em autorização > Rascunho > Encerrada.
-//   (a "sequência de garantia": dado autorizado vale mais que rascunho mais novo)
+// SELEÇÃO quando o usuário não pede um mês específico:
+//   SEMPRE a ficha mais recente. Se ela não estiver autorizada, o resultado leva
+//   junto a última AUTORIZADA (ficha_autorizada) como referência oficial. Se
+//   nenhuma estiver autorizada, sem_ficha_autorizada=true (avisar o usuário).
 //
 // FONTE: todo resultado carrega `fonte` (ficha, mês, status) — a Eme SEMPRE cita
 // de qual ficha o dado saiu.
@@ -41,8 +42,8 @@ const STATUS_LABEL = {
     closed: 'Encerrada',
 };
 
-// Ordem de preferência quando o mês não é informado (sequência de garantia).
-const STATUS_PRIORITY = ['approved', 'pending_approval', 'draft', 'closed'];
+// Ficha "autorizada" = aprovada ou encerrada (foi autorizada em algum momento).
+const isAuthorizedStatus = (c) => ['approved', 'closed'].includes(c.status);
 
 // Args em pt → status interno
 const STATUS_ARG = {
@@ -61,11 +62,11 @@ const TOOL_DECLARATIONS = [
     {
         name: 'query_condition_sheets',
         description:
-            'Lista as Fichas Comerciais (condições comerciais mensais por empreendimento) visíveis ao usuário: quais empreendimentos/produtos têm ficha, meses disponíveis e status de cada uma. Use para descobrir o que existe antes de detalhar, ou quando o usuário perguntar "quais fichas temos", "de quais meses", "tem ficha do X?".',
+            'Lista as Fichas Comerciais (condições comerciais mensais por empreendimento) visíveis ao usuário: quais empreendimentos/produtos têm ficha, meses disponíveis e status de cada uma. Use para descobrir o que existe antes de detalhar, ou quando o usuário perguntar "quais fichas temos", "de quais meses", "tem ficha do X?", "quais fichas em [cidade]?". Para perguntas de condições comerciais por CIDADE, use esta tool (o filtro empreendimento também casa cidade) — NUNCA conclua que não há fichas usando query_enterprises.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                empreendimento: { type: 'STRING', description: 'Filtro por nome do empreendimento (CV) ou nome do produto (ficha avulsa). Busca parcial, sem acento.' },
+                empreendimento: { type: 'STRING', description: 'Filtro por nome do empreendimento (CV), nome do produto (ficha avulsa) ou CIDADE. Busca parcial, sem acento.' },
                 mes: { type: 'STRING', description: 'Filtro por mês de referência no formato YYYY-MM. Ex: "2026-07".' },
                 status: { type: 'STRING', description: 'Filtro por status: "rascunho" | "em_autorizacao" | "autorizada" | "encerrada".' },
             },
@@ -74,12 +75,12 @@ const TOOL_DECLARATIONS = [
     {
         name: 'get_condition_sheet',
         description:
-            'Retorna a Ficha Comercial COMPLETA de um empreendimento/produto: comissão, prazo de entrega, tabelas de preço, regras de negociação (entrada máxima, parcelas, RP, correções), subsídio estadual, campanhas, documentação (pacote CEF, ITBI, cartório), operacional (CCA, certificação digital, registro de contrato) e custos Menin × Cliente. Use para QUALQUER pergunta sobre condições comerciais de um empreendimento. Sem `mes`, seleciona automaticamente a ficha mais recente priorizando status Autorizada > Em autorização > Rascunho. SEMPRE cite a fonte (mês + status) na resposta.',
+            'Retorna a Ficha Comercial COMPLETA de um empreendimento/produto: comissão, prazo de entrega, tabelas de preço, regras de negociação (entrada máxima, parcelas, RP, correções), subsídio estadual, campanhas, documentação (pacote CEF, ITBI, cartório), operacional (CCA, certificação digital, registro de contrato) e custos Menin × Cliente. Use para QUALQUER pergunta sobre condições comerciais de um empreendimento. O nome também casa por CIDADE (ex: "votuporanga" acha as fichas de lá). Sem `mes`, retorna a ficha mais recente; se ela não estiver autorizada, vem junto a última autorizada em `ficha_autorizada`. SEMPRE cite a fonte (mês + status) na resposta.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                empreendimento: { type: 'STRING', description: 'Nome do empreendimento (CV) ou do produto avulso. Busca parcial, sem acento.' },
-                mes: { type: 'STRING', description: 'Mês de referência específico (YYYY-MM). Só passe se o usuário pedir um mês/data específico; caso contrário omita para usar a regra de prioridade.' },
+                empreendimento: { type: 'STRING', description: 'Nome do empreendimento (CV), do produto avulso, ou cidade. Busca parcial, sem acento.' },
+                mes: { type: 'STRING', description: 'Mês de referência específico (YYYY-MM). Só passe se o usuário pedir um mês/data específico; caso contrário omita.' },
             },
             required: ['empreendimento'],
         },
@@ -187,11 +188,13 @@ async function findSeries(term, scope) {
         params.ids = scope.ids;
     }
 
+    // Casa por nome OU cidade do empreendimento (ex.: "votuporanga" acha as fichas da cidade).
     const cvRows = await db.sequelize.query(
         `SELECT DISTINCT ec.idempreendimento, ce.nome
            FROM enterprise_conditions ec
            JOIN cv_enterprises ce ON ce.idempreendimento = ec.idempreendimento
-          WHERE unaccent(lower(ce.nome)) LIKE unaccent(:t) ${cvVisibility}
+          WHERE (unaccent(lower(ce.nome)) LIKE unaccent(:t)
+                 OR unaccent(lower(COALESCE(ce.cidade, ''))) LIKE unaccent(:t)) ${cvVisibility}
           ORDER BY ce.nome
           LIMIT 15`,
         { replacements: params, type: QueryTypes.SELECT }
@@ -237,24 +240,18 @@ async function loadSeriesConditions(serie, scope, options = {}) {
         where,
         order: [['reference_month', 'DESC']],
         ...(options.full ? {
-            include: [{
-                model: EnterpriseConditionModule,
-                as: 'modules',
-                separate: true,
-                order: [['sort_order', 'ASC']],
-                include: [{ model: EnterpriseConditionCampaign, as: 'campaigns', separate: true, order: [['sort_order', 'ASC']] }],
-            }],
+            include: [
+                { model: CvEnterprise, as: 'enterprise', attributes: ['idempreendimento', 'nome', 'cidade', 'logo'] },
+                {
+                    model: EnterpriseConditionModule,
+                    as: 'modules',
+                    separate: true,
+                    order: [['sort_order', 'ASC']],
+                    include: [{ model: EnterpriseConditionCampaign, as: 'campaigns', separate: true, order: [['sort_order', 'ASC']] }],
+                },
+            ],
         } : {}),
     });
-}
-
-// Seleção da ficha quando o mês não vem: sequência de garantia sobre o mês mais recente.
-function pickByPriority(conditions) {
-    for (const status of STATUS_PRIORITY) {
-        const found = conditions.find(c => c.status === status); // lista já em mês DESC
-        if (found) return found;
-    }
-    return null;
 }
 
 function buildFonte(cond, serieNome) {
@@ -262,9 +259,12 @@ function buildFonte(cond, serieNome) {
         tipo: 'Ficha Comercial',
         ficha_id: cond.id,
         empreendimento: serieNome,
+        cidade: cond.enterprise?.cidade || undefined,
+        logo: cond.enterprise?.logo || undefined,
         avulsa: cond.idempreendimento == null || undefined,
         mes_referencia: fmtMonth(cond.reference_month),
         status: STATUS_LABEL[cond.status] || cond.status,
+        autorizada: isAuthorizedStatus(cond) || undefined,
         autorizada_em: cond.approved_at ? dayjs(cond.approved_at).format('DD/MM/YYYY') : undefined,
         atualizada_em: cond.updatedAt ? dayjs(cond.updatedAt).format('DD/MM/YYYY HH:mm') : undefined,
     };
@@ -511,7 +511,12 @@ async function executeGetSheet(args, user) {
     const conditions = await loadSeriesConditions(serie, scope, { full: true });
     if (!conditions.length) return { error: `Não há fichas visíveis para "${serie.nome}".` };
 
-    let cond = null;
+    // ── Seleção ──────────────────────────────────────────────────────────────
+    // Regra: SEMPRE a ficha mais recente. Se ela não estiver autorizada, vai
+    // junto a última AUTORIZADA (referência oficial). Se nenhuma estiver
+    // autorizada, o resultado marca isso explicitamente.
+    let cond = null;            // ficha principal (mais recente / mês pedido)
+    let condAutorizada = null;  // última autorizada, quando a principal não é
     let selecao;
     if (args.mes && /^\d{4}-\d{2}$/.test(args.mes)) {
         cond = conditions.find(c => monthOf(c.reference_month) === args.mes);
@@ -520,42 +525,56 @@ async function executeGetSheet(args, user) {
                 error: `"${serie.nome}" não tem ficha visível em ${dayjs(args.mes + '-01').format('MM/YYYY')}. Meses disponíveis: ${buildMesesDisponiveis(conditions)}.`,
             };
         }
-        selecao = `Mês ${fmtMonth(cond.reference_month)} solicitado pelo usuário.`;
+        selecao = `Mês ${fmtMonth(cond.reference_month)} solicitado pelo usuário (status ${STATUS_LABEL[cond.status]}).`;
+        if (!isAuthorizedStatus(cond)) condAutorizada = conditions.find(isAuthorizedStatus) || null;
     } else {
-        cond = pickByPriority(conditions);
-        selecao = `Selecionada a ficha mais recente com maior garantia (Autorizada > Em autorização > Rascunho): ${fmtMonth(cond.reference_month)} (${STATUS_LABEL[cond.status]}).`;
-        const newer = conditions.find(c => monthOf(c.reference_month) > monthOf(cond.reference_month));
-        if (newer) {
-            selecao += ` ATENÇÃO: existe ficha mais nova de ${fmtMonth(newer.reference_month)} em status ${STATUS_LABEL[newer.status]} — avise o usuário.`;
+        cond = conditions[0]; // mais recente (lista em mês DESC)
+        if (isAuthorizedStatus(cond)) {
+            selecao = `Ficha mais recente (${fmtMonth(cond.reference_month)}) está ${STATUS_LABEL[cond.status]} — use como oficial.`;
+        } else {
+            condAutorizada = conditions.find(isAuthorizedStatus) || null;
+            if (condAutorizada) {
+                selecao = `A ficha mais recente (${fmtMonth(cond.reference_month)}) ainda está em ${STATUS_LABEL[cond.status]} (NÃO autorizada). Vai junto a última AUTORIZADA (${fmtMonth(condAutorizada.reference_month)}) em ficha_autorizada — apresente as duas: a autorizada como oficial vigente e a mais recente como em elaboração.`;
+            } else {
+                selecao = `ATENÇÃO: NENHUMA ficha de "${serie.nome}" está autorizada. Os dados são da mais recente (${fmtMonth(cond.reference_month)}, ${STATUS_LABEL[cond.status]}) — deixe EXPLÍCITO ao usuário que ainda não existe ficha autorizada.`;
+            }
         }
     }
 
-    const ptMap = await loadPriceTableMap([cond]);
-    const modules = (cond.modules || []).map(m => buildModulePayload(m, ptMap));
-    const custoTotal = aggregateCostSummaries((cond.modules || []).map(m => m.toJSON()));
+    const ptMap = await loadPriceTableMap([cond, condAutorizada].filter(Boolean));
 
-    return {
-        type: 'condition_sheet',
-        fonte: buildFonte(cond, serie.nome),
-        selecao,
-        meses_disponiveis: buildMesesDisponiveis(conditions),
-        ficha: clean({
-            prazo_entrega_meses: cond.delivery_deadline_months,
-            obs_prazo: cond.delivery_deadline_note,
-            comissao_pct: numOrNull(cond.commission_pct),
-            fonte_comissao: cond.commission_source,
-            premissa_preco: cond.price_premise_note,
-            observacoes: cond.notes ? String(cond.notes).slice(0, 500) : undefined,
-            modulos: modules,
+    const buildConditionPayload = (c) => {
+        const custoTotal = aggregateCostSummaries((c.modules || []).map(m => m.toJSON()));
+        return clean({
+            prazo_entrega_meses: c.delivery_deadline_months,
+            obs_prazo: c.delivery_deadline_note,
+            comissao_pct: numOrNull(c.commission_pct),
+            fonte_comissao: c.commission_source,
+            premissa_preco: c.price_premise_note,
+            observacoes: c.notes ? String(c.notes).slice(0, 500) : undefined,
+            modulos: (c.modules || []).map(m => buildModulePayload(m, ptMap)),
             custos_totais: (custoTotal.totalMenin || custoTotal.totalClient) ? {
                 menin: Object.fromEntries(custoTotal.menin.map(i => [i.label, round2(i.value)])),
                 cliente: Object.fromEntries(custoTotal.client.map(i => [i.label, round2(i.value)])),
                 total_menin: round2(custoTotal.totalMenin),
                 total_cliente: round2(custoTotal.totalClient),
             } : undefined,
-        }) || {},
-        context: { source: 'conditions' },
-        message: 'Responda com base na ficha acima e CITE A FONTE: mês de referência + status. Valores monetários em R$.',
+        }) || {};
+    };
+
+    return {
+        type: 'condition_sheet',
+        fonte: buildFonte(cond, serie.nome),
+        selecao,
+        meses_disponiveis: buildMesesDisponiveis(conditions),
+        ficha: buildConditionPayload(cond),
+        ...(condAutorizada ? {
+            fonte_autorizada: buildFonte(condAutorizada, serie.nome),
+            ficha_autorizada: buildConditionPayload(condAutorizada),
+        } : {}),
+        sem_ficha_autorizada: (!isAuthorizedStatus(cond) && !condAutorizada) || undefined,
+        context: { source: 'conditions', ficha_id: cond.id },
+        message: 'Responda com base na ficha acima e CITE A FONTE: mês de referência + status. O card visual já mostra os detalhes — seja direto no texto. Valores monetários em R$.',
     };
 }
 
