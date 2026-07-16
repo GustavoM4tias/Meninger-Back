@@ -75,7 +75,7 @@ const TOOL_DECLARATIONS = [
     {
         name: 'get_condition_sheet',
         description:
-            'Retorna a Ficha Comercial COMPLETA de um empreendimento/produto: comissão, prazo de entrega, tabelas de preço, regras de negociação (entrada máxima, parcelas, RP, correções), subsídio estadual, campanhas, documentação (pacote CEF, ITBI, cartório), operacional (CCA, certificação digital, registro de contrato) e custos Menin × Cliente. Use para QUALQUER pergunta sobre condições comerciais de um empreendimento. O nome também casa por CIDADE (ex: "votuporanga" acha as fichas de lá). Sem `mes`, retorna a ficha mais recente; se ela não estiver autorizada, vem junto a última autorizada em `ficha_autorizada`. SEMPRE cite a fonte (mês + status) na resposta.',
+            'Retorna a Ficha Comercial COMPLETA de um empreendimento/produto: comissão, prazo de entrega, tabelas de preço, regras de negociação (entrada máxima, parcelas, RP, correções), subsídio estadual, campanhas, documentação (pacote CEF, ITBI, cartório), operacional (CCA, certificação digital, registro de contrato) e custos Menin × Cliente. Use para QUALQUER pergunta sobre condições comerciais de um empreendimento. O nome também casa por CIDADE (ex: "votuporanga" acha as fichas de lá). NUNCA pergunte ao usuário qual mês: sem `mes`, a tool já retorna a ficha mais recente e, se ela não estiver autorizada, a última autorizada junto em `ficha_autorizada` — responda direto com isso. SEMPRE cite a fonte (mês + status) na resposta.',
         parameters: {
             type: 'OBJECT',
             properties: {
