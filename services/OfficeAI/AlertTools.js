@@ -250,8 +250,6 @@ async function executeList(args, user) {
         ],
     });
 
-    console.log(`[list_alerts] user=${user.id} (admin=${isAdmin(user)}) where=${JSON.stringify(where)} -> ${rules.length} resultados`);
-
     return {
         ok: true,
         items: rules.map(r => ({
