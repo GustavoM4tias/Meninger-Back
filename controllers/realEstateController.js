@@ -430,7 +430,7 @@ async function handleParseCard(req, res) {
         if (!onlyDigits(data.cnpj)) {
             return res.status(422).json({
                 ok: false,
-                error: 'Não foi possível ler o CNPJ neste PDF (pode ser um arquivo escaneado). Preencha os campos manualmente.',
+                error: 'Não foi possível ler o CNPJ neste PDF. Confira se o arquivo é o cartão CNPJ da Receita ou preencha os campos manualmente.',
             });
         }
         return res.json({ ok: true, data });
