@@ -1,0 +1,71 @@
+<p style="margin:0 0 8px 0; font-size:18px; color:#0f172a;">Olá, {{gerentePrimeiroNome}} 👋</p>
+<p style="margin:0 0 24px 0; font-size:15px; color:#475569;">
+    O cadastro da imobiliária <strong style="color:#0f172a;">{{imobiliariaNome}}</strong> foi concluído
+    e o seu acesso ao painel já está liberado.
+</p>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; margin:0 0 24px 0; background:#ffffff;">
+    <tr>
+        <td style="background:#f8fafc; padding:18px 24px; border-bottom:1px solid #e2e8f0;">
+            <p style="margin:0; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#64748b; font-weight:600;">
+                Seus dados de acesso
+            </p>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding:18px 24px; color:#334155; font-size:14px; line-height:1.6;">
+            <table width="100%" cellspacing="0" cellpadding="6">
+                <tr>
+                    <td style="color:#64748b; width:90px;">Login</td>
+                    <td style="color:#0f172a; font-weight:600; font-family:'Courier New', monospace;">{{login}}</td>
+                </tr>
+                {{#if senha}}
+                <tr>
+                    <td style="color:#64748b;">Senha</td>
+                    <td style="color:#0f172a; font-weight:600; font-family:'Courier New', monospace;">{{senha}}</td>
+                </tr>
+                {{/if}}
+            </table>
+        </td>
+    </tr>
+</table>
+
+{{#unless senha}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; margin:0 0 24px 0;">
+    <tr>
+        <td style="padding:14px 18px; color:#1e3a8a; font-size:13px; line-height:1.6;">
+            <strong>🔑 Primeiro acesso:</strong> na tela de login do painel, clique em
+            <strong>"Esqueci minha senha"</strong> e informe o e-mail acima para definir a sua senha.
+        </td>
+    </tr>
+</table>
+{{/unless}}
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+    <tr>
+        <td align="center">
+            <a href="{{painelUrl}}" target="_blank"
+                style="display:inline-block; background:#0f172a; color:#ffffff; text-decoration:none;
+                       font-weight:600; font-size:16px; padding:16px 36px; border-radius:10px;
+                       box-shadow:0 4px 6px -1px rgba(15,23,42,0.25);">
+                Acessar o painel
+            </a>
+        </td>
+    </tr>
+</table>
+
+{{#if empreendimentos}}
+<p style="margin:0 0 24px 0; font-size:13px; color:#64748b; line-height:1.6;">
+    A imobiliária já está associada a: <strong style="color:#334155;">{{empreendimentos}}</strong>.
+</p>
+{{/if}}
+
+<div class="divider"></div>
+
+<p style="margin:0; font-size:12px; color:#94a3b8; text-align:center; line-height:1.6;">
+    📬 Este é um e-mail automático <strong>somente para envio</strong> de comunicados.<br>
+    Por favor, <strong>não responda a esta mensagem</strong>. Em caso de dúvida, fale com quem
+    enviou o seu convite de cadastro.
+</p>

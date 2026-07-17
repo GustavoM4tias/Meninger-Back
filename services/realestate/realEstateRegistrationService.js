@@ -9,6 +9,7 @@
 // 'error' com retry — o upsert do CV torna a repetição segura.
 
 import apiCv from '../../lib/apiCv.js';
+import { sendAccessEmail, sendPendingEmail } from './realEstateNotifyService.js';
 
 export const onlyDigits = (s) => String(s || '').replace(/\D/g, '');
 
@@ -267,12 +268,34 @@ export async function processRegistration(registration) {
             result: { ...result, steps },
             completed_at: new Date(),
         });
+
+        // E-mail de acesso ao gerente (uma única vez, mesmo em retry). Falha de
+        // e-mail não derruba o cadastro - fica registrada para diagnóstico.
+        const emails = { ...(result.emails || {}) };
+        if (!emails.access_sent_at) {
+            try {
+                if (await sendAccessEmail(reg)) emails.access_sent_at = new Date().toISOString();
+            } catch (mailErr) {
+                console.error('[realestate] falha no e-mail de acesso:', mailErr?.message);
+                emails.access_error = mailErr?.message || String(mailErr);
+            }
+            await reg.update({ result: { ...result, steps, emails } });
+        }
         return reg;
     } catch (err) {
+        // "Aguarde": avisa o gerente uma única vez que o acesso sai depois.
+        const emails = { ...(result.emails || {}) };
+        if (!emails.pending_sent_at && !emails.access_sent_at) {
+            try {
+                if (await sendPendingEmail(reg)) emails.pending_sent_at = new Date().toISOString();
+            } catch (mailErr) {
+                console.error('[realestate] falha no e-mail de aguarde:', mailErr?.message);
+            }
+        }
         await reg.update({
             status: 'error',
             error: err?.message || String(err),
-            result: { ...result, steps },
+            result: { ...result, steps, emails },
         });
         throw err;
     }
