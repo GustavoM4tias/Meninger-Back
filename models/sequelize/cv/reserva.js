@@ -24,6 +24,7 @@ export default (sequelize, DataTypes) => {
         corretor: { type: DataTypes.JSONB },
         condicoes: { type: DataTypes.JSONB },
         leads_associados: { type: DataTypes.JSONB },
+        associados: { type: DataTypes.JSONB }, // co-compradores (associados_array do CV: cônjuge etc.)
 
         // Demais campos
         idproposta_cv: { type: DataTypes.INTEGER },

@@ -197,6 +197,7 @@ function mapReservaToCols(idreserva, core, docs, erp, campanhas, mensagens, snap
         corretor: core?.corretor ?? null,
         condicoes: core?.condicoes ?? null,
         leads_associados: core?.leads_associados ?? null,
+        associados: core?.associados_array ?? null,
         idproposta_cv: core?.idproposta_cv ?? null,
         idproposta_int: core?.idproposta_int ?? null,
         vendida: core?.vendida ?? null,
