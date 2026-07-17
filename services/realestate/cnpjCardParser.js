@@ -10,6 +10,9 @@
 // Import direto do lib/ evita o bloco de debug do index.js do pdf-parse,
 // que quebra quando importado via ESM.
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+// Fallback p/ cartão ESCANEADO (sem camada de texto): visão do Gemini, mesmo
+// padrão do validatorAI/PaymentExtractorService.
+import { AIService } from '../../validatorAI/src/services/AIService.js';
 
 // Labels do cartão, na grafia da Receita (sem acento p/ casar normalizado).
 const LABELS = [
@@ -87,9 +90,78 @@ const cleanValue = (v) => {
     return s;
 };
 
+// ── Fallback: cartão escaneado → visão do Gemini ─────────────────────────────
+
+const VISION_PROMPT = `Extraia os dados deste Comprovante de Inscrição e de Situação Cadastral (cartão CNPJ) da Receita Federal do Brasil.
+Retorne APENAS JSON (sem markdown):
+{
+  "cnpj": "<00.000.000/0000-00>",
+  "razao_social": "<NOME EMPRESARIAL>",
+  "nome_fantasia": "<TITULO DO ESTABELECIMENTO ou vazio>",
+  "porte": "<ME|EPP|DEMAIS|vazio>",
+  "data_abertura": "<dd/mm/aaaa>",
+  "email": "<ENDERECO ELETRONICO ou vazio>",
+  "telefone": "<primeiro telefone ou vazio>",
+  "logradouro": "<LOGRADOURO>",
+  "numero": "<NUMERO>",
+  "complemento": "<COMPLEMENTO ou vazio>",
+  "bairro": "<BAIRRO/DISTRITO>",
+  "cidade": "<MUNICIPIO>",
+  "estado": "<UF>",
+  "cep": "<CEP>",
+  "situacao_cadastral": "<ATIVA|BAIXADA|...>"
+}
+Campos ilegíveis ou ausentes: string vazia. Sem texto fora do JSON.`;
+
+async function parseViaVision(buffer) {
+    const result = await AIService.generateResponseFromPdf(
+        `${VISION_PROMPT}\n\nEste documento é uma imagem escaneada. Use visão para ler e extrair os dados.`,
+        buffer
+    );
+    if (result?.error || !result?.response) return null;
+
+    let data;
+    try {
+        data = JSON.parse(result.response.replace(/^```json\n?|^```\n?|```$/gm, '').trim());
+    } catch {
+        return null;
+    }
+
+    const porte = cleanValue(data.porte).toUpperCase();
+    return {
+        cnpj: cleanValue(data.cnpj),
+        razao_social: cleanValue(data.razao_social),
+        nome_fantasia: cleanValue(data.nome_fantasia),
+        micro_empresa: porte === 'ME' || porte === 'EPP' ? 'S' : (porte ? 'N' : ''),
+        porte,
+        data_abertura: cleanValue(data.data_abertura),
+        email: cleanValue(data.email).toLowerCase(),
+        telefone: cleanValue(data.telefone).split('/')[0].trim(),
+        logradouro: cleanValue(data.logradouro),
+        numero: cleanValue(data.numero),
+        complemento: cleanValue(data.complemento),
+        bairro: cleanValue(data.bairro),
+        cidade: cleanValue(data.cidade),
+        estado: cleanValue(data.estado).toUpperCase(),
+        cep: cleanValue(data.cep),
+        situacao_cadastral: cleanValue(data.situacao_cadastral).split(' ')[0],
+    };
+}
+
 export async function parseCnpjCard(buffer) {
-    const parsed = await pdfParse(buffer);
-    const text = parsed?.text || '';
+    let text = '';
+    try {
+        const parsed = await pdfParse(buffer);
+        text = parsed?.text || '';
+    } catch {
+        // PDF sem camada de texto legível — segue para o fallback de visão.
+    }
+
+    // Escaneado (sem texto) ou sem CNPJ legível: tenta a visão do Gemini.
+    if (!/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/.test(text)) {
+        const viaVision = await parseViaVision(buffer);
+        if (viaVision?.cnpj) return viaVision;
+    }
 
     const sections = extractSections(text);
 
