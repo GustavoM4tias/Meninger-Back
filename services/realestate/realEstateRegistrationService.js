@@ -138,6 +138,10 @@ function buildImobiliariaPayload(reg) {
         // Upsert idempotente no CV: retry do mesmo registro atualiza em vez de duplicar.
         idimobiliaria_int: `OFFICE-${reg.id}`,
         email: String(imob.email || '').trim().toLowerCase() || undefined,
+        // A doc do POST não lista telefone/celular, mas o GET devolve ambos —
+        // enviamos para ficarem salvos no CV (se ignorar, não faz mal).
+        telefone: onlyDigits(imob.telefone) || undefined,
+        celular: onlyDigits(imob.celular || imob.telefone) || undefined,
         logradouro: splitLogradouro(imob.logradouro).tipo || undefined,
         endereco: [splitLogradouro(imob.logradouro).rua, imob.numero, imob.complemento, imob.bairro]
             .map(v => String(v || '').trim()).filter(Boolean).join(', ') || undefined,
@@ -298,6 +302,14 @@ export async function processRegistration(registration) {
             result: { ...result, steps },
             completed_at: new Date(),
         });
+
+        // Atualiza o backup local (cv_imobiliarias) com o registro recém-criado.
+        try {
+            const { default: ImobiliariaSyncService } = await import('../bulkData/cv/ImobiliariaSyncService.js');
+            await new ImobiliariaSyncService().syncOne(result.idimobiliaria_cv);
+        } catch (syncErr) {
+            console.error('[realestate] falha ao sincronizar backup da imobiliária:', syncErr?.message);
+        }
 
         // E-mail de acesso ao gerente (uma única vez, mesmo em retry). Falha de
         // e-mail não derruba o cadastro - fica registrada para diagnóstico.

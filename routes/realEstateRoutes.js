@@ -13,6 +13,8 @@ import {
     createInternalRegistration,
     retryRegistration,
     parseCardAuthenticated,
+    getImobiliariasReport,
+    syncImobiliarias,
 } from '../controllers/realEstateController.js';
 
 const router = express.Router();
@@ -27,5 +29,9 @@ router.post('/invites', createInvite);
 router.post('/invites/:id/revoke', revokeInvite);
 
 router.post('/parse-cnpj-card', upload.single('file'), parseCardAuthenticated);
+
+// Relatório de imobiliárias (backup local do CV)
+router.get('/report', getImobiliariasReport);
+router.post('/sync', syncImobiliarias);
 
 export default router;
