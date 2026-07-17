@@ -93,6 +93,33 @@ export function validateSubmission(form) {
 
 // ── Payloads CV ──────────────────────────────────────────────────────────────
 
+// No CV, `logradouro` é o TIPO (Rua, Avenida...) e `endereco` é o nome da via.
+// O cartão CNPJ traz tudo junto ("R PEDRO CHARUTO") — separa o tipo pela
+// abreviação inicial; sem match, assume Rua (o CV rejeita logradouro inválido).
+const TIPOS_LOGRADOURO = [
+    [/^(R|RUA)$/i, 'Rua'],
+    [/^(AV|AVN|AVENIDA)$/i, 'Avenida'],
+    [/^(AL|ALAMEDA)$/i, 'Alameda'],
+    [/^(TRAV|TV|TRAVESSA)$/i, 'Travessa'],
+    [/^(ROD|RODOVIA)$/i, 'Rodovia'],
+    [/^(EST|ESTRADA)$/i, 'Estrada'],
+    [/^(PC|PCA|PRACA|PRAÇA)$/i, 'Praça'],
+    [/^(VIA)$/i, 'Via'],
+    [/^(LARGO)$/i, 'Largo'],
+    [/^(VIELA)$/i, 'Viela'],
+];
+
+export function splitLogradouro(raw) {
+    const s = String(raw || '').trim().replace(/\s+/g, ' ');
+    if (!s) return { tipo: '', rua: '' };
+    const [first, ...rest] = s.split(' ');
+    const firstClean = first.replace(/\.$/, '');
+    for (const [re, tipo] of TIPOS_LOGRADOURO) {
+        if (re.test(firstClean)) return { tipo, rua: rest.join(' ') || s };
+    }
+    return { tipo: 'Rua', rua: s };
+}
+
 function buildImobiliariaPayload(reg) {
     const imob = reg.form?.imobiliaria || {};
     const nome = String(imob.nome || '').trim();
@@ -111,8 +138,8 @@ function buildImobiliariaPayload(reg) {
         // Upsert idempotente no CV: retry do mesmo registro atualiza em vez de duplicar.
         idimobiliaria_int: `OFFICE-${reg.id}`,
         email: String(imob.email || '').trim().toLowerCase() || undefined,
-        logradouro: String(imob.logradouro || '').trim() || undefined,
-        endereco: [imob.endereco || imob.logradouro, imob.numero, imob.complemento, imob.bairro]
+        logradouro: splitLogradouro(imob.logradouro).tipo || undefined,
+        endereco: [splitLogradouro(imob.logradouro).rua, imob.numero, imob.complemento, imob.bairro]
             .map(v => String(v || '').trim()).filter(Boolean).join(', ') || undefined,
         cidade: String(imob.cidade || '').trim() || undefined,
         estado: String(imob.estado || '').trim().toUpperCase() || undefined,
@@ -121,7 +148,13 @@ function buildImobiliariaPayload(reg) {
 
 function buildUsuarioPayload(reg, idimobiliariaCv) {
     const ger = reg.form?.gerente || {};
+    const imob = reg.form?.imobiliaria || {};
     const celular = onlyDigits(ger.celular);
+
+    // O CV exige logradouro válido no usuário mesmo sendo "opcional" na doc.
+    // Endereço do gerente vazio → herda o da imobiliária (que vem do cartão CNPJ).
+    const addr = String(ger.logradouro || '').trim() ? ger : imob;
+    const { tipo, rua } = splitLogradouro(addr.logradouro);
 
     const payload = {
         idimobiliaria_cv: Number(idimobiliariaCv),
@@ -136,14 +169,14 @@ function buildUsuarioPayload(reg, idimobiliariaCv) {
 
     const opt = {
         creci: String(ger.creci || '').trim(),
-        cep: onlyDigits(ger.cep),
-        logradouro: String(ger.logradouro || '').trim(),
-        endereco: String(ger.endereco || ger.logradouro || '').trim(),
-        bairro: String(ger.bairro || '').trim(),
-        numero: String(ger.numero || '').trim(),
-        complemento: String(ger.complemento || '').trim(),
-        estado: String(ger.estado || '').trim().toUpperCase(),
-        cidade: String(ger.cidade || '').trim(),
+        cep: onlyDigits(addr.cep),
+        logradouro: tipo,
+        endereco: rua,
+        bairro: String(addr.bairro || '').trim(),
+        numero: String(addr.numero || '').trim(),
+        complemento: String(addr.complemento || '').trim(),
+        estado: String(addr.estado || '').trim().toUpperCase(),
+        cidade: String(addr.cidade || '').trim(),
     };
     for (const [k, v] of Object.entries(opt)) if (v) payload[k] = v;
 
