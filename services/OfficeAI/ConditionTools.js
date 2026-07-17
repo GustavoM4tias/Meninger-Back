@@ -56,6 +56,13 @@ const STATUS_ARG = {
 
 const PAYER_LABEL = { menin: 'Menin', client: 'Cliente' };
 
+// Temas válidos do arg `foco` (ecoado em context.foco p/ o card variar as sugestões).
+const FOCOS = new Set(['campanhas', 'custos', 'negociacao', 'comissao', 'precos', 'documentacao', 'prazo', 'geral']);
+const sanitizeFoco = (v) => {
+    const f = normText(v).replace(/\s+/g, '_');
+    return FOCOS.has(f) ? f : 'geral';
+};
+
 // ─── Declarações (Gemini) ─────────────────────────────────────────────────────
 
 const TOOL_DECLARATIONS = [
@@ -81,6 +88,7 @@ const TOOL_DECLARATIONS = [
             properties: {
                 empreendimento: { type: 'STRING', description: 'Nome do empreendimento (CV), do produto avulso, ou cidade. Busca parcial, sem acento.' },
                 mes: { type: 'STRING', description: 'Mês de referência específico (YYYY-MM). Só passe se o usuário pedir um mês/data específico; caso contrário omita.' },
+                foco: { type: 'STRING', description: 'SEMPRE passe o tema principal da pergunta: "campanhas" | "custos" | "negociacao" (entrada/parcelas/correções) | "comissao" | "precos" (tabelas/valores) | "documentacao" (ITBI/cartório/CEF) | "prazo" | "geral". Controla as sugestões exibidas no card.' },
             },
             required: ['empreendimento'],
         },
@@ -573,7 +581,7 @@ async function executeGetSheet(args, user) {
             ficha_autorizada: buildConditionPayload(condAutorizada),
         } : {}),
         sem_ficha_autorizada: (!isAuthorizedStatus(cond) && !condAutorizada) || undefined,
-        context: { source: 'conditions', ficha_id: cond.id },
+        context: { source: 'conditions', ficha_id: cond.id, foco: sanitizeFoco(args.foco) },
         message: 'Responda com base na ficha acima e CITE A FONTE: mês de referência + status. O card visual já mostra os detalhes — seja direto no texto. Valores monetários em R$.',
     };
 }
