@@ -118,6 +118,18 @@ const META = {
         preview: (d) => d.resumoPreview || 'Resumo e ações gerados por IA',
         file: 'meeting.report.hbs',
     },
+    'realestate.access': {
+        subject: (d) => `Seu acesso ao painel está pronto - ${d.imobiliariaNome || 'Imobiliária'}`,
+        preview: (d) => `Login: ${d.login || ''}`,
+        file: 'realestate.access.hbs',
+        headerLight: true,    // gerente da imobiliária (externo) - header claro
+    },
+    'realestate.pending': {
+        subject: (d) => `Cadastro recebido - ${d.imobiliariaNome || 'Imobiliária'}`,
+        preview: () => 'Estamos finalizando a liberação do seu acesso',
+        file: 'realestate.pending.hbs',
+        headerLight: true,
+    },
     'boleto.caixa': {
         subject: (d) => `Boleto disponível — ${d.empreendimento || 'Sua reserva'} (venc. ${d.vencimentoFormatado || ''})`,
         preview: (d) => `Valor ${d.valorFormatado || ''} • Vencimento ${d.vencimentoFormatado || ''}`,

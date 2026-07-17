@@ -228,10 +228,10 @@ export async function submitPublicInvite(req, res) {
             return res.json({
                 ok: true,
                 pending: true,
-                message: 'Cadastro recebido! Nossa equipe vai concluir o processamento e você será avisado.',
+                message: 'Cadastro recebido! Assim que o acesso estiver disponível, enviaremos as instruções para o e-mail do gerente.',
             });
         }
-        return res.json({ ok: true, message: 'Imobiliária cadastrada com sucesso!' });
+        return res.json({ ok: true, message: 'Imobiliária cadastrada com sucesso! Enviamos os dados de acesso para o e-mail do gerente.' });
     } catch (err) {
         console.error('[realestate] submitPublicInvite:', err);
         return res.status(500).json({ ok: false, error: 'Erro ao enviar o cadastro.' });
