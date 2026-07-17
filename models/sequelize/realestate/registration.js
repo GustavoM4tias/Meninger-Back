@@ -19,10 +19,27 @@ export default (sequelize, DataTypes) => {
 
         // invite (aguardando preenchimento do link) → processing → completed | error
         // revoked = link cancelado pelo criador antes do preenchimento.
+        // Link multi-uso (multi_use=true) fica em 'invite' permanente e cada
+        // preenchimento gera um registro-filho (parent_id) processado à parte.
         status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'invite' },
 
         // Identificação livre do convite ("Imobiliária do João - Sinop").
         label: { type: DataTypes.STRING(160) },
+
+        // Link reutilizável: aceita vários cadastros dentro de uma janela.
+        // false (padrão) = uso único, igual ao comportamento original.
+        multi_use: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+
+        // Janela de funcionamento do link multi-uso (DATEONLY 'YYYY-MM-DD').
+        starts_at: { type: DataTypes.DATEONLY },
+        ends_at: { type: DataTypes.DATEONLY },
+
+        // Convite multi-uso: quem já enviou, para bloquear reenvio do mesmo CNPJ.
+        // [{ cnpj, nome, gerente, registration_id, status, at }]
+        submissions: { type: DataTypes.JSONB },
+
+        // Registro-filho: aponta para o convite multi-uso que o originou.
+        parent_id: { type: DataTypes.INTEGER },
 
         // Empreendimentos a associar — [{ id, nome }] (id = idempreendimento CV).
         enterprises: { type: DataTypes.JSONB },
