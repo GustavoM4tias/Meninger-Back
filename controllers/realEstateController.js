@@ -210,7 +210,7 @@ export async function getImobiliariasReport(req, res) {
                 WHERE COALESCE(imobiliaria->>'cnpj', '') <> '' AND COALESCE(empreendimento, '') <> ''
             `, { type: db.Sequelize.QueryTypes.SELECT }),
             db.sequelize.query(
-                'SELECT idempreendimento, nome, cidade FROM cv_enterprises',
+                'SELECT idempreendimento, nome, cidade, foto_listagem, foto, logo, situacao_obra_nome FROM cv_enterprises',
                 { type: db.Sequelize.QueryTypes.SELECT }
             ),
             // Vínculo por cadastro do Office: associações escolhidas na criação.
@@ -220,7 +220,18 @@ export async function getImobiliariasReport(req, res) {
         const entById = new Map(ents.map(e => [Number(e.idempreendimento), e]));
         const entByName = new Map(ents.map(e => [normCity(e.nome).trim(), e]));
 
-        // cnpj → Map(idOuNome → { id, nome, cidade })
+        // Card básico do empreendimento no relatório (foto p/ o front).
+        const entCard = (hit, fallbackNome) => hit
+            ? {
+                id: Number(hit.idempreendimento),
+                nome: hit.nome,
+                cidade: hit.cidade || null,
+                foto: hit.foto_listagem || hit.foto || hit.logo || null,
+                situacao: hit.situacao_obra_nome || null,
+            }
+            : { id: null, nome: fallbackNome, cidade: null, foto: null, situacao: null };
+
+        // cnpj → Map(idOuNome → entCard)
         const linksByCnpj = new Map();
         const addLink = (cnpj, ent) => {
             if (!cnpj || !ent?.nome) return;
@@ -231,15 +242,16 @@ export async function getImobiliariasReport(req, res) {
 
         for (const l of links) {
             const hit = entByName.get(normCity(l.empreendimento).trim());
-            addLink(l.cnpj, hit
-                ? { id: Number(hit.idempreendimento), nome: hit.nome, cidade: hit.cidade }
-                : { id: null, nome: l.empreendimento, cidade: null });
+            addLink(l.cnpj, entCard(hit, l.empreendimento));
         }
+        // Cadastros do Office: origem (interno x link) + gerente de fallback.
+        const regByCnpj = new Map();
         for (const r of regs) {
-            const cnpj = r.form?.imobiliaria?.cnpj;
+            const cnpj = onlyDigits(r.form?.imobiliaria?.cnpj);
+            if (cnpj) regByCnpj.set(cnpj, r);
             for (const e of (r.enterprises || [])) {
                 const hit = entById.get(Number(e.id));
-                addLink(cnpj, { id: Number(e.id), nome: e.nome, cidade: hit?.cidade || null });
+                addLink(cnpj, hit ? entCard(hit) : { id: Number(e.id), nome: e.nome, cidade: null, foto: null, situacao: null });
             }
         }
 
@@ -272,6 +284,18 @@ export async function getImobiliariasReport(req, res) {
                 if (!alvo.includes(normCity(q))) continue;
             }
 
+            // Origem: cadastrada pelo Office (via link público ou tela interna)
+            // ou direto no CV. O codigointerno OFFICE-<id> cobre cadastros cujo
+            // registro local se perdeu.
+            const reg = regByCnpj.get(onlyDigits(i.cnpj));
+            const origem = reg
+                ? (reg.source === 'public' ? 'link' : 'office')
+                : (String(i.raw?.codigointerno || '').startsWith('OFFICE-') ? 'office' : 'cv');
+
+            // Gerente: campos do CV; vazios em cadastros do Office (o gerente lá
+            // vira usuário-imobiliária) → fallback para o formulário enviado.
+            const regGer = reg?.form?.gerente || {};
+
             rows.push({
                 idimobiliaria: i.idimobiliaria,
                 nome: i.nome,
@@ -282,12 +306,16 @@ export async function getImobiliariasReport(req, res) {
                 validade_creci: i.validade_creci,
                 ativo: i.ativo,
                 ativo_painel: i.ativo_painel,
+                micro_empresa: i.micro_empresa,
+                origem,
                 email: i.email,
                 telefone: i.telefone,
                 celular: i.celular,
-                gerente_nome: i.gerente_nome,
-                gerente_email: i.gerente_email,
-                gerente_celular: i.gerente_celular,
+                gerente_nome: i.gerente_nome || regGer.nome || null,
+                gerente_email: i.gerente_email || regGer.email || null,
+                gerente_celular: i.gerente_celular || regGer.celular || null,
+                gerente_telefone: i.raw?.gerente_telefone || regGer.telefone || null,
+                gerente_cpf: i.raw?.gerente_cpf || regGer.documento || null,
                 cidade: i.cidade,
                 estado: i.estado,
                 cidades,
