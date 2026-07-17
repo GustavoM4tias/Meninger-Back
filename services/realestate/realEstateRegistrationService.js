@@ -183,36 +183,28 @@ function buildUsuarioPayload(reg, idimobiliariaCv) {
     return payload;
 }
 
-// Vasculha a resposta do CV por um id numérico de imobiliária.
-function extractImobiliariaId(data) {
-    if (data == null) return null;
-    if (typeof data === 'number') return data;
-    if (typeof data === 'string') return /^\d+$/.test(data.trim()) ? Number(data.trim()) : null;
-    for (const key of ['idimobiliaria_cv', 'idimobiliaria', 'id', 'codigo', 'data', 'imobiliaria']) {
-        if (key in data) {
-            const found = extractImobiliariaId(data[key]);
-            if (found != null) return found;
-        }
-    }
-    return null;
-}
-
-// Fallback: localizar a imobiliária no CV pelo CNPJ.
+// Fonte da verdade do ID: localizar a imobiliária no CV pelo CNPJ (match
+// estrito — nunca aceitar o primeiro da lista, o filtro pode ser ignorado).
 async function lookupImobiliariaByCnpj(cnpj) {
     const doc = onlyDigits(cnpj);
-    const attempts = [{ cnpj: doc }, { documento: doc }];
+    if (!doc) return null;
+    const attempts = [{ cnpj: doc }, { documento: doc }, {}];
     for (const params of attempts) {
         try {
-            const resp = await apiCv.get('/v1/cadastros/imobiliarias', { params: { ...params, limit: 5, offset: 0 } });
+            const resp = await apiCv.get('/v1/cadastros/imobiliarias', {
+                params: { ...params, limit: 500, offset: 0 },
+            });
             const data = resp?.data;
             const list = Array.isArray(data) ? data
                 : Array.isArray(data?.imobiliarias) ? data.imobiliarias
                 : Array.isArray(data?.dados) ? data.dados
                 : data?.imobiliaria ? [data.imobiliaria]
                 : [];
-            const hit = list.find(i => onlyDigits(i?.cnpj || i?.documento) === doc) || list[0];
-            const id = extractImobiliariaId(hit);
-            if (id != null) return id;
+            const hit = list.find(i => onlyDigits(i?.cnpj || i?.documento) === doc);
+            if (hit) {
+                const id = Number(hit.idimobiliaria_cv ?? hit.idimobiliaria ?? hit.id);
+                if (Number.isFinite(id)) return id;
+            }
         } catch {
             // tenta o próximo formato de filtro
         }
@@ -238,26 +230,31 @@ export async function processRegistration(registration) {
     await reg.update({ status: 'processing', error: null });
 
     try {
-        // 1. Imobiliária (upsert por CNPJ / idimobiliaria_int)
-        if (!steps.imobiliaria?.ok) {
-            try {
-                const resp = await apiCv.post('/v1/cadastros/imobiliarias', buildImobiliariaPayload(reg));
-                steps.imobiliaria = { ok: true, response: resp?.data ?? null };
-            } catch (err) {
-                steps.imobiliaria = { ok: false, response: err?.response?.data ?? null };
-                throw new Error(cvErrorMessage(err, 'Falha ao cadastrar a imobiliária no CV'));
-            }
+        // 1. Imobiliária (upsert por CNPJ / idimobiliaria_int). O CV v1 pode
+        // devolver HTTP 200 com { codigo, mensagem } de ERRO no corpo — por
+        // isso o sucesso real é confirmado pelo lookup do passo 2, nunca pelo
+        // corpo do POST. Reenviamos sempre: upsert é idempotente e garante que
+        // edições/correções cheguem ao CV.
+        let postBody = steps.imobiliaria?.response ?? null;
+        try {
+            const resp = await apiCv.post('/v1/cadastros/imobiliarias', buildImobiliariaPayload(reg));
+            postBody = resp?.data ?? null;
+        } catch (err) {
+            steps.imobiliaria = { ok: false, response: err?.response?.data ?? null };
+            throw new Error(cvErrorMessage(err, 'Falha ao cadastrar a imobiliária no CV'));
         }
 
-        // 2. Resolver o id da imobiliária no CV
-        let idimobiliaria = result.idimobiliaria_cv
-            || extractImobiliariaId(steps.imobiliaria.response);
+        // 2. Resolver o ID real pelo CNPJ (fonte da verdade). O `codigo` do
+        // corpo não é confiável — já veio 400 (erro aplicacional) com HTTP 200.
+        const idimobiliaria = await lookupImobiliariaByCnpj(reg.form?.imobiliaria?.cnpj);
         if (!idimobiliaria) {
-            idimobiliaria = await lookupImobiliariaByCnpj(reg.form?.imobiliaria?.cnpj);
+            steps.imobiliaria = { ok: false, response: postBody };
+            const bodyMsg = postBody?.mensagem || postBody?.message || '';
+            throw new Error(
+                `Imobiliária não encontrada no CV após o cadastro${bodyMsg ? ` (CV respondeu: ${bodyMsg})` : ''}. Verifique os dados e reprocesse.`
+            );
         }
-        if (!idimobiliaria) {
-            throw new Error('Imobiliária criada, mas não foi possível obter o ID dela no CV. Tente reprocessar.');
-        }
+        steps.imobiliaria = { ok: true, response: postBody };
         result.idimobiliaria_cv = Number(idimobiliaria);
 
         // 3. Usuário gerente
