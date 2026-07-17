@@ -167,6 +167,147 @@ export async function parseCardAuthenticated(req, res) {
     return handleParseCard(req, res);
 }
 
+// ── Relatório de imobiliárias (backup cv_imobiliarias) ───────────────────────
+
+// Normalização compatível com a lógica de cidade usada no resto do sistema:
+// sem acento, maiúsculas, não-alfanumérico vira espaço.
+const normCity = (s) => ` ${String(s || '')
+    .normalize('NFD').replace(/\p{M}/gu, '')
+    .toUpperCase().replace(/[^A-Z0-9]+/g, ' ')
+    .trim()} `;
+const cityMatches = (value, needle) => {
+    const n = normCity(needle);
+    return n.trim() ? normCity(value).includes(n) : true;
+};
+
+export async function syncImobiliarias(req, res) {
+    try {
+        const { default: ImobiliariaSyncService } = await import('../services/bulkData/cv/ImobiliariaSyncService.js');
+        const count = await new ImobiliariaSyncService().syncAll();
+        return res.json({ ok: true, count });
+    } catch (err) {
+        console.error('[realestate] syncImobiliarias:', err);
+        return res.status(502).json({ ok: false, error: 'Erro ao sincronizar imobiliárias do CV.' });
+    }
+}
+
+export async function getImobiliariasReport(req, res) {
+    try {
+        // Primeira visita sem backup: sincroniza na hora (uma chamada ao CV).
+        let total = await db.CvImobiliaria.count();
+        if (!total) {
+            const { default: ImobiliariaSyncService } = await import('../services/bulkData/cv/ImobiliariaSyncService.js');
+            await new ImobiliariaSyncService().syncAll().catch(e =>
+                console.error('[realestate] sync inicial falhou:', e?.message));
+        }
+
+        const [imobs, links, ents, regs] = await Promise.all([
+            db.CvImobiliaria.findAll({ order: [['nome', 'ASC']], raw: true }),
+            // Vínculo por atividade: reservas ligam imobiliária (cnpj) a empreendimento (nome).
+            db.sequelize.query(`
+                SELECT DISTINCT (imobiliaria->>'cnpj') AS cnpj, empreendimento
+                FROM reservas
+                WHERE COALESCE(imobiliaria->>'cnpj', '') <> '' AND COALESCE(empreendimento, '') <> ''
+            `, { type: db.Sequelize.QueryTypes.SELECT }),
+            db.sequelize.query(
+                'SELECT idempreendimento, nome, cidade FROM cv_enterprises',
+                { type: db.Sequelize.QueryTypes.SELECT }
+            ),
+            // Vínculo por cadastro do Office: associações escolhidas na criação.
+            db.RealEstateRegistration.findAll({ where: { status: 'completed' }, raw: true }),
+        ]);
+
+        const entById = new Map(ents.map(e => [Number(e.idempreendimento), e]));
+        const entByName = new Map(ents.map(e => [normCity(e.nome).trim(), e]));
+
+        // cnpj → Map(idOuNome → { id, nome, cidade })
+        const linksByCnpj = new Map();
+        const addLink = (cnpj, ent) => {
+            if (!cnpj || !ent?.nome) return;
+            const key = onlyDigits(cnpj);
+            if (!linksByCnpj.has(key)) linksByCnpj.set(key, new Map());
+            linksByCnpj.get(key).set(ent.id ?? normCity(ent.nome).trim(), ent);
+        };
+
+        for (const l of links) {
+            const hit = entByName.get(normCity(l.empreendimento).trim());
+            addLink(l.cnpj, hit
+                ? { id: Number(hit.idempreendimento), nome: hit.nome, cidade: hit.cidade }
+                : { id: null, nome: l.empreendimento, cidade: null });
+        }
+        for (const r of regs) {
+            const cnpj = r.form?.imobiliaria?.cnpj;
+            for (const e of (r.enterprises || [])) {
+                const hit = entById.get(Number(e.id));
+                addLink(cnpj, { id: Number(e.id), nome: e.nome, cidade: hit?.cidade || null });
+            }
+        }
+
+        const q = String(req.query.q || '').trim();
+        const cidadeFilter = String(req.query.cidade || '').trim();
+        const entFilter = String(req.query.empreendimento || '').trim();
+        const isUserAdmin = isAdmin(req);
+        const userCity = req.user?.city || '';
+
+        const rows = [];
+        for (const i of imobs) {
+            const vinculos = [...(linksByCnpj.get(onlyDigits(i.cnpj)) || new Map()).values()];
+            // Cidade efetiva: a da própria imobiliária; sem endereço, herda as
+            // cidades dos empreendimentos vinculados.
+            const cidades = i.cidade
+                ? [i.cidade]
+                : [...new Set(vinculos.map(v => v.cidade).filter(Boolean))];
+
+            // Escopo de acesso: não-admin só vê imobiliárias das suas cidades.
+            if (!isUserAdmin) {
+                if (!cidades.length) continue;
+                if (!cidades.some(c => cityMatches(c, userCity))) continue;
+            }
+
+            if (cidadeFilter && !cidades.some(c => cityMatches(c, cidadeFilter))) continue;
+            if (entFilter && !vinculos.some(v =>
+                String(v.id) === entFilter || cityMatches(v.nome, entFilter))) continue;
+            if (q) {
+                const alvo = normCity(`${i.nome} ${i.razao_social} ${i.cnpj} ${i.gerente_nome || ''}`);
+                if (!alvo.includes(normCity(q))) continue;
+            }
+
+            rows.push({
+                idimobiliaria: i.idimobiliaria,
+                nome: i.nome,
+                razao_social: i.razao_social,
+                cnpj: i.cnpj,
+                sigla: i.sigla,
+                creci: i.creci,
+                validade_creci: i.validade_creci,
+                ativo: i.ativo,
+                ativo_painel: i.ativo_painel,
+                email: i.email,
+                telefone: i.telefone,
+                celular: i.celular,
+                gerente_nome: i.gerente_nome,
+                gerente_email: i.gerente_email,
+                gerente_celular: i.gerente_celular,
+                cidade: i.cidade,
+                estado: i.estado,
+                cidades,
+                cidade_origem: i.cidade ? 'imobiliaria' : (cidades.length ? 'empreendimentos' : null),
+                empreendimentos: vinculos.sort((a, b) => String(a.nome).localeCompare(String(b.nome))),
+                data_cad: i.data_cad,
+                synced_at: i.synced_at,
+            });
+        }
+
+        const lastSync = imobs.reduce((max, i) =>
+            (!max || (i.synced_at && i.synced_at > max)) ? i.synced_at : max, null);
+
+        return res.json({ ok: true, total: rows.length, last_sync: lastSync, imobiliarias: rows });
+    } catch (err) {
+        console.error('[realestate] getImobiliariasReport:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao montar o relatório de imobiliárias.' });
+    }
+}
+
 // ── Rotas públicas (link do convite) ─────────────────────────────────────────
 
 async function findInviteByToken(token) {
