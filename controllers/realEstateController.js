@@ -19,6 +19,19 @@ const { RealEstateRegistration } = db;
 
 const isAdmin = (req) => req.user?.role === 'admin';
 
+// Data de hoje 'YYYY-MM-DD' no fuso de Brasília (DATEONLY comparável por string).
+const todayBR = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+
+// Estado da janela de um link multi-uso: 'not_started' | 'open' | 'expired'.
+// Link de uso único é sempre 'open' (o controle é o status, não a janela).
+function windowState(reg) {
+    if (!reg.multi_use) return 'open';
+    const today = todayBR();
+    if (reg.starts_at && today < reg.starts_at) return 'not_started';
+    if (reg.ends_at && today > reg.ends_at) return 'expired';
+    return 'open';
+}
+
 // Sanitiza um registro para o front do Office.
 function toListItem(reg) {
     const r = reg.toJSON ? reg.toJSON() : reg;
@@ -34,10 +47,23 @@ function toListItem(reg) {
         error: r.error,
         created_by: r.created_by,
         creator_name: r.creator?.username || null,
+        multi_use: !!r.multi_use,
+        starts_at: r.starts_at || null,
+        ends_at: r.ends_at || null,
+        parent_id: r.parent_id || null,
+        submissions: r.multi_use ? (r.submissions || []) : undefined,
+        submissions_count: r.multi_use ? (r.submissions || []).length : undefined,
+        window_state: r.multi_use ? windowState(r) : undefined,
         submitted_at: r.submitted_at,
         completed_at: r.completed_at,
         createdAt: r.createdAt,
     };
+}
+
+// Aceita 'YYYY-MM-DD' (ou vazio) e devolve a data validada ou null.
+function parseDateOnly(value) {
+    const s = String(value || '').trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
 function normalizeEnterprises(input) {
@@ -74,6 +100,20 @@ export async function createInvite(req, res) {
             return res.status(400).json({ ok: false, error: 'Selecione ao menos um empreendimento.' });
         }
 
+        const multiUse = !!req.body?.multi_use;
+        let startsAt = null;
+        let endsAt = null;
+        if (multiUse) {
+            startsAt = parseDateOnly(req.body?.starts_at) || todayBR();
+            endsAt = parseDateOnly(req.body?.ends_at);
+            if (!endsAt) {
+                return res.status(400).json({ ok: false, error: 'Informe a data de encerramento do link.' });
+            }
+            if (endsAt < startsAt) {
+                return res.status(400).json({ ok: false, error: 'A data de encerramento deve ser igual ou posterior ao início.' });
+            }
+        }
+
         const reg = await RealEstateRegistration.create({
             token: crypto.randomBytes(24).toString('hex'),
             source: 'public',
@@ -81,6 +121,10 @@ export async function createInvite(req, res) {
             label: String(req.body?.label || '').trim() || null,
             enterprises,
             created_by: req.user.id,
+            multi_use: multiUse,
+            starts_at: startsAt,
+            ends_at: endsAt,
+            submissions: multiUse ? [] : null,
         });
         return res.status(201).json({ ok: true, registration: toListItem(reg) });
     } catch (err) {
@@ -96,7 +140,9 @@ export async function revokeInvite(req, res) {
         if (!isAdmin(req) && reg.created_by !== req.user.id) {
             return res.status(403).json({ ok: false, error: 'Sem permissão sobre este link.' });
         }
-        if (reg.status !== 'invite') {
+        // Uso único: só antes do preenchimento. Multi-uso: pode revogar a
+        // qualquer momento (encerra o link; os cadastros já feitos permanecem).
+        if (!reg.multi_use && reg.status !== 'invite') {
             return res.status(400).json({ ok: false, error: 'Só é possível revogar links ainda não preenchidos.' });
         }
         await reg.update({ status: 'revoked' });
@@ -350,12 +396,34 @@ export async function getPublicInvite(req, res) {
         if (!reg || reg.status === 'revoked') {
             return res.status(404).json({ ok: false, error: 'Link inválido ou cancelado.' });
         }
+
+        const enterprises = (reg.enterprises || []).map(e => ({ nome: e.nome }));
+
+        if (reg.multi_use) {
+            const state = windowState(reg);
+            return res.json({
+                ok: true,
+                invite: {
+                    label: reg.label,
+                    multi_use: true,
+                    enterprises,
+                    window_state: state,          // not_started | open | expired
+                    starts_at: reg.starts_at,
+                    ends_at: reg.ends_at,
+                    // Link multi-uso nunca "trava" por preenchimento; só a janela.
+                    done: false,
+                    completed: false,
+                },
+            });
+        }
+
         return res.json({
             ok: true,
             invite: {
                 label: reg.label,
+                multi_use: false,
                 status: reg.status,
-                enterprises: (reg.enterprises || []).map(e => ({ nome: e.nome })),
+                enterprises,
                 // Já preenchido: a página mostra "cadastro concluído/em análise".
                 done: reg.status !== 'invite',
                 completed: reg.status === 'completed',
@@ -367,14 +435,14 @@ export async function getPublicInvite(req, res) {
     }
 }
 
+const PENDING_MSG = 'Cadastro recebido! Assim que o acesso estiver disponível, enviaremos as instruções para o e-mail do gerente.';
+const SUCCESS_MSG = 'Imobiliária cadastrada com sucesso! Enviamos os dados de acesso para o e-mail do gerente.';
+
 export async function submitPublicInvite(req, res) {
     try {
         const reg = await findInviteByToken(req.params.token);
         if (!reg || reg.status === 'revoked') {
             return res.status(404).json({ ok: false, error: 'Link inválido ou cancelado.' });
-        }
-        if (reg.status !== 'invite') {
-            return res.status(409).json({ ok: false, error: 'Este link já foi utilizado.' });
         }
 
         // Honeypot anti-bot: campo invisível preenchido = descarta em silêncio.
@@ -386,6 +454,69 @@ export async function submitPublicInvite(req, res) {
         const errors = validateSubmission(form);
         if (errors.length) return res.status(400).json({ ok: false, error: errors.join(' '), errors });
 
+        // ── Link multi-uso: janela + bloqueio de CNPJ repetido + registro-filho ──
+        if (reg.multi_use) {
+            const state = windowState(reg);
+            if (state === 'not_started') {
+                return res.status(403).json({ ok: false, error: 'Este link ainda não está ativo. Tente novamente na data de início.' });
+            }
+            if (state === 'expired') {
+                return res.status(403).json({ ok: false, error: 'O período deste link foi encerrado.' });
+            }
+
+            const cnpj = onlyDigits(form?.imobiliaria?.cnpj);
+            const submissions = Array.isArray(reg.submissions) ? reg.submissions : [];
+            if (submissions.some(s => onlyDigits(s.cnpj) === cnpj)) {
+                return res.status(409).json({ ok: false, error: 'Este CNPJ já foi cadastrado por este link.' });
+            }
+
+            const child = await RealEstateRegistration.create({
+                source: 'public',
+                status: 'processing',
+                label: String(form?.imobiliaria?.nome || '').trim() || reg.label || null,
+                enterprises: reg.enterprises,
+                form,
+                created_by: reg.created_by,
+                parent_id: reg.id,
+                submitted_at: new Date(),
+            });
+
+            let childStatus = 'completed';
+            try {
+                await processRegistration(child);
+            } catch (err) {
+                childStatus = 'error';
+                console.error('[realestate] processamento de submissão multi-uso falhou:', err?.message);
+            }
+
+            // Registra a submissão no convite (bloqueia reenvio do mesmo CNPJ).
+            await reg.update({
+                submissions: [
+                    ...submissions,
+                    {
+                        cnpj,
+                        nome: form?.imobiliaria?.nome || null,
+                        gerente: form?.gerente?.nome || null,
+                        registration_id: child.id,
+                        status: childStatus,
+                        at: new Date().toISOString(),
+                    },
+                ],
+            });
+
+            return res.json({
+                ok: true,
+                multi_use: true,
+                pending: childStatus === 'error',
+                message: childStatus === 'error' ? PENDING_MSG : SUCCESS_MSG,
+            });
+        }
+
+        // ── Link de uso único: comportamento original ───────────────────────────
+        if (reg.status !== 'invite') {
+            return res.status(409).json({ ok: false, error: 'Este link já foi utilizado.' });
+        }
+
         await reg.update({ form, submitted_at: new Date() });
 
         try {
@@ -394,13 +525,9 @@ export async function submitPublicInvite(req, res) {
             // O cadastro fica registrado com erro; o Office reprocessa. Para quem
             // preencheu, o envio foi recebido — não expor detalhes internos do CV.
             console.error('[realestate] processamento do convite falhou:', err?.message);
-            return res.json({
-                ok: true,
-                pending: true,
-                message: 'Cadastro recebido! Assim que o acesso estiver disponível, enviaremos as instruções para o e-mail do gerente.',
-            });
+            return res.json({ ok: true, pending: true, message: PENDING_MSG });
         }
-        return res.json({ ok: true, message: 'Imobiliária cadastrada com sucesso! Enviamos os dados de acesso para o e-mail do gerente.' });
+        return res.json({ ok: true, message: SUCCESS_MSG });
     } catch (err) {
         console.error('[realestate] submitPublicInvite:', err);
         return res.status(500).json({ ok: false, error: 'Erro ao enviar o cadastro.' });
@@ -409,8 +536,13 @@ export async function submitPublicInvite(req, res) {
 
 export async function parseCardPublic(req, res) {
     const reg = await findInviteByToken(req.params.token);
-    if (!reg || reg.status !== 'invite') {
-        return res.status(404).json({ ok: false, error: 'Link inválido ou já utilizado.' });
+    if (!reg || reg.status === 'revoked') {
+        return res.status(404).json({ ok: false, error: 'Link inválido ou cancelado.' });
+    }
+    // Uso único já preenchido, ou multi-uso fora da janela: não lê o cartão.
+    const usable = reg.multi_use ? windowState(reg) === 'open' : reg.status === 'invite';
+    if (!usable) {
+        return res.status(404).json({ ok: false, error: 'Link indisponível no momento.' });
     }
     return handleParseCard(req, res);
 }
