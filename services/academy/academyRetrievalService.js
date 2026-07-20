@@ -38,8 +38,7 @@ function cacheSet(map, key, val, ttl) {
 
 // Stopwords PT p/ tokenizar a pergunta — uma pergunta em linguagem natural
 // ("como fazer uma reserva no cvcrm") não bate como substring única; precisa
-// casar pelos TERMOS relevantes (reserva, cvcrm). Mantém acentos (ILIKE é
-// case-insensitive mas acento-sensitive).
+// casar pelos TERMOS relevantes (reserva, cvcrm).
 const STOPWORDS = new Set([
     'como', 'fazer', 'faz', 'faço', 'um', 'uma', 'uns', 'umas', 'o', 'a', 'os', 'as',
     'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas', 'em', 'para', 'pra',
@@ -47,17 +46,36 @@ const STOPWORDS = new Set([
     'meus', 'minhas', 'quero', 'preciso', 'sobre', 'ser', 'tem', 'ter', 'são', 'sao',
     'onde', 'quando', 'isso', 'esse', 'essa', 'esta', 'este', 'aqui', 'lá', 'la', 'me',
     'se', 'já', 'ja', 'vou', 'pode', 'posso', 'qual', 'the', 'of', 'to',
+    'você', 'voce', 'vocês', 'voces', 'têm', 'temos', 'queria', 'gostaria',
 ]);
 function tokenizeQuery(q) {
-    const words = String(q || '').toLowerCase()
+    const seq = String(q || '').toLowerCase()
         .split(/[\s\-_/.,;:!?()"'’]+/)
         .map((t) => t.trim())
         .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
-    const uniq = [...new Set(words)].slice(0, 8);
-    if (uniq.length) return uniq;
-    // tudo virou stopword → usa a query inteira (sem pontuação) como 1 termo
-    const whole = String(q || '').toLowerCase().replace(/[^a-zà-ÿ0-9 ]/gi, '').trim();
-    return whole ? [whole] : [];
+    const terms = [...new Set(seq)].slice(0, 8);
+    if (!terms.length) {
+        // tudo virou stopword → usa a query inteira (sem pontuação) como 1 termo
+        const whole = String(q || '').toLowerCase().replace(/[^a-zà-ÿ0-9 ]/gi, '').trim();
+        return { terms: whole ? [whole] : [], phrases: [] };
+    }
+    // FRASES (bigramas de tokens adjacentes): "pré-cadastro" tokeniza em
+    // "pre"+"cadastro"; sem o bigrama "pre cadastro", qualquer "Cadastro de X"
+    // pontua parecido com o alvo. O bigrama é o sinal que separa o composto.
+    const phrases = [];
+    for (let i = 0; i < seq.length - 1; i++) phrases.push(norm(`${seq[i]} ${seq[i + 1]}`));
+    return { terms, phrases: [...new Set(phrases)].slice(0, 8) };
+}
+
+// Termos que indicam que o usuário quer VÍDEO (videoaula/tutorial gravado) —
+// vira boost p/ artigos com vídeo e alimenta o filtro onlyWithVideo da tool.
+const VIDEO_INTENT = new Set([
+    'video', 'videos', 'videoaula', 'videoaulas', 'tutorial', 'tutoriais',
+    'treinamento', 'treinamentos', 'aula', 'aulas', 'assistir', 'gravacao',
+    'gravacoes', 'youtube',
+]);
+function hasVideoIntent(terms) {
+    return (terms || []).some((t) => VIDEO_INTENT.has(norm(t)));
 }
 
 // Extrai URLs de vídeo (YouTube) do payload do artigo (embeds VIDEO). É o que
@@ -116,12 +134,22 @@ const academyRetrievalService = {
     },
 
     /**
-     * Busca processos (digests). Híbrido vetorial+keyword, filtrado por
-     * audience+departamento. Devolve resumos curtos, NÃO o corpo.
+     * Busca processos (digests), filtrada por audience+departamento.
+     * Devolve resumos curtos, NÃO o corpo.
+     *
+     * A base é pequena (~dezenas de artigos): os filtros de SEGURANÇA ficam no
+     * SQL, mas o matching/ranking roda TODO em JS sobre o corpus visível —
+     * acento-insensível (ILIKE '%pre%' não casa "Pré", '%videos%' não casa
+     * "vídeo") e sem LIMIT arbitrário de candidatos (antes um findAll sem
+     * order cortava em 24 e podia descartar o artigo certo).
+     *
+     * Corte de RELEVÂNCIA: em vez de devolver sempre k itens, descarta o que
+     * pontuar abaixo de uma fração do topo — menos cards irrelevantes.
+     * onlyWithVideo: restringe a artigos com vídeo (pedidos de videoaula).
      */
-    async searchProcesses({ query, userId, k = 6, categorySlug = null }) {
+    async searchProcesses({ query, userId, k = 6, categorySlug = null, onlyWithVideo = false }) {
         const q = String(query || '').trim();
-        const cacheKey = `${userId}::${norm(q)}::${categorySlug || ''}::${k}`;
+        const cacheKey = `${userId}::${norm(q)}::${categorySlug || ''}::${k}::${onlyWithVideo ? 1 : 0}`;
         const cached = cacheGet(searchCache, cacheKey);
         if (cached) return cached.data;
 
@@ -129,95 +157,117 @@ const academyRetrievalService = {
         const deptWhere = await departmentWhereForUser(userId);
         const baseAnd = [{ status: 'PUBLISHED' }, audiencesWhereLiteral(tokens), deptWhere];
         if (categorySlug) baseAnd.push({ categorySlug });
-        const attrs = ['id', 'title', 'slug', 'categorySlug', 'subcategorySlug', 'aiDigest', 'processMeta', 'payload', 'updatedAt'];
+        const attrs = ['id', 'title', 'slug', 'categorySlug', 'subcategorySlug', 'aiDigest', 'processMeta', 'payload', 'body', 'updatedAt'];
 
-        const seen = new Map();
+        if (!q) {
+            const data = { results: [], count: 0 };
+            cacheSet(searchCache, cacheKey, { data }, SEARCH_TTL);
+            return data;
+        }
 
-        // 1) Vetorial (se houver embeddings + a query embeddar)
-        if (q && await this._hasEmbeddings()) {
+        // Corpus visível inteiro (teto de segurança p/ crescimento futuro).
+        const rows = await db.AcademyArticle.findAll({
+            where: { [Op.and]: baseAnd },
+            attributes: attrs,
+            limit: 400,
+            raw: true,
+        });
+
+        // Bônus vetorial (se pgvector/embeddings existirem): vira um SINAL
+        // somado ao score keyword, não uma lista separada sem score.
+        const vecBonus = new Map();
+        if (await this._hasEmbeddings()) {
             const vec = toPgVector(await this._queryEmbedding(q));
             if (vec) {
                 try {
-                    const rows = await db.AcademyArticle.findAll({
+                    const vrows = await db.AcademyArticle.findAll({
                         where: { [Op.and]: [...baseAnd, db.Sequelize.literal('embedding IS NOT NULL')] },
-                        attributes: attrs,
+                        attributes: ['id'],
                         order: db.Sequelize.literal(`embedding <=> '${vec}'::vector`),
                         limit: k,
                         raw: true,
                     });
-                    for (const r of rows) if (!seen.has(r.id)) seen.set(r.id, r);
+                    vrows.forEach((r, i) => vecBonus.set(r.id, 2.5 * (k - i) / k));
                 } catch (err) {
                     console.warn('[academyRetrieval] vector search skip:', err?.message);
                 }
             }
         }
 
-        // 2) Keyword MULTI-TERMO (sempre roda; único caminho sem pgvector).
-        // Tokeniza a pergunta, casa CADA termo em título/corpo/digest (OR p/
-        // recall) e rankeia pelo nº de termos batidos (título e digest pesam mais).
-        if (q) {
-            const terms = tokenizeQuery(q);
-            const orConds = [];
-            for (const term of terms) {
-                const like = `%${term}%`;
-                const safe = like.replace(/'/g, "''");
-                orConds.push({ title: { [Op.iLike]: like } });
-                orConds.push({ body: { [Op.iLike]: like } });
-                orConds.push({ categorySlug: { [Op.iLike]: like } });
-                orConds.push({ subcategorySlug: { [Op.iLike]: like } });
-                orConds.push(db.Sequelize.literal(`ai_digest::text ILIKE '${safe}'`));
-            }
-            if (orConds.length) {
-                const rows = await db.AcademyArticle.findAll({
-                    where: { [Op.and]: [...baseAnd, { [Op.or]: orConds }] },
-                    attributes: attrs,
-                    limit: Math.max(k * 4, 24),
-                    raw: true,
-                });
-                // Ranking ACENTO-INSENSÍVEL (norm) + peso IDF: termos COMUNS na
-                // base (ex.: "cadastro", que casa dezenas de artigos) pesam MENOS
-                // que termos discriminativos (ex.: "reserva") — assim os "Cadastro
-                // de X" não afogam os tutoriais de reserva/pré-cadastro. Título e
-                // digest pesam mais que corpo.
-                const nterms = [...new Set(terms.map(norm).filter(Boolean))];
-                const docs = rows.map((r) => {
-                    const dg = r.aiDigest || {};
-                    return {
-                        r,
-                        hayTitle: norm(r.title || ''),
-                        // intenção: o que o processo ATENDE (processFor) + keywords —
-                        // sinal mais preciso que o corpo p/ "como fazer X".
-                        hayAction: norm([...(dg.processFor || []), ...(dg.keywords || [])].join(' . ')),
-                        hayDigest: norm(JSON.stringify(dg)),
-                        // CATEGORIA/subcategoria como sinal: "reserva" deve puxar a
-                        // subcategoria "reservas" (agrupa por área e tira o ruído).
-                        hayCat: norm(`${r.categorySlug || ''} ${r.subcategorySlug || ''}`),
-                    };
-                });
-                const N = docs.length || 1;
-                const idf = {};
-                for (const t of nterms) {
-                    let df = 0;
-                    for (const d of docs) if (d.hayTitle.includes(t) || d.hayDigest.includes(t)) df++;
-                    idf[t] = Math.log((N + 1) / (df + 1)) + 0.5; // suavizado, sempre > 0
-                }
-                // Título + intenção (processFor/keywords) + CATEGORIA pesam mais que
-                // o corpo; IDF reduz o peso de termos comuns (ex.: "cadastro").
-                const ranked = docs.map((d) => {
-                    let score = 0;
-                    for (const t of nterms) {
-                        if (d.hayTitle.includes(t)) score += idf[t] * 3;
-                        if (d.hayAction.includes(t)) score += idf[t] * 3;
-                        else if (d.hayDigest.includes(t)) score += idf[t] * 1.5;
-                        if (d.hayCat.includes(t)) score += idf[t] * 2.5; // mesma categoria/subcategoria
-                    }
-                    return { r: d.r, score };
-                }).sort((a, b) => b.score - a.score);
-                for (const { r } of ranked) if (!seen.has(r.id)) seen.set(r.id, r);
-            }
+        const { terms, phrases } = tokenizeQuery(q);
+        const nterms = [...new Set(terms.map(norm).filter(Boolean))];
+        // Pedido de vídeo (explícito via onlyWithVideo, ou detectado na query)
+        // vira boost p/ artigos que TÊM vídeo — o título do vídeo (payload)
+        // também entra como haystack ("Treinamento Menin x CV CRM: ...").
+        const wantsVideo = onlyWithVideo || hasVideoIntent(terms);
+        // Termos de INTENÇÃO de mídia ("vídeo", "treinamento") não pontuam como
+        // CONTEÚDO — senão "vídeo de X" puxa vídeos de OUTROS temas quando X
+        // não tem vídeo. Se a query é SÓ intenção ("quais vídeos têm?"), o
+        // bônus de vídeo sozinho lista os artigos com vídeo.
+        const scoreTerms = nterms.filter((t) => !VIDEO_INTENT.has(t));
+        const intentOnly = wantsVideo && !scoreTerms.length;
+
+        const docs = rows.map((r) => {
+            const dg = r.aiDigest || {};
+            const embeds = Array.isArray(r.payload?.embeds) ? r.payload.embeds : [];
+            return {
+                r,
+                videoUrl: videoUrlsFromPayload(r.payload)[0] || null,
+                hayTitle: norm(r.title || ''),
+                // intenção: o que o processo ATENDE (processFor) + keywords —
+                // sinal mais preciso que o corpo p/ "como fazer X".
+                hayAction: norm([...(dg.processFor || []), ...(dg.keywords || [])].join(' . ')),
+                hayDigest: norm(JSON.stringify(dg)),
+                // CATEGORIA/subcategoria como sinal: "reserva" deve puxar a
+                // subcategoria "reservas" (agrupa por área e tira o ruído).
+                hayCat: norm(`${r.categorySlug || ''} ${r.subcategorySlug || ''}`),
+                hayBody: norm(r.body || ''),
+                hayVideo: norm(embeds.map((e) => e?.title || '').join(' . ')),
+            };
+        });
+
+        // IDF: termos COMUNS na base (ex.: "cadastro", que casa dezenas de
+        // artigos) pesam MENOS que termos discriminativos (ex.: "reserva").
+        const N = docs.length || 1;
+        const idf = {};
+        for (const t of scoreTerms) {
+            let df = 0;
+            for (const d of docs) if (d.hayTitle.includes(t) || d.hayDigest.includes(t) || d.hayBody.includes(t)) df++;
+            idf[t] = Math.log((N + 1) / (df + 1)) + 0.5; // suavizado, sempre > 0
         }
 
-        const results = [...seen.values()].slice(0, k).map(r => this._toDigestResult(r));
+        const scored = docs.map((d) => {
+            let score = 0;
+            for (const t of scoreTerms) {
+                if (d.hayTitle.includes(t)) score += idf[t] * 3;
+                if (d.hayAction.includes(t)) score += idf[t] * 3;
+                else if (d.hayDigest.includes(t)) score += idf[t] * 1.5;
+                if (d.hayCat.includes(t)) score += idf[t] * 2.5; // mesma categoria/subcategoria
+                if (d.hayVideo.includes(t)) score += idf[t] * 2; // título do vídeo
+                if (d.hayBody.includes(t)) score += idf[t] * 0.75;
+            }
+            // Frase composta ("pre cadastro") vale mais que os tokens soltos —
+            // é o que separa "Como realizar um Pré-Cadastro" de "Cadastro de X".
+            for (const p of phrases) {
+                if (!p) continue;
+                if (d.hayTitle.includes(p) || d.hayAction.includes(p) || d.hayVideo.includes(p)) score += 6;
+                else if (d.hayDigest.includes(p) || d.hayBody.includes(p)) score += 2.5;
+            }
+            // Bônus de vídeo só p/ quem JÁ casou o tema (não cria relevância
+            // do nada), exceto quando a query é só "quero vídeos".
+            if (wantsVideo && d.videoUrl && (score > 0 || intentOnly)) score += 3;
+            score += vecBonus.get(d.r.id) || 0;
+            return { d, score };
+        }).sort((a, b) => b.score - a.score);
+
+        // Só quem casou algo; onlyWithVideo restringe; corte relativo ao topo
+        // (score < 35% do 1º lugar = relacionado fraco → fora dos cards).
+        let kept = scored.filter((s) => s.score > 0);
+        if (onlyWithVideo) kept = kept.filter((s) => s.d.videoUrl);
+        const top = kept.length ? kept[0].score : 0;
+        kept = kept.filter((s) => s.score >= top * 0.35).slice(0, k);
+
+        const results = kept.map((s) => this._toDigestResult(s.d.r));
         const data = { results, count: results.length };
         cacheSet(searchCache, cacheKey, { data }, SEARCH_TTL);
         return data;
