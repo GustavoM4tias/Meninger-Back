@@ -24,7 +24,7 @@ import { NotificationType } from '../notification/notificationTypes.js';
 import { recordLeadEvent } from './leadEventLog.js';
 import MarketingConfigService from './MarketingConfigService.js';
 
-const { InboundLead, User } = db;
+const { InboundLead } = db;
 
 const RETRY_BASE_MS = 2 * 60 * 1000;        // 2 min
 const RETRY_CAP_MS  = 2 * 60 * 60 * 1000;   // 2 h
@@ -356,11 +356,7 @@ async function markFailed(lead, err, actor) {
 // Avisa os admins quando um lead não consegue ser entregue ao CRM.
 async function alertDeadLetter(lead) {
     try {
-        const admins = await User.findAll({
-            where: { role: 'admin', status: true },
-            attributes: ['id'],
-        });
-        const userIds = admins.map(u => u.id);
+        const userIds = await MarketingConfigService.getAlertRecipients();
         if (!userIds.length) return;
 
         await NotificationService.notify({

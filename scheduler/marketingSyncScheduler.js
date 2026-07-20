@@ -25,6 +25,7 @@ import CvBindingHealthService from '../services/marketing/CvBindingHealthService
 import NotificationService from '../services/notification/NotificationService.js';
 import { NotificationType } from '../services/notification/notificationTypes.js';
 import LeadCampaignBackfillService from '../services/marketing/LeadCampaignBackfillService.js';
+import MarketingConfigService from '../services/marketing/MarketingConfigService.js';
 import MetaCampaignsTokenService from '../services/meta/MetaCampaignsTokenService.js';
 
 const FULL_CRON  = process.env.MARKETING_FULL_SYNC_CRON  || '20 6-22/2 * * *';
@@ -212,8 +213,7 @@ async function alertMissingBindings() {
     if (now - _lastBindingAlertAt < BINDING_ALERT_THROTTLE_MS) return;
     _lastBindingAlertAt = now;
 
-    const admins = await db.User.findAll({ where: { role: 'admin', status: true }, attributes: ['id'] });
-    const userIds = admins.map(u => u.id);
+    const userIds = await MarketingConfigService.getAlertRecipients();
     if (!userIds.length) return;
 
     const topList = signal.top.map(t => `• ${t.name} (${t.held} lead${t.held === 1 ? '' : 's'})`).join('\n');

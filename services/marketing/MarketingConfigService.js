@@ -30,6 +30,7 @@ function rowToConfig(row, { withSecrets = false } = {}) {
         retry_max_attempts: row.retry_max_attempts,
         form_rate_limit_per_min: row.form_rate_limit_per_min,
         cv_leads_endpoint: row.cv_leads_endpoint,
+        alert_recipient_user_ids: row.alert_recipient_user_ids || null,
         meta_app_id: row.meta_app_id,
         meta_graph_api_version: row.meta_graph_api_version,
         meta_last_health_at: row.meta_last_health_at,
@@ -59,6 +60,7 @@ function envFallback({ withSecrets }) {
         retry_max_attempts: Number(process.env.MARKETING_DISPATCH_MAX_ATTEMPTS) || 6,
         form_rate_limit_per_min: Number(process.env.MARKETING_FORM_RATE_LIMIT) || 10,
         cv_leads_endpoint: process.env.CV_LEADS_ENDPOINT || '/v1/comercial/leads',
+        alert_recipient_user_ids: null,
         meta_app_id: process.env.META_APP_ID || '785502081163165',
         meta_graph_api_version: process.env.META_GRAPH_API_VERSION || 'v21.0',
         has_meta_app_secret:     !!process.env.META_APP_SECRET,
@@ -151,6 +153,15 @@ async function updateConfig(patch = {}) {
         if (patch[k] !== undefined && patch[k] !== null) row[k] = patch[k];
     }
 
+    // Destinatários dos alertas: array de IDs de usuário. Aceita [] (= volta
+    // ao fallback de admins). Só ignora quando o campo nem veio no patch.
+    if (patch.alert_recipient_user_ids !== undefined) {
+        const ids = Array.isArray(patch.alert_recipient_user_ids)
+            ? [...new Set(patch.alert_recipient_user_ids.map(Number).filter(n => Number.isInteger(n) && n > 0))]
+            : [];
+        row.alert_recipient_user_ids = ids;
+    }
+
     const setSecret = (col, value) => {
         if (value === undefined || value === null || value === '') return;
         if (value === '__CLEAR__') { row[col] = null; return; }
@@ -163,6 +174,26 @@ async function updateConfig(patch = {}) {
     await row.save();
     invalidateCache();
     return rowToConfig(row, { withSecrets: false });
+}
+
+/**
+ * Destinatários dos alertas da captação (vínculo faltando, dead-letter,
+ * webhook rejeitando, token expirando). Usa a lista configurada em
+ * alert_recipient_user_ids (só usuários ativos); se não houver lista — ou
+ * nenhum da lista estiver ativo — cai no fallback: todos os admins ativos,
+ * pra alerta nunca sumir no vácuo.
+ */
+async function getAlertRecipients() {
+    const cfg = await getConfig();
+    const ids = Array.isArray(cfg?.alert_recipient_user_ids)
+        ? cfg.alert_recipient_user_ids.map(Number).filter(n => Number.isInteger(n) && n > 0)
+        : [];
+    if (ids.length) {
+        const users = await db.User.findAll({ where: { id: ids, status: true }, attributes: ['id'] });
+        if (users.length) return users.map(u => u.id);
+    }
+    const admins = await db.User.findAll({ where: { role: 'admin', status: true }, attributes: ['id'] });
+    return admins.map(u => u.id);
 }
 
 async function recordMetaHealth({ ok, error = null, payload = null }) {
@@ -181,4 +212,4 @@ async function recordMetaHealth({ ok, error = null, payload = null }) {
     }
 }
 
-export default { getConfig, updateConfig, recordMetaHealth, invalidateCache };
+export default { getConfig, updateConfig, recordMetaHealth, invalidateCache, getAlertRecipients };

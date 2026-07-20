@@ -28,6 +28,12 @@ export default (sequelize, DataTypes) => {
     meta_access_token_enc:   { type: DataTypes.TEXT },
     meta_graph_api_version:  { type: DataTypes.STRING(10), defaultValue: 'v21.0' },
 
+    // ── Alertas ──────────────────────────────────────────────────────────────
+    // IDs de usuário que recebem os alertas da captação (vínculo faltando,
+    // dead-letter, webhook rejeitando, token expirando). null/[] = fallback
+    // para todos os admins ativos.
+    alert_recipient_user_ids: { type: DataTypes.JSONB },
+
     // ── Saúde da integração Meta ─────────────────────────────────────────────
     meta_last_health_at:      { type: DataTypes.DATE },
     meta_last_health_ok:      { type: DataTypes.BOOLEAN },
