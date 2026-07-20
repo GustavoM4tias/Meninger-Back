@@ -96,12 +96,13 @@ function topicCards(items) {
 // ─── kb_search ─────────────────────────────────────────────────────────
 registerTool({
     name: 'academy_kb_search',
-    description: 'Busca PROCESSOS/procedimentos e artigos da base de conhecimento do Academy. Retorna RESUMOS (digests) dos mais relevantes — o que é, para que serve, CATEGORIA e pré-requisitos. Use quando o usuário pergunta como fazer algo, procura um procedimento ou quer entender um processo. Chame TAMBÉM quando o pedido é REFINADO — nunca responda sobre um processo de memória nem invente nome de processo. Para o passo-a-passo completo, depois chame academy_get_process com o slug.',
+    description: 'Busca PROCESSOS/procedimentos e artigos da base de conhecimento do Academy. Retorna RESUMOS (digests) apenas dos que realmente correspondem (já filtrados por relevância) — o que é, para que serve, CATEGORIA e pré-requisitos. Use quando o usuário pergunta como fazer algo, procura um procedimento ou quer entender um processo. Se o usuário pedir VÍDEO/videoaula/treinamento em vídeo, passe onlyWithVideo=true. Chame TAMBÉM quando o pedido é REFINADO — nunca responda sobre um processo de memória nem invente nome de processo. Para o passo-a-passo completo, depois chame academy_get_process com o slug.',
     parameters: {
         type: 'object',
         properties: {
             query: { type: 'string', description: 'Termo de busca livre (tema, ação, processo).' },
             categorySlug: { type: 'string', description: 'Filtro opcional por slug da categoria (ex: "procedimentos", "comercial").' },
+            onlyWithVideo: { type: 'boolean', description: 'true QUANDO o usuário pede vídeo/videoaula/treinamento em vídeo — retorna só processos que têm vídeo.' },
         },
         required: ['query'],
     },
@@ -110,21 +111,36 @@ registerTool({
     async handler(user, args) {
         const q = String(args?.query || '').trim();
         const categorySlug = args?.categorySlug ? String(args.categorySlug).trim() : null;
+        const onlyWithVideo = args?.onlyWithVideo === true;
         if (!q) return { result: { results: [], message: 'Forneça um termo de busca.' } };
 
-        const { results, count } = await academyRetrieval.searchProcesses({
-            query: q, userId: user.id, k: 6, categorySlug,
+        let { results, count } = await academyRetrieval.searchProcesses({
+            query: q, userId: user.id, k: 6, categorySlug, onlyWithVideo,
         });
+
+        // Pediu vídeo e não há nenhum sobre o tema → oferece os processos
+        // ESCRITOS como alternativa, deixando claro que vídeo não existe.
+        let videoFallback = false;
+        if (onlyWithVideo && !count) {
+            const fb = await academyRetrieval.searchProcesses({
+                query: q, userId: user.id, k: 3, categorySlug,
+            });
+            if (fb.count) { results = fb.results; count = fb.count; videoFallback = true; }
+        }
 
         const out = {
             processos: formatProcessList(results),
             message: count
-                ? 'Resumos dos processos no campo "processos". ESCOLHA o(s) que REALMENTE correspondem ao pedido (confira "Resumo" e "Atende" — alguns podem ser só relacionados, não exatamente o pedido; ex.: "Reserva Direta - sem Pré-Cadastro" NÃO é o tutorial de pré-cadastro) e destaque-os primeiro. Se um processo tiver "Vídeo (YouTube)", use EXATAMENTE aquela URL — NUNCA invente link de vídeo (se não houver, diga que não há). Responda só a partir deles, citando os links. Para o passo-a-passo, use academy_get_process com o slug.'
-                : 'Nenhum processo encontrado dentro do que o usuário pode ver. Diga isso com clareza — não invente.',
+                ? (videoFallback
+                    ? 'NÃO existe vídeo sobre esse tema na base — diga isso com clareza. Os processos ESCRITOS mais próximos estão no campo "processos"; ofereça-os como alternativa, citando os links. NUNCA invente link de vídeo.'
+                    : 'Resumos no campo "processos" — a lista JÁ vem filtrada por relevância; apresente na ordem, priorizando o 1º (os demais são complementares; não trate tudo como igualmente importante). Se um processo tiver "Vídeo (YouTube)", use EXATAMENTE aquela URL — NUNCA invente link de vídeo (se não houver, diga que não há). Responda só a partir deles, citando os links. Para o passo-a-passo, use academy_get_process com o slug.')
+                : (onlyWithVideo
+                    ? 'Nenhum processo (com ou sem vídeo) encontrado sobre isso dentro do que o usuário pode ver. Diga isso com clareza — não invente.'
+                    : 'Nenhum processo encontrado dentro do que o usuário pode ver. Diga isso com clareza — não invente.'),
         };
         if (count) {
             out.type = 'academy_cards';
-            out.title = 'Processos encontrados';
+            out.title = videoFallback ? 'Sem vídeo — processos escritos relacionados' : 'Processos encontrados';
             out.cards = processCards(results);
         }
         return { result: out, resultCount: count };
