@@ -8,7 +8,7 @@
 // e processamento em background — o Meta reenvia se a resposta demorar.
 
 import { verifySignature, verifyHandshake, processLeadgenPayload } from '../../services/marketing/MetaLeadAdsService.js';
-import db from '../../models/sequelize/index.js';
+import MarketingConfigService from '../../services/marketing/MarketingConfigService.js';
 import NotificationService from '../../services/notification/NotificationService.js';
 import { NotificationType } from '../../services/notification/notificationTypes.js';
 
@@ -23,8 +23,7 @@ async function alertSignatureRejected() {
     if (now - _lastSigAlertAt < SIG_ALERT_THROTTLE_MS) return;
     _lastSigAlertAt = now;
     try {
-        const admins = await db.User.findAll({ where: { role: 'admin', status: true }, attributes: ['id'] });
-        const userIds = admins.map(u => u.id);
+        const userIds = await MarketingConfigService.getAlertRecipients();
         if (!userIds.length) return;
         await NotificationService.notify({
             type: NotificationType.LEAD_WEBHOOK_REJECTED,

@@ -15,6 +15,7 @@
 import axios from 'axios';
 import db from '../../models/sequelize/index.js';
 import MetaAppConfigService from './MetaAppConfigService.js';
+import MarketingConfigService from '../marketing/MarketingConfigService.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 
@@ -262,8 +263,7 @@ export async function maybeRefreshAndAlert() {
         // Não renovou e está perto de cair → alerta (throttle 12h).
         if (left <= ALERT_WINDOW_DAYS && Date.now() - _lastAlertAt >= ALERT_THROTTLE_MS) {
             _lastAlertAt = Date.now();
-            const admins = await db.User.findAll({ where: { role: 'admin', status: true }, attributes: ['id'] });
-            const userIds = admins.map(u => u.id);
+            const userIds = await MarketingConfigService.getAlertRecipients();
             if (userIds.length) {
                 await NotificationService.notify({
                     type: NotificationType.META_CAMPAIGNS_TOKEN_EXPIRING,

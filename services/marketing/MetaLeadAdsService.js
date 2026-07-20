@@ -346,8 +346,7 @@ function fetchBackoffMs(attempts) {
 
 async function alertFetchDead(lead) {
     try {
-        const admins = await db.User.findAll({ where: { role: 'admin', status: true }, attributes: ['id'] });
-        const userIds = admins.map(u => u.id);
+        const userIds = await MarketingConfigService.getAlertRecipients();
         if (!userIds.length) return;
         await NotificationService.notify({
             type: NotificationType.LEAD_DISPATCH_FAILED,
