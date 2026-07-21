@@ -1,7 +1,12 @@
-// src/controllers/viabilityController.js
-import ViabilityService from '../services/viabilityService.js';
+// src/controllers/deptSpendingController.js
+//
+// Tela "Gastos por Departamento" (reestruturação da Viabilidade de Marketing).
+// Governança: a diretoria (não-admin) só recebe empreendimentos LIBERADOS; o
+// admin recebe tudo (rascunho + liberado) para ajustar no backoffice.
 
-const service = new ViabilityService();
+import DeptSpendingService from '../services/deptSpending/deptSpendingService.js';
+
+const service = new DeptSpendingService();
 
 function normYM(v) {
     const ym = String(v || '').slice(0, 7);
@@ -9,16 +14,13 @@ function normYM(v) {
     return ym;
 }
 
-export async function getEnterpriseViability(req, res) {
+export async function getEnterpriseSpending(req, res) {
     try {
         if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
         const { erpId } = req.params;
+        const { year, aliasId = 'default', month } = req.query;
 
-        // compat (antigo)
-        const { year, aliasId = 'default', cvEnterpriseId, costCenterId, month } = req.query;
-
-        // novo
         const start_month = req.query.start_month ? normYM(req.query.start_month) : null;
         const end_month = req.query.end_month ? normYM(req.query.end_month) : null;
 
@@ -29,34 +31,23 @@ export async function getEnterpriseViability(req, res) {
             if (!start_month || !end_month) return res.status(400).json({ error: 'Envie start_month e end_month juntos.' });
         }
 
-        // No novo padrão o identificador real é enterprise_key.
-        // Para não quebrar rota, vamos assumir:
-        // - enterpriseKey = erpId (se você ainda chama por ERP)
-        // Depois você pode trocar rota para /enterprise/:enterpriseKey
-        const enterpriseKey = String(erpId);
-
         const data = await service.computeEnterpriseViability({
             year: parsedYear,
             upToMonth: month ? normYM(month) : null,
-
             startMonth: start_month,
             endMonth: end_month,
-
-            enterpriseKey,
             aliasId,
-            erpId, // mantém vendas com ERP se existir
-            cvEnterpriseId: cvEnterpriseId ? Number(cvEnterpriseId) : undefined,
-            costCenterId: costCenterId ? Number(costCenterId) : (erpId ? Number(erpId) : null)
+            erpId,
         });
 
         return res.json(data);
     } catch (e) {
-        console.error('[ViabilityController] getEnterpriseViability: erro', e);
-        return res.status(500).json({ error: e.message || 'Erro ao calcular viabilidade.' });
+        console.error('[DeptSpendingController] getEnterpriseSpending: erro', e);
+        return res.status(500).json({ error: e.message || 'Erro ao calcular gastos por departamento.' });
     }
 }
 
-export const getEnterprisesViability = async (req, res) => {
+export const getEnterprisesSpending = async (req, res) => {
     try {
         if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
@@ -72,19 +63,21 @@ export const getEnterprisesViability = async (req, res) => {
             if (!start_month || !end_month) return res.status(400).json({ error: 'Envie start_month e end_month juntos.' });
         }
 
+        // Governança: só admin enxerga rascunhos. Diretoria (não-admin) recebe só os liberados.
+        const isAdmin = req.user?.role === 'admin';
+
         const out = await service.listEnterprisesViability({
             year: parsedYear,
             upToMonth: month ? normYM(month) : null,
-
             startMonth: start_month,
             endMonth: end_month,
-
-            aliasId: aliasId || 'default'
+            aliasId: aliasId || 'default',
+            onlyReleased: !isAdmin,
         });
 
-        return res.json(out);
+        return res.json({ ...out, isAdmin });
     } catch (e) {
-        console.error('[ViabilityController] getEnterprisesViability erro', e);
-        return res.status(500).json({ error: e.message || 'Erro ao carregar viabilidade de empreendimentos' });
+        console.error('[DeptSpendingController] getEnterprisesSpending erro', e);
+        return res.status(500).json({ error: e.message || 'Erro ao carregar gastos por departamento' });
     }
 };

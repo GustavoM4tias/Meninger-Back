@@ -1,15 +1,15 @@
-// controllers/viabilityAdminController.js
+// controllers/deptSpendingAdminController.js
 //
-// Endpoints ADMIN-ONLY de configuração da Viabilidade de Marketing.
-// Montados com authenticate + requireAdmin em viabilityRoutes.js.
+// Endpoints ADMIN-ONLY de configuração + liberação da tela "Gastos por Departamento".
+// Montados com authenticate + requireAdmin em deptSpendingRoutes.js.
 
-import * as cfg from '../services/viability/viabilityConfigService.js';
+import * as cfg from '../services/deptSpending/deptSpendingConfigService.js';
 
 function actor(req) {
     return req.user?.username || req.user?.email || String(req.user?.id || '');
 }
 
-/* ===== Departamentos de marketing (global) ===== */
+/* ===== Departamentos acompanhados (global) ===== */
 
 export async function getMarketingDepartments(req, res) {
     try {
@@ -19,8 +19,8 @@ export async function getMarketingDepartments(req, res) {
         ]);
         return res.json({ configured, known });
     } catch (e) {
-        console.error('[ViabilityAdmin] getMarketingDepartments erro', e);
-        return res.status(500).json({ error: e.message || 'Erro ao carregar departamentos de marketing.' });
+        console.error('[DeptSpendingAdmin] getMarketingDepartments erro', e);
+        return res.status(500).json({ error: e.message || 'Erro ao carregar departamentos.' });
     }
 }
 
@@ -30,8 +30,8 @@ export async function putMarketingDepartment(req, res) {
         const out = await cfg.setMarketingDepartment(name, is_marketing, actor(req));
         return res.json(out);
     } catch (e) {
-        console.error('[ViabilityAdmin] putMarketingDepartment erro', e);
-        return res.status(400).json({ error: e.message || 'Erro ao salvar departamento de marketing.' });
+        console.error('[DeptSpendingAdmin] putMarketingDepartment erro', e);
+        return res.status(400).json({ error: e.message || 'Erro ao salvar departamento.' });
     }
 }
 
@@ -42,7 +42,7 @@ export async function getEnterpriseSettings(req, res) {
         const rows = await cfg.listEnterpriseSettings();
         return res.json({ results: rows });
     } catch (e) {
-        console.error('[ViabilityAdmin] getEnterpriseSettings erro', e);
+        console.error('[DeptSpendingAdmin] getEnterpriseSettings erro', e);
         return res.status(500).json({ error: e.message || 'Erro ao carregar configurações por empreendimento.' });
     }
 }
@@ -62,7 +62,25 @@ export async function putEnterpriseSettings(req, res) {
         );
         return res.json(out);
     } catch (e) {
-        console.error('[ViabilityAdmin] putEnterpriseSettings erro', e);
+        console.error('[DeptSpendingAdmin] putEnterpriseSettings erro', e);
         return res.status(400).json({ error: e.message || 'Erro ao salvar configuração do empreendimento.' });
+    }
+}
+
+/* ===== Liberação (rascunho → liberado) por empreendimento ===== */
+
+export async function putEnterpriseRelease(req, res) {
+    try {
+        const { companyId } = req.params;
+        const { is_released, notes } = req.body || {};
+        const out = await cfg.setEnterpriseRelease(
+            companyId,
+            { isReleased: is_released, notes },
+            actor(req)
+        );
+        return res.json(out);
+    } catch (e) {
+        console.error('[DeptSpendingAdmin] putEnterpriseRelease erro', e);
+        return res.status(400).json({ error: e.message || 'Erro ao liberar empreendimento.' });
     }
 }

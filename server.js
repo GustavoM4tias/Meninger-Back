@@ -19,7 +19,7 @@ import admin from './routes/admin.js';
 import supportRoutes from './routes/supportRoutes.js'; 
 import projectionRoutes from './routes/projectionsRoutes.js';
 import expensesRoutes from './routes/expensesRoutes.js';
-import viabilityRoutes from './routes/viabilityRoutes.js';
+import deptSpendingRoutes from './routes/deptSpendingRoutes.js';
 import academyRoutes from './routes/academyRoutes.js'; 
 import uploadRoutes from './routes/uploadRoutes.js';
 import bucketUploadRoutes from './routes/bucketUploadRoutes.js';
@@ -83,7 +83,7 @@ import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.j
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
-import { ensureViabilitySchema } from './lib/ensureViabilitySchema.js';
+import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
@@ -197,7 +197,7 @@ app.use('/api/external', externalRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/projections', projectionRoutes);
 app.use('/api/expenses', expensesRoutes);
-app.use('/api/viability', viabilityRoutes);
+app.use('/api/dept-spending', deptSpendingRoutes);
 app.use('/api/academy', academyRoutes); 
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/bucket-upload', bucketUploadRoutes);
@@ -331,8 +331,11 @@ async function syncModelsAndPatches(fingerprint) {
     ['BolaoMatch', db.BolaoMatch],
     ['BolaoParticipant', db.BolaoParticipant],
     ['BolaoPrediction', db.BolaoPrediction],
-    // Viabilidade de Marketing — campo Custo Loja novo em sales_projection_enterprises
+    // Projeção de vendas — colunas custo_loja / blocked_considered_available (usadas pela projeção e por Gastos por Departamento)
     ['SalesProjectionEnterprise', db.SalesProjectionEnterprise],
+    // Gastos por Departamento (ex-Viabilidade) — colunas de liberação novas em viability_enterprise_settings
+    ['DeptSpendingEnterpriseSettings', db.DeptSpendingEnterpriseSettings],
+    ['DeptSpendingMarketingDepartment', db.DeptSpendingMarketingDepartment],
     // Personalização de custos (categoria + observação) — Títulos/Custos agora ao vivo do backup
     ['ExpensePersonalization', db.ExpensePersonalization],
     // Eme Atende — atendente IA de leads (módulo novo em evolução)
@@ -373,7 +376,7 @@ async function syncModelsAndPatches(fingerprint) {
   await ensureWhatsappAutomationSchema();
   await ensureEmeAtendeSeed();
   await ensureAlertSharesSchema();
-  await ensureViabilitySchema();
+  await ensureDeptSpendingSchema();
   await ensureDepartmentVisibilitySchema();
   await ensureComercialConditionsSchema();
   await ensureOrganogramSchema();

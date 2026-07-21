@@ -40,9 +40,9 @@ import SalesProjectionLineDefine from './projection/salesProjectionLine.js';
 import SalesProjectionLogDefine from './projection/salesProjectionLog.js';
 import SalesProjectionEnterpriseDefine from './projection/salesProjectionEnterprise.js';
 
-// Viabilidade de Marketing — config admin
-import ViabilityMarketingDepartmentDefine from './viability/marketingDepartment.js';
-import ViabilityEnterpriseSettingsDefine from './viability/enterpriseSettings.js';
+// Gastos por Departamento — config admin + liberação (ex-Viabilidade)
+import DeptSpendingMarketingDepartmentDefine from './deptSpending/marketingDepartment.js';
+import DeptSpendingEnterpriseSettingsDefine from './deptSpending/enterpriseSettings.js';
 
 // ... imports existentes
 import CvEnterpriseDefine from './cv/enterprise.js';
@@ -267,9 +267,9 @@ db.SalesProjectionLine = SalesProjectionLineDefine(sequelize, DataTypes);
 db.SalesProjectionLog = SalesProjectionLogDefine(sequelize, DataTypes);
 db.SalesProjectionEnterprise = SalesProjectionEnterpriseDefine(sequelize, DataTypes);
 
-// Viabilidade de Marketing — config admin
-db.ViabilityMarketingDepartment = ViabilityMarketingDepartmentDefine(sequelize, DataTypes);
-db.ViabilityEnterpriseSettings = ViabilityEnterpriseSettingsDefine(sequelize, DataTypes);
+// Gastos por Departamento — config admin + liberação (ex-Viabilidade)
+db.DeptSpendingMarketingDepartment = DeptSpendingMarketingDepartmentDefine(sequelize, DataTypes);
+db.DeptSpendingEnterpriseSettings = DeptSpendingEnterpriseSettingsDefine(sequelize, DataTypes);
 
 // ... modelos já existentes
 db.CvEnterprise = CvEnterpriseDefine(sequelize, DataTypes);
