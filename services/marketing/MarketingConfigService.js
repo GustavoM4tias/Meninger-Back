@@ -16,7 +16,36 @@ const CACHE_TTL_MS = 30_000;
 let _cache = null;
 let _cacheAt = 0;
 
+// Auto-patch da coluna de destinatários dos alertas (2026-07-20). Necessário
+// porque com SKIP_DB_SYNC=true no Railway a fase de schema do boot é pulada e
+// a coluna nova nunca seria criada — o que derrubaria TODA leitura da config
+// (findByPk seleciona a coluna → erro → fallback pro .env, que não tem mais os
+// tokens). Roda 1x por processo, idempotente; o seed (Gustavo + Taketa) só
+// aplica quando a coluna ainda está NULL (nunca configurada pela tela).
+let _alertColumnEnsured = false;
+async function ensureAlertRecipientsColumn() {
+    if (_alertColumnEnsured) return;
+    try {
+        await db.sequelize.query(
+            `ALTER TABLE marketing_configs ADD COLUMN IF NOT EXISTS alert_recipient_user_ids JSONB`);
+        await db.sequelize.query(`
+            UPDATE marketing_configs SET alert_recipient_user_ids = sub.ids
+              FROM (SELECT jsonb_agg(id) AS ids FROM users
+                     WHERE status = true
+                       AND (email ILIKE 'gustavo.diniz@menin.com.br' OR username ILIKE '%taketa%')) sub
+             WHERE marketing_configs.id = 1
+               AND marketing_configs.alert_recipient_user_ids IS NULL
+               AND sub.ids IS NOT NULL`);
+        _alertColumnEnsured = true;
+    } catch (err) {
+        // Não-fatal: se falhar (permissão, transitório), tenta de novo na próxima
+        // leitura; o findByPk abaixo decide se dá pra seguir.
+        console.warn('[marketing-config] ensure alert_recipient_user_ids falhou:', err.message);
+    }
+}
+
 async function loadRow() {
+    await ensureAlertRecipientsColumn();
     let row = await db.MarketingConfig.findByPk(SINGLETON_ID);
     if (!row) row = await db.MarketingConfig.create({ id: SINGLETON_ID });
     return row;
