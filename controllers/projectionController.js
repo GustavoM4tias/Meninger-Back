@@ -645,25 +645,6 @@ export async function getProjectionDetail(req, res) {
 
         const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
 
-        // log leve de acompanhamento
-        try {
-          await SalesProjectionLog.create({
-            projection_id: id,
-            action: 'VIEW_DETAIL',
-            user_id: req.user.id,
-            payload_after: {
-              include_zero: true,
-              start_month: start ?? null,
-              end_month: end ?? null,
-              lines_count: Array.isArray(lines) ? lines.length : (lines?.length ?? null),
-              defaults_count: defaultsEnriched?.length ?? 0,
-            },
-            note: `Detalhe carregado (admin, include_zero=sim${hasRange ? `, range=${start}..${end}` : ''}).`,
-          });
-        } catch (e) {
-          console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
-        }
-
         return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
       }
 
@@ -708,24 +689,6 @@ export async function getProjectionDetail(req, res) {
         const defaultsPlain = defaults.map((d) => (d?.toJSON ? d.toJSON() : d));
         const defaultsEnriched = await enrichDefaultsWithUnits(defaultsPlain);
 
-        try {
-          await SalesProjectionLog.create({
-            projection_id: id,
-            action: 'VIEW_DETAIL',
-            user_id: req.user.id,
-            payload_after: {
-              include_zero: false,
-              start_month: null,
-              end_month: null,
-              lines_count: lines?.length ?? 0,
-              defaults_count: defaultsEnriched?.length ?? 0,
-            },
-            note: 'Detalhe carregado (admin, include_zero=não, sem range).',
-          });
-        } catch (e) {
-          console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
-        }
-
         return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
       }
 
@@ -741,24 +704,6 @@ export async function getProjectionDetail(req, res) {
       });
 
       const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
-
-      try {
-        await SalesProjectionLog.create({
-          projection_id: id,
-          action: 'VIEW_DETAIL',
-          user_id: req.user.id,
-          payload_after: {
-            include_zero: false,
-            start_month: start,
-            end_month: end,
-            lines_count: lines?.length ?? 0,
-            defaults_count: defaultsEnriched?.length ?? 0,
-          },
-          note: `Detalhe carregado (admin, include_zero=não, range=${start}..${end}).`,
-        });
-      } catch (e) {
-        console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
-      }
 
       return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
     }
@@ -796,25 +741,6 @@ export async function getProjectionDetail(req, res) {
         );
 
       const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
-
-      // log leve (usuário também) — ajuda a rastrear tela “vazia”
-      try {
-        await SalesProjectionLog.create({
-          projection_id: id,
-          action: 'VIEW_DETAIL',
-          user_id: req.user.id,
-          payload_after: {
-            include_zero: true,
-            start_month: start ?? null,
-            end_month: end ?? null,
-            lines_count: lines?.length ?? 0,
-            defaults_count: defaultsEnriched?.length ?? 0,
-          },
-          note: `Detalhe carregado (user, include_zero=sim${hasRange ? `, range=${start}..${end}` : ''}).`,
-        });
-      } catch (e) {
-        console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
-      }
 
       return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
     }
@@ -854,24 +780,6 @@ export async function getProjectionDetail(req, res) {
 
       const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
 
-      try {
-        await SalesProjectionLog.create({
-          projection_id: id,
-          action: 'VIEW_DETAIL',
-          user_id: req.user.id,
-          payload_after: {
-            include_zero: false,
-            start_month: null,
-            end_month: null,
-            lines_count: lines?.length ?? 0,
-            defaults_count: defaultsEnriched?.length ?? 0,
-          },
-          note: 'Detalhe carregado (user, include_zero=não, sem range).',
-        });
-      } catch (e) {
-        console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
-      }
-
       return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
     }
 
@@ -886,24 +794,6 @@ export async function getProjectionDetail(req, res) {
     });
 
     const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
-
-    try {
-      await SalesProjectionLog.create({
-        projection_id: id,
-        action: 'VIEW_DETAIL',
-        user_id: req.user.id,
-        payload_after: {
-          include_zero: false,
-          start_month: start,
-          end_month: end,
-          lines_count: lines?.length ?? 0,
-          defaults_count: defaultsEnriched?.length ?? 0,
-        },
-        note: `Detalhe carregado (user, include_zero=não, range=${start}..${end}).`,
-      });
-    } catch (e) {
-      console.error('[projections][VIEW_DETAIL] falha ao salvar log', e?.message);
-    }
 
     return res.json({ projection: proj, lines, enterprise_defaults: defaultsEnriched });
   } catch (e) {
@@ -1210,6 +1100,237 @@ export async function updateProjectionMeta(req, res) {
 
 /**
  * =============================================================================
+ * DELETE PROJECTION (ADMIN)
+ * DELETE /api/projections/:id
+ * Remove a projeção e TODOS os seus filhos (linhas, defaults, logs) numa
+ * transação. Operação irreversível.
+ * =============================================================================
+ */
+export async function deleteProjection(req, res) {
+  const deny = assertAdmin(req, res);
+  if (deny) return;
+
+  const trx = await db.sequelize.transaction();
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      await trx.rollback();
+      return res.status(400).json({ error: 'ID inválido.' });
+    }
+
+    const proj = await SalesProjection.findByPk(id, { transaction: trx });
+    if (!proj) {
+      await trx.rollback();
+      return res.status(404).json({ error: 'Projeção não encontrada.' });
+    }
+    if (proj.is_locked) {
+      await trx.rollback();
+      return res.status(423).json({ error: 'Projeção bloqueada. Desbloqueie antes de excluir.' });
+    }
+
+    await SalesProjectionLine.destroy({ where: { projection_id: id }, transaction: trx });
+    await SalesProjectionEnterprise.destroy({ where: { projection_id: id }, transaction: trx });
+    await SalesProjectionLog.destroy({ where: { projection_id: id }, transaction: trx });
+    await proj.destroy({ transaction: trx });
+
+    await trx.commit();
+    return res.json({ ok: true, deleted_id: id });
+  } catch (e) {
+    console.error(e);
+    await trx.rollback();
+    return res.status(400).json({ error: e.message || 'Erro ao excluir projeção.' });
+  }
+}
+
+/**
+ * =============================================================================
+ * UPSERT GRID (ADMIN) — salvamento UNIFICADO da tela nova
+ * PUT /api/projections/:id/grid
+ * Body: {
+ *   range_start: 'YYYY-MM', range_end: 'YYYY-MM',
+ *   defaults: [ ... TODAS as linhas atuais da tela ... ],
+ *   lines:    [ ... só células com unidades > 0, dentro do período ... ]
+ * }
+ *
+ * Reconciliação (numa única transação):
+ *  - `defaults` é o conjunto AUTORITATIVO de empreendimentos da projeção.
+ *  - Empreendimento ausente em `defaults` é REMOVIDO (default + todas as linhas).
+ *  - Dentro de [range_start, range_end] as linhas passam a refletir exatamente o
+ *    que veio em `lines` (meses zerados/limpos somem). Meses FORA do período ficam intactos.
+ * =============================================================================
+ */
+export async function upsertProjectionGrid(req, res) {
+  const deny = assertAdmin(req, res);
+  if (deny) return;
+
+  const trx = await db.sequelize.transaction();
+  try {
+    const id = Number(req.params.id);
+    const proj = await SalesProjection.findByPk(id, { transaction: trx });
+    if (!proj) { await trx.rollback(); return res.status(404).json({ error: 'Projeção não encontrada.' }); }
+    if (proj.is_locked) { await trx.rollback(); return res.status(423).json({ error: 'Projeção bloqueada.' }); }
+
+    const rangeStart = normYM(req.body.range_start);
+    const rangeEnd = normYM(req.body.range_end);
+    if (rangeStart > rangeEnd) throw new Error('range_start não pode ser maior que range_end.');
+
+    const defaultsIn = Array.isArray(req.body.defaults) ? req.body.defaults : [];
+    const linesIn = Array.isArray(req.body.lines) ? req.body.lines : [];
+
+    const pairKey = (ek, alias) => `${String(ek)}|${String(alias || 'default')}`;
+
+    // ---- DEFAULTS (conjunto autoritativo de empreendimentos) ----
+    const defDedup = new Map();
+    for (const i of defaultsIn) {
+      const enterprise_key = String(i.enterprise_key || '').trim();
+      if (!enterprise_key) throw new Error('enterprise_key é obrigatório nos defaults.');
+      const alias_id = i.alias_id ? String(i.alias_id) : 'default';
+      const erp_id = i.erp_id ? String(i.erp_id) : null;
+
+      let total_units = null;
+      const tuRaw = (i.total_units ?? i.totalUnits);
+      if (tuRaw !== undefined && tuRaw !== null && tuRaw !== '') {
+        total_units = Math.max(0, parseInt(tuRaw, 10) || 0);
+      }
+
+      const nameCache = (i.enterprise_name_cache ?? i.name);
+      const manual_city = i.city != null ? (String(i.city).trim() || null)
+        : i.manual_city != null ? (String(i.manual_city).trim() || null)
+        : null;
+
+      defDedup.set(pairKey(enterprise_key, alias_id), {
+        projection_id: id,
+        enterprise_key,
+        erp_id,
+        alias_id,
+        default_avg_price: Number(i.default_avg_price ?? i.defaultPrice ?? 0),
+        enterprise_name_cache: nameCache != null ? String(nameCache) : null,
+        default_marketing_pct: Number(i.default_marketing_pct ?? 0),
+        default_commission_pct: Number(i.default_commission_pct ?? 0),
+        total_units,
+        custo_loja: Number(i.custo_loja ?? i.custoLoja ?? 0),
+        blocked_considered_available: Number(i.blocked_considered_available ?? i.blockedConsideredAvailable ?? 0),
+        manual_city,
+      });
+    }
+    const finalDefaults = [...defDedup.values()];
+    const keepPairs = new Set(finalDefaults.map((d) => pairKey(d.enterprise_key, d.alias_id)));
+
+    if (finalDefaults.length) {
+      await SalesProjectionEnterprise.bulkCreate(finalDefaults, {
+        transaction: trx,
+        updateOnDuplicate: [
+          'erp_id', 'default_avg_price', 'enterprise_name_cache',
+          'default_marketing_pct', 'default_commission_pct', 'total_units',
+          'custo_loja', 'blocked_considered_available', 'manual_city', 'updated_at',
+        ],
+      });
+    }
+
+    // Remove defaults de empreendimentos que sumiram da tela
+    const existingDefaults = await SalesProjectionEnterprise.findAll({ where: { projection_id: id }, transaction: trx });
+    const removedEnterprises = existingDefaults.filter(
+      (d) => !keepPairs.has(pairKey(d.enterprise_key, d.alias_id))
+    );
+    if (removedEnterprises.length) {
+      await SalesProjectionEnterprise.destroy({ where: { id: removedEnterprises.map((d) => d.id) }, transaction: trx });
+    }
+
+    // ---- LINES (só células com unidades > 0, dentro do período) ----
+    const lineDedup = new Map();
+    for (const r of linesIn) {
+      const ym = normYM(r.year_month);
+      if (ym < rangeStart || ym > rangeEnd) continue;                 // só o período visível
+      const enterprise_key = String(r.enterprise_key || '').trim();
+      if (!enterprise_key) throw new Error('enterprise_key é obrigatório nas linhas.');
+      const alias_id = r.alias_id ? String(r.alias_id) : 'default';
+      if (!keepPairs.has(pairKey(enterprise_key, alias_id))) continue; // ignora linha de emp. removido
+      const erp_id = r.erp_id ? String(r.erp_id) : null;
+      const nameCache = r.enterprise_name_cache ? String(r.enterprise_name_cache) : null;
+      if (!erp_id && !nameCache) throw new Error(`Linha manual precisa enterprise_name_cache (${enterprise_key}).`);
+
+      const units = Math.max(0, parseInt(r.units_target ?? 0, 10));
+      if (units <= 0) continue;                                        // sem unidades = sem meta
+
+      lineDedup.set(`${enterprise_key}|${alias_id}|${ym}`, {
+        projection_id: id,
+        enterprise_key,
+        erp_id,
+        alias_id,
+        year_month: ym,
+        units_target: units,
+        avg_price_target: Number(r.avg_price_target ?? 0),
+        enterprise_name_cache: nameCache,
+        marketing_pct: Number(r.marketing_pct ?? 0),
+        commission_pct: Number(r.commission_pct ?? 0),
+      });
+    }
+    const finalLines = [...lineDedup.values()];
+
+    if (finalLines.length) {
+      await SalesProjectionLine.bulkCreate(finalLines, {
+        transaction: trx,
+        updateOnDuplicate: [
+          'erp_id', 'units_target', 'avg_price_target',
+          'enterprise_name_cache', 'marketing_pct', 'commission_pct', 'updated_at',
+        ],
+      });
+    }
+
+    // Reconcilia linhas: apaga meses limpos DENTRO do período e tudo de emp. removido.
+    const existingLines = await SalesProjectionLine.findAll({ where: { projection_id: id }, transaction: trx });
+    const keepLineKeys = new Set(finalLines.map((l) => `${l.enterprise_key}|${l.alias_id}|${l.year_month}`));
+    const linesToDelete = existingLines.filter((l) => {
+      const alias = l.alias_id || 'default';
+      if (!keepPairs.has(pairKey(l.enterprise_key, alias))) return true; // emp. removido → apaga todas
+      const ym = String(l.year_month);
+      if (ym < rangeStart || ym > rangeEnd) return false;                 // fora do período → preserva
+      return !keepLineKeys.has(`${l.enterprise_key}|${alias}|${ym}`);     // no período mas limpo → apaga
+    });
+    if (linesToDelete.length) {
+      await SalesProjectionLine.destroy({ where: { id: linesToDelete.map((l) => l.id) }, transaction: trx });
+    }
+
+    const removedNames = removedEnterprises.map((d) => d.enterprise_name_cache || d.erp_id || d.enterprise_key);
+    const noteParts = [
+      `${finalDefaults.length} empreendimento(s)`,
+      `${finalLines.length} meta(s) mensais`,
+      `período ${rangeStart}..${rangeEnd}`,
+    ];
+    if (removedEnterprises.length) noteParts.push(`removidos: ${removedNames.join(', ')}`);
+
+    await SalesProjectionLog.create(
+      {
+        projection_id: id,
+        action: 'SAVED',
+        user_id: req.user.id,
+        payload_after: {
+          defaults: finalDefaults.length,
+          lines: finalLines.length,
+          removed_enterprises: removedEnterprises.length,
+          range: [rangeStart, rangeEnd],
+        },
+        note: `Salvou ${noteParts.join(' • ')}.`,
+      },
+      { transaction: trx }
+    );
+
+    await trx.commit();
+    return res.json({
+      ok: true,
+      defaults: finalDefaults.length,
+      lines: finalLines.length,
+      removed_enterprises: removedEnterprises.length,
+    });
+  } catch (e) {
+    console.error(e);
+    await trx.rollback();
+    return res.status(400).json({ error: e.message || 'Erro ao salvar projeção.' });
+  }
+}
+
+/**
+ * =============================================================================
  * LOGS
  * =============================================================================
  */
@@ -1219,7 +1340,9 @@ export async function getProjectionLogs(req, res) {
 
     const id = Number(req.params.id);
     const logs = await SalesProjectionLog.findAll({
-      where: { projection_id: id },
+      // VIEW_DETAIL era gravado a cada leitura da tela e só poluía a linha do
+      // tempo; a tela nova não grava mais, e aqui filtramos o histórico antigo.
+      where: { projection_id: id, action: { [Op.ne]: 'VIEW_DETAIL' } },
       order: [['created_at', 'DESC']],
       attributes: ['id', 'action', 'user_id', 'payload_before', 'payload_after', 'note', 'created_at'],
       include: User ? [{ model: User, as: 'actor', attributes: ['id', 'username', 'email'], required: false }] : [],

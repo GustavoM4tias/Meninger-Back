@@ -18,9 +18,11 @@ router.get('/cost-center-names', ctrl.getActiveProjectionCostCenterNames);
 
 // rotas que usam :id com regex numérica
 router.get('/:id(\\d+)', ctrl.getProjectionDetail);
-router.put('/:id(\\d+)/lines', ctrl.upsertProjectionLines);
+router.put('/:id(\\d+)/grid', ctrl.upsertProjectionGrid);   // salvamento unificado (tela nova)
+router.put('/:id(\\d+)/lines', ctrl.upsertProjectionLines); // legado (mantido p/ compat)
 router.patch('/:id(\\d+)', ctrl.updateProjectionMeta);
-router.put('/:id(\\d+)/defaults', ctrl.upsertProjectionDefaults);
+router.put('/:id(\\d+)/defaults', ctrl.upsertProjectionDefaults); // legado
+router.delete('/:id(\\d+)', ctrl.deleteProjection);
 router.get('/:id(\\d+)/logs', ctrl.getProjectionLogs);
 
 export default router;
