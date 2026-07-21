@@ -12,6 +12,8 @@ import { TOOL_DECLARATIONS as CONDITION_DECLARATIONS, executeTool as conditionEx
 // Dual-context (E3): tools do Academy + runner seguro.
 // O import de AcademyTools dispara o auto-registro das tools no ToolRegistry.
 import './AcademyTools.js';
+// Idem: tools de Imobiliárias (Comercial > Imobiliárias) — contexto OFFICE.
+import './RealEstateTools.js';
 import { getToolsFor, toGeminiDeclarations, findTool } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
 
