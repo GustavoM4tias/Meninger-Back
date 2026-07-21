@@ -536,7 +536,9 @@ async function executeQueryEvents(args, user) {
 function parseTags(raw) {
   if (!raw) return [];
   const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  return Array.isArray(arr) ? arr : [];
+  // Tags com prefixo '__' são marcadores internos (ex.: legado '__reminded__')
+  // — nunca exibir ao usuário.
+  return Array.isArray(arr) ? arr.filter(t => !String(t).startsWith('__')) : [];
 }
 
 function parseOrganizers(raw) {
