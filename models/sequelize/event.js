@@ -28,6 +28,10 @@ export default (sequelize, DataTypes) => {
     enterprise_id:   { type: DataTypes.INTEGER, allowNull: true },
     enterprise_name: { type: DataTypes.STRING(255), allowNull: true },
     enterprise_logo: { type: DataTypes.TEXT, allowNull: true },
+
+    // Lembrete D-1 já enviado (eventReminderScheduler). Antes era a tag
+    // interna '__reminded__' dentro de `tags`, que vazava na UI/IA.
+    reminded_at:     { type: DataTypes.DATE, allowNull: true },
   }, {
     sequelize,
     modelName: 'Event',
