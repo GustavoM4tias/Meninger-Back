@@ -14,6 +14,15 @@ const fmt = (iso) => (iso ? dayjs.utc(iso).tz(TZ).format('dddd, D [de] MMMM [de]
 
 const { Event } = db;
 
+// Vínculo de empreendimento do evento (o form envia enterprise_id/name/logo).
+// Sanitiza: id numérico ou null; strings vazias viram null.
+const enterpriseFields = (body) => ({
+    enterprise_id: Number.isFinite(Number(body?.enterprise_id)) && String(body?.enterprise_id ?? '') !== ''
+        ? Number(body.enterprise_id) : null,
+    enterprise_name: String(body?.enterprise_name || '').trim() || null,
+    enterprise_logo: String(body?.enterprise_logo || '').trim() || null,
+});
+
 export const addEvent = async (req, res) => {
     const {
         title, description, eventDate, tags = [], images = [],
@@ -32,6 +41,7 @@ export const addEvent = async (req, res) => {
             created_by,
             organizers,
             notify_to,
+            ...enterpriseFields(req.body),
         });
 
         res.status(201).json({ message: 'Evento criado com sucesso', eventId: created.id });
@@ -95,7 +105,8 @@ export const updateEvent = async (req, res) => {
                 users: Array.isArray(notify_to?.users) ? notify_to.users : [],
                 positions: Array.isArray(notify_to?.positions) ? notify_to.positions : [],
                 emails: Array.isArray(notify_to?.emails) ? notify_to.emails : []
-            }
+            },
+            ...enterpriseFields(req.body),
         }, { where: { id } });
 
         if (!updated) return responseHandler.error(res, 'Evento não encontrado');
@@ -120,7 +131,8 @@ export const getEvents = async (req, res) => {
       order: [['event_date', 'ASC']],
       attributes: [
         'id', 'title', 'description', 'post_date', 'event_date',
-        'tags', 'images', 'address', 'created_by', 'organizers', 'notify_to'
+        'tags', 'images', 'address', 'created_by', 'organizers', 'notify_to',
+        'enterprise_id', 'enterprise_name', 'enterprise_logo',
       ],
     };
 

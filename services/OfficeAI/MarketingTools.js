@@ -89,7 +89,7 @@ export const TOOL_DECLARATIONS = [
         data_fim:       { type: 'STRING', description: 'Data final YYYY-MM-DD. Padrão: fim do mês atual.' },
         titulo:         { type: 'STRING', description: 'Filtro por título do evento.' },
         tag:            { type: 'STRING', description: 'Filtro por tag. Ex: Lançamento, Meeting.' },
-        empreendimento: { type: 'STRING', description: 'Filtro por nome do empreendimento relacionado.' },
+        empreendimento: { type: 'STRING', description: 'Filtro por empreendimento vinculado ao evento (busca acento-insensível; também encontra eventos antigos que citam o empreendimento apenas no título). Use o nome como o usuário falou (ex: "Residencial Ingá").' },
         cidade:         { type: 'STRING', description: 'Filtro por cidade do evento (apenas admin pode usar). Para não-admin, a cidade do perfil do usuário é aplicada automaticamente — não é possível ver eventos de outras cidades.' },
         organizador:    { type: 'STRING', description: 'Filtro por nome do organizador responsável.' },
         group_by: {
@@ -448,7 +448,7 @@ async function executeQueryEvents(args, user) {
   };
 
   if (args.titulo) {
-    whereClauses.push(`ev.title ILIKE :titulo`);
+    whereClauses.push(`unaccent(ev.title) ILIKE unaccent(:titulo)`);
     replacements.titulo = `%${args.titulo}%`;
   }
   if (args.tag) {
@@ -456,7 +456,12 @@ async function executeQueryEvents(args, user) {
     replacements.tag = `%${args.tag}%`;
   }
   if (args.empreendimento) {
-    whereClauses.push(`ev.enterprise_name ILIKE :emp`);
+    // Acento-insensível ("inga" acha "Ingá") e cobre o LEGADO: eventos antigos
+    // não têm enterprise_name persistido — o vínculo aparecia só no título.
+    whereClauses.push(`(
+      unaccent(COALESCE(ev.enterprise_name, '')) ILIKE unaccent(:emp)
+      OR unaccent(ev.title) ILIKE unaccent(:emp)
+    )`);
     replacements.emp = `%${args.empreendimento}%`;
   }
   // Match de cidade normalizado (unaccent + collapse de pontuação/espaços).
