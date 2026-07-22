@@ -137,13 +137,16 @@ export async function listHistory(req, res) {
             paymentStatus,      // CSV: 'paid,pending'
             idreserva,
             empreendimento,     // texto exato (igual ao nome guardado em boleto_history)
-            dateFrom,           // ISO YYYY-MM-DD — filtra created_at >=
-            dateTo,             // ISO YYYY-MM-DD — filtra created_at <= 23:59
+            dateFrom,           // ISO YYYY-MM-DD — filtra a data escolhida em dateField >=
+            dateTo,             // ISO YYYY-MM-DD — filtra a data escolhida em dateField <= 23:59
+            dateField,          // 'created_at' (emissão, default) | 'paid_at' (pagamento)
             q,                  // busca livre em titular_nome OR nosso_numero OR seu_numero
         } = req.query;
 
         const { Op } = db.Sequelize;
         const where = {};
+        // Coluna de data a filtrar: emissão (created_at) ou pagamento (paid_at).
+        const dateCol = String(dateField) === 'paid_at' ? 'paid_at' : 'created_at';
 
         // Status emissão (multi via CSV ou string)
         if (status) {
@@ -164,11 +167,11 @@ export async function listHistory(req, res) {
             if (arr.length === 1) where.empreendimento = arr[0];
             else if (arr.length > 1) where.empreendimento = { [Op.in]: arr };
         }
-        // Faixa de datas em created_at
+        // Faixa de datas na coluna escolhida (created_at = emissão | paid_at = pagamento)
         if (dateFrom || dateTo) {
-            where.created_at = {};
-            if (dateFrom) where.created_at[Op.gte] = new Date(`${dateFrom}T00:00:00`);
-            if (dateTo)   where.created_at[Op.lte] = new Date(`${dateTo}T23:59:59.999`);
+            where[dateCol] = {};
+            if (dateFrom) where[dateCol][Op.gte] = new Date(`${dateFrom}T00:00:00`);
+            if (dateTo)   where[dateCol][Op.lte] = new Date(`${dateTo}T23:59:59.999`);
         }
         // Busca livre — titular, nosso número ou número documento
         if (q) {
@@ -272,11 +275,12 @@ export async function listHistory(req, res) {
 export async function getHistoryStats(req, res) {
     try {
         const {
-            status, paymentStatus, idreserva, empreendimento, dateFrom, dateTo, q,
+            status, paymentStatus, idreserva, empreendimento, dateFrom, dateTo, dateField, q,
         } = req.query;
 
         const { Op } = db.Sequelize;
         const where = {};
+        const dateCol = String(dateField) === 'paid_at' ? 'paid_at' : 'created_at';
 
         if (status) {
             const arr = String(status).split(',').map(s => s.trim()).filter(Boolean);
@@ -295,9 +299,9 @@ export async function getHistoryStats(req, res) {
             else if (arr.length > 1) where.empreendimento = { [Op.in]: arr };
         }
         if (dateFrom || dateTo) {
-            where.created_at = {};
-            if (dateFrom) where.created_at[Op.gte] = new Date(`${dateFrom}T00:00:00`);
-            if (dateTo)   where.created_at[Op.lte] = new Date(`${dateTo}T23:59:59.999`);
+            where[dateCol] = {};
+            if (dateFrom) where[dateCol][Op.gte] = new Date(`${dateFrom}T00:00:00`);
+            if (dateTo)   where[dateCol][Op.lte] = new Date(`${dateTo}T23:59:59.999`);
         }
         if (q) {
             const term = `%${String(q).trim()}%`;
@@ -414,6 +418,94 @@ export async function getHistoryStats(req, res) {
         return res.json(stats);
     } catch (err) {
         console.error('[BOLETO_STATS]', err);
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
+ * Série temporal pro Relatório: evolução dos boletos ao longo do tempo, com foco
+ * nos PAGOS (contagem + valor por período), e a linha de EMITIDOS como
+ * comparação. Diferente dos KPIs (foto do conjunto filtrado), aqui devolvemos a
+ * evolução período a período pra alimentar o gráfico.
+ *
+ * Query params:
+ *   - granularity: 'day' | 'month' (default 'month')
+ *   - dateFrom / dateTo: ISO YYYY-MM-DD — recorta a janela (pagos por paid_at,
+ *     emitidos por created_at).
+ *   - empreendimento: CSV de nomes exatos (opcional).
+ *
+ * Retorno: { granularity, periods: [{ period, pagos_qty, pagos_valor,
+ *   emitidos_qty, emitidos_valor }], totals: { ... } }
+ */
+export async function getHistoryTimeseries(req, res) {
+    try {
+        const { granularity, dateFrom, dateTo, empreendimento } = req.query;
+        const gran = String(granularity) === 'day' ? 'day' : 'month';
+
+        // Monta filtros comuns via replacements (sem interpolar string do usuário).
+        const empArr = empreendimento
+            ? String(empreendimento).split(',').map(s => s.trim()).filter(Boolean)
+            : null;
+
+        // Helper que roda a agregação por período pra uma coluna de data + condição.
+        async function aggregate({ dateCol, extraSql }) {
+            const conds = [];
+            const repl = {};
+            conds.push(`${dateCol} IS NOT NULL`);
+            if (extraSql) conds.push(extraSql);
+            if (dateFrom) { conds.push(`${dateCol} >= :dateFrom`); repl.dateFrom = new Date(`${dateFrom}T00:00:00`); }
+            if (dateTo)   { conds.push(`${dateCol} <= :dateTo`);   repl.dateTo = new Date(`${dateTo}T23:59:59.999`); }
+            if (empArr && empArr.length) { conds.push(`empreendimento IN (:empArr)`); repl.empArr = empArr; }
+
+            const fmt = gran === 'day' ? 'YYYY-MM-DD' : 'YYYY-MM';
+            const [rows] = await db.sequelize.query(`
+                SELECT to_char(date_trunc('${gran}', ${dateCol}), '${fmt}') AS period,
+                       COUNT(*)::int AS qty,
+                       COALESCE(SUM(valor), 0)::float AS valor
+                  FROM boleto_history
+                 WHERE ${conds.join(' AND ')}
+              GROUP BY 1
+              ORDER BY 1 ASC
+            `, { replacements: repl });
+            return rows;
+        }
+
+        const [pagos, emitidos] = await Promise.all([
+            aggregate({ dateCol: 'paid_at', extraSql: `payment_status = 'paid'` }),
+            aggregate({ dateCol: 'created_at', extraSql: `status = 'success'` }),
+        ]);
+
+        // Une os períodos das duas séries num eixo único ordenado.
+        const byPeriod = new Map();
+        const ensure = (p) => {
+            if (!byPeriod.has(p)) {
+                byPeriod.set(p, { period: p, pagos_qty: 0, pagos_valor: 0, emitidos_qty: 0, emitidos_valor: 0 });
+            }
+            return byPeriod.get(p);
+        };
+        for (const r of pagos) {
+            const b = ensure(r.period);
+            b.pagos_qty = Number(r.qty) || 0;
+            b.pagos_valor = Number(r.valor) || 0;
+        }
+        for (const r of emitidos) {
+            const b = ensure(r.period);
+            b.emitidos_qty = Number(r.qty) || 0;
+            b.emitidos_valor = Number(r.valor) || 0;
+        }
+        const periods = Array.from(byPeriod.values()).sort((a, b) => a.period.localeCompare(b.period));
+
+        const totals = periods.reduce((acc, p) => {
+            acc.pagos_qty += p.pagos_qty;
+            acc.pagos_valor += p.pagos_valor;
+            acc.emitidos_qty += p.emitidos_qty;
+            acc.emitidos_valor += p.emitidos_valor;
+            return acc;
+        }, { pagos_qty: 0, pagos_valor: 0, emitidos_qty: 0, emitidos_valor: 0 });
+
+        return res.json({ granularity: gran, periods, totals });
+    } catch (err) {
+        console.error('[BOLETO_TIMESERIES]', err);
         return res.status(500).json({ error: err.message });
     }
 }

@@ -9,6 +9,7 @@ import {
     updateSettings,
     listHistory,
     getHistoryStats,
+    getHistoryTimeseries,
     getHistoryFacets,
     getHistoryItem,
     listHistoryEvents,
@@ -52,6 +53,7 @@ router.post('/whatsapp-template/sync', authenticate, requireAdmin, createBoletoW
 // ── Histórico — usuário autenticado ───────────────────────────────────────────
 router.get('/history', authenticate, listHistory);
 router.get('/history-stats', authenticate, getHistoryStats);
+router.get('/history-timeseries', authenticate, getHistoryTimeseries);
 router.get('/history-facets', authenticate, getHistoryFacets);
 router.get('/history/:id', authenticate, getHistoryItem);
 router.get('/history/:id/events', authenticate, listHistoryEvents);
