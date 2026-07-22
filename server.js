@@ -42,6 +42,8 @@ import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
 import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
 import realEstateRoutes from './routes/realEstateRoutes.js';
 import realEstatePublicRoutes from './routes/realEstatePublicRoutes.js';
+import emeReportsRoutes from './routes/emeReportsRoutes.js';
+import emeReportsPublicRoutes from './routes/emeReportsPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import marketingApprovalRoutes from './routes/marketingApprovalRoutes.js';
@@ -81,6 +83,7 @@ import { ensureFinanceOverridesSchema } from './lib/ensureFinanceOverridesSchema
 import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
+import { ensureEmeReportsSchema } from './lib/ensureEmeReportsSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
@@ -98,6 +101,7 @@ import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
 import todoDigestScheduler from './scheduler/todoDigestScheduler.js';
+import reportPublicExpiryScheduler from './scheduler/reportPublicExpiryScheduler.js';
 import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
 import seedBolaoPublico from './services/bolao/seedBolaoPublico.js';
 import seedBolaoJapao from './services/bolao/seedBolaoJapao.js';
@@ -173,6 +177,10 @@ app.use('/api/marketing/public', marketingPublicRoutes);
 // parsers próprios + rate limit; segurança = token de convite de uso único).
 app.use('/api/realestate/public', realEstatePublicRoutes);
 
+// Link público de Relatórios da Eme — mesmo padrão (CORS aberto + rate limit;
+// segurança = token CSPRNG + vencimento obrigatório, 404 genérico, noindex).
+app.use('/api/reports/public', emeReportsPublicRoutes);
+
 // Webhook do Meta Lead Ads — precisa do raw body para validar o HMAC.
 app.use('/api/marketing/webhook', marketingWebhookRoutes);
 
@@ -211,6 +219,7 @@ app.use('/s', shortLinkRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
 app.use('/api/office-brain', officeBrainRoutes);
+app.use('/api/reports', emeReportsRoutes); // Relatórios da Eme (builder admin + view interna)
 app.use('/api/whatsapp-automations', whatsappAutomationRoutes);
 app.use('/api/eme-atende/public', emeAtendePublicRoutes); // intake de leads (X-Api-Key)
 app.use('/api/eme-atende', emeAtendeRoutes);              // admin (JWT + admin)
@@ -373,6 +382,7 @@ async function syncModelsAndPatches(fingerprint) {
   await ensureAcademyPostSync();
   await ensureMarketingCaptureSchema();
   await ensureEmeBrainSchema();
+  await ensureEmeReportsSchema();
   await ensureWhatsappAutomationSchema();
   await ensureEmeAtendeSeed();
   await ensureAlertSharesSchema();
@@ -453,6 +463,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_BOLETO_SITUACAO_APPLY')) boletoSituacaoApplyScheduler.start(); // 1min: aplica situações CV agendadas (delay lote Sienge)
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
   if (schedulerOn('ENABLE_TODO_DIGEST')) todoDigestScheduler.start(); // resumo diário do Microsoft To Do (07:00)
+  if (schedulerOn('ENABLE_REPORT_PUBLIC_EXPIRY')) reportPublicExpiryScheduler.start(); // links públicos de relatórios: aviso D-3 + revoga vencidos (08:00)
   if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
   if (schedulerOn('ENABLE_ACADEMY_RECERTIFY')) startAcademyRecertifyScheduler(); // recertificação periódica (expira certificado + reassign mandatory)
   if (schedulerOn('ENABLE_ACADEMY_ONBOARDING')) startAcademyOnboardingScheduler(); // aplica regras de onboarding (auto-atribui trilhas)

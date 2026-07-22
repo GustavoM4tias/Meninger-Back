@@ -141,6 +141,14 @@ import EmeReportDefine        from './eme/report.js';
 import EmeSettingDefine       from './eme/setting.js';
 import EmeConfigVersionDefine from './eme/configVersion.js';
 
+// Relatórios da Eme — relatórios customizados gerados por IA (eme_generated_*)
+import EmeGeneratedReportDefine            from './emeReports/generatedReport.js';
+import EmeGeneratedReportVersionDefine     from './emeReports/generatedReportVersion.js';
+import EmeGeneratedReportMessageDefine     from './emeReports/generatedReportMessage.js';
+import EmeGeneratedReportAccessDefine      from './emeReports/generatedReportAccess.js';
+import EmeGeneratedReportPublicLogDefine   from './emeReports/generatedReportPublicLog.js';
+import EmeGeneratedReportCustomBlockDefine from './emeReports/generatedReportCustomBlock.js';
+
 // Notificações
 import NotificationDefine from './notification.js';
 import NotificationPreferenceDefine from './notificationPreference.js';
@@ -367,6 +375,14 @@ db.EmeGlossaryTerm  = EmeGlossaryTermDefine(sequelize, DataTypes);
 db.EmeReport        = EmeReportDefine(sequelize, DataTypes);
 db.EmeSetting       = EmeSettingDefine(sequelize, DataTypes);
 db.EmeConfigVersion = EmeConfigVersionDefine(sequelize, DataTypes);
+
+// Relatórios da Eme (relatórios customizados gerados por IA)
+db.EmeGeneratedReport            = EmeGeneratedReportDefine(sequelize, DataTypes);
+db.EmeGeneratedReportVersion     = EmeGeneratedReportVersionDefine(sequelize, DataTypes);
+db.EmeGeneratedReportMessage     = EmeGeneratedReportMessageDefine(sequelize, DataTypes);
+db.EmeGeneratedReportAccess      = EmeGeneratedReportAccessDefine(sequelize, DataTypes);
+db.EmeGeneratedReportPublicLog   = EmeGeneratedReportPublicLogDefine(sequelize, DataTypes);
+db.EmeGeneratedReportCustomBlock = EmeGeneratedReportCustomBlockDefine(sequelize, DataTypes);
 
 // Notificações
 db.Notification           = NotificationDefine(sequelize, DataTypes);

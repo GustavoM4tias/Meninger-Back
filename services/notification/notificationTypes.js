@@ -70,6 +70,10 @@ export const NotificationType = {
 
     // To Do (Microsoft) — tarefas pessoais
     TODO_DAILY_DIGEST: 'todo.daily_digest',
+
+    // Relatórios da Eme (relatórios customizados gerados por IA)
+    REPORT_SHARED:          'report.shared',
+    REPORT_PUBLIC_EXPIRING: 'report.public.expiring',
 };
 
 export const NOTIFICATION_CATALOG = {
@@ -331,6 +335,27 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },
         // Comunicação oficial: a preferência é forçada (sempre chega ao destinatário).
+        userOptional: false,
+    },
+
+    // ── Relatórios da Eme ───────────────────────────────────────────────────────
+    [NotificationType.REPORT_SHARED]: {
+        label: 'Relatório compartilhado com você',
+        group: 'Relatórios',
+        description: 'Quando alguém compartilha um relatório da Eme com você.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.REPORT_PUBLIC_EXPIRING]: {
+        label: 'Link público de relatório vencendo',
+        group: 'Relatórios',
+        description: 'Aviso 3 dias antes de o link público de um relatório seu expirar, com opção de renovar.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        // Aviso de segurança do link público: sempre chega ao dono.
         userOptional: false,
     },
 
