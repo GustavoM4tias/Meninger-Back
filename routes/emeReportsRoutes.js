@@ -1,0 +1,302 @@
+// routes/emeReportsRoutes.js
+//
+// Relatórios da Eme (relatórios customizados gerados por IA).
+// Geração/edição: admin-only (alçada inicial). Visualização interna: dono,
+// admins e quem estiver na lista de acesso do relatório.
+
+import express from 'express';
+import { Op } from 'sequelize';
+import authenticate from '../middlewares/authMiddleware.js';
+import requireAdmin from '../middlewares/requireAdmin.js';
+import db from '../models/sequelize/index.js';
+import {
+  normalizeSpec, canEdit, canView, listForUser, publish, getPublishedPayload,
+  setInternalAccess, enablePublic, revokePublic, rotatePublicToken, renewPublic,
+  scanPii, publicExposureSummary,
+} from '../services/emeReports/ReportService.js';
+import { streamReportChat } from '../services/emeReports/ReportChatService.js';
+
+const router = express.Router();
+router.use(authenticate);
+
+// Rate limit do chat do builder (in-memory, mesmo padrão do office-chat)
+const _buckets = new Map();
+function rateLimitChat(req, res, next) {
+  const now = Date.now();
+  const arr = _buckets.get(req.user.id) || [];
+  while (arr.length && now - arr[0] > 60 * 1000) arr.shift();
+  if (arr.length >= 10) {
+    res.set('Retry-After', '60');
+    return res.status(429).json({ error: 'Muitas mensagens em sequência. Aguarde um instante.' });
+  }
+  arr.push(now);
+  _buckets.set(req.user.id, arr);
+  next();
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, arr] of _buckets) {
+    while (arr.length && now - arr[0] > 60 * 1000) arr.shift();
+    if (!arr.length) _buckets.delete(uid);
+  }
+}, 10 * 60 * 1000).unref?.();
+
+async function loadReport(req, res) {
+  const report = await db.EmeGeneratedReport.findByPk(req.params.id);
+  if (!report) {
+    res.status(404).json({ error: 'Relatório não encontrado.' });
+    return null;
+  }
+  return report;
+}
+
+// ── Listagem / CRUD ──────────────────────────────────────────────────────────
+
+router.get('/', async (req, res) => {
+  try {
+    const { own, shared } = await listForUser(req.user);
+    res.json({ own, shared, isAdmin: req.user.role === 'admin' });
+  } catch (err) {
+    console.error('[emeReports] list:', err);
+    res.status(500).json({ error: 'Falha ao listar relatórios.' });
+  }
+});
+
+router.post('/', requireAdmin, async (req, res) => {
+  try {
+    const report = await db.EmeGeneratedReport.create({
+      ownerId: req.user.id,
+      title: String(req.body?.title || 'Novo relatório').slice(0, 200),
+      dataMode: req.body?.data_mode === 'live' ? 'live' : 'fixed',
+    });
+    res.status(201).json(report);
+  } catch (err) {
+    console.error('[emeReports] create:', err);
+    res.status(500).json({ error: 'Falha ao criar relatório.' });
+  }
+});
+
+// Builder: relatório completo + thread da conversa
+router.get('/:id', async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  const messages = await db.EmeGeneratedReportMessage.findAll({
+    where: { reportId: report.id },
+    order: [['created_at', 'ASC']],
+    limit: 80,
+  });
+  const access = await db.EmeGeneratedReportAccess.findAll({ where: { reportId: report.id } });
+  res.json({ report, messages, access });
+});
+
+// Visualização (dono/admin/compartilhado): sempre a versão publicada
+router.get('/:id/view', async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!(await canView(report, req.user))) return res.status(403).json({ error: 'Sem permissão.' });
+  const isEditor = canEdit(report, req.user);
+  const payload = isEditor && report.status === 'draft'
+    ? { spec: report.spec, dataSnapshot: report.dataSnapshot, version: null, publishedAt: null }
+    : await getPublishedPayload(report);
+  res.json({
+    id: report.id,
+    title: report.title,
+    enterpriseName: report.enterpriseName,
+    periodStart: report.periodStart,
+    periodEnd: report.periodEnd,
+    dataMode: report.dataMode,
+    status: report.status,
+    visibility: report.visibility,
+    refreshedAt: report.refreshedAt,
+    canEdit: isEditor,
+    ...payload,
+  });
+});
+
+router.put('/:id', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  const patch = {};
+  if (req.body?.title) patch.title = String(req.body.title).slice(0, 200);
+  if (req.body?.spec) patch.spec = normalizeSpec(req.body.spec);
+  if (req.body?.data_mode && ['fixed', 'live'].includes(req.body.data_mode)) patch.dataMode = req.body.data_mode;
+  if ('period_start' in (req.body || {})) patch.periodStart = req.body.period_start || null;
+  if ('period_end' in (req.body || {})) patch.periodEnd = req.body.period_end || null;
+  if ('enterprise_name' in (req.body || {})) patch.enterpriseName = req.body.enterprise_name || null;
+  await report.update(patch);
+  res.json(report);
+});
+
+router.delete('/:id', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  await db.EmeGeneratedReportMessage.destroy({ where: { reportId: report.id } });
+  await db.EmeGeneratedReportAccess.destroy({ where: { reportId: report.id } });
+  await db.EmeGeneratedReportPublicLog.destroy({ where: { reportId: report.id } });
+  await db.EmeGeneratedReportVersion.destroy({ where: { reportId: report.id } });
+  await report.destroy();
+  res.json({ ok: true });
+});
+
+// ── Chat do builder (SSE) ────────────────────────────────────────────────────
+
+router.post('/:id/chat', requireAdmin, rateLimitChat, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  const message = String(req.body?.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'Mensagem obrigatória.' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+  req.on('close', () => clearInterval(heartbeat));
+
+  try {
+    await streamReportChat({
+      req, res,
+      user: req.user,
+      report,
+      userMessage: message,
+      selectedBlockId: req.body?.selected_block_id || null,
+    });
+  } catch (err) {
+    console.error('[emeReports] chat:', err);
+    try { res.write(`data: ${JSON.stringify({ type: 'error', message: 'Erro inesperado.' })}\n\n`); } catch { /* conexão fechada */ }
+  } finally {
+    clearInterval(heartbeat);
+    res.end();
+  }
+});
+
+// ── Publicação / versões ─────────────────────────────────────────────────────
+
+router.post('/:id/publish', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  if (!(report.spec?.blocks || []).length) return res.status(400).json({ error: 'Relatório vazio — monte-o com a Eme antes de publicar.' });
+  const version = await publish(report, req.user);
+  res.json({ ok: true, version });
+});
+
+// ── Compartilhamento interno ─────────────────────────────────────────────────
+
+router.post('/:id/share', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  const userIds = (req.body?.user_ids || []).map(Number).filter(Boolean);
+  const positions = (req.body?.positions || []).map(String).filter(Boolean);
+  await setInternalAccess(report, { userIds, positions }, req.user);
+  res.json({ ok: true });
+});
+
+// Opções para o modal de compartilhamento
+router.get('/:id/share-options', requireAdmin, async (req, res) => {
+  const users = await db.User.findAll({
+    attributes: ['id', 'username', 'position'],
+    where: { role: { [Op.ne]: null } },
+    order: [['username', 'ASC']],
+    limit: 500,
+  });
+  const positions = [...new Set(users.map((u) => u.position).filter(Boolean))].sort();
+  res.json({ users, positions });
+});
+
+// ── Link público (segurança máxima) ──────────────────────────────────────────
+
+// Passo 1+2 do modal: resumo do que será exposto + scan de PII
+router.get('/:id/public-check', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  res.json({
+    summary: publicExposureSummary(report),
+    piiFindings: scanPii(report),
+    currentToken: report.publicToken ? true : false,
+    expiresAt: report.publicExpiresAt,
+  });
+});
+
+router.post('/:id/public', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  if (report.status !== 'published') return res.status(400).json({ error: 'Publique o relatório antes de gerar o link público.' });
+  if (req.body?.confirmed !== true) return res.status(400).json({ error: 'Confirmação obrigatória.' });
+
+  // PII detectada exige reconhecimento explícito extra
+  const findings = scanPii(report);
+  if (findings.length && req.body?.pii_acknowledged !== true) {
+    return res.status(409).json({ error: 'Conteúdo sensível detectado.', piiFindings: findings });
+  }
+
+  const token = await enablePublic(report, { expiresInDays: req.body?.expires_in_days });
+  res.json({ ok: true, token, expiresAt: report.publicExpiresAt });
+});
+
+router.post('/:id/public/rotate', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user) || report.visibility !== 'public') return res.status(403).json({ error: 'Sem permissão.' });
+  const token = await rotatePublicToken(report);
+  res.json({ ok: true, token });
+});
+
+router.post('/:id/public/renew', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user) || report.visibility !== 'public') return res.status(403).json({ error: 'Sem permissão.' });
+  await renewPublic(report, { expiresInDays: req.body?.expires_in_days });
+  res.json({ ok: true, expiresAt: report.publicExpiresAt });
+});
+
+router.delete('/:id/public', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  await revokePublic(report, { downgradeTo: req.body?.downgrade_to === 'private' ? 'private' : 'internal' });
+  res.json({ ok: true });
+});
+
+// Auditoria do link público (dono)
+router.get('/:id/public-log', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  const logs = await db.EmeGeneratedReportPublicLog.findAll({
+    where: { reportId: report.id },
+    order: [['created_at', 'DESC']],
+    limit: 200,
+  });
+  res.json({ views: report.publicViews, logs });
+});
+
+// ── Painel admin: blocos custom (pipeline de promoção) ───────────────────────
+
+router.get('/admin/custom-blocks', requireAdmin, async (req, res) => {
+  const rows = await db.EmeGeneratedReportCustomBlock.findAll({
+    order: [['use_count', 'DESC'], ['updated_at', 'DESC']],
+    limit: 200,
+  });
+  res.json(rows);
+});
+
+router.put('/admin/custom-blocks/:blockId', requireAdmin, async (req, res) => {
+  const row = await db.EmeGeneratedReportCustomBlock.findByPk(req.params.blockId);
+  if (!row) return res.status(404).json({ error: 'Bloco não encontrado.' });
+  const patch = {};
+  if (['em_uso', 'promovido', 'descartado'].includes(req.body?.status)) patch.status = req.body.status;
+  if ('review_note' in (req.body || {})) patch.reviewNote = req.body.review_note || null;
+  await row.update(patch);
+  res.json(row);
+});
+
+export default router;
