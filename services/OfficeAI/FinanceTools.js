@@ -40,7 +40,7 @@ function resolvePeriod(args) {
 // ─── query_custos ────────────────────────────────────────────────────────────
 registerTool({
     name: 'query_custos',
-    description: 'Consulta os CUSTOS do Financeiro (parcelas pagas, ao vivo do Sienge — mesma fonte da tela /financeiro/custos): total do período, quebra por empreendimento (centro de custo), por departamento ou por categoria, e detalhe das parcelas de um empreendimento. Use quando o usuário perguntar "quanto gastamos", "custos de <empreendimento/departamento>", "maiores custos do mês". O usuário só enxerga os departamentos que a alçada dele permite (regra aplicada automaticamente). Período padrão: mês atual.',
+    description: 'Consulta os CUSTOS FINANCEIROS pagos (parcelas efetivamente pagas, ao vivo do Sienge — mesma fonte da tela /financeiro/custos): total do período, quebra por empreendimento (centro de custo), por departamento ou por categoria, e detalhe das parcelas de um empreendimento. Use quando o usuário perguntar "quanto gastamos", "quanto foi pago", "maiores custos/despesas do mês", "custos por departamento". NÃO use para "Custos Menin × Cliente" / custos de VENDA de um produto (comissão, ITBI, cartório, CCA, documentação repassada ao cliente) — isso é da Ficha Comercial (get_condition_sheet). Regra prática: pergunta sobre DESPESA PAGA/orçamento → aqui; pergunta sobre o que compõe a condição comercial de um empreendimento → ficha. O usuário só enxerga os departamentos que a alçada dele permite (regra aplicada automaticamente). Período padrão: mês atual.',
     parameters: {
         type: 'object',
         properties: {
