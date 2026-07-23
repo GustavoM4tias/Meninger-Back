@@ -24,6 +24,7 @@ import { getCatalogEntry, NotificationType } from './notificationTypes.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
+import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
 
 const { Notification, NotificationPreference, User, WhatsappMessage } = db;
 
@@ -145,6 +146,28 @@ async function dispatchWhatsApp({ user, type, title, body, link, notificationId,
     // dry-run: registra como dry_run e não chama API
     if (!cfg?.active || cfg?.dry_run) {
         return WhatsappMessage.create({ ...baseMsg, status: 'dry_run' });
+    }
+
+    // 💰 Janela de serviço aberta (usuário nos escreveu há <24h) → texto livre
+    // GRATUITO em vez de template pago. Mesmo conteúdo; qualquer falha aqui cai
+    // no fluxo de template abaixo (comportamento histórico intacto).
+    try {
+        const win = await WhatsAppWindowService.getServiceWindow(user.whatsapp_phone);
+        if (win.open) {
+            let freeBody = title + (body ? `\n${body}` : '');
+            if (link && /^https?:\/\//i.test(link)) freeBody += `\n${link}`;
+            const { id } = await WhatsAppService.sendText({ to: user.whatsapp_phone, body: freeBody });
+            return WhatsappMessage.create({
+                ...baseMsg,
+                type: 'text',
+                body: freeBody,
+                status: 'sent',
+                meta_message_id: id,
+                sent_at: new Date(),
+            });
+        }
+    } catch (err) {
+        console.warn('[NotificationService] envio livre na janela 24h falhou — caindo pro template:', err?.message);
     }
 
     // valida template

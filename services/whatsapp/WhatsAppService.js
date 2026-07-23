@@ -318,6 +318,39 @@ async function sendImage({ to, link, caption = null }) {
 }
 
 /**
+ * Envia documento (PDF etc.) LIVRE — só funciona dentro da janela de 24h.
+ * Aceita media_id (upload prévio via uploadMessageMedia) ou link público.
+ * Usado pelo boleto quando a janela de serviço está aberta (envio gratuito).
+ */
+async function sendDocument({ to, mediaId = null, link = null, filename = null, caption = null }) {
+    const phone = normalizePhone(to);
+    if (!phone) throw new CloudApiError('Telefone inválido', { code: 'BAD_PHONE' });
+    if (!mediaId && !link) throw new CloudApiError('mediaId ou link obrigatório', { code: 'NO_MEDIA' });
+
+    const { client, cfg } = await getAxiosClient();
+    try {
+        const { data } = await client.post(`/${cfg.phone_number_id}/messages`, {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: phone,
+            type: 'document',
+            document: {
+                ...(mediaId ? { id: mediaId } : { link }),
+                ...(filename ? { filename } : {}),
+                ...(caption ? { caption } : {}),
+            },
+        });
+        return { id: data?.messages?.[0]?.id || null, raw: data };
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            apiErr?.message || err.message || 'Falha no envio de documento',
+            { status: err.response?.status, code: apiErr?.code, details: err.response?.data }
+        );
+    }
+}
+
+/**
  * Lista templates da conta WABA na Meta (paginado retornando até 200).
  * @returns {Promise<Array>}
  */
@@ -662,6 +695,7 @@ export default {
     sendTemplate,
     sendText,
     sendImage,
+    sendDocument,
     fetchTemplates,
     createTemplate,
     deleteTemplate,

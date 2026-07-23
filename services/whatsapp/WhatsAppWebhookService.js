@@ -97,8 +97,13 @@ async function handleStatusUpdate(s) {
         update.error_message = s.errors?.[0]?.title || s.errors?.[0]?.message || 'failed';
     }
 
-    if (s.pricing?.category) {
-        update.cost_category = s.pricing.category; // utility/marketing/authentication/service
+    // Pricing COMPLETO — antes só a categoria era salva e billable/model/type
+    // eram descartados, impossibilitando distinguir mensagem cobrada de grátis.
+    if (s.pricing) {
+        if (s.pricing.category)             update.cost_category = s.pricing.category; // utility/marketing/authentication/service
+        if (s.pricing.billable !== undefined) update.billable = !!s.pricing.billable;
+        if (s.pricing.pricing_model)        update.pricing_model = s.pricing.pricing_model; // PMP/CBP
+        if (s.pricing.type)                 update.pricing_type = s.pricing.type; // regular/free_customer_service/free_entry_point
     }
 
     await row.update(update);

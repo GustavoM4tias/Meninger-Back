@@ -246,15 +246,21 @@ async function handleIncomingMessage(m, fromPhone, profileName) {
     scheduleAI(conversation.id, debounce);
 }
 
-async function doHandoff({ conversation, lead, flow, reason }) {
+async function doHandoff({ conversation, lead, flow, reason, message = null }) {
     await conversation.update({ state: 'human', handoff_reason: reason });
     await lead?.update({ status: 'handoff' });
     await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'handoff', { reason });
-    const msg = flow?.handoff?.message
+    const msg = message
+        || flow?.handoff?.message
         || 'Perfeito! Vou te conectar com um de nossos consultores, que já continua o atendimento por aqui. Um instante! 😉';
     await EmeAtendeMessenger.sendText({ conversation, body: msg });
     // Fase 2: notificar corretor via NotificationService (in-app/e-mail/WhatsApp)
 }
+
+// Falha/silêncio da IA NUNCA pode virar silêncio ao lead: pede desculpa e passa
+// para humano (estado 'human' → um consultor assume; perder o lead é pior que
+// um handoff a mais).
+const AI_FAILURE_MSG = 'Desculpe, tive um probleminha técnico agora. 🙏 Já estou te conectando com um de nossos consultores para continuar o atendimento por aqui!';
 
 // ── Rodada de IA ─────────────────────────────────────────────────────────────
 // Contexto do negócio = automático (CV + ficha comercial, ao vivo, via
@@ -348,8 +354,15 @@ async function fireAI(conversationId) {
             },
         });
     } catch (err) {
+        // Gemini fora (todas as chaves/retries esgotados) → lead NÃO fica sem
+        // resposta: desculpa + handoff para humano assumir.
         console.error(`[eme-atende/engine] Gemini falhou conv=${conversation.id}:`, err?.message);
         await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'ai_error', { error: err?.message });
+        try {
+            await doHandoff({ conversation, lead, flow, reason: `falha da IA: ${err?.message || 'erro'}`, message: AI_FAILURE_MSG });
+        } catch (e2) {
+            console.error(`[eme-atende/engine] fallback handoff falhou conv=${conversation.id}:`, e2?.message);
+        }
         return;
     }
 
@@ -365,13 +378,28 @@ async function fireAI(conversationId) {
     }
 
     if (actions.handoff !== null) {
+        // IA transferiu mas não escreveu a despedida → manda a mensagem padrão
+        // do fluxo (sem isso o lead ficava mudo até o humano responder).
+        if (!result?.text) {
+            const msg = flow?.handoff?.message
+                || 'Perfeito! Vou te conectar com um de nossos consultores, que já continua o atendimento por aqui. Um instante! 😉';
+            await EmeAtendeMessenger.sendText({ conversation, body: msg });
+        }
         await conversation.update({ state: 'human', handoff_reason: actions.handoff });
         await lead?.update({ status: 'handoff' });
         await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'handoff', { reason: actions.handoff, by: 'ai' });
     } else if (actions.close !== null) {
+        if (!result?.text) {
+            await EmeAtendeMessenger.sendText({ conversation, body: 'Tudo bem! Obrigada pelo contato — qualquer coisa é só chamar por aqui. 😊' });
+        }
         await conversation.update({ state: 'closed' });
         await lead?.update({ status: 'closed' });
         await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'conversation_closed', { reason: actions.close, by: 'ai' });
+    } else if (!result?.text) {
+        // Sem texto e sem ação (ex.: bloqueio de safety devolveu vazio) →
+        // desculpa + handoff. Silêncio aqui era perda de lead invisível.
+        await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'ai_empty_fallback', {});
+        await doHandoff({ conversation, lead, flow, reason: 'IA retornou resposta vazia', message: AI_FAILURE_MSG });
     }
 }
 
