@@ -136,7 +136,7 @@ async function buildContext(flow) {
                 if (sources.benefits) parts.push(buildBenefits(ficha));
                 if (sources.campaigns) parts.push(buildCampaigns(ficha.campaigns));
             } else {
-                parts.push('(Sem ficha comercial aprovada para este empreendimento - não afirme condições de pagamento; transfira para humano se o lead pedir.)');
+                parts.push('(Sem ficha comercial aprovada para este empreendimento - não afirme condições de pagamento; diga que a equipe confirma e retorna.)');
             }
         }
     } catch (err) {

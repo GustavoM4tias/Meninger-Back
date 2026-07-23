@@ -14,18 +14,13 @@ export async function ensureEmeAtendeSeed() {
             system_prompt:
                 'Você é a Eme, assistente virtual da construtora Menin Engenharia. '
                 + 'Seu papel é dar as boas-vindas ao lead, entender o que ele procura '
-                + '(qual empreendimento, tamanho, orçamento aproximado, prazo) e encaminhar '
-                + 'para um consultor quando houver interesse real. Seja calorosa, objetiva e profissional.',
+                + '(qual empreendimento, tamanho, orçamento aproximado, prazo) e registrar '
+                + 'o interesse. Seja calorosa, objetiva e profissional.',
             business_context: null,
             opener_template: null, // definir quando o template for aprovado na Meta
             opener_language: 'pt_BR',
             opener_variables: [],
-            triggers: [
-                { match: 'keyword', value: 'corretor', action: 'handoff' },
-                { match: 'keyword', value: 'atendente', action: 'handoff' },
-                { match: 'keyword', value: 'falar com alguém', action: 'handoff' },
-            ],
-            handoff: {},
+            triggers: [],
             settings: {},
         });
         console.log('[eme-atende/seed] fluxo "Padrão" criado.');

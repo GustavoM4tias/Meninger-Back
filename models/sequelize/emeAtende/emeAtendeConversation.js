@@ -1,7 +1,7 @@
 // models/sequelize/emeAtende/emeAtendeConversation.js
 //
-// Conversa da Eme Atende com um lead. state controla quem responde:
-// bot (IA) | human (corretor assumiu, IA silencia) | closed.
+// Conversa da Eme Atende com um lead. state controla o fluxo:
+// bot (IA responde) | closed (encerrada). Sem atendimento humano.
 
 import { Model } from 'sequelize';
 
@@ -14,7 +14,6 @@ export default (sequelize, DataTypes) => {
         last_inbound_at: { type: DataTypes.DATE, allowNull: true },  // janela de 24h
         last_outbound_at: { type: DataTypes.DATE, allowNull: true },
         ai_messages_count: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-        handoff_reason: { type: DataTypes.TEXT, allowNull: true },
         lead_id: { type: DataTypes.INTEGER, allowNull: true },
         flow_id: { type: DataTypes.INTEGER, allowNull: true },
     }, {
