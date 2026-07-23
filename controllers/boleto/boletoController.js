@@ -148,6 +148,34 @@ export async function listHistory(req, res) {
         // Coluna de data a filtrar: emissão (created_at) ou pagamento (paid_at).
         const dateCol = String(dateField) === 'paid_at' ? 'paid_at' : 'created_at';
 
+        // ── Ordenação (whitelist) ──────────────────────────────────────────────
+        // Chaves da UI → atributo do model. Default: emissão mais recente primeiro.
+        const SORT_MAP = {
+            reserva: 'idreserva',
+            titular: 'titular_nome',
+            valor: 'valor',
+            vencimento: 'vencimento',
+            status: 'status',
+            pagamento: 'payment_status',
+            data: 'createdAt',
+        };
+        const sortKey = SORT_MAP[String(req.query.sortBy || '')] || 'createdAt';
+        const sortDir = String(req.query.sortDir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+        const NUMERIC_SORT = new Set(['idreserva', 'valor']);
+        const DATE_SORT = new Set(['vencimento', 'createdAt']);
+        // Comparador para o caminho agrupado (ordena em memória sobre toJSON()).
+        const sortRows = (list) => list.sort((a, b) => {
+            const dir = sortDir === 'ASC' ? 1 : -1;
+            let va = sortKey === 'createdAt' ? (a.createdAt ?? a.created_at) : a[sortKey];
+            let vb = sortKey === 'createdAt' ? (b.createdAt ?? b.created_at) : b[sortKey];
+            if (NUMERIC_SORT.has(sortKey)) { va = Number(va) || 0; vb = Number(vb) || 0; }
+            else if (DATE_SORT.has(sortKey)) { va = va ? new Date(va).getTime() : 0; vb = vb ? new Date(vb).getTime() : 0; }
+            else { va = String(va ?? '').toLowerCase(); vb = String(vb ?? '').toLowerCase(); }
+            if (va < vb) return -dir;
+            if (va > vb) return dir;
+            return (Number(b.id) || 0) - (Number(a.id) || 0); // desempate estável
+        });
+
         // Status emissão (multi via CSV ou string)
         if (status) {
             const arr = String(status).split(',').map(s => s.trim()).filter(Boolean);
@@ -246,8 +274,8 @@ export async function listHistory(req, res) {
                     const j = r.toJSON();
                     j.attempts_count = attemptsByReserva.get(Number(r.idreserva)) || 1;
                     return j;
-                })
-                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                });
+            sortRows(filtered);
 
             const total = filtered.length;
             const rows = filtered.slice(offset, offset + Number(limit));
@@ -256,7 +284,7 @@ export async function listHistory(req, res) {
 
         const { count, rows } = await db.BoletoHistory.findAndCountAll({
             where,
-            order: [['created_at', 'DESC']],
+            order: [[sortKey, sortDir], ['id', 'DESC']],
             limit: Number(limit),
             offset,
         });
