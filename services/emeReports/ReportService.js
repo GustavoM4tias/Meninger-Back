@@ -15,11 +15,11 @@ import { NotificationType } from '../notification/notificationTypes.js';
 
 // ── Spec helpers ─────────────────────────────────────────────────────────────
 
-const KNOWN_BLOCK_TYPES = new Set([
+export const KNOWN_BLOCK_TYPES = new Set([
   'hero', 'section-header', 'narrative', 'stat-row', 'big-number', 'progress-goal',
-  'comparison', 'chart-bar', 'chart-line', 'chart-donut', 'chart-funnel', 'table',
-  'timeline', 'highlight-list', 'insight-box', 'image', 'divider', 'note', 'footer',
-  'custom-html',
+  'comparison', 'chart-bar', 'chart-line', 'chart-donut', 'chart-funnel', 'gauge',
+  'ranking', 'map', 'table', 'timeline', 'highlight-list', 'insight-box', 'image',
+  'divider', 'note', 'footer', 'custom-html',
 ]);
 
 // Sanitização defensiva do custom-html no servidor (o front re-sanitiza com

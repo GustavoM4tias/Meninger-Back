@@ -19,6 +19,9 @@ import { streamReportChat } from '../services/emeReports/ReportChatService.js';
 const router = express.Router();
 router.use(authenticate);
 
+// Temas visuais aceitos (espelha front: components/Reports/themes.js)
+const THEMES = ['classic', 'modern', 'executive', 'vibrant', 'nature', 'minimal'];
+
 // Rate limit do chat do builder (in-memory, mesmo padrão do office-chat)
 const _buckets = new Map();
 function rateLimitChat(req, res, next) {
@@ -106,6 +109,7 @@ router.get('/:id/view', async (req, res) => {
     periodStart: report.periodStart,
     periodEnd: report.periodEnd,
     dataMode: report.dataMode,
+    theme: report.theme,
     status: report.status,
     visibility: report.visibility,
     refreshedAt: report.refreshedAt,
@@ -121,6 +125,7 @@ router.put('/:id', requireAdmin, async (req, res) => {
   const patch = {};
   if (req.body?.title) patch.title = String(req.body.title).slice(0, 200);
   if (req.body?.spec) patch.spec = normalizeSpec(req.body.spec);
+  if (req.body?.theme && THEMES.includes(req.body.theme)) patch.theme = req.body.theme;
   if (req.body?.data_mode && ['fixed', 'live'].includes(req.body.data_mode)) patch.dataMode = req.body.data_mode;
   if ('period_start' in (req.body || {})) patch.periodStart = req.body.period_start || null;
   if ('period_end' in (req.body || {})) patch.periodEnd = req.body.period_end || null;
@@ -164,7 +169,7 @@ router.post('/:id/chat', requireAdmin, rateLimitChat, async (req, res) => {
       user: req.user,
       report,
       userMessage: message,
-      selectedBlockId: req.body?.selected_block_id || null,
+      selectedBlockIds: Array.isArray(req.body?.selected_block_ids) ? req.body.selected_block_ids : [],
     });
   } catch (err) {
     console.error('[emeReports] chat:', err);

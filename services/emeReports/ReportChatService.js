@@ -67,6 +67,103 @@ const REPORT_APPLY_DECLARATION = {
   },
 };
 
+// Tool de ANÁLISE: agrupa/soma/ordena os registros já trazidos por uma tool de
+// dados, sem nova ida ao banco. É o que permite responder "de onde vêm os
+// leads", "qual etapa perde mais", "que origem cresceu" sem reconsultar.
+const REPORT_ANALYZE_DECLARATION = {
+  name: 'report_analyze_data',
+  description: 'Analisa os registros retornados por uma consulta anterior desta conversa: agrupa por um campo, aplica uma métrica e ordena. Use para achar padrões (origem, período, etapa, responsável) antes de montar um bloco. Não vai ao banco - trabalha sobre o resultado já buscado.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      source_tool: { type: 'STRING', description: 'Nome da tool cujo resultado deve ser analisado (ex.: query_leads)' },
+      group_by: { type: 'STRING', description: 'Campo pelo qual agrupar (ex.: origem, situacao, empreendimento, created_at)' },
+      metric: { type: 'STRING', description: 'count (padrão) | sum | avg' },
+      metric_field: { type: 'STRING', description: 'Campo numérico para sum/avg' },
+      date_granularity: { type: 'STRING', description: 'Quando group_by for data: day | week | month' },
+      top: { type: 'NUMBER', description: 'Quantos grupos retornar (padrão 10)' },
+    },
+    required: ['source_tool', 'group_by'],
+  },
+};
+
+// Extrai a lista de registros de um resultado de tool (formatos variam).
+function extractRows(result) {
+  if (!result || typeof result !== 'object') return [];
+  for (const key of ['rows', 'data', 'items', 'list', 'leads', 'reservas', 'precadastros', 'results']) {
+    if (Array.isArray(result[key])) return result[key];
+  }
+  const firstArray = Object.values(result).find((v) => Array.isArray(v) && v.length && typeof v[0] === 'object');
+  return firstArray || [];
+}
+
+function bucketDate(value, granularity) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  if (granularity === 'month') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  if (granularity === 'week') {
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return monday.toISOString().slice(0, 10);
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+export function analyzeRows(rows, { group_by, metric = 'count', metric_field, date_granularity, top = 10 }) {
+  if (!rows.length) return { error: 'Nenhum registro disponível dessa consulta para analisar.' };
+  const sample = rows[0];
+  if (!(group_by in sample)) {
+    return {
+      error: `Campo "${group_by}" não existe nos registros.`,
+      availableFields: Object.keys(sample).slice(0, 40),
+    };
+  }
+
+  const groups = new Map();
+  for (const row of rows) {
+    let key = row[group_by];
+    if (key === null || key === undefined || key === '') key = '(não informado)';
+    else if (date_granularity) key = bucketDate(key, date_granularity);
+    else key = String(key);
+
+    const g = groups.get(key) || { count: 0, sum: 0 };
+    g.count += 1;
+    if (metric_field != null) {
+      const n = Number(row[metric_field]);
+      if (Number.isFinite(n)) g.sum += n;
+    }
+    groups.set(key, g);
+  }
+
+  let items = [...groups.entries()].map(([label, g]) => ({
+    label,
+    value: metric === 'sum' ? g.sum : metric === 'avg' ? (g.count ? g.sum / g.count : 0) : g.count,
+    count: g.count,
+  }));
+
+  // Série temporal mantém ordem cronológica; o resto ordena por valor
+  if (date_granularity) items.sort((a, b) => String(a.label).localeCompare(String(b.label)));
+  else items.sort((a, b) => b.value - a.value);
+
+  const total = items.reduce((s, i) => s + i.value, 0);
+  const limited = date_granularity ? items : items.slice(0, top);
+
+  return {
+    groupBy: group_by,
+    metric,
+    total: Math.round(total * 100) / 100,
+    groupCount: items.length,
+    items: limited.map((i) => ({
+      ...i,
+      value: Math.round(i.value * 100) / 100,
+      share: total ? Math.round((i.value / total) * 1000) / 10 : 0,
+    })),
+    // Leitura pronta para a Eme usar no texto de análise
+    topLabel: limited[0]?.label ?? null,
+    topShare: total && limited[0] ? Math.round((limited[0].value / total) * 1000) / 10 : null,
+  };
+}
+
 function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
@@ -130,7 +227,37 @@ function summarizeForGemini(result) {
 const MAX_TOOL_ROUNDS = 15;
 const HISTORY_LIMIT = 30;
 
-export async function streamReportChat({ req, res, user, report, userMessage, selectedBlockId }) {
+// Cache dos REGISTROS BRUTOS por relatório, para report_analyze_data cruzar os
+// dados sem reconsultar o banco. Em memória, com TTL — se expirar, a Eme
+// simplesmente busca de novo.
+const RAW_TTL_MS = 30 * 60 * 1000;
+const _rawCache = new Map(); // reportId -> { at, byTool: { [toolName]: rows } }
+
+function putRaw(reportId, toolName, rows) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  const entry = _rawCache.get(reportId) || { at: Date.now(), byTool: {} };
+  entry.at = Date.now();
+  entry.byTool[toolName] = rows.slice(0, 5000); // teto de memória
+  _rawCache.set(reportId, entry);
+}
+function getRaw(reportId, toolName) {
+  const entry = _rawCache.get(reportId);
+  if (!entry || Date.now() - entry.at > RAW_TTL_MS) return null;
+  return entry.byTool[toolName] || null;
+}
+function listRawTools(reportId) {
+  const entry = _rawCache.get(reportId);
+  if (!entry || Date.now() - entry.at > RAW_TTL_MS) return [];
+  return Object.keys(entry.byTool);
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of _rawCache) {
+    if (now - entry.at > RAW_TTL_MS) _rawCache.delete(id);
+  }
+}, 10 * 60 * 1000).unref?.();
+
+export async function streamReportChat({ req, res, user, report, userMessage, selectedBlockIds = [] }) {
   // Histórico da thread do relatório
   const prior = await db.EmeGeneratedReportMessage.findAll({
     where: { reportId: report.id },
@@ -144,14 +271,14 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
 
   await db.EmeGeneratedReportMessage.create({ reportId: report.id, role: 'user', content: userMessage });
 
-  const selectedBlock = selectedBlockId
-    ? (report.spec?.blocks || []).find((b) => b.id === selectedBlockId) || null
-    : null;
+  const selectedBlocks = selectedBlockIds.length
+    ? (report.spec?.blocks || []).filter((b) => selectedBlockIds.includes(b.id))
+    : [];
 
-  const systemPrompt = buildReportSystemPrompt({ user, report, selectedBlock });
+  const systemPrompt = buildReportSystemPrompt({ user, report, selectedBlocks });
 
   const dataDeclarations = OFFICE_TOOL_DECLARATIONS.filter((d) => DATA_TOOL_NAMES.includes(d.name));
-  const declarations = [...dataDeclarations, REPORT_APPLY_DECLARATION];
+  const declarations = [...dataDeclarations, REPORT_ANALYZE_DECLARATION, REPORT_APPLY_DECLARATION];
 
   // Cliente com retry modelo×chave (mesma estratégia do Office chat, compacta)
   const keys = getKeys();
@@ -211,7 +338,10 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
       // Executa as tools do round e devolve todas as respostas de uma vez
       const responses = [];
       for (const { name, args } of pendingCalls) {
-        const label = DATA_TOOL_LABELS[name] || (name === 'report_apply_ops' ? 'Montando o relatório' : name);
+        const label = DATA_TOOL_LABELS[name]
+          || (name === 'report_apply_ops' ? 'Montando o relatório'
+            : name === 'report_analyze_data' ? `Analisando ${args?.group_by || 'os dados'}`
+              : name);
         sendSSE(res, { type: 'tool_start', name, label });
         const t0 = Date.now();
         let result;
@@ -238,8 +368,23 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
               },
             });
             result = { ok: true, blockCount: spec.blocks.length, changedIds };
+          } else if (name === 'report_analyze_data') {
+            const sourceTool = args?.source_tool;
+            const rows = getRaw(report.id, sourceTool);
+            if (!rows) {
+              const available = listRawTools(report.id);
+              result = {
+                error: available.length
+                  ? `Nenhum dado em memória de "${sourceTool}". Disponíveis: ${available.join(', ')}. Rode a consulta antes de analisar.`
+                  : 'Nenhuma consulta feita ainda nesta conversa. Busque os dados primeiro.',
+              };
+            } else {
+              result = analyzeRows(rows, args || {});
+            }
           } else if (DATA_TOOL_NAMES.includes(name)) {
             result = await officeExecuteTool(name, args || {}, user);
+            // Guarda os registros brutos para o report_analyze_data cruzar depois
+            putRaw(report.id, name, extractRows(result));
             // Snapshot dos dados usados (auditoria + botão "Atualizar dados")
             const snapshot = report.dataSnapshot || { calls: [] };
             snapshot.calls = [
