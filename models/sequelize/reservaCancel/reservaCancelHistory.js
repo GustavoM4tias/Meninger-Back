@@ -72,6 +72,12 @@ export default (sequelize, DataTypes) => {
         sienge_contrato_excluido: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
         cv_unidade_disponibilizada: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
         cv_mensagem_enviada: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
+        cv_situacao_alterada: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
+        situacao_aplicada_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            comment: 'Etapa CV aplicada pela automação (Pendência no bloqueio/erro, Cancelada no sucesso).',
+        },
 
         // ── Auditoria ─────────────────────────────────────────────────────────
         manual: {

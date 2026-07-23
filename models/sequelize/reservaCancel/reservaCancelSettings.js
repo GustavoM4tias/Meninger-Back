@@ -12,6 +12,20 @@ export default (sequelize, DataTypes) => {
             comment: 'Habilita o processamento automático dos cancelamentos.',
         },
 
+        // ── Workflow CV ───────────────────────────────────────────────────────
+        situacao_pendencia_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 30,
+            comment: 'Etapa CV pra onde a reserva vai quando o cancelamento é barrado/falha (Pendência).',
+        },
+        situacao_cancelada_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 4,
+            comment: 'Etapa CV de cancelamento concluído (Cancelada). Sucesso mantém/devolve a reserva pra cá.',
+        },
+
         updated_by: { type: DataTypes.INTEGER, allowNull: true },
     }, {
         tableName: 'reserva_cancel_settings',

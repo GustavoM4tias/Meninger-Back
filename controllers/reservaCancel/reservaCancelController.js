@@ -88,6 +88,12 @@ export async function updateSettings(req, res) {
     try {
         const updates = {};
         if (req.body.active !== undefined) updates.active = !!req.body.active;
+        for (const key of ['situacao_pendencia_id', 'situacao_cancelada_id']) {
+            if (req.body[key] !== undefined) {
+                const n = Number(req.body[key]);
+                updates[key] = Number.isFinite(n) && n > 0 ? n : null;
+            }
+        }
         updates.updated_by = req.user?.id || null;
 
         let s = await db.ReservaCancelSettings.findByPk(1);
