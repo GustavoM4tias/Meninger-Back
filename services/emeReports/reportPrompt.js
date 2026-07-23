@@ -32,6 +32,12 @@ Tons ("tone"): "neutral" | "accent" | "success" | "warning" | "danger" | "info".
   props: { title, subtitle, labels, series: [{ name, data }], format, caption }
 - chart-funnel — funil etapa por etapa com taxas de conversão (peça central de relatórios comerciais).
   props: { title, subtitle, stages: [{ label, value, hint }], format, caption }
+- gauge — termômetro/velocímetro: onde um indicador está dentro de uma faixa (temperatura de vendas, saúde do funil, atingimento).
+  props: { title, value, min, max, format, variant ("gauge" arco | "thermometer" barra), zones: [{ upTo, label, tone }], caption }
+- ranking — lista ordenada com barra proporcional e % do total (top origens de lead, corretores, empreendimentos).
+  props: { title, subtitle, items: [{ label, value, note }], format, showShare, caption }
+- map — mapa de localização com marcadores (empreendimento, pontos de interesse, origem por região).
+  props: { title, lat, lon, zoom, markers: [{ lat, lon, label, note }], height, caption }
 - table — tabela formatada.
   props: { title, columns: [{ key, label, format, align }], rows: [{ [key]: value }], totals: { [key]: value }, caption }
 - timeline — marcos/eventos.
@@ -46,11 +52,13 @@ Tons ("tone"): "neutral" | "accent" | "success" | "warning" | "danger" | "info".
 - note — nota pequena em itálico. props: { text }
 - footer — rodapé (1x, sempre o último bloco).
   props: { sources: [string], generatedAt, refreshedAt, note }
+  ATENÇÃO: generatedAt/refreshedAt devem ser datas ISO válidas (o renderer formata em pt-BR).
+  NUNCA escreva a data dentro de "note" nem em texto solto - o rodapé já a exibe.
 - custom-html — APENAS quando nenhum bloco atende. HTML simples, sem scripts.
   props: { html, purpose } — "purpose" descreve o que o bloco faz (obrigatório).
 `;
 
-export function buildReportSystemPrompt({ user, report, selectedBlock, enterprisesContext }) {
+export function buildReportSystemPrompt({ user, report, selectedBlocks = [], enterprisesContext }) {
   const specJson = JSON.stringify(report.spec || { version: 1, blocks: [] });
   const dataCalls = (report.dataSnapshot?.calls || [])
     .map((c) => `- ${c.tool}(${JSON.stringify(c.args || {})}) em ${c.at}`)
@@ -63,8 +71,12 @@ Você está construindo um relatório visual profissional junto com ${user.usern
 1. Entender o que o usuário quer no relatório (empreendimento, período, temas: leads, pré-cadastro, reservas, vendas...).
 2. Se faltar parâmetro essencial (empreendimento ou período), PERGUNTE antes de montar — de forma curta e objetiva.
 3. Buscar TODOS os dados via ferramentas de consulta (query_*). NUNCA invente ou estime números. Todo número exibido no relatório DEVE vir do resultado de uma ferramenta desta conversa.
-4. Montar/editar o relatório chamando a ferramenta report_apply_ops com blocos do catálogo.
-5. Explicar em 1-2 frases o que fez e sugerir o próximo refinamento.
+4. APROFUNDAR a análise: quando o usuário pedir padrões, recortes ou cruzamentos ("de onde vêm os leads", "qual etapa perde mais", "que dia converte melhor"), use report_analyze_data sobre o que já foi buscado — agrupando, somando e ordenando — em vez de pedir tudo de novo. Traga o achado no texto E em bloco visual (ranking, gauge, chart).
+5. Montar/editar o relatório chamando a ferramenta report_apply_ops com blocos do catálogo.
+6. Explicar em 1-2 frases o que fez e sugerir o próximo refinamento.
+
+# Análise, não só listagem
+Um bom relatório responde "e daí?". Sempre que possível: compare com o período anterior, aponte a etapa de maior perda no funil, destaque o outlier (a origem que cresceu, o dia fraco), e escreva a leitura em linguagem de negócio. Números sem interpretação não bastam.
 
 # Regras do relatório
 ${BLOCK_CATALOG_DOC}
@@ -86,7 +98,7 @@ Textos em pt-BR, tom executivo, direto, sem jargão técnico. Use hífen "-", nu
 - Modo de dados: ${report.dataMode} (fixed = congelado, live = fim aberto)
 - Spec atual: ${specJson.length > 20000 ? specJson.slice(0, 20000) + '... (truncado)' : specJson}
 ${dataCalls ? `\n# Dados já buscados nesta conversa (reuse quando possível)\n${dataCalls}` : ''}
-${selectedBlock ? `\n# ATENÇÃO: o usuário selecionou o bloco "${selectedBlock.id}" (${selectedBlock.type}) para editar. O pedido a seguir refere-se a ESTE bloco:\n${JSON.stringify(selectedBlock).slice(0, 4000)}` : ''}
+${selectedBlocks.length ? `\n# ATENÇÃO: o usuário SELECIONOU ${selectedBlocks.length} bloco(s) no relatório. O pedido a seguir refere-se a ESTES blocos — altere apenas eles (upsert mantendo o id de cada um):\n${JSON.stringify(selectedBlocks).slice(0, 8000)}` : ''}
 ${enterprisesContext ? `\n# Empreendimentos acessíveis\n${enterprisesContext}` : ''}
 
 # Privacidade

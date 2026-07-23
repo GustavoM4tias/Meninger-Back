@@ -55,6 +55,7 @@ router.get('/:token', rateLimit, async (req, res) => {
       periodStart: report.periodStart,
       periodEnd: report.periodEnd,
       dataMode: report.dataMode,
+      theme: report.theme,
       refreshedAt: report.refreshedAt,
       publishedAt: payload.publishedAt,
       spec: payload.spec,

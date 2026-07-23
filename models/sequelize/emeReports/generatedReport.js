@@ -36,6 +36,10 @@ export default (sequelize, DataTypes) => {
     publicExpiresAt: { type: DataTypes.DATE, allowNull: true },
     publicViews: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
 
+    // Tema visual do relatório (ver front: components/Reports/themes.js):
+    // classic | modern | executive | vibrant | nature | minimal
+    theme: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'classic' },
+
     // Spec de blocos ({ version, blocks: [{ id, type, props }] }).
     spec: { type: DataTypes.JSONB, allowNull: false, defaultValue: { version: 1, blocks: [] } },
 
