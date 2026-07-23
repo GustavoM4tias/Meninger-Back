@@ -27,6 +27,7 @@ import permissionRoutes from './routes/permissionRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
 import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
+import reservaCancelRoutes from './routes/reservaCancelRoutes.js';
 import shortLinkRoutes from './routes/shortLinkRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
@@ -213,6 +214,7 @@ app.use('/api/permissions', permissionRoutes);
 app.use('/api/realestate', realEstateRoutes); // cadastro de imobiliárias (CV)
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
+app.use('/api/cancelamento-reservas', reservaCancelRoutes);
 // Encurtador de URL público — rota fora de /api por elegância.
 // Cliente que recebeu link curto via WhatsApp acessa `${host}/s/{slug}` e cai aqui.
 app.use('/s', shortLinkRoutes);

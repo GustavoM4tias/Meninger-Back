@@ -125,6 +125,11 @@ import BoletoComissionRuleDefine from './boleto/boletoComissionRule.js';
 import BoletoEventDefine from './boleto/boletoEvent.js';
 import BoletoEcoLockDefine from './boleto/boletoEcoLock.js';
 
+// Cancelamento de Reservas (CV × Sienge)
+import ReservaCancelSettingsDefine from './reservaCancel/reservaCancelSettings.js';
+import ReservaCancelHistoryDefine from './reservaCancel/reservaCancelHistory.js';
+import ReservaCancelEventDefine from './reservaCancel/reservaCancelEvent.js';
+
 // Encurtador de URL genérico
 import ShortLinkDefine from './shortLink.js';
 
@@ -359,6 +364,11 @@ db.BoletoHistory       = BoletoHistoryDefine(sequelize, DataTypes);
 db.BoletoComissionRule = BoletoComissionRuleDefine(sequelize, DataTypes);
 db.BoletoEvent         = BoletoEventDefine(sequelize, DataTypes);
 db.BoletoEcoLock       = BoletoEcoLockDefine(sequelize, DataTypes);
+
+// Cancelamento de Reservas (CV × Sienge)
+db.ReservaCancelSettings = ReservaCancelSettingsDefine(sequelize, DataTypes);
+db.ReservaCancelHistory  = ReservaCancelHistoryDefine(sequelize, DataTypes);
+db.ReservaCancelEvent    = ReservaCancelEventDefine(sequelize, DataTypes);
 
 // Encurtador de URL
 db.ShortLink           = ShortLinkDefine(sequelize, DataTypes);
