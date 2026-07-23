@@ -69,7 +69,21 @@ export async function runChat({ systemPrompt, history = [], userMessage, functio
                 ]);
             }
             const parts = result.response?.candidates?.[0]?.content?.parts || [];
-            return { text: parts.filter(p => p.text).map(p => p.text).join('').trim(), toolCalls };
+            let text = parts.filter(p => p.text).map(p => p.text).join('').trim();
+            // Estourou MAX_TOOL_ROUNDS no meio de uma tool call → sem esta rodada
+            // final o retorno seria text:'' e o lead ficaria sem resposta.
+            const pendingFc = parts.find(p => p.functionCall)?.functionCall;
+            if (!text && pendingFc) {
+                const final = await chat.sendMessage([{
+                    functionResponse: {
+                        name: pendingFc.name,
+                        response: { ok: false, error: 'Limite de ferramentas desta rodada atingido — responda o lead em TEXTO com o que você já tem.' },
+                    },
+                }]);
+                const finalParts = final.response?.candidates?.[0]?.content?.parts || [];
+                text = finalParts.filter(p => p.text).map(p => p.text).join('').trim();
+            }
+            return { text, toolCalls };
         } catch (err) {
             lastErr = err;
             const status = err?.status || err?.response?.status;

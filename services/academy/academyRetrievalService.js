@@ -91,6 +91,14 @@ function videoUrlsFromPayload(payload) {
 let _embAvail = { val: false, exp: 0 };
 
 const academyRetrievalService = {
+    // Invalida o cache de resultados de busca. Chamar quando conteúdo publicado
+    // muda (publish/despublish/edição) — sem isso a Eme servia resultados
+    // defasados por até 10 min (TTL do searchCache).
+    invalidateSearchCache() {
+        searchCache.clear();
+        _embAvail = { val: false, exp: 0 }; // re-detecta embeddings na próxima busca
+    },
+
     // pgvector disponível E há ao menos 1 artigo com embedding? (cacheado 5min)
     async _hasEmbeddings() {
         if (Date.now() < _embAvail.exp) return _embAvail.val;

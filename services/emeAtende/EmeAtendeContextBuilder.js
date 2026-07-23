@@ -150,9 +150,16 @@ async function buildContext(flow) {
 /**
  * Contexto COMPLETO do fluxo: automático (CV/ficha) + manual (business_context).
  */
+// Texto livre do admin — sem cap, um contexto manual gigante entraria inteiro
+// em CADA rodada de IA do lead.
+const MAX_MANUAL_CONTEXT = 4000;
+
 async function fullContext(flow) {
     const auto = await buildContext(flow);
-    const manual = String(flow?.business_context || '').trim();
+    let manual = String(flow?.business_context || '').trim();
+    if (manual.length > MAX_MANUAL_CONTEXT) {
+        manual = `${manual.slice(0, MAX_MANUAL_CONTEXT)}\n(… contexto manual truncado em ${MAX_MANUAL_CONTEXT} caracteres)`;
+    }
     const text = [auto.text, manual].filter(Boolean).join('\n\n');
     return { text, meta: auto.meta };
 }

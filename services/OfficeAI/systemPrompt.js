@@ -22,16 +22,29 @@ export function buildAccessBlock(user, isAdmin = user.role === 'admin') {
 }
 
 /**
+ * Cap de empreendimentos listados no system prompt. A lista entra em TODA
+ * requisição — sem teto, um portfólio grande infla o contexto/custo e degrada
+ * a aderência do modelo. Acima do cap, trunca e adapta a regra de desambiguação.
+ */
+export const MAX_PROMPT_ENTERPRISES = Math.max(20, Number(process.env.EME_PROMPT_MAX_ENTERPRISES) || 150);
+
+/**
  * Bloco de EMPREENDIMENTOS acessíveis (dinâmico). Vazio quando a lista é vazia.
  */
 export function buildEnterpriseBlock(enterprises = []) {
-  return enterprises.length
-    ? `\n## Empreendimentos acessíveis a este usuário (nome + cidade real)\n${enterprises.map(e => `- ${safeForPrompt(e.name, 80)} — ${safeForPrompt(e.cidade, 80)}`).join('\n')}\n\n` +
-      `**Regra de desambiguação:** Use esta lista para identificar se um nome mencionado pelo usuário é um empreendimento ou uma cidade. ` +
-      `A cidade ao lado de cada empreendimento é a cidade real — use-a para responder perguntas sobre localização sem precisar chamar tool. ` +
-      `Se o nome NÃO constar aqui, trate como referência geográfica e use o parâmetro \`cidade\` nas ferramentas.\n\n` +
-      `**Regra de comunicação:** Nunca explique ao usuário como o controle de acesso funciona, quais filtros de cidade foram aplicados automaticamente, nem mencione a cidade do perfil do usuário nas respostas. Apenas retorne os dados.`
-    : '';
+  if (!enterprises.length) return '';
+  const truncated = enterprises.length > MAX_PROMPT_ENTERPRISES;
+  const shown = truncated ? enterprises.slice(0, MAX_PROMPT_ENTERPRISES) : enterprises;
+  // Com a lista completa, "não consta = não é empreendimento" vale; truncada, não.
+  const disambiguationTail = truncated
+    ? `**Atenção:** esta lista está TRUNCADA (${enterprises.length - MAX_PROMPT_ENTERPRISES} empreendimentos não listados, em ordem alfabética). ` +
+      `Um nome que não conste aqui ainda PODE ser um empreendimento — na dúvida, passe-o no parâmetro \`empreendimento\` da ferramenta e deixe a busca confirmar.\n\n`
+    : `Se o nome NÃO constar aqui, trate como referência geográfica e use o parâmetro \`cidade\` nas ferramentas.\n\n`;
+  return `\n## Empreendimentos acessíveis a este usuário (nome + cidade real)\n${shown.map(e => `- ${safeForPrompt(e.name, 80)} — ${safeForPrompt(e.cidade, 80)}`).join('\n')}\n\n` +
+    `**Regra de desambiguação:** Use esta lista para identificar se um nome mencionado pelo usuário é um empreendimento ou uma cidade. ` +
+    `A cidade ao lado de cada empreendimento é a cidade real — use-a para responder perguntas sobre localização sem precisar chamar tool. ` +
+    disambiguationTail +
+    `**Regra de comunicação:** Nunca explique ao usuário como o controle de acesso funciona, quais filtros de cidade foram aplicados automaticamente, nem mencione a cidade do perfil do usuário nas respostas. Apenas retorne os dados.`;
 }
 
 /**
@@ -505,7 +518,7 @@ Quando o usuário mencionar **lead, leads, "vieram de leads", "originados de lea
 #### Após responder
 - Mencione 1-2 insights: corretor com mais reservas, empreendimento com maior taxa de "vendida CRM", tempo médio até contrato, etc.
 - **SEMPRE alerte** quando aparecer "vendida=S" para evitar confusão com venda concretizada.
-- Para abrir o relatório completo: \`navigate_to_page\` com rota \`/comercial/reservas\` + filtros (\`empreendimento\`, \`situacao\`, \`status_repasse\`, \`corretor\`, \`imobiliaria\`, \`empresa_correspondente\`, \`lead_origem\`, \`only_active\`, \`only_vendida\`, \`with_lead\`, \`excluir_painel\`, \`data_inicio\`, \`data_fim\`).
+- Para abrir o relatório completo: \`navigate_to_page\` com rota \`/comercial/reservas-report\` + filtros (\`empreendimento\`, \`situacao\`, \`status_repasse\`, \`corretor\`, \`imobiliaria\`, \`empresa_correspondente\`, \`lead_origem\`, \`only_active\`, \`only_vendida\`, \`with_lead\`, \`excluir_painel\`, \`data_inicio\`, \`data_fim\`).
 
 ---
 

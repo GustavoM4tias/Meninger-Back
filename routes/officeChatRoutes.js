@@ -96,6 +96,14 @@ router.post('/stream', authenticate, rateLimitChat, async (req, res) => {
       userMessage: message.trim(),
       viaVoice: !!via_voice,
     });
+  } catch (err) {
+    // Headers SSE já foram enviados — não dá para responder status HTTP; emite
+    // o evento de erro padronizado para o front não ficar com o stream pendurado.
+    console.error('[office-chat/stream] erro não tratado:', err?.message || err);
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Desculpe, ocorreu um erro ao processar sua mensagem.' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+    } catch { /* conexão já fechada */ }
   } finally {
     clearInterval(heartbeat);
     res.end();

@@ -61,6 +61,33 @@ Responda APENAS um JSON:
 Português. Arrays vazios quando não houver. NUNCA invente prazos, números ou nomes ausentes do texto.`;
 }
 
+// Texto denso e barato p/ o embedding: título + resumo + ações + keywords + aliases.
+function buildEmbInput(article, digest) {
+    const aliases = Array.isArray(article.aliases) ? article.aliases.join(' ') : '';
+    return [
+        article.title,
+        digest?.resumo || '',
+        (digest?.processFor || []).join(' '),
+        (digest?.keywords || []).join(' '),
+        aliases,
+    ].filter(Boolean).join(' . ');
+}
+
+async function writeEmbedding(articleId, embedding) {
+    const vec = toPgVector(embedding);
+    try {
+        await db.sequelize.query(
+            `UPDATE academy_articles SET embedding = :vec::vector WHERE id = :id`,
+            { replacements: { vec, id: articleId } }
+        );
+        return true;
+    } catch (err) {
+        // pgvector ausente → segue só com digest (busca por keyword).
+        console.warn('[academyDigest] embedding skip:', err?.message);
+        return false;
+    }
+}
+
 const academyDigestService = {
     /**
      * Gera/regenera digest + embedding de um artigo, se necessário.
@@ -72,6 +99,22 @@ const academyDigestService = {
         const hash = hashBody(body);
 
         if (!force && article.digestHash === hash && article.aiDigest) {
+            // Digest em dia — mas se o pgvector foi habilitado DEPOIS do digest,
+            // o embedding pode estar faltando. Gera SÓ o embedding a partir do
+            // digest existente (sem nova chamada de digest).
+            if (hasGeminiKey() && await embeddingColumnExists()) {
+                const [rows] = await db.sequelize.query(
+                    `SELECT (embedding IS NOT NULL) AS has FROM academy_articles WHERE id = :id`,
+                    { replacements: { id: article.id } }
+                );
+                const hasEmb = Array.isArray(rows) ? !!rows[0]?.has : false;
+                if (!hasEmb) {
+                    const embedding = await embedText(buildEmbInput(article, article.aiDigest), { taskType: 'RETRIEVAL_DOCUMENT' });
+                    if (embedding && await writeEmbedding(article.id, embedding)) {
+                        return { updated: true, reason: 'embedding-backfill' };
+                    }
+                }
+            }
             return { updated: false, reason: 'up-to-date' };
         }
         if (!hasGeminiKey()) return { updated: false, reason: 'no-key' };
@@ -81,15 +124,7 @@ const academyDigestService = {
         }));
         if (!digest || typeof digest !== 'object') return { updated: false, reason: 'digest-failed' };
 
-        // Texto denso e barato p/ o embedding: título + resumo + ações + keywords + aliases.
-        const aliases = Array.isArray(article.aliases) ? article.aliases.join(' ') : '';
-        const embInput = [
-            article.title,
-            digest.resumo || '',
-            (digest.processFor || []).join(' '),
-            (digest.keywords || []).join(' '),
-            aliases,
-        ].filter(Boolean).join(' . ');
+        const embInput = buildEmbInput(article, digest);
         // Embedding só se a coluna pgvector existir — senão é chamada
         // desperdiçada (sem pgvector a busca usa keyword + digests).
         const embedding = (await embeddingColumnExists())
@@ -101,18 +136,7 @@ const academyDigestService = {
             { aiDigest: digest, digestHash: hash },
             { where: { id: article.id } }
         );
-        if (embedding) {
-            const vec = toPgVector(embedding);
-            try {
-                await db.sequelize.query(
-                    `UPDATE academy_articles SET embedding = :vec::vector WHERE id = :id`,
-                    { replacements: { vec, id: article.id } }
-                );
-            } catch (err) {
-                // pgvector ausente → segue só com digest (busca por keyword).
-                console.warn('[academyDigest] embedding skip:', err?.message);
-            }
-        }
+        if (embedding) await writeEmbedding(article.id, embedding);
         return { updated: true };
     },
 
