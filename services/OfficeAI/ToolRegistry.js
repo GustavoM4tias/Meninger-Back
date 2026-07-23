@@ -57,14 +57,16 @@ async function userHasPermissions(user, requiredPermissions = [], adminOnly = fa
     if (!requiredPermissions.length) return true;
     if (isAdmin) return true; // admin bypass
 
-    // Lazy load das permissions do user
+    // Lazy load das permissions do user. O model real guarda UMA linha por user
+    // com `routes` = array JSON de rotas liberadas (mesma fonte das Alçadas).
     try {
-        const perms = await db.UserPermission.findAll({
-            where: { user_id: user.id },
-            attributes: ['router'],
+        const perm = await db.UserPermission.findOne({
+            where: { userId: user.id },
+            attributes: ['routes'],
             raw: true,
         });
-        const permSet = new Set(perms.map(p => String(p.router || '').toLowerCase()));
+        const routes = Array.isArray(perm?.routes) ? perm.routes : [];
+        const permSet = new Set(routes.map(r => String(r || '').toLowerCase()));
         return requiredPermissions.every(p => permSet.has(String(p).toLowerCase()));
     } catch (err) {
         console.warn('[ToolRegistry] permission check failed', err?.message);
