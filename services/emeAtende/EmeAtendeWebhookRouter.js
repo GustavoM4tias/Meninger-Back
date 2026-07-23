@@ -19,19 +19,18 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
+import { phoneSuffix, samePhone } from './emeAtendePhone.js';
 
 async function isInternalUser(fromPhone) {
-    const digits = String(fromPhone || '').replace(/[^\d]/g, '');
-    if (!digits) return false;
-    for (const len of [9, 8]) {
-        if (digits.length < len) continue;
-        const u = await db.User.findOne({
-            where: { whatsapp_phone: { [Op.like]: `%${digits.slice(-len)}` } },
-            attributes: ['id'],
-        });
-        if (u) return true;
-    }
-    return false;
+    const suffix = phoneSuffix(fromPhone);
+    if (!suffix) return false;
+    // Sufixo de 8 no SQL só pré-filtra candidatos; a decisão é samePhone
+    // (DDD + assinante) — sufixo puro colide entre DDDs diferentes.
+    const candidates = await db.User.findAll({
+        where: { whatsapp_phone: { [Op.like]: `%${suffix}` } },
+        attributes: ['id', 'whatsapp_phone'],
+    });
+    return candidates.some(u => samePhone(u.whatsapp_phone, fromPhone));
 }
 
 async function officeOwnsWamid(wamid) {

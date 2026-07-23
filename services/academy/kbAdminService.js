@@ -14,6 +14,7 @@ import {
 } from './audience.js';
 import { normalizeDepartmentIds } from './departmentVisibility.js';
 import academyDigestService from './academyDigestService.js';
+import academyRetrievalService from './academyRetrievalService.js';
 
 /**
  * Resolve usuários que devem ser notificados pelo conjunto de audiences do
@@ -414,6 +415,9 @@ const kbAdminService = {
 
         await article.update(fields);
 
+        // Conteúdo mudou → busca da Eme não pode servir resultado defasado do cache.
+        academyRetrievalService.invalidateSearchCache();
+
         return article;
     },
 
@@ -481,6 +485,9 @@ const kbAdminService = {
             status: publish ? 'PUBLISHED' : 'DRAFT',
             updatedByUserId: userId || article.updatedByUserId || null,
         });
+
+        // Publicou/despublicou → o conjunto pesquisável pela Eme mudou agora.
+        academyRetrievalService.invalidateSearchCache();
 
         // Eme × Processos: ao publicar, gera/atualiza digest + embedding (async,
         // não bloqueia; idempotente por digest_hash). É a base da busca da Eme.

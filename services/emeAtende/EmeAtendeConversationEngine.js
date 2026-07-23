@@ -19,7 +19,7 @@ import EmeAtendeFlowService from './EmeAtendeFlowService.js';
 import EmeAtendeMessenger from './EmeAtendeMessenger.js';
 import EmeAtendeContextBuilder from './EmeAtendeContextBuilder.js';
 import { runChat, hasGeminiKey } from './emeAtendeGeminiChat.js';
-import { normalizePhone, phoneSuffix } from './emeAtendePhone.js';
+import { normalizePhone, phoneSuffix, samePhone } from './emeAtendePhone.js';
 
 const OPTOUT_RE = /^\s*(parar|sair|stop|cancelar|descadastrar)\s*[.!]*\s*$/i;
 
@@ -151,11 +151,15 @@ function extractBody(m) {
 
 async function findOrCreateConversation(fromPhone, profileName) {
     const suffix = phoneSuffix(fromPhone);
-    let conversation = await db.EmeAtendeConversation.findOne({
+    // Sufixo no SQL só pré-filtra; samePhone (DDD + assinante) decide — o LIKE
+    // puro podia MESCLAR conversas de leads distintos com o mesmo final de número.
+    const candidates = await db.EmeAtendeConversation.findAll({
         where: { phone: { [Op.like]: `%${suffix}` } },
         include: [{ model: db.EmeAtendeLead, as: 'lead' }],
         order: [['id', 'DESC']],
+        limit: 10,
     });
+    let conversation = candidates.find(c => samePhone(c.phone, fromPhone)) || null;
     if (conversation) return conversation;
 
     // Contato frio: externo mandou mensagem sem ser lead cadastrado.
@@ -272,14 +276,16 @@ async function buildSystemPrompt(flow, lead) {
 }
 
 async function buildHistory(conversationId) {
-    const rows = await db.EmeAtendeMessage.findAll({
+    // DESC + reverse: as 40 mensagens mais RECENTES em ordem cronológica
+    // (ASC + limit pegava as 40 mais antigas em conversas longas).
+    const rows = (await db.EmeAtendeMessage.findAll({
         where: {
             conversation_id: conversationId,
             status: { [Op.notIn]: ['failed'] },
         },
-        order: [['id', 'ASC']],
+        order: [['id', 'DESC']],
         limit: 40,
-    });
+    })).reverse();
     // Gemini exige história alternada começando em 'user'. Junta blocos consecutivos.
     const turns = [];
     for (const r of rows) {

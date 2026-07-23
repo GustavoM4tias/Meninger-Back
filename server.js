@@ -109,6 +109,7 @@ import seedBolaoJapao from './services/bolao/seedBolaoJapao.js';
 import { startAcademyDeadlineScheduler } from './scheduler/academyDeadlineScheduler.js';
 import { startAcademyRecertifyScheduler } from './scheduler/academyRecertifyScheduler.js';
 import { startAcademyOnboardingScheduler } from './scheduler/academyOnboardingScheduler.js';
+import academyDigestScheduler from './scheduler/academyDigestScheduler.js';
 import AlertEngine from './services/alerts/AlertEngine.js';
 
 const app = express();
@@ -469,6 +470,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
   if (schedulerOn('ENABLE_ACADEMY_RECERTIFY')) startAcademyRecertifyScheduler(); // recertificação periódica (expira certificado + reassign mandatory)
   if (schedulerOn('ENABLE_ACADEMY_ONBOARDING')) startAcademyOnboardingScheduler(); // aplica regras de onboarding (auto-atribui trilhas)
+  if (schedulerOn('ENABLE_ACADEMY_DIGEST')) academyDigestScheduler.start(); // mantém digests/embeddings da KB da Eme em dia (03:30)
   if (schedulerOn('ENABLE_MARKETING_CAPTURE')) marketingDispatchScheduler.start(); // re-tenta despacho de leads ao CV
   if (schedulerOn('ENABLE_MARKETING_AUTO_SYNC')) marketingSyncScheduler.start(); // sync Meta (forms/campanhas/ads/leads) — full a cada 2h em horário comercial + light 15/15min
   if (schedulerOn('ENABLE_BOLAO_LIVE')) bolaoLiveScheduler.start(); // placar ao vivo do bolão (poll ESPN na janela do jogo)

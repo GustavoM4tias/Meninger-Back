@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { assembleSystemPrompt } from './promptAssembler.js';
+import { MAX_PROMPT_ENTERPRISES } from './systemPrompt.js';
 import { getActiveBrain } from './ConfigService.js';
 import { buildAcademyTutorPrompt } from './academyTutorPrompt.js';
 import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
@@ -38,8 +39,19 @@ async function executeTool(name, args, user) {
 // Overlay do Cérebro sobre as tools builtin: liga/desliga, sobrescreve a descrição
 // (o que o Gemini lê — controla QUANDO a tool é chamada) e injeta regras de uso por
 // tool no prompt. Sem reports no brain → retorna as declarações intactas (fallback).
+const _warnedOrphanReports = new Set(); // 1 warn por nome — evita poluir o log a cada request
 function overlayOfficeTools(declarations, reports) {
   if (!Array.isArray(reports) || !reports.length) return { declarations, promptRules: '' };
+  // Report cujo `name` não bate com nenhuma tool builtin é IGNORADO (não existe
+  // executor de reports kind sql/declarative). Sem este warn, a config no Brain
+  // Studio ficava silenciosamente inócua.
+  const knownNames = new Set(declarations.map(d => d.name));
+  for (const r of reports) {
+    if (r?.name && !knownNames.has(r.name) && !_warnedOrphanReports.has(r.name)) {
+      _warnedOrphanReports.add(r.name);
+      console.warn(`[Eme brain] report "${r.name}" (kind=${r.kind || 'builtin'}) não corresponde a nenhuma tool builtin — ignorado (execução de reports SQL/declarative ainda não implementada).`);
+    }
+  }
   const byName = new Map(reports.map(r => [r.name, r]));
   const out = [];
   const rules = [];
@@ -263,11 +275,14 @@ export async function saveMessage(sessionId, role, content, responseType = 'text
  * para o modelo não replicar o bloco em respostas seguintes.
  */
 async function buildHistory(sessionId) {
-  const messages = await db.ChatMessage.findAll({
+  // DESC + reverse: as 40 mensagens mais RECENTES em ordem cronológica.
+  // (ASC + limit pegava as 40 mais ANTIGAS — em conversa longa o modelo
+  // perdia o contexto recente e ficava preso no começo da sessão.)
+  const messages = (await db.ChatMessage.findAll({
     where: { session_id: sessionId },
-    order: [['created_at', 'ASC']],
+    order: [['created_at', 'DESC']],
     limit: 40,
-  });
+  })).reverse();
 
   return messages.map(m => {
     let text = m.content;
@@ -481,6 +496,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
 
   let fullAssistantText = '';
   let actionResult = null;
+  let lastFinishReason = null; // finishReason do último candidate (main + follow-up)
   const toolCalls = [];
   const startedAt = Date.now();
   const bridgeFilter = makeBridgeFilter();
@@ -511,6 +527,13 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   let chat = null;
   let streamIterator = null;
   let firstChunk = null;
+  // Teto opcional de tokens de saída (inclui thinking nos modelos 2.5 — por isso
+  // não há default hardcoded; valor baixo truncaria respostas do pool smart).
+  const maxOut = Number(process.env.EME_MAX_OUTPUT_TOKENS);
+  // A seleção de modelo/chave roda ANTES do try do stream — sem este guard, uma
+  // falha aqui (todas as chaves fora, GEMINI_API_KEY ausente) escapava do caminho
+  // SSE e o cliente ficava sem o evento de erro padronizado.
+  try {
   outer: for (let i = 0; i < modelList.length; i++) {
     for (let k = 0; k < keysCount; k++) {
       try {
@@ -520,6 +543,9 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           systemInstruction: systemPrompt,
           tools: [{ functionDeclarations: activeDeclarations }],
         };
+        if (Number.isFinite(maxOut) && maxOut > 0) {
+          modelParams.generationConfig = { maxOutputTokens: maxOut };
+        }
         // ACADEMY — TRAVA anti-alucinação: força o modelo a chamar uma
         // ferramenta ANTES de responder (proíbe responder "de cabeça").
         // O follow-up, após o resultado da tool, roda em modo NONE p/ o
@@ -548,6 +574,13 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       }
     }
   }
+  if (!streamIterator) throw new Error('Nenhum modelo Gemini disponível.');
+  } catch (err) {
+    console.error('[OfficeChatService] Falha ao iniciar o stream Gemini:', err?.message || err);
+    sendSSE(res, { type: 'error', message: 'Desculpe, o assistente está indisponível no momento. Tente novamente em instantes.' });
+    sendSSE(res, { type: 'done', sessionId: session.id });
+    return;
+  }
 
   // Gera um async iterator que reemite o primeiro chunk + resto do stream
   async function* mergedStream() {
@@ -564,6 +597,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     for await (const chunk of mergedStream()) {
       const candidate = chunk.candidates?.[0];
       if (!candidate) continue;
+      if (candidate.finishReason) lastFinishReason = candidate.finishReason;
 
       for (const part of candidate.content?.parts || []) {
         if (part.text) {
@@ -654,7 +688,9 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
               ])).stream;
             }
             for await (const followChunk of followStream) {
-              for (const followPart of followChunk.candidates?.[0]?.content?.parts || []) {
+              const followCandidate = followChunk.candidates?.[0];
+              if (followCandidate?.finishReason) lastFinishReason = followCandidate.finishReason;
+              for (const followPart of followCandidate?.content?.parts || []) {
                 if (followPart.text) emitTextChunk(followPart.text);
               }
             }
@@ -686,10 +722,29 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     fullAssistantText = cleanedFinal;
   }
 
-  // ACADEMY: se o follow-up falhou (ex.: indisponibilidade do Gemini) e a tool
-  // já rodou mas não veio texto, evita uma resposta vazia ao usuário.
-  if (isAcademy && actionResult && !fullAssistantText.trim()) {
-    const fallback = 'Consultei o Academy, mas tive um problema ao escrever a resposta. Pode me perguntar de novo?';
+  // finishReason anômalo → a resposta pode ter sido cortada (MAX_TOKENS) ou
+  // bloqueada (SAFETY/RECITATION/...). Sem este aviso, o usuário recebia o
+  // texto parcial como se estivesse completo.
+  const ABNORMAL_FINISH = new Set(['MAX_TOKENS', 'SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII']);
+  const finishUpper = String(lastFinishReason || '').toUpperCase();
+  if (ABNORMAL_FINISH.has(finishUpper)) {
+    sendSSE(res, {
+      type: 'warning',
+      message: finishUpper === 'MAX_TOKENS'
+        ? 'A resposta atingiu o limite de tamanho e pode ter sido cortada. Peça para continuar ou refine a pergunta.'
+        : 'A resposta foi interrompida pelos filtros do modelo e pode estar incompleta. Reformule a pergunta se necessário.',
+      finishReason: lastFinishReason,
+    });
+  }
+
+  // Resposta vazia (ex.: bloqueio de safety no primeiro chunk, follow-up que
+  // falhou após a tool) → nunca deixar um balão em branco, em NENHUM contexto.
+  if (!fullAssistantText.trim()) {
+    const fallback = actionResult
+      ? (isAcademy
+          ? 'Consultei o Academy, mas tive um problema ao escrever a resposta. Pode me perguntar de novo?'
+          : 'Os dados da consulta estão acima. Tive um problema ao escrever o comentário — pergunte de novo se quiser a análise.')
+      : 'Desculpe, não consegui gerar uma resposta agora. Tente reformular a pergunta ou enviar de novo em instantes.';
     fullAssistantText = fallback;
     sendSSE(res, { type: 'chunk', text: fallback });
   }
@@ -1196,15 +1251,20 @@ export async function loadAccessibleEnterprises(user) {
        FROM cv_enterprises ce
        LEFT JOIN enterprise_cities ec ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
        WHERE ce.nome IS NOT NULL
-       ORDER BY ce.nome`
+       ORDER BY ce.nome
+       LIMIT :cap`
     : `SELECT ce.nome AS enterprise_name, COALESCE(ec.city_override, ec.default_city, ce.cidade) AS cidade
        FROM cv_enterprises ce
        LEFT JOIN enterprise_cities ec ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
        WHERE ce.nome IS NOT NULL
          AND COALESCE(ec.city_override, ec.default_city, ce.cidade) ILIKE :city
-       ORDER BY ce.nome`;
+       ORDER BY ce.nome
+       LIMIT :cap`;
+  // cap+1: o excedente sinaliza ao buildEnterpriseBlock que a lista foi truncada.
   const rows = await db.sequelize.query(sql, {
-    replacements: isAdmin ? {} : { city: `%${user.city}%` },
+    replacements: isAdmin
+      ? { cap: MAX_PROMPT_ENTERPRISES + 1 }
+      : { city: `%${user.city}%`, cap: MAX_PROMPT_ENTERPRISES + 1 },
     type: QueryTypes.SELECT,
   });
   return rows.map(r => ({ name: r.enterprise_name, cidade: r.cidade || 'N/A' }));

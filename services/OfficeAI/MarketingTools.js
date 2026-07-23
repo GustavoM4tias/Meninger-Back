@@ -39,11 +39,21 @@ export function buildSubtitle(ctx, extras = {}) {
 export const TOOL_DECLARATIONS = [
   {
     name: 'navigate_to_page',
-    description: 'Navega para uma tela do sistema e aplica filtros. Use quando o usuário pedir para abrir um relatório, ir para uma tela, ou visualizar algo.',
+    description: 'Navega para qualquer tela do sistema e aplica filtros. Use quando o usuário pedir para abrir um relatório, ir para uma tela ou visualizar algo. Vale para TODOS os módulos do Office — inclusive os que ainda não têm ferramenta de consulta de dados (ex.: Financeiro): nesses casos você não consulta os dados, mas PODE abrir a tela para o usuário.',
     parameters: {
       type: 'OBJECT',
       properties: {
-        route: { type: 'STRING', description: 'Rota Vue do sistema. Ex: /marketing/leads, /comercial/eventos' },
+        route: {
+          type: 'STRING',
+          description: 'Rota Vue do sistema. Rotas disponíveis — ' +
+            'Marketing: /marketing/leads (Leads), /marketing/events (Eventos), /marketing/aprovacoes (Aprovações de Marketing), /marketing/captacao (Captação de Leads), /marketing/formularios (Formulários), /marketing/vinculos (Vínculos CV), /marketing/campanhas (Campanhas Meta). ' +
+            'Comercial: /comercial/precadastros (Pré-Cadastros), /comercial/reservas-report (Reservas), /comercial/faturamento (Faturamento), /comercial/distratos (Distratos), /comercial/sales-projection (Vendas x Projeção), /comercial/projections (Projeção), /comercial/buildings (Empreendimentos), /comercial/conditions (Fichas Comerciais), /comercial/imobiliarias (Imobiliárias), /comercial/mcmv (MCMV). ' +
+            'Financeiro: /financeiro/titulos (Títulos), /financeiro/custos (Custos), /financeiro/gastos-departamento (Gastos por Departamento), /financeiro/inadimplencia (Inadimplência), /financeiro/paymentflow (Fluxo de Pagamento), /financeiro/boleto-caixa (Boleto Caixa). ' +
+            'Operação: /checklists (Checklists). ' +
+            'Academy: /academy/panel (Painel do Academy), /academy/kb (Base de Conhecimento), /academy/tracks (Trilhas). ' +
+            'Microsoft: /microsoft/sharepoint (SharePoint), /microsoft/teams (Teams), /microsoft/planner (Planner), /microsoft/todo (To Do), /microsoft/transcripts (Transcrições de reuniões). ' +
+            'Outros: /mural (Mural de Avisos), /notifications (Notificações), /settings/alerts (Alertas), /settings/organograma (Organograma), /settings/account (Minha Conta), /tools/validator (Validador de Contratos), /report (Reportar Problema).',
+        },
         filters: { type: 'OBJECT', description: 'Filtros como query params. Ex: { data_inicio: "2025-01-01", empreendimento: "Nome" }' },
         message: { type: 'STRING', description: 'Mensagem curta para exibir enquanto navega.' },
       },
