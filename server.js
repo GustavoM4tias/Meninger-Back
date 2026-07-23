@@ -90,6 +90,7 @@ import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
+import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
 import { ensureMarketingApprovalWhatsappTemplates } from './lib/ensureMarketingApprovalWhatsappTemplates.js';
@@ -359,6 +360,10 @@ async function syncModelsAndPatches(fingerprint) {
     ['EmeAtendeConversation', db.EmeAtendeConversation],
     ['EmeAtendeMessage', db.EmeAtendeMessage],
     ['EmeAtendeEvent', db.EmeAtendeEvent],
+    // Cancelamento de Reservas CV × Sienge (módulo novo em evolução)
+    ['ReservaCancelSettings', db.ReservaCancelSettings],
+    ['ReservaCancelHistory', db.ReservaCancelHistory],
+    ['ReservaCancelEvent', db.ReservaCancelEvent],
     // Aprovações de Marketing (módulo novo em evolução)
     ['MarketingApprovalRequest', db.MarketingApprovalRequest],
     ['MarketingApprovalAuthProfile', db.MarketingApprovalAuthProfile],
@@ -382,6 +387,7 @@ async function syncModelsAndPatches(fingerprint) {
   await ensureFinanceOverridesSchema();
   await ensureSiengeBackupLogSchema();
   await ensureBoletoSchema();
+  await ensureReservaCancelSchema();
   await ensureAcademyPostSync();
   await ensureMarketingCaptureSchema();
   await ensureEmeBrainSchema();
