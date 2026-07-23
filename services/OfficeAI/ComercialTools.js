@@ -43,7 +43,7 @@ const RESERVA_BUCKET_CASE = `
 export const TOOL_DECLARATIONS = [
   {
     name: 'query_mcmv',
-    description: 'Consulta o teto de financiamento MCMV Faixa 2 por município. Use quando o usuário perguntar sobre limite/teto MCMV, valor máximo Faixa 2, enquadramento de empreendimento no programa habitacional, ou comparar preço de empreendimento com o teto.',
+    description: 'Consulta o teto de financiamento MCMV Faixa 2 por município. Use quando o usuário perguntar sobre limite/teto MCMV, valor máximo Faixa 2, enquadramento de empreendimento no programa habitacional, ou comparar preço de empreendimento com o teto. NÃO use para "demanda mínima", "demanda fracionada" ou "valor de demanda" — isso é da Ficha Comercial do produto (get_condition_sheet), não do MCMV.',
     parameters: {
       type: 'OBJECT',
       properties: {
