@@ -1,7 +1,7 @@
 // models/sequelize/emeAtende/emeAtendeEvent.js
 //
 // Trilha de auditoria por lead (mesma filosofia de inbound_lead_events):
-// lead_received, flow_assigned, opener_sent, trigger_fired, handoff, ...
+// lead_received, flow_assigned, opener_sent, trigger_fired, qualified, ...
 
 import { Model } from 'sequelize';
 

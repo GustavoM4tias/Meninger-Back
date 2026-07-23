@@ -34,10 +34,8 @@ export default (sequelize, DataTypes) => {
         // campos do lead que preenchem {{1}}, {{2}}... na ordem: ["name","empreendimento"]
         opener_variables: { type: DataTypes.JSONB, allowNull: true, defaultValue: [] },
         // gatilhos determinísticos que rodam ANTES da IA:
-        // [{ match:'keyword', value:'corretor', action:'handoff'|'reply'|'close', reply_text }]
+        // [{ match:'keyword', value:'quero visitar', action:'reply'|'close', reply_text }]
         triggers: { type: DataTypes.JSONB, allowNull: true, defaultValue: [] },
-        // { message: 'texto avisando o lead da transferência' }
-        handoff: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
         // overrides: { debounce_seconds, max_ai_messages }
         settings: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
     }, {

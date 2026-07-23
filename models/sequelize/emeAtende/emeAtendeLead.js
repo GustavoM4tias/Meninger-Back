@@ -19,7 +19,7 @@ export default (sequelize, DataTypes) => {
         // futuro: reconciliação com o CRM pra Eme Atende mover etapa do lead
         cv_lead_id: { type: DataTypes.STRING(40), allowNull: true },
         payload: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
-        // received|opened|engaged|qualified|handoff|closed|opted_out
+        // received|opened|engaged|qualified|closed|opted_out
         status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'received' },
         qualified_summary: { type: DataTypes.TEXT, allowNull: true },
         flow_id: { type: DataTypes.INTEGER, allowNull: true },

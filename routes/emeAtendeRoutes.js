@@ -61,7 +61,7 @@ router.delete('/api-keys/:id', wrap(async (req, res) => {
 // ── Flows ────────────────────────────────────────────────────────────────────
 const FLOW_FIELDS = ['name', 'active', 'is_default', 'system_prompt', 'business_context',
     'cv_enterprise_id', 'context_sources', 'images',
-    'opener_template', 'opener_language', 'opener_variables', 'triggers', 'handoff', 'settings'];
+    'opener_template', 'opener_language', 'opener_variables', 'triggers', 'settings'];
 
 router.get('/flows', wrap(async (req, res) => {
     res.json(await db.EmeAtendeFlow.findAll({
@@ -216,11 +216,11 @@ router.get('/conversations/:id', wrap(async (req, res) => {
     res.json(row);
 }));
 
-/** Muda o estado (bot|human|closed) - humano assume ou devolve pro bot. */
+/** Muda o estado (bot|closed) - pausa/encerra ou devolve pro bot. */
 router.put('/conversations/:id/state', wrap(async (req, res) => {
     const state = String(req.body?.state || '');
-    if (!['bot', 'human', 'closed'].includes(state)) {
-        return res.status(400).json({ error: 'state deve ser bot|human|closed.' });
+    if (!['bot', 'closed'].includes(state)) {
+        return res.status(400).json({ error: 'state deve ser bot|closed.' });
     }
     const row = await db.EmeAtendeConversation.findByPk(req.params.id);
     if (!row) return res.status(404).json({ error: 'não encontrada' });
