@@ -601,6 +601,14 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
                 }
             }
 
+            // Gate do Ato (Boleto Caixa) - mesmo sem contrato no Sienge, não
+            // libera a unidade com boleto de ato pendente/pago/em processamento
+            // (ex.: ato emitido mas o envio do contrato ao Sienge falhou).
+            const atoSemContrato = await validarAto(idreserva);
+            if (!(await addCheck('Ato sem boleto pendente/pago', atoSemContrato.ok, atoSemContrato.detalhe))) {
+                return await finishBlocked(`Gate do ato barrou a liberação da unidade: ${atoSemContrato.detalhe}`);
+            }
+
             // Sucesso: garante a etapa Cancelada, libera a unidade e registra.
             await aplicarSituacaoCv(settings.situacao_cancelada_id, 'Cancelada');
             const liberada = await disponibilizarUnidadeCv(history, unidade, ev, warnings);
