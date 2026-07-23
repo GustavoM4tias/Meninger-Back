@@ -23,9 +23,17 @@
 //      pago ou em processamento = bloqueia.
 //   9. Nenhum OUTRO contrato ativo na mesma unidade no Sienge.
 //
-// Sem contrato no Sienge: a unidade só é disponibilizada no CV se o Sienge
-// confirmar a unidade como Disponível (GET /v1/units) e não houver contrato
-// ativo na unidade.
+// Sem contrato no Sienge: a unidade só é disponibilizada no CV se NENHUMA das
+// referências cruzadas apontar contrato ativo (busca por reserva/externalId,
+// por unidade, pelo número de integração CVMENIN{unidade}{reserva} e pelos
+// contratos dos clientes Sienge com o documento do titular).
+//
+// Workflow CV (definido pelo negócio em 2026-07-23):
+//   sucesso        → reserva PERMANECE/volta para "Cancelada" (settings.situacao_cancelada_id, ID 4)
+//   blocked/error  → reserva é movida para "Pendência" (settings.situacao_pendencia_id, ID 30);
+//                    ao regularizar, mover Pendência → Cancelada re-dispara o webhook e o
+//                    fluxo roda de novo. Assim "Cancelada" só contém o que foi de fato
+//                    cancelado dos dois lados.
 
 import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
@@ -162,25 +170,39 @@ function contratoResumo(c) {
 }
 
 /**
- * Consulta a disponibilidade da unidade no Sienge (GET /v1/units/{id}).
- * `commercialStock` = 'D' significa Disponível no estoque comercial.
- * Requer o recurso "Unidades" liberado pro usuário da API no painel do Sienge.
+ * Localiza clientes no Sienge pelo documento (CPF/CNPJ) do titular da reserva.
+ * Filtra o retorno pra garantir match exato de dígitos.
  */
-async function getUnitStock(unitId) {
+async function buscarClientesPorDocumento(doc) {
+    const param = doc.length > 11 ? { cnpj: doc } : { cpf: doc };
+    const { data } = await apiSienge.get('/v1/customers', { params: { ...param, limit: 200 } });
+    return (data?.results || []).filter(c => digits(c.cpf || c.cnpj) === doc);
+}
+
+/**
+ * Altera a situação da reserva no CV (workflow). Usada pra mover a reserva
+ * pra "Pendência" quando algo barra o cancelamento, e pra devolver/manter em
+ * "Cancelada" quando o fluxo conclui com sucesso.
+ */
+async function alterarSituacaoCv(idreserva, idsituacao, comentario) {
+    const tag = `[RESERVA-CANCEL][CV-SITUACAO][reserva ${idreserva}]`;
     try {
-        const { data } = await apiSienge.get(`/v1/units/${unitId}`);
-        const stock = data?.commercialStock ?? null;
-        return { ok: true, stock, available: String(stock).toUpperCase() === 'D', name: data?.name || null };
-    } catch (err) {
-        const status = err?.response?.status || null;
-        if (status === 403) {
-            return {
-                ok: false, status,
-                error: 'Sem permissão no recurso "Unidades" da API Sienge - libere o recurso pro usuário da API no painel do Sienge.',
-            };
+        const resp = await apiCv.post('/v1/comercial/reservas/alterar-situacao', {
+            idreserva_cv: Number(idreserva),
+            idsituacao_destino: Number(idsituacao),
+            comentario: comentario || 'Alteração automática - Cancelamentos CV × Sienge',
+        });
+        if (!isCvResponseOk(resp.data)) {
+            const detail = resp.data?.error || resp.data?.erro || resp.data?.mensagem || 'erro lógico do CV';
+            console.warn(`${tag} ✗ HTTP ${resp.status} com erro lógico: ${detail}`);
+            return { ok: false, error: String(detail), httpStatus: resp.status };
         }
-        if (status === 404) return { ok: false, status, error: `Unidade ${unitId} não encontrada no Sienge.` };
-        return { ok: false, status, error: describeApiError(err) };
+        console.log(`${tag} ✓ Situação ${idsituacao} aplicada (HTTP ${resp.status}).`);
+        return { ok: true };
+    } catch (err) {
+        const detail = describeApiError(err);
+        console.error(`${tag} ✗ Falha: ${detail}`);
+        return { ok: false, error: detail, httpStatus: err?.response?.status || null };
     }
 }
 
@@ -284,14 +306,15 @@ function mensagemSucessoComDelete(history, contrato, checks) {
     ].join('\n');
 }
 
-function mensagemSucessoSemContrato(history, stockInfo) {
+function mensagemSucessoSemContrato(history, checks) {
     return [
         '✅ Automação de cancelamento CV × Sienge concluída.',
         '',
         ...linhasBase(history),
         '',
         'Nenhum contrato de venda ativo no Sienge para esta reserva.',
-        `Sienge confirmou a unidade como Disponível no estoque comercial${stockInfo ? ` (${stockInfo})` : ''}.`,
+        'Conferências que garantiram a unidade livre no Sienge:',
+        ...checks.map(c => `• ${c.check}: ${c.detalhe}`),
         '',
         'Ação executada:',
         '• Unidade DISPONIBILIZADA no CV.',
@@ -302,14 +325,30 @@ function mensagemSucessoSemContrato(history, stockInfo) {
 
 function mensagemBloqueio(history, motivo) {
     return [
-        '⚠️ Automação de cancelamento CV × Sienge NÃO executou ações para esta reserva.',
+        '⚠️ Automação de cancelamento CV × Sienge NÃO executou o cancelamento desta reserva.',
         '',
         ...linhasBase(history),
         '',
         `Motivo: ${motivo}`,
         '',
-        'Nenhum dado foi alterado no Sienge nem no CV.',
-        `Trate manualmente ou reprocesse pela tela ${OFFICE_TELA} (caso #${history.id}).`,
+        'Nenhum dado foi alterado no Sienge.',
+        'Para efetuar este cancelamento de maneira correta, envie um e-mail ao administrativo interno solicitando a regularização do contrato no Sienge.',
+        'A reserva foi movida para a etapa PENDÊNCIA no CV e só deve retornar para Cancelada após a regularização.',
+        '',
+        `Acompanhamento: ${OFFICE_TELA} (caso #${history.id}).`,
+    ].join('\n');
+}
+
+function mensagemErro(history, motivo) {
+    return [
+        '❌ Automação de cancelamento CV × Sienge encontrou um erro nesta reserva.',
+        '',
+        ...linhasBase(history),
+        '',
+        `Erro: ${motivo}`,
+        '',
+        'A reserva foi movida para a etapa PENDÊNCIA no CV até a regularização.',
+        `Reprocesse pela tela ${OFFICE_TELA} (caso #${history.id}) ou retorne a reserva para Cancelada para tentar novamente.`,
     ].join('\n');
 }
 
@@ -372,14 +411,59 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         return history;
     };
 
-    // Bloqueio = pendência manual: nada foi alterado; avisa na reserva CV.
+    // Preenchido após a reserva ser carregada e confirmada como cancelada -
+    // habilita os finalizadores a mexer no workflow do CV (Pendência/Cancelada).
+    let reservaCtx = null; // { situacaoId }
+
+    /**
+     * Move a reserva pra outra etapa do workflow CV (se já não estiver nela).
+     * Falha vira warning - a decisão de status do caso é do chamador.
+     */
+    const aplicarSituacaoCv = async (idsituacao, rotulo) => {
+        if (!idsituacao) {
+            warnings.push({ etapa: 'cv_situacao', erro: `ID da situação "${rotulo}" não configurado nas Configurações.` });
+            return false;
+        }
+        if (reservaCtx?.situacaoId === Number(idsituacao)) {
+            await ev('cv_situacao', `Reserva já está na etapa ${rotulo} (ID ${idsituacao}) - nenhuma alteração de workflow necessária.`);
+            return true;
+        }
+        const r = await alterarSituacaoCv(idreserva, idsituacao, `Automação Cancelamentos CV × Sienge - caso #${history.id}`);
+        if (r.ok) {
+            await ev('cv_situacao', `Reserva movida para a etapa ${rotulo} (ID ${idsituacao}) no CV.`, 'success');
+            await history.update({ cv_situacao_alterada: true, situacao_aplicada_id: Number(idsituacao) });
+            return true;
+        }
+        warnings.push({ etapa: 'cv_situacao', erro: r.error });
+        await ev('error', `Falha ao mover a reserva para ${rotulo} (ID ${idsituacao}): ${r.error}`, 'error');
+        return false;
+    };
+
+    // Bloqueio por REGRA: nada foi alterado no Sienge; mensagem orienta e-mail
+    // ao administrativo interno e a reserva vai pra etapa Pendência no CV.
     const finishBlocked = async (motivo) => {
         console.warn(`${tag} BLOQUEADO: ${motivo}`);
         await ev('blocked', motivo, 'warning');
         const msg = await sendCvMessage(idreserva, mensagemBloqueio(history, motivo));
         if (msg.ok) await ev('cv_message_sent', 'Mensagem de pendência registrada na reserva CV.');
         else warnings.push({ etapa: 'cv_mensagem', erro: msg.error });
+        if (reservaCtx) await aplicarSituacaoCv(settings.situacao_pendencia_id, 'Pendência');
         return finish('blocked', motivo, { cv_mensagem_enviada: !!msg.ok });
+    };
+
+    // Erro TÉCNICO: reserva também vai pra Pendência (se já sabemos que está
+    // cancelada), com mensagem própria orientando o reprocesso.
+    const finishError = async (motivo, extra = {}) => {
+        console.error(`${tag} ERRO: ${motivo}`);
+        let msgOk = false;
+        if (reservaCtx) {
+            const msg = await sendCvMessage(idreserva, mensagemErro(history, motivo));
+            msgOk = !!msg.ok;
+            if (msg.ok) await ev('cv_message_sent', 'Mensagem de erro registrada na reserva CV.');
+            else warnings.push({ etapa: 'cv_mensagem', erro: msg.error });
+            await aplicarSituacaoCv(settings.situacao_pendencia_id, 'Pendência');
+        }
+        return finish('error', motivo, { cv_mensagem_enviada: msgOk, ...extra });
     };
 
     try {
@@ -446,6 +530,9 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         await addCheck('Cancelamento confirmado no CV',
             true, `data ${formatDateBr(dataCancel)}${motivoCancel ? ` - motivo: ${motivoCancel}` : ''} (situação CV: "${situacao?.situacao || '?'}").`);
 
+        // A partir daqui os finalizadores podem mexer no workflow CV.
+        reservaCtx = { situacaoId: Number(situacao?.idsituacao) || null };
+
         const unitIdSienge = digits(unidade?.idunidade_int) ? Number(digits(unidade.idunidade_int)) : null;
 
         // ── 3. Contratos no Sienge ────────────────────────────────────────────
@@ -466,27 +553,61 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
             if (!unitIdSienge) {
                 return await finishBlocked('Sem contrato no Sienge pela reserva, mas a reserva não tem código interno de unidade (idunidade_int) - impossível garantir a disponibilidade no Sienge.');
             }
+            // Referência 1: busca por externalId (= idreserva) já retornou vazio.
+            await addCheck('Sem contrato ativo pela reserva (externalId)', true,
+                `busca por externalId ${idreserva} sem contratos ativos.`);
+
+            // Referência 2: unidade (id global da unidade no Sienge).
             if (ativosUnidade.length > 0) {
                 const lista = ativosUnidade.map(c => `nº ${c.number} (ID ${c.id}, ${c.situation}, reserva CV ${c.externalId || '?'})`).join('; ');
                 return await finishBlocked(`Existe contrato ativo de OUTRA reserva na unidade no Sienge: ${lista}. Unidade não será liberada.`);
             }
-            const stock = await getUnitStock(unitIdSienge);
-            await ev('unit_stock', stock.ok
-                ? `Estoque comercial da unidade no Sienge: "${stock.stock}"${stock.available ? ' (Disponível)' : ''}.`
-                : `Falha ao consultar unidade no Sienge: ${stock.error}`, stock.ok && stock.available ? 'info' : 'warning');
-            if (!stock.ok) {
-                return await finishBlocked(`Não foi possível garantir a disponibilidade da unidade no Sienge: ${stock.error}`);
-            }
-            if (!stock.available) {
-                return await finishBlocked(`Unidade consta no Sienge com estoque comercial "${stock.stock}" (diferente de Disponível) mesmo sem contrato ativo. Conferir manualmente.`);
-            }
-            await addCheck('Unidade disponível no Sienge', true, `sem contrato ativo na unidade e estoque comercial "D" (Disponível).`);
+            await addCheck('Sem contrato ativo na unidade', true,
+                `busca por unitId ${unitIdSienge} sem contratos ativos (empreendimento e empresa implícitos - o id da unidade é único no Sienge).`);
 
+            // Referência 3: número de integração (CVMENIN{unidade}{reserva}).
+            const numeroIntegracao = `CVMENIN${unitIdSienge}${idreserva}`;
+            const porNumero = (await fetchSalesContracts({ number: numeroIntegracao })).filter(isContratoAtivo);
+            if (porNumero.length > 0) {
+                const lista = porNumero.map(c => `nº ${c.number} (ID ${c.id}, ${c.situation})`).join('; ');
+                return await finishBlocked(`Contrato ativo localizado pelo número de integração ${numeroIntegracao}: ${lista}. Unidade não será liberada.`);
+            }
+            await addCheck('Sem contrato ativo pelo número de integração', true,
+                `nenhum contrato ativo com número ${numeroIntegracao}.`);
+
+            // Referência 4: documento do titular → clientes Sienge → contratos.
+            const docTitular = digits(titular?.documento);
+            if (docTitular) {
+                try {
+                    const clientesSienge = await buscarClientesPorDocumento(docTitular);
+                    const suspeitos = [];
+                    for (const cli of clientesSienge) {
+                        const doCliente = (await fetchSalesContracts({ customerId: cli.id })).filter(isContratoAtivo);
+                        suspeitos.push(...doCliente.filter(c =>
+                            String(c.externalId || '') === String(idreserva)
+                            || [].concat(c.salesContractUnits || []).some(u => Number(u.id) === unitIdSienge)));
+                    }
+                    if (suspeitos.length > 0) {
+                        const lista = suspeitos.map(c => `nº ${c.number} (ID ${c.id}, ${c.situation})`).join('; ');
+                        return await finishBlocked(`Contrato ativo do titular (documento ${docTitular}) vinculado a esta reserva/unidade: ${lista}. Unidade não será liberada.`);
+                    }
+                    await addCheck('Documento do titular sem contrato ativo nesta unidade', true,
+                        `${clientesSienge.length} cliente(s) Sienge com o documento ${docTitular}; nenhum contrato ativo nesta unidade/reserva.`);
+                } catch (err) {
+                    // Referências 1-3 já garantem a unidade; falha aqui vira aviso.
+                    const detail = describeApiError(err);
+                    warnings.push({ etapa: 'validacao_documento', erro: detail });
+                    await ev('check_failed', `Busca de contratos pelo documento do titular indisponível: ${detail}`, 'warning');
+                }
+            }
+
+            // Sucesso: garante a etapa Cancelada, libera a unidade e registra.
+            await aplicarSituacaoCv(settings.situacao_cancelada_id, 'Cancelada');
             const liberada = await disponibilizarUnidadeCv(history, unidade, ev, warnings);
             if (!liberada) {
-                return finish('error', 'Falha ao disponibilizar a unidade no CV (ver warnings). Reprocesse pela tela.', { cv_unidade_disponibilizada: false });
+                return await finishError('Falha ao disponibilizar a unidade no CV (ver avisos). Reprocesse pela tela.', { cv_unidade_disponibilizada: false });
             }
-            const msg = await sendCvMessage(idreserva, mensagemSucessoSemContrato(history, `unidade ${unitIdSienge}`));
+            const msg = await sendCvMessage(idreserva, mensagemSucessoSemContrato(history, checks));
             if (msg.ok) await ev('cv_message_sent', 'Mensagem de conclusão registrada na reserva CV.');
             else warnings.push({ etapa: 'cv_mensagem', erro: msg.error });
 
@@ -584,7 +705,7 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         } catch (err) {
             const detail = describeApiError(err);
             await ev('error', `DELETE do contrato ${contrato.id} falhou: ${detail}`, 'error', { httpStatus: err?.response?.status });
-            return await finish('error', `Sienge recusou a exclusão do contrato nº ${contrato.number}: ${detail}. Nada foi alterado no CV.`);
+            return await finishError(`Sienge recusou a exclusão do contrato nº ${contrato.number}: ${detail}. Nada foi alterado no Sienge.`);
         }
         await ev('contract_deleted', `DELETE /sales-contracts/${contrato.id} executado (contrato nº ${contrato.number}).`, 'success');
 
@@ -592,27 +713,28 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         const conferencia = (await fetchSalesContracts({ externalId: String(idreserva) })).filter(isContratoAtivo);
         if (conferencia.some(c => Number(c.id) === Number(contrato.id))) {
             await ev('error', 'Releitura ainda encontra o contrato ativo - exclusão NÃO confirmada.', 'error');
-            return await finish('error', `Sienge aceitou o DELETE mas o contrato nº ${contrato.number} ainda aparece ativo na releitura. Nada foi alterado no CV. Verifique no Sienge e reprocesse.`);
+            return await finishError(`Sienge aceitou o DELETE mas o contrato nº ${contrato.number} ainda aparece ativo na releitura. Nada foi alterado no CV. Verifique no Sienge e reprocesse.`);
         }
         await ev('delete_confirmed', 'Releitura confirmou: contrato não existe mais no Sienge.', 'success');
         await history.update({ sienge_contrato_excluido: true });
 
-        // 4c. Estoque da unidade pós-exclusão (informativo - não bloqueia).
+        // 4c. Releitura por UNIDADE: garante que nenhum outro contrato ativo
+        // segura a unidade no Sienge antes de liberá-la no CV.
         if (unitIdSienge) {
-            const stock = await getUnitStock(unitIdSienge);
-            if (stock.ok && !stock.available) {
-                warnings.push({ etapa: 'sienge_unidade', erro: `Após a exclusão, unidade ainda consta com estoque "${stock.stock}" no Sienge.` });
+            const restantes = (await fetchSalesContracts({ unitId: unitIdSienge })).filter(isContratoAtivo);
+            if (restantes.length > 0) {
+                const lista = restantes.map(c => `nº ${c.number} (${c.situation})`).join('; ');
+                return await finishError(`Contrato excluído, mas a unidade ainda tem contrato ativo no Sienge: ${lista}. Unidade NÃO liberada no CV.`);
             }
-            await ev('unit_stock', stock.ok
-                ? `Estoque comercial da unidade após exclusão: "${stock.stock}".`
-                : `Consulta de unidade indisponível após exclusão: ${stock.error}`, 'info');
+            await ev('delete_confirmed', 'Releitura por unidade confirmou: nenhum contrato ativo restante na unidade.', 'success');
         }
 
-        // ── 5. Disponibiliza a unidade no CV ──────────────────────────────────
+        // ── 5. Garante a etapa Cancelada e disponibiliza a unidade no CV ──────
+        await aplicarSituacaoCv(settings.situacao_cancelada_id, 'Cancelada');
         const liberada = await disponibilizarUnidadeCv(history, unidade, ev, warnings);
         if (!liberada) {
-            return await finish('error',
-                'Contrato excluído no Sienge, mas FALHOU a disponibilização da unidade no CV (ver warnings). Reprocesse pela tela - a nova tentativa reconfere o Sienge e libera a unidade.',
+            return await finishError(
+                'Contrato excluído no Sienge, mas FALHOU a disponibilização da unidade no CV (ver avisos). Reprocesse pela tela - a nova tentativa reconfere o Sienge e libera a unidade.',
                 { cv_unidade_disponibilizada: false });
         }
 
@@ -628,7 +750,9 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         const detail = describeApiError(err);
         console.error(`${tag} ✗ Erro: ${detail}`);
         await ev('error', detail, 'error');
-        return finish('error', detail).catch(() => history);
+        // finishError também move a reserva pra Pendência (se a reserva já foi
+        // confirmada como cancelada nesta execução).
+        return finishError(detail).catch(() => history);
     }
 }
 
