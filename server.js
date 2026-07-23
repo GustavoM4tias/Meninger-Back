@@ -86,6 +86,7 @@ import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.j
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
 import { ensureEmeReportsSchema } from './lib/ensureEmeReportsSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
+import { ensureWhatsappMessagesSchema } from './lib/ensureWhatsappMessagesSchema.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
@@ -393,6 +394,7 @@ async function syncModelsAndPatches(fingerprint) {
   await ensureEmeBrainSchema();
   await ensureEmeReportsSchema();
   await ensureWhatsappAutomationSchema();
+  await ensureWhatsappMessagesSchema();
   await ensureEmeAtendeSeed();
   await ensureAlertSharesSchema();
   await ensureDeptSpendingSchema();
