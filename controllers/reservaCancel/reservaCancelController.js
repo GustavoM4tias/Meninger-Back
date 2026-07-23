@@ -142,9 +142,25 @@ export async function listHistory(req, res) {
         const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
         const where = buildHistoryWhere(req.query);
 
+        // ── Ordenação (whitelist) ──────────────────────────────────────────────
+        // Chaves da UI → atributo do model. Default: caso mais recente primeiro.
+        const SORT_MAP = {
+            caso: 'id',
+            titular: 'titular_nome',
+            unidade: 'unidade_nome',
+            contrato: 'contrato_numero',
+            status: 'status',
+            quando: 'createdAt',
+        };
+        const sortKey = SORT_MAP[String(req.query.sortBy || '')] || 'id';
+        const sortDir = String(req.query.sortDir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+        const order = sortKey === 'id'
+            ? [['id', sortDir]]
+            : [[sortKey, sortDir], ['id', 'DESC']];
+
         const { rows, count } = await db.ReservaCancelHistory.findAndCountAll({
             where,
-            order: [['id', 'DESC']],
+            order,
             limit,
             offset: (page - 1) * limit,
         });
