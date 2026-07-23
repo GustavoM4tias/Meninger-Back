@@ -15,6 +15,12 @@ import { TOOL_DECLARATIONS as CONDITION_DECLARATIONS, executeTool as conditionEx
 import './AcademyTools.js';
 // Idem: tools de Imobiliárias (Comercial > Imobiliárias) — contexto OFFICE.
 import './RealEstateTools.js';
+// Idem: Financeiro (Custos c/ alçada da tela + Boletos admin), Pessoas/Organograma,
+// Validador de Contratos e Perfil (notificações + share de alertas).
+import './FinanceTools.js';
+import './PeopleTools.js';
+import './ContractTools.js';
+import './ProfileTools.js';
 import { getToolsFor, toGeminiDeclarations, findTool } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
 
