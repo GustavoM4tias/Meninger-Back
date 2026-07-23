@@ -82,13 +82,13 @@ const TOOL_DECLARATIONS = [
     {
         name: 'get_condition_sheet',
         description:
-            'Retorna a Ficha Comercial COMPLETA de um empreendimento/produto: comissão, prazo de entrega, tabelas de preço, regras de negociação (entrada máxima, parcelas, RP, correções), subsídio estadual, campanhas, documentação (pacote CEF, ITBI, cartório), operacional (CCA, certificação digital, registro de contrato) e custos Menin × Cliente. Use para QUALQUER pergunta sobre condições comerciais de um empreendimento. O nome também casa por CIDADE (ex: "votuporanga" acha as fichas de lá). NUNCA pergunte ao usuário qual mês: sem `mes`, a tool já retorna a ficha mais recente e, se ela não estiver autorizada, a última autorizada junto em `ficha_autorizada` — responda direto com isso. SEMPRE cite a fonte (mês + status) na resposta.',
+            'Retorna a Ficha Comercial COMPLETA de um empreendimento/produto: comissão, prazo de entrega, DEMANDA MÍNIMA (nº de unidades) e demanda fracionada, tabelas de preço, regras de negociação (entrada máxima, parcelas, RP, correções), subsídio estadual, campanhas, documentação (pacote CEF, ITBI, cartório), operacional (CCA, certificação digital, registro de contrato) e custos Menin × Cliente. Use para QUALQUER pergunta sobre condições comerciais de um empreendimento. IMPORTANTE: "demanda mínima", "demanda fracionada", "valor de demanda" são conceitos DESTA ficha (campo do produto), NÃO do MCMV — se perguntarem "demanda" de uma cidade/empreendimento, é AQUI. O nome também casa por CIDADE (ex: "votuporanga" acha as fichas de lá). NUNCA pergunte ao usuário qual mês: sem `mes`, a tool já retorna a ficha mais recente e, se ela não estiver autorizada, a última autorizada junto em `ficha_autorizada` — responda direto com isso. SEMPRE cite a fonte (mês + status) na resposta.',
         parameters: {
             type: 'OBJECT',
             properties: {
                 empreendimento: { type: 'STRING', description: 'Nome do empreendimento (CV), do produto avulso, ou cidade. Busca parcial, sem acento.' },
                 mes: { type: 'STRING', description: 'Mês de referência específico (YYYY-MM). Só passe se o usuário pedir um mês/data específico; caso contrário omita.' },
-                foco: { type: 'STRING', description: 'SEMPRE passe o tema principal da pergunta: "campanhas" | "custos" | "negociacao" (entrada/parcelas/correções) | "comissao" | "precos" (tabelas/valores) | "documentacao" (ITBI/cartório/CEF) | "prazo" | "geral". Controla as sugestões exibidas no card.' },
+                foco: { type: 'STRING', description: 'SEMPRE passe o tema principal da pergunta: "campanhas" | "custos" | "negociacao" (entrada/parcelas/correções/DEMANDA mínima/fracionada) | "comissao" | "precos" (tabelas/valores) | "documentacao" (ITBI/cartório/CEF) | "prazo" | "geral". Controla as sugestões exibidas no card.' },
             },
             required: ['empreendimento'],
         },
