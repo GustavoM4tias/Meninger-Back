@@ -4,6 +4,7 @@
 
 import { Op, fn, col, literal } from 'sequelize';
 import db from '../../models/sequelize/index.js';
+import { getRatesUSD, getUsdToBrl, estimateCostBRL } from '../../services/whatsapp/WhatsAppPricing.js';
 
 const { WhatsappMessage, User } = db;
 
@@ -72,18 +73,62 @@ export const stats = async (req, res) => {
         const deliveredOrRead = byStatus.delivered + byStatus.read;
         const deliveryRate = totals ? deliveredOrRead / totals : 0;
 
+        // Breakdown por categoria × cobrança (billable). Base do painel de gastos.
         const costRows = await WhatsappMessage.findAll({
             where: {
                 direction: 'out',
+                status: { [Op.in]: ['sent', 'delivered', 'read'] },
                 created_at: { [Op.gte]: since },
-                cost_category: { [Op.ne]: null },
             },
-            attributes: ['cost_category', [fn('COUNT', col('id')), 'count']],
-            group: ['cost_category'],
+            attributes: [
+                'cost_category',
+                'billable',
+                [fn('COUNT', col('id')), 'count'],
+            ],
+            group: ['cost_category', 'billable'],
             raw: true,
         });
-        const byCostCategory = {};
-        costRows.forEach(r => { byCostCategory[r.cost_category] = Number(r.count); });
+
+        const byCostCategory = {}; // categoria → contagem total (compat. UI atual)
+        const cost = {
+            billableCount: 0,
+            freeCount: 0,
+            unknownCount: 0,          // categoria ainda não confirmada pelo webhook
+            estimatedBRL: 0,
+            byCategory: {},           // categoria → { count, billable, free, estBRL }
+            freeWindowSavedBRL: 0,    // economia estimada das mensagens de serviço grátis
+        };
+        for (const r of costRows) {
+            const cat = r.cost_category || 'desconhecido';
+            const n = Number(r.count);
+            byCostCategory[cat] = (byCostCategory[cat] || 0) + n;
+
+            const slot = cost.byCategory[cat] || (cost.byCategory[cat] = { count: 0, billable: 0, free: 0, estBRL: 0 });
+            slot.count += n;
+
+            if (!r.cost_category) {
+                cost.unknownCount += n;
+            } else if (r.billable === false) {
+                cost.freeCount += n;
+                slot.free += n;
+                // serviço grátis dentro da janela: quanto teria custado como template
+                cost.freeWindowSavedBRL += n * estimateCostBRL({ cost_category: cat === 'service' ? 'utility' : cat, billable: true, status: 'sent' });
+            } else {
+                // billable=true OU billable ainda nulo mas com categoria cobrável
+                const unit = estimateCostBRL({ cost_category: cat, billable: r.billable === false ? false : true, status: 'sent' });
+                if (unit > 0) {
+                    cost.billableCount += n;
+                    slot.billable += n;
+                    slot.estBRL += n * unit;
+                    cost.estimatedBRL += n * unit;
+                } else {
+                    cost.freeCount += n;
+                    slot.free += n;
+                }
+            }
+        }
+        cost.estimatedBRL = Math.round(cost.estimatedBRL * 100) / 100;
+        cost.freeWindowSavedBRL = Math.round(cost.freeWindowSavedBRL * 100) / 100;
 
         return res.json({
             days,
@@ -91,6 +136,8 @@ export const stats = async (req, res) => {
             byCostCategory,
             total: totals,
             deliveryRate,
+            cost,
+            rates: { usd: getRatesUSD(), usdToBrl: getUsdToBrl() },
         });
     } catch (err) {
         console.error('[whatsapp/messages/stats]', err);

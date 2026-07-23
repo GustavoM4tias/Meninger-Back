@@ -20,6 +20,7 @@ import { EmailType } from '../../email/types.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
+import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
 import ShortLinkService from '../shortLink/ShortLinkService.js';
 import db from '../../models/sequelize/index.js';
 
@@ -255,6 +256,39 @@ async function sendBoletoWhatsApp({ titular, dadosBoleto, historyId, pdfBuffer =
         await WhatsappMessage.create({ ...baseMsg, variables, status: 'dry_run' });
         console.log(`[BOLETO][NOTIFY-WPP] ⊘ Dry-run — registrado mas não enviado pra ${phone}.`);
         return { ok: false, skipped: true, error: 'WhatsApp em dry_run — mensagem não enviada.', to: phone };
+    }
+
+    // 💰 Janela de serviço aberta (cliente nos escreveu há <24h) → PDF + texto
+    // LIVRES, gratuitos, sem template. Qualquer falha cai no template abaixo.
+    if (pdfBuffer) {
+        try {
+            const win = await WhatsAppWindowService.getServiceWindow(phone);
+            if (win.open) {
+                const filename = `boleto-${dadosBoleto.nossoNumero || 'caixa'}.pdf`;
+                const { id: mediaId } = await WhatsAppService.uploadMessageMedia({
+                    buffer: pdfBuffer, filename, mimeType: 'application/pdf',
+                });
+                const caption =
+                    `Olá, ${primeiroNome(titular?.nome) || 'cliente'}! Segue o boleto` +
+                    `${dadosBoleto.empreendimento ? ` de ${dadosBoleto.empreendimento}` : ''}` +
+                    `${dadosBoleto.unidade ? ` (${dadosBoleto.unidade})` : ''}: ` +
+                    `${formatCurrency(dadosBoleto.valor)}, vencimento ${formatDateBr(dadosBoleto.vencimento)}.`;
+                const { id } = await WhatsAppService.sendDocument({ to: phone, mediaId, filename, caption });
+                await WhatsappMessage.create({
+                    ...baseMsg,
+                    type: 'document',
+                    template_name: null,
+                    body: caption,
+                    status: 'sent',
+                    meta_message_id: id,
+                    sent_at: new Date(),
+                });
+                console.log(`[BOLETO][NOTIFY-WPP] ✓ Enviado LIVRE (janela 24h aberta, gratuito) pra ${phone}.`);
+                return { ok: true, to: phone, freeWindow: true };
+            }
+        } catch (err) {
+            console.warn(`[BOLETO][NOTIFY-WPP] Envio livre na janela falhou — caindo pro template: ${err.message}`);
+        }
     }
 
     // Confirma que o template está APROVADO localmente (sincronizado da Meta).

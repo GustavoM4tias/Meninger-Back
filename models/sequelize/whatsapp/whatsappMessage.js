@@ -50,8 +50,13 @@ export default (sequelize, DataTypes) => {
     error_code:      { type: DataTypes.STRING(50),  allowNull: true },
     error_message:   { type: DataTypes.TEXT,        allowNull: true },
 
-    // categoria de cobrança (Meta retorna nas confirmações)
-    cost_category: { type: DataTypes.STRING(20), allowNull: true },
+    // ─── Pricing (Meta retorna no status do webhook) ─────────────────────
+    // Base do painel de gastos: billable=false = mensagem GRATUITA (janela de
+    // serviço 24h, utility dentro da janela ou free entry point).
+    cost_category: { type: DataTypes.STRING(20), allowNull: true },  // utility/marketing/authentication/service
+    billable:      { type: DataTypes.BOOLEAN,    allowNull: true },  // cobrada pela Meta?
+    pricing_model: { type: DataTypes.STRING(20), allowNull: true },  // PMP (por mensagem) / CBP (legado, por conversa)
+    pricing_type:  { type: DataTypes.STRING(40), allowNull: true },  // regular / free_customer_service / free_entry_point
 
     // ─── Timestamps ───────────────────────────────────────────────────────
     sent_at:      { type: DataTypes.DATE, allowNull: true },
