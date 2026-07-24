@@ -97,6 +97,7 @@ import AuthAccessCodeDefine from './academy/external/authAccessCode.js';
 
 import MeetingTranscriptDefine from './meetingTranscript.js';
 import InPersonMeetingDefine from './inPersonMeeting.js';
+import InstantMeetingDefine from './instantMeeting.js';
 import BucketUploadHistoryDefine from './tools/bucketUploadHistory.js';
 import UserPermissionDefine from './userPermission.js';
 import PermissionProfileDefine from './permissionProfile.js';
@@ -340,6 +341,7 @@ db.AuthAccessCode = AuthAccessCodeDefine(sequelize, DataTypes);
 
 db.MeetingTranscript = MeetingTranscriptDefine(sequelize, DataTypes);
 db.InPersonMeeting   = InPersonMeetingDefine(sequelize, DataTypes);
+db.InstantMeeting    = InstantMeetingDefine(sequelize, DataTypes);
 db.BucketUploadHistory = BucketUploadHistoryDefine(sequelize, DataTypes);
 db.UserPermission = UserPermissionDefine(sequelize, DataTypes);
 db.PermissionProfile = PermissionProfileDefine(sequelize, DataTypes);
