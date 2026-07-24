@@ -31,6 +31,12 @@ export default (sequelize, DataTypes) => {
         released_by: { type: DataTypes.STRING(120), allowNull: true },
         released_at: { type: DataTypes.DATE, allowNull: true },
         release_notes: { type: DataTypes.TEXT, allowNull: true },
+        // Relatório gerencial: departamentos que compõem o bucket LOJA (array de nomes).
+        // O bucket MARKETING continua vindo da config global + overrides.
+        loja_departments: { type: DataTypes.JSONB, allowNull: true },
+        // Cache da "Leitura para decisão" gerada por IA:
+        // { month, hash, generatedAt, blocks: [{ title, tone, text }] }
+        report_insights: { type: DataTypes.JSONB, allowNull: true },
         updated_by: { type: DataTypes.STRING(120), allowNull: true },
     }, {
         tableName: 'viability_enterprise_settings',
