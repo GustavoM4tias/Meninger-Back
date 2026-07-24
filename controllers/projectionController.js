@@ -8,6 +8,7 @@ const {
   SalesProjectionLog,
   SalesProjectionEnterprise,
   EnterpriseCity,
+  CvEnterprise,
   CvEnterpriseStage,
   Sequelize,
   User,
@@ -117,6 +118,23 @@ async function enrichDefaultsWithUnits(defaults) {
       };
     })
   );
+
+  // Segmento do CV por empreendimento resolvido (Luxo → SBPE, Popular → MCMV no front).
+  try {
+    const cvIds = [...new Set(items.map((i) => i.cv_enterprise_id).filter(Boolean))];
+    const ents = cvIds.length
+      ? await CvEnterprise.findAll({
+          where: { idempreendimento: cvIds },
+          attributes: ['idempreendimento', 'segmento_nome'],
+          raw: true,
+        })
+      : [];
+    const segById = new Map(ents.map((e) => [Number(e.idempreendimento), e.segmento_nome || null]));
+    for (const i of items) i.cv_segment = i.cv_enterprise_id ? (segById.get(Number(i.cv_enterprise_id)) ?? null) : null;
+  } catch (e) {
+    console.error('[projections][cv_segment] erro ao resolver segmento do CV', { message: e?.message });
+    for (const i of items) i.cv_segment = i.cv_segment ?? null;
+  }
 
   return items;
 }
