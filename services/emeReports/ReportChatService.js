@@ -169,12 +169,11 @@ export function analyzeRows(rows, { group_by, metric = 'count', metric_field, da
 // precisar ouvir a mesma instrução em toda conversa.
 const REPORT_REMEMBER_DECLARATION = {
   name: 'report_remember',
-  description: 'Guarda uma preferência do usuário sobre como fazer relatórios (estrutura, tom, recortes que sempre entram ou nunca entram, regras de negócio). Chame quando o usuário declarar um padrão que deve valer nas próximas vezes - não para pedidos pontuais.',
+  description: 'Guarda uma preferência GERAL do usuário sobre como fazer relatórios (estrutura, tom, recortes que sempre entram ou nunca entram, regras de negócio). Vale para todos os relatórios dele. Chame quando o usuário declarar um padrão que deve valer nas próximas vezes - não para pedidos pontuais.',
   parameters: {
     type: 'OBJECT',
     properties: {
       text: { type: 'STRING', description: 'A preferência em uma frase clara e acionável, na 3a pessoa. Ex.: "Sempre separar leads de Painel dos leads de mídia paga nas análises de conversão."' },
-      scope: { type: 'STRING', description: '"report" (só este relatório) ou "global" (todos os relatórios do usuário). Na dúvida use "report".' },
     },
     required: ['text'],
   },
@@ -291,7 +290,7 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
     ? (report.spec?.blocks || []).filter((b) => selectedBlockIds.includes(b.id))
     : [];
 
-  const memoryPrompt = await buildMemoryPrompt(user.id, report.id).catch(() => '');
+  const memoryPrompt = await buildMemoryPrompt(user.id).catch(() => '');
   const systemPrompt = buildReportSystemPrompt({ user, report, selectedBlocks }) + memoryPrompt;
 
   const dataDeclarations = OFFICE_TOOL_DECLARATIONS.filter((d) => DATA_TOOL_NAMES.includes(d.name));
@@ -398,14 +397,8 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
             });
             result = { ok: true, blockCount: spec.blocks.length, changedIds };
           } else if (name === 'report_remember') {
-            result = await remember({
-              userId: user.id,
-              reportId: report.id,
-              text: args?.text,
-              scope: args?.scope === 'global' ? 'global' : 'report',
-              source: 'eme',
-            });
-            if (result?.ok) sendSSE(res, { type: 'memory_saved', text: args?.text, scope: args?.scope || 'report' });
+            result = await remember({ userId: user.id, text: args?.text, source: 'eme' });
+            if (result?.ok) sendSSE(res, { type: 'memory_saved', text: args?.text });
           } else if (name === 'report_analyze_data') {
             const sourceTool = args?.source_tool;
             const rows = getRaw(report.id, sourceTool);

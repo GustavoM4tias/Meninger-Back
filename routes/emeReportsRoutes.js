@@ -287,43 +287,30 @@ router.get('/:id/public-log', requireAdmin, async (req, res) => {
   res.json({ views: report.publicViews, logs });
 });
 
-// ── Memória do relatório ─────────────────────────────────────────────────────
-// Preferências de como o usuário quer os relatórios: globais (valem para todos)
-// e locais (só deste relatório). A Eme lê no início de cada conversa.
+// ── Memória dos relatórios ───────────────────────────────────────────────────
+// Preferências GERAIS de como o usuário quer seus relatórios. Valem para todos;
+// a Eme lê no início de cada conversa e grava o que o usuário declarar.
 
-router.get('/:id/memories', requireAdmin, async (req, res) => {
-  const rows = await listMemories(req.user.id, req.params.id);
-  res.json(rows);
+router.get('/memories/all', requireAdmin, async (req, res) => {
+  res.json(await listMemories(req.user.id));
 });
 
-router.post('/:id/memories', requireAdmin, async (req, res) => {
-  const result = await remember({
-    userId: req.user.id,
-    reportId: req.params.id,
-    text: req.body?.text,
-    scope: req.body?.scope === 'global' ? 'global' : 'report',
-    source: 'user',
-  });
+router.post('/memories/all', requireAdmin, async (req, res) => {
+  const result = await remember({ userId: req.user.id, text: req.body?.text, source: 'user' });
   if (result?.error) return res.status(400).json(result);
-  const rows = await listMemories(req.user.id, req.params.id);
-  res.json(rows);
+  res.json(await listMemories(req.user.id));
 });
 
-router.put('/:id/memories/:memoryId', requireAdmin, async (req, res) => {
-  const row = await updateMemory(req.params.memoryId, req.user.id, {
-    ...req.body,
-    reportId: req.params.id,
-  });
+router.put('/memories/all/:memoryId', requireAdmin, async (req, res) => {
+  const row = await updateMemory(req.params.memoryId, req.user.id, req.body || {});
   if (!row) return res.status(404).json({ error: 'Memória não encontrada.' });
-  const rows = await listMemories(req.user.id, req.params.id);
-  res.json(rows);
+  res.json(await listMemories(req.user.id));
 });
 
-router.delete('/:id/memories/:memoryId', requireAdmin, async (req, res) => {
+router.delete('/memories/all/:memoryId', requireAdmin, async (req, res) => {
   const ok = await deleteMemory(req.params.memoryId, req.user.id);
   if (!ok) return res.status(404).json({ error: 'Memória não encontrada.' });
-  const rows = await listMemories(req.user.id, req.params.id);
-  res.json(rows);
+  res.json(await listMemories(req.user.id));
 });
 
 // ── Painel admin: blocos custom (pipeline de promoção) ───────────────────────
