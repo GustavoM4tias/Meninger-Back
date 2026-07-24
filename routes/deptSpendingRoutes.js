@@ -2,13 +2,14 @@
 //
 // Tela "Gastos por Departamento" (reestruturação da Viabilidade de Marketing).
 import express from 'express';
-import { getEnterpriseSpending, getEnterprisesSpending } from '../controllers/deptSpendingController.js';
+import { getEnterpriseSpending, getEnterprisesSpending, getCompanyReport } from '../controllers/deptSpendingController.js';
 import {
     getMarketingDepartments,
     putMarketingDepartment,
     getEnterpriseSettings,
     putEnterpriseSettings,
     putEnterpriseRelease,
+    regenerateReportInsights,
 } from '../controllers/deptSpendingAdminController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
@@ -22,6 +23,9 @@ router.get('/enterprise/:erpId', authenticate, getEnterpriseSpending);
 // Diretoria (não-admin) recebe só os liberados; admin recebe tudo (rascunho + liberado).
 router.get('/enterprises', authenticate, getEnterprisesSpending);
 
+// Relatório Gerencial de Investimento (por empresa Sienge). Não-admin: só configurado+liberado.
+router.get('/report/:companyId', authenticate, getCompanyReport);
+
 /* ===== ADMIN — configuração + liberação (admin-only) ===== */
 // Departamentos acompanhados (global)
 router.get('/admin/marketing-departments', authenticate, requireAdmin, getMarketingDepartments);
@@ -31,5 +35,7 @@ router.get('/admin/enterprise-settings', authenticate, requireAdmin, getEnterpri
 router.put('/admin/enterprise-settings/:companyId', authenticate, requireAdmin, putEnterpriseSettings);
 // Liberação por empreendimento (rascunho → liberado)
 router.put('/admin/release/:companyId', authenticate, requireAdmin, putEnterpriseRelease);
+// Regenerar a "Leitura para decisão" (IA) do relatório
+router.post('/admin/report/:companyId/insights/regenerate', authenticate, requireAdmin, regenerateReportInsights);
 
 export default router;
