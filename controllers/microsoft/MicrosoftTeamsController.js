@@ -1,5 +1,6 @@
 // controllers/microsoft/MicrosoftTeamsController.js
 import teamsService from '../../services/microsoft/MicrosoftTeamsService.js';
+import db from '../../models/sequelize/index.js';
 
 function handleErr(res, err, ctx) {
     const msg = err?.message || '';
@@ -36,7 +37,28 @@ class MicrosoftTeamsController {
     async createInstantMeeting(req, res) {
         if (!req.user.microsoft_id) return res.status(401).json({ error: 'Conta Microsoft não conectada.' });
         try {
-            res.status(201).json(await teamsService.createInstantMeeting(req.user, req.body));
+            const meeting = await teamsService.createInstantMeeting(req.user, req.body);
+
+            // Reuniões instantâneas não geram evento de calendário, então não
+            // apareceriam na listagem de Transcrições & IA. Persistimos aqui para
+            // que o usuário consiga voltar depois e gerar o relatório.
+            if (meeting?.id) {
+                await db.InstantMeeting.findOrCreate({
+                    where: { user_id: req.user.id, meeting_id: meeting.id },
+                    defaults: {
+                        user_id:         req.user.id,
+                        meeting_id:      meeting.id,
+                        subject:         meeting.subject || null,
+                        join_url:        meeting.joinUrl || null,
+                        start_at:        meeting.startDateTime ? new Date(meeting.startDateTime) : new Date(),
+                        end_at:          meeting.endDateTime ? new Date(meeting.endDateTime) : null,
+                        organizer_name:  req.user.name || null,
+                        organizer_email: req.user.email || null,
+                    },
+                }).catch(err => console.error('⚠️ [Teams] falha ao persistir reunião instantânea:', err.message));
+            }
+
+            res.status(201).json(meeting);
         } catch (err) { handleErr(res, err, 'createInstantMeeting'); }
     }
 

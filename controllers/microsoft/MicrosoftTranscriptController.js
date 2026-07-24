@@ -17,6 +17,21 @@ function durationMin(start, end) {
     return Math.round((new Date(end) - new Date(start)) / 60000);
 }
 
+/**
+ * Converte um Date (armazenado em UTC) para o horário de parede de São Paulo
+ * no mesmo formato das reuniões de calendário (ISO local, sem 'Z'):
+ * "2026-07-24T14:30:00". Mantém o front (fmtDate/fmtTime) consistente.
+ */
+function toSaoPauloLocal(date) {
+    if (!date) return null;
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).format(new Date(date));
+    return parts.replace(' ', 'T');
+}
+
 class MicrosoftTranscriptController {
 
     // ── GET /transcripts/meetings?days=30 ─────────────────────────────────────
@@ -27,18 +42,35 @@ class MicrosoftTranscriptController {
             const days = parseInt(req.query.days) || 30;
             const meetings = await transcriptService.getRecentTeamsMeetings(req.user, days);
 
-            // Enriquece com status do nosso banco (sem chamar o Graph API para cada uma)
-            const savedRecords = await db.MeetingTranscript.findAll({
-                where: { user_id: req.user.id },
-                attributes: ['transcript_id', 'meeting_id', 'subject', 'status', 'report_generated_at'],
+            // Reuniões instantâneas não existem no calendário — busca do nosso banco
+            // e injeta na mesma listagem (mesmo formato das reuniões de calendário).
+            const since = new Date();
+            since.setDate(since.getDate() - days);
+            const instant = await db.InstantMeeting.findAll({
+                where: {
+                    user_id: req.user.id,
+                    start_at: { [db.Sequelize.Op.gte]: since },
+                },
+                order: [['start_at', 'DESC']],
             });
-            const savedMap = {};
-            for (const r of savedRecords) savedMap[r.transcript_id] = r;
 
-            res.json(meetings.map(m => ({
-                ...m,
-                dbStatus: null, // cliente vai verificar individualmente
-            })));
+            const instantMapped = instant.map(m => ({
+                eventId:   m.meeting_id,       // onlineMeeting.id — estável e único
+                subject:   m.subject || 'Reunião instantânea',
+                start:     toSaoPauloLocal(m.start_at),
+                end:       toSaoPauloLocal(m.end_at),
+                joinUrl:   m.join_url || null,
+                webLink:   m.join_url || null,
+                organizer: { name: m.organizer_name, email: m.organizer_email },
+                attendees: [],
+                isInstant: true,              // flag para o front distinguir visualmente
+            }));
+
+            // Mescla e ordena por data (mais recente primeiro)
+            const all = [...instantMapped, ...meetings.map(m => ({ ...m, isInstant: false }))]
+                .sort((a, b) => new Date(b.start || 0) - new Date(a.start || 0));
+
+            res.json(all);
         } catch (err) {
             res.status(500).json({ error: err.message });
         }
