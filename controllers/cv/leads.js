@@ -45,6 +45,20 @@ function addIlikeCsv(whereClauses, replacements, paramName, column, rawVal) {
   }
 }
 
+// Exclusão por nome (CSV). Diferente do filtro normal, aqui a comparação é
+// EXATA (case-insensitive): "Painel Corretor" não pode derrubar "Painel X".
+// Serve para defaults que não podem depender de o front conhecer a lista toda.
+function addNotInCsv(whereClauses, replacements, paramName, column, rawVal) {
+  if (!rawVal) return;
+  const termos = String(rawVal).split(',').map(s => s.trim()).filter(Boolean);
+  if (!termos.length) return;
+
+  const parts = termos.map((_, i) => `:${paramName}_${i}`);
+  // COALESCE: lead sem origem não pode sumir por causa do NOT IN.
+  whereClauses.push(`LOWER(COALESCE(${column}, '')) NOT IN (${parts.join(', ')})`);
+  termos.forEach((t, i) => (replacements[`${paramName}_${i}`] = t.toLowerCase()));
+}
+
 export async function getLeads(req, res) {
   const verbose = String(req.query?.log || '').toLowerCase() === 'verbose';
   const logger = makeLogger({ enabled: verbose });
@@ -60,7 +74,8 @@ export async function getLeads(req, res) {
       imobiliaria, corretor,
       situacao_nome, midia_principal, origem,
       empreendimento, cidade,
-      data_inicio, data_fim
+      data_inicio, data_fim,
+      origem_excluir
     } = req.query;
 
     const hoje = dayjs();
@@ -93,6 +108,7 @@ export async function getLeads(req, res) {
 
     // filtros multi (CSV)
     addIlikeCsv(whereClauses, replacements, 'origem', 'l.origem', origem);
+    addNotInCsv(whereClauses, replacements, 'origem_excl', 'l.origem', origem_excluir);
     addIlikeCsv(whereClauses, replacements, 'situacao_nome', 'l.situacao_nome', situacao_nome);
     addIlikeCsv(whereClauses, replacements, 'midia_principal', 'l.midia_principal', midia_principal);
     addIlikeCsv(whereClauses, replacements, 'imobiliaria', `l.imobiliaria->>'nome'`, imobiliaria);

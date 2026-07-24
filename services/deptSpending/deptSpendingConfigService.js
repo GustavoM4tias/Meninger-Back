@@ -62,7 +62,7 @@ export async function getEnterpriseSettings(companyId) {
 
 const ALLOWED_STATUS = ['concluido', 'em_andamento', 'pre_lancamento', 'previsao_futura'];
 
-export async function setEnterpriseSettings(companyId, { blockedConsideredAvailable, marketingDeptOverrides, statusOverride } = {}, updatedBy) {
+export async function setEnterpriseSettings(companyId, { blockedConsideredAvailable, marketingDeptOverrides, statusOverride, lojaDepartments } = {}, updatedBy) {
     const company_id = Number(companyId);
     if (!Number.isFinite(company_id)) throw new Error('company_id inválido.');
 
@@ -76,9 +76,30 @@ export async function setEnterpriseSettings(companyId, { blockedConsideredAvaila
     if (statusOverride !== undefined) {
         payload.status_override = ALLOWED_STATUS.includes(statusOverride) ? statusOverride : null;
     }
+    if (lojaDepartments !== undefined) {
+        // Bucket LOJA do relatório: lista de nomes de departamento (ou null p/ nenhum).
+        const list = Array.isArray(lojaDepartments)
+            ? lojaDepartments.map((d) => String(d || '').trim()).filter(Boolean)
+            : [];
+        payload.loja_departments = list.length ? list : null;
+    }
 
     await DeptSpendingEnterpriseSettings.upsert(payload);
     return getEnterpriseSettings(company_id);
+}
+
+/* ===== Cache da narrativa IA ("Leitura para decisão") por empreendimento ===== */
+
+export async function getReportInsightsCache(companyId) {
+    const row = await getEnterpriseSettings(companyId);
+    return row?.report_insights || null;
+}
+
+export async function setReportInsightsCache(companyId, insights) {
+    const company_id = Number(companyId);
+    if (!Number.isFinite(company_id)) throw new Error('company_id inválido.');
+    await DeptSpendingEnterpriseSettings.upsert({ company_id, report_insights: insights || null });
+    return insights || null;
 }
 
 /* ============================ Liberação (rascunho → liberado) ============================ */
@@ -133,6 +154,7 @@ export async function buildSpendingResolver() {
     const blockedByCompany = new Map();   // company_id -> number
     const statusByCompany = new Map();    // company_id -> status | null
     const releasedByCompany = new Map();  // company_id -> bool
+    const lojaByCompany = new Map();      // company_id -> [nomes originais] (bucket Loja)
     for (const r of entRows) {
         const key = Number(r.company_id);
         const ov = r.marketing_dept_overrides || {};
@@ -142,6 +164,7 @@ export async function buildSpendingResolver() {
         blockedByCompany.set(key, Math.max(0, Number(r.blocked_considered_available || 0)));
         statusByCompany.set(key, r.status_override || null);
         releasedByCompany.set(key, !!r.is_released);
+        lojaByCompany.set(key, Array.isArray(r.loja_departments) ? r.loja_departments.filter(Boolean) : []);
     }
 
     function isMarketing(deptName, companyId) {
@@ -164,7 +187,31 @@ export async function buildSpendingResolver() {
         return releasedByCompany.get(Number(companyId)) === true;
     }
 
-    return { isMarketing, blockedConsideredAvailable, statusOverride, isReleased, hasAnyMarketingConfig: anyMarketing };
+    // Bucket LOJA do relatório: nomes de depto configurados p/ a empresa (relatório gerencial).
+    function lojaDepartments(companyId) {
+        return lojaByCompany.get(Number(companyId)) || [];
+    }
+    function isLoja(deptName, companyId) {
+        const key = norm(deptName);
+        if (!key) return false;
+        return lojaDepartments(companyId).some((d) => norm(d) === key);
+    }
+
+    // "Configurado" p/ o relatório: existe bucket marketing resolvível p/ a empresa
+    // (algum depto global marcado OU algum override true no empreendimento).
+    function isConfigured(companyId) {
+        if (anyMarketing) return true;
+        const ov = overridesByCompany.get(Number(companyId));
+        if (!ov) return false;
+        for (const v of ov.values()) if (v) return true;
+        return false;
+    }
+
+    return {
+        isMarketing, blockedConsideredAvailable, statusOverride, isReleased,
+        lojaDepartments, isLoja, isConfigured,
+        hasAnyMarketingConfig: anyMarketing,
+    };
 }
 
 export default {
@@ -175,5 +222,7 @@ export default {
     getEnterpriseSettings,
     setEnterpriseSettings,
     setEnterpriseRelease,
+    getReportInsightsCache,
+    setReportInsightsCache,
     buildSpendingResolver,
 };
