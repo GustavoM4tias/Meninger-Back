@@ -4,6 +4,10 @@
 // Montados com authenticate + requireAdmin em deptSpendingRoutes.js.
 
 import * as cfg from '../services/deptSpending/deptSpendingConfigService.js';
+import DeptSpendingService from '../services/deptSpending/deptSpendingService.js';
+import { getReportInsights } from '../services/deptSpending/deptSpendingInsightService.js';
+
+const service = new DeptSpendingService();
 
 function actor(req) {
     return req.user?.username || req.user?.email || String(req.user?.id || '');
@@ -50,13 +54,14 @@ export async function getEnterpriseSettings(req, res) {
 export async function putEnterpriseSettings(req, res) {
     try {
         const { companyId } = req.params;
-        const { blocked_considered_available, marketing_dept_overrides, status_override } = req.body || {};
+        const { blocked_considered_available, marketing_dept_overrides, status_override, loja_departments } = req.body || {};
         const out = await cfg.setEnterpriseSettings(
             companyId,
             {
                 blockedConsideredAvailable: blocked_considered_available,
                 marketingDeptOverrides: marketing_dept_overrides,
                 statusOverride: status_override,
+                lojaDepartments: loja_departments,
             },
             actor(req)
         );
@@ -68,6 +73,23 @@ export async function putEnterpriseSettings(req, res) {
 }
 
 /* ===== Liberação (rascunho → liberado) por empreendimento ===== */
+
+/* ===== Relatório: regenerar "Leitura para decisão" (IA) ===== */
+
+export async function regenerateReportInsights(req, res) {
+    try {
+        const companyId = Number(req.params.companyId);
+        if (!Number.isFinite(companyId)) return res.status(400).json({ error: 'companyId inválido.' });
+        const month = String(req.query.month || req.body?.month || new Date().toISOString().slice(0, 7)).slice(0, 7);
+
+        const report = await service.computeCompanyReport({ companyId, refMonth: month });
+        const insights = await getReportInsights({ companyId, report, force: true });
+        return res.json(insights);
+    } catch (e) {
+        console.error('[DeptSpendingAdmin] regenerateReportInsights erro', e);
+        return res.status(400).json({ error: e.message || 'Erro ao regenerar a leitura para decisão.' });
+    }
+}
 
 export async function putEnterpriseRelease(req, res) {
     try {

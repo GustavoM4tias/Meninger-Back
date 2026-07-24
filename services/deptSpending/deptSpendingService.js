@@ -552,8 +552,8 @@ export default class DeptSpendingService {
             const h = viability.header;
             // mostra só se há projeção no mês selecionado OU gasto acompanhado em algum momento
             if (num(h.projectedUnitsMonth) <= 0 && num(h.spentTotal) <= 0) continue;
-            // governança: diretoria (onlyReleased) só vê empreendimentos liberados
-            if (onlyReleased && !h.released) continue;
+            // governança: diretoria (onlyReleased) só vê empreendimentos CONFIGURADOS + liberados
+            if (onlyReleased && (!h.released || !resolver.isConfigured(company.companyId))) continue;
 
             results.push({
                 companyId: company.companyId,
@@ -579,6 +579,252 @@ export default class DeptSpendingService {
             onlyReleased,
             count: results.length,
             results,
+        };
+    }
+
+    /* ==================== Relatório Gerencial de Investimento ==================== */
+
+    /* Lines da projeção ativa no EXERCÍCIO (ano do refMonth), por mês, das keys da empresa. */
+    async loadYearProjectionLines({ projectionId, aliasId, enterpriseKeys, year }) {
+        if (!enterpriseKeys.length) return [];
+        return await db.sequelize.query(
+            `SELECT year_month, units_target, avg_price_target, marketing_pct
+               FROM sales_projection_lines
+              WHERE projection_id = :pid AND alias_id = :alias
+                AND enterprise_key IN (:keys)
+                AND year_month BETWEEN :y01 AND :y12
+              ORDER BY year_month ASC`,
+            {
+                replacements: { pid: projectionId, alias: String(aliasId), keys: enterpriseKeys, y01: `${year}-01`, y12: `${year}-12` },
+                type: db.Sequelize.QueryTypes.SELECT,
+            }
+        );
+    }
+
+    /* VGV/unidades projetados APÓS o exercício (saldo p/ os anos seguintes). */
+    async loadNextYearsProjection({ projectionId, aliasId, enterpriseKeys, year }) {
+        if (!enterpriseKeys.length) return { units: 0, vgv: 0 };
+        const [row] = await db.sequelize.query(
+            `SELECT COALESCE(SUM(units_target),0) AS units,
+                    COALESCE(SUM(units_target * avg_price_target),0) AS vgv
+               FROM sales_projection_lines
+              WHERE projection_id = :pid AND alias_id = :alias
+                AND enterprise_key IN (:keys)
+                AND year_month > :y12`,
+            {
+                replacements: { pid: projectionId, alias: String(aliasId), keys: enterpriseKeys, y12: `${year}-12` },
+                type: db.Sequelize.QueryTypes.SELECT,
+            }
+        );
+        return { units: num(row?.units), vgv: num(row?.vgv) };
+    }
+
+    /* Gasto ao vivo bucketed (marketing × loja), vida toda até endDate, por mês.
+       Loja tem precedência (config explícita por empresa) p/ não contar 2×. */
+    async loadBucketSpendByMonth({ costCenterIds, endDate, resolver, companyId }) {
+        const mkt = new Map();   // ym -> amount
+        const loja = new Map();  // ym -> amount
+        const ids = (costCenterIds || []).map(Number).filter((n) => Number.isFinite(n));
+        if (!ids.length) return { mkt, loja, mktTotal: 0, lojaTotal: 0 };
+
+        const rows = await listMarketingSpendByMonth({ costCenterIds: ids, endDate });
+        let mktTotal = 0;
+        let lojaTotal = 0;
+        for (const r of rows) {
+            const amount = num(r.amount);
+            if (resolver.isLoja(r.departmentName, companyId)) {
+                loja.set(r.ym, (loja.get(r.ym) || 0) + amount);
+                lojaTotal += amount;
+            } else if (resolver.isMarketing(r.departmentName, companyId)) {
+                mkt.set(r.ym, (mkt.get(r.ym) || 0) + amount);
+                mktTotal += amount;
+            }
+        }
+        return { mkt, loja, mktTotal, lojaTotal };
+    }
+
+    /**
+     * Relatório gerencial de 1 empreendimento (empresa Sienge) no EXERCÍCIO do refMonth.
+     * Realizado = Jan..refMonth; Projetado = refMonth+1..Dez (derivado da projeção de
+     * vendas: units × price × %mkt). Tetos: Marketing = VGV vida útil × % (motor atual);
+     * Loja = Σ custo_loja dos CCs.
+     */
+    async computeCompanyReport({ companyId, refMonth, aliasId = 'default' }) {
+        const endYM = normYM(refMonth);
+        const year = String(endYM).slice(0, 4);
+        const startYM = `${year}-01`;
+        const yearMonths = buildYmRange(startYM, `${year}-12`);
+        const monthIndex = Number(String(endYM).slice(5, 7)); // 1..12
+        const endDate = ymToDateStart(nextYm(endYM));
+
+        const projection = await this.getActiveProjection();
+        const { defaults, linesByKey, fullByKey, futureByKey } = await this.loadProjectionAggregates({
+            projectionId: projection.id, aliasId, startYM, endYM,
+        });
+
+        const erpToCompany = await this.mapErpsToCompany(defaults.map((d) => d.erp_id).filter(Boolean));
+        const resolver = await buildSpendingResolver();
+
+        const cid = Number(companyId);
+        const ccRows = defaults.filter((d) => {
+            const info = d.erp_id ? erpToCompany.get(String(d.erp_id)) : null;
+            return info?.companyId === cid;
+        });
+        if (!ccRows.length) throw new Error('Empreendimento não encontrado na projeção ativa.');
+
+        const company = {
+            companyId: cid,
+            companyName: ccRows[0]?.enterprise_name_cache
+                || erpToCompany.get(String(ccRows[0]?.erp_id))?.companyName
+                || `Empresa ${cid}`,
+            ccRows, linesByKey, fullByKey, futureByKey,
+        };
+        const range = { startYM, endYM, ymList: buildYmRange(startYM, endYM), endDate };
+
+        // Motor existente: tetos, unidades, estoque, status, liberação, vendas reais.
+        const viability = await this.computeCompanyViability({ company, projection, range, resolver });
+        const h = viability.header;
+
+        const enterpriseKeys = ccRows.map((r) => String(r.enterprise_key));
+        const costCenterIds = ccRows.map((r) => Number(r.erp_id)).filter((n) => Number.isFinite(n));
+
+        // ----- Projeção do exercício (mês a mês) + saldo p/ anos seguintes -----
+        const yearLines = await this.loadYearProjectionLines({
+            projectionId: projection.id, aliasId, enterpriseKeys, year,
+        });
+        const pctFallback = num(h.marketingPct);
+        const byYm = new Map(); // ym -> { unitsTarget, vgvTarget, mktProjetado }
+        for (const ym of yearMonths) byYm.set(ym, { unitsTarget: 0, vgvTarget: 0, mktProjetado: 0 });
+        for (const l of yearLines) {
+            const ym = String(l.year_month).slice(0, 7);
+            const slot = byYm.get(ym);
+            if (!slot) continue;
+            const u = num(l.units_target);
+            const p = num(l.avg_price_target);
+            const pct = num(l.marketing_pct) > 0 ? num(l.marketing_pct) : pctFallback;
+            slot.unitsTarget += u;
+            slot.vgvTarget += u * p;
+            slot.mktProjetado += u * p * (pct / 100);
+        }
+        const nextYears = await this.loadNextYearsProjection({
+            projectionId: projection.id, aliasId, enterpriseKeys, year,
+        });
+
+        // ----- Gasto realizado bucketed (vida toda até refMonth) -----
+        const spend = await this.loadBucketSpendByMonth({ costCenterIds, endDate, resolver, companyId: cid });
+
+        // ----- Série mensal do exercício (realizado × projetado) -----
+        const months = yearMonths.map((ym) => {
+            const proj = byYm.get(ym) || { unitsTarget: 0, vgvTarget: 0, mktProjetado: 0 };
+            const isRealized = ym <= endYM;
+            return {
+                ym,
+                isRealized,
+                unitsTarget: proj.unitsTarget,
+                vgvTarget: proj.vgvTarget,
+                mktRealizado: isRealized ? (spend.mkt.get(ym) || 0) : 0,
+                mktProjetado: !isRealized ? proj.mktProjetado : 0,
+                lojaRealizado: isRealized ? (spend.loja.get(ym) || 0) : 0,
+                lojaProjetado: 0, // fase de teste: loja sem projeção (ponto de iteração)
+            };
+        });
+
+        // ----- Agregados do exercício -----
+        const mktRealizadoAno = months.reduce((s, m) => s + m.mktRealizado, 0);
+        const mktProjetadoAno = months.reduce((s, m) => s + m.mktProjetado, 0);
+        const lojaRealizadoAno = months.reduce((s, m) => s + m.lojaRealizado, 0);
+        const planoAnoMkt = mktRealizadoAno + mktProjetadoAno;
+        const mesesFuturos = 12 - monthIndex;
+        const mktProjetadoMes = mesesFuturos > 0 ? mktProjetadoAno / mesesFuturos : 0;
+
+        const yearUnits = months.reduce((s, m) => s + m.unitsTarget, 0);
+        const yearVgv = months.reduce((s, m) => s + m.vgvTarget, 0);
+
+        // ----- Governança: consumo da viabilidade aprovada (vida toda + projetado restante) -----
+        const ritmoLinear = monthIndex / 12;
+        const buildBucket = (key, label, teto, consumido, extra = {}) => {
+            const pctConsumido = teto > 0 ? consumido / teto : 0;
+            const status = pctConsumido > 1 ? 'acima'
+                : pctConsumido > ritmoLinear ? 'atencao' : 'dentro';
+            return { key, label, teto, consumido, saldo: teto - consumido, pctConsumido, status, ...extra };
+        };
+        const tetoMkt = num(h.budgetTotal);          // VGV vida útil × %
+        const tetoLoja = num(h.custoLoja);           // Σ custo_loja dos CCs
+        const mktConsumido = num(spend.mktTotal) + mktProjetadoAno; // vida toda + projetado do exercício
+        const lojaConsumido = num(spend.lojaTotal);
+        const buckets = {
+            marketing: buildBucket('marketing', 'Marketing', tetoMkt, mktConsumido, {
+                realizadoVida: num(spend.mktTotal),
+                realizadoAno: mktRealizadoAno,
+                projetadoAno: mktProjetadoAno,
+                projetadoMes: mktProjetadoMes,
+                planoAno: planoAnoMkt,
+            }),
+            loja: buildBucket('loja', 'Loja física', tetoLoja, lojaConsumido, {
+                realizadoVida: num(spend.lojaTotal),
+                realizadoAno: lojaRealizadoAno,
+                projetadoAno: 0,
+                projetadoMes: 0,
+                planoAno: lojaRealizadoAno,
+            }),
+        };
+        buckets.total = buildBucket('total', 'Total aprovado',
+            tetoMkt + tetoLoja, mktConsumido + lojaConsumido, {
+                realizadoVida: num(spend.mktTotal) + num(spend.lojaTotal),
+                realizadoAno: mktRealizadoAno + lojaRealizadoAno,
+                projetadoAno: mktProjetadoAno,
+                projetadoMes: mktProjetadoMes,
+                planoAno: planoAnoMkt + lojaRealizadoAno,
+            });
+
+        return {
+            refMonth: endYM,
+            year: Number(year),
+            monthIndex,
+            company: {
+                companyId: cid,
+                name: company.companyName,
+                erpId: h.erpId,
+                costCenterIds: h.costCenterIds,
+            },
+            // subset do motor: estoque/vendas/status/governança
+            viability: {
+                totalUnits: h.totalUnits,
+                availableUnits: h.availableUnits,
+                reservedUnits: h.reservedUnits,
+                blockedUnits: h.blockedUnits,
+                soldUnitsStock: h.soldUnitsStock,
+                boletagemUnits: h.boletagemUnits,
+                availableInventory: h.availableInventory,
+                soldUnitsRealYtd: h.soldUnitsRealYtd,
+                futureUnits: h.futureUnits,
+                futureUnitsSource: h.futureUnitsSource,
+                avgTicket: h.avgTicketGlobal,
+                marketingPct: h.marketingPct,
+                vgvTotal: num(h.totalUnits) * num(h.avgTicketGlobal),
+                status: h.status,
+                released: h.released,
+                configured: resolver.isConfigured(cid),
+            },
+            kpis: {
+                vgv: {
+                    yearUnits,
+                    yearVgv,
+                    totalUnits: h.totalUnits,
+                    vgvTotal: num(h.totalUnits) * num(h.avgTicketGlobal),
+                    nextYearsUnits: nextYears.units,
+                    nextYearsVgv: nextYears.vgv,
+                    soldUnitsRealYtd: h.soldUnitsRealYtd,
+                },
+                buckets,
+            },
+            governance: { ritmoLinear },
+            distribution: {
+                realizadoAno: mktRealizadoAno,
+                aInvestirAno: Math.max(0, planoAnoMkt - mktRealizadoAno),
+                pctRealizado: planoAnoMkt > 0 ? mktRealizadoAno / planoAnoMkt : 0,
+            },
+            months,
         };
     }
 

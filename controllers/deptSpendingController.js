@@ -5,6 +5,7 @@
 // admin recebe tudo (rascunho + liberado) para ajustar no backoffice.
 
 import DeptSpendingService from '../services/deptSpending/deptSpendingService.js';
+import { getReportInsights } from '../services/deptSpending/deptSpendingInsightService.js';
 
 const service = new DeptSpendingService();
 
@@ -44,6 +45,37 @@ export async function getEnterpriseSpending(req, res) {
     } catch (e) {
         console.error('[DeptSpendingController] getEnterpriseSpending: erro', e);
         return res.status(500).json({ error: e.message || 'Erro ao calcular gastos por departamento.' });
+    }
+}
+
+/* Relatório Gerencial de Investimento de 1 empreendimento (empresa Sienge).
+   Diretoria (não-admin) só acessa empreendimentos CONFIGURADOS + LIBERADOS. */
+export async function getCompanyReport(req, res) {
+    try {
+        if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+
+        const companyId = Number(req.params.companyId);
+        if (!Number.isFinite(companyId)) return res.status(400).json({ error: 'companyId inválido.' });
+
+        const month = normYM(req.query.month || new Date().toISOString().slice(0, 7));
+        const isAdmin = req.user?.role === 'admin';
+
+        const report = await service.computeCompanyReport({
+            companyId,
+            refMonth: month,
+            aliasId: req.query.aliasId || 'default',
+        });
+
+        // Governança: fora do backoffice, rascunho/não-configurado não existe.
+        if (!isAdmin && (!report.viability.released || !report.viability.configured)) {
+            return res.status(404).json({ error: 'Relatório não disponível.' });
+        }
+
+        const insights = await getReportInsights({ companyId, report });
+        return res.json({ ...report, insights, isAdmin });
+    } catch (e) {
+        console.error('[DeptSpendingController] getCompanyReport erro', e);
+        return res.status(500).json({ error: e.message || 'Erro ao montar o relatório do empreendimento.' });
     }
 }
 
