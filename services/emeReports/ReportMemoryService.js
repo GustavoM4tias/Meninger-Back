@@ -1,66 +1,49 @@
 // services/emeReports/ReportMemoryService.js
 //
 // Memória dos relatórios: o "jeito de fazer" que o usuário quer, aprendido ao
-// longo do uso. Duas camadas, ambas lidas no início de cada conversa:
-//   - global do usuário (report_id NULL): vale em todos os relatórios dele
-//   - do relatório (report_id preenchido): vale só naquele relatório
+// longo do uso. É GERAL — vale para todos os relatórios daquele usuário.
 //
 // Quem grava: o usuário (pela tela) ou a própria Eme (tool report_remember),
 // quando percebe uma preferência declarada na conversa.
 
-import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 
-const MAX_PER_SCOPE = 25;
+const MAX_MEMORIES = 40;
 const MAX_TEXT = 400;
 
-export async function listMemories(userId, reportId) {
-  const rows = await db.EmeGeneratedReportMemory.findAll({
-    where: {
-      userId,
-      [Op.or]: [{ reportId: null }, ...(reportId ? [{ reportId }] : [])],
-    },
+export async function listMemories(userId) {
+  return db.EmeGeneratedReportMemory.findAll({
+    where: { userId },
     order: [['pinned', 'DESC'], ['updated_at', 'DESC']],
   });
-  return rows;
 }
 
-// Bloco pronto para o system prompt. Global primeiro (regra geral), depois as
-// específicas do relatório (que podem refinar ou contrariar a regra geral).
-export async function buildMemoryPrompt(userId, reportId) {
-  const rows = await listMemories(userId, reportId);
+// Bloco pronto para o system prompt.
+export async function buildMemoryPrompt(userId) {
+  const rows = await listMemories(userId);
   if (!rows.length) return '';
 
-  const global = rows.filter((r) => !r.reportId);
-  const local = rows.filter((r) => r.reportId);
+  const out = '\n# Memória (como este usuário quer os relatórios)\n'
+    + 'Siga estas preferências sem precisar perguntar de novo. Se o pedido atual contrariar uma delas, o pedido atual vence.\n'
+    + rows.map((r) => `- ${r.text}`).join('\n')
+    + '\n';
 
-  const fmt = (list) => list.map((r) => `- ${r.text}`).join('\n');
-
-  let out = '\n# Memória (como este usuário quer os relatórios)\nSiga estas preferências sem precisar perguntar de novo. Se o pedido atual contrariar uma delas, o pedido atual vence.\n';
-  if (global.length) out += `\n## Vale para todos os relatórios\n${fmt(global)}\n`;
-  if (local.length) out += `\n## Específico deste relatório\n${fmt(local)}\n`;
-
-  // Marca uso (sinal de relevância para poda futura)
-  const ids = rows.map((r) => r.id);
+  // Marca uso (sinal de relevância para a poda)
   db.EmeGeneratedReportMemory.update(
     { useCount: db.sequelize.literal('use_count + 1'), lastUsedAt: new Date() },
-    { where: { id: ids } }
+    { where: { id: rows.map((r) => r.id) } }
   ).catch((err) => console.warn('[ReportMemory] touch:', err?.message));
 
   return out;
 }
 
-// Grava uma memória. Se já existir uma muito parecida no mesmo escopo,
-// ATUALIZA em vez de duplicar — a memória evolui com o uso em vez de inchar.
-export async function remember({ userId, reportId, text, scope = 'report', source = 'eme' }) {
+// Grava uma memória. Se já existir uma muito parecida, ATUALIZA em vez de
+// duplicar — a memória evolui com o uso em vez de inchar.
+export async function remember({ userId, text, source = 'eme' }) {
   const clean = String(text || '').trim().slice(0, MAX_TEXT);
   if (clean.length < 4) return { error: 'Memória vazia ou curta demais.' };
 
-  const targetReportId = scope === 'global' ? null : reportId;
-
-  const existing = await db.EmeGeneratedReportMemory.findAll({
-    where: { userId, reportId: targetReportId },
-  });
+  const existing = await db.EmeGeneratedReportMemory.findAll({ where: { userId } });
 
   const similar = existing.find((r) => isSimilar(r.text, clean));
   if (similar) {
@@ -68,17 +51,15 @@ export async function remember({ userId, reportId, text, scope = 'report', sourc
     return { ok: true, updated: true, id: similar.id };
   }
 
-  // Teto por escopo: remove a menos usada e não fixada
-  if (existing.length >= MAX_PER_SCOPE) {
+  // Teto: remove a menos usada e não fixada
+  if (existing.length >= MAX_MEMORIES) {
     const victim = [...existing]
       .filter((r) => !r.pinned)
       .sort((a, b) => a.useCount - b.useCount || new Date(a.updatedAt) - new Date(b.updatedAt))[0];
     if (victim) await victim.destroy();
   }
 
-  const row = await db.EmeGeneratedReportMemory.create({
-    userId, reportId: targetReportId, text: clean, source,
-  });
+  const row = await db.EmeGeneratedReportMemory.create({ userId, text: clean, source });
   return { ok: true, created: true, id: row.id };
 }
 
@@ -103,9 +84,7 @@ export async function updateMemory(id, userId, patch) {
   const fields = {};
   if (typeof patch.text === 'string') fields.text = patch.text.trim().slice(0, MAX_TEXT);
   if (typeof patch.pinned === 'boolean') fields.pinned = patch.pinned;
-  if (patch.scope === 'global') fields.reportId = null;
-  if (patch.scope === 'report' && patch.reportId) fields.reportId = patch.reportId;
-  if (fields.text !== undefined || fields.pinned !== undefined || fields.reportId !== undefined) {
+  if (Object.keys(fields).length) {
     fields.source = 'user'; // edição manual passa a valer como decisão do usuário
     await row.update(fields);
   }
