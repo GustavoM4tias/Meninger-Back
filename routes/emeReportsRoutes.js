@@ -14,7 +14,7 @@ import {
   setInternalAccess, enablePublic, revokePublic, rotatePublicToken, renewPublic,
   scanPii, publicExposureSummary,
   listTrash, deletionImpact, softDelete, restore, purge, TRASH_RETENTION_DAYS,
-  dismissForUser, undismissForUser,
+  dismissForUser, undismissForUser, listOrphans, transferOwnership,
 } from '../services/emeReports/ReportService.js';
 import { streamReportChat } from '../services/emeReports/ReportChatService.js';
 import {
@@ -180,6 +180,24 @@ router.delete('/:id/purge', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Propriedade: relatórios sem responsável ativo ────────────────────────────
+// Nada é reatribuído sozinho: o relatório continua visível para quem tem
+// acesso, e um admin decide para quem vai a responsabilidade de editar.
+
+router.get('/orphans/all', requireAdmin, async (req, res) => {
+  res.json(await listOrphans());
+});
+
+router.post('/:id/transfer', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  const result = await transferOwnership(report, Number(req.body?.user_id), {
+    keepPreviousAccess: req.body?.keep_previous_access !== false,
+  });
+  if (result?.error) return res.status(400).json(result);
+  res.json(result);
+});
+
 // ── Compartilhado comigo: sair da própria lista ──────────────────────────────
 // NÃO exige admin: quem recebeu precisa poder se livrar do item, inclusive
 // quando o acesso veio por cargo (aí não há linha individual para remover).
@@ -259,9 +277,10 @@ router.post('/:id/share', requireAdmin, async (req, res) => {
 
 // Opções para o modal de compartilhamento
 router.get('/:id/share-options', requireAdmin, async (req, res) => {
+  // Só usuários ativos: compartilhar com quem saiu da empresa não faz sentido
   const users = await db.User.findAll({
     attributes: ['id', 'username', 'position'],
-    where: { role: { [Op.ne]: null } },
+    where: { role: { [Op.ne]: null }, status: true },
     order: [['username', 'ASC']],
     limit: 500,
   });

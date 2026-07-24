@@ -100,6 +100,12 @@ export function canEdit(report, user) {
   return report.ownerId === user.id;
 }
 
+// Relatório sem responsável ativo: continua visível para quem tem acesso
+// (a visibilidade não depende do dono), mas o admin deve reatribuí-lo.
+export function isOrphan(report) {
+  return !report.owner || report.owner.status === false;
+}
+
 export async function canView(report, user) {
   if (!user) return false;
   if (report.deletedAt) return user.role === 'admin' || report.ownerId === user.id; // só para restaurar
@@ -115,7 +121,7 @@ export async function listForUser(user) {
   const own = await db.EmeGeneratedReport.findAll({
     where: { ...(isAdmin ? {} : { ownerId: user.id }), deletedAt: null },
     order: [['updated_at', 'DESC']],
-    include: [{ model: db.User, as: 'owner', attributes: ['id', 'username'] }],
+    include: [{ model: db.User, as: 'owner', attributes: ['id', 'username', 'status'] }],
   });
 
   // Compartilhados comigo (user_id direto ou pelo cargo), menos os que eu
@@ -217,6 +223,60 @@ export async function purge(report) {
   await db.EmeGeneratedReportDismissal.destroy({ where });
   await db.EmeGeneratedReportMemory.destroy({ where: { reportId: report.id } }).catch(() => {});
   await report.destroy();
+}
+
+// ── Propriedade / relatórios sem responsável ─────────────────────────────────
+//
+// Princípio: quem pode VER é a lista de acesso, não o dono. Por isso um
+// relatório cujo dono saiu da empresa continua funcionando normalmente para
+// todo mundo que tem acesso, e o link público continua válido até vencer.
+// O dono importa só para EDITAR — e aí entra a transferência, que é sempre
+// uma decisão explícita de um admin (transferir sozinho para alguém seria
+// dar poder de edição a quem ninguém escolheu).
+
+export async function listOrphans() {
+  const reports = await db.EmeGeneratedReport.findAll({
+    where: { deletedAt: null },
+    include: [{ model: db.User, as: 'owner', attributes: ['id', 'username', 'status'] }],
+    order: [['updated_at', 'DESC']],
+  });
+  // Dono inativo ou apagado do sistema
+  return reports.filter((r) => !r.owner || r.owner.status === false);
+}
+
+export async function transferOwnership(report, newOwnerId, { keepPreviousAccess = true } = {}) {
+  const newOwner = await db.User.findByPk(newOwnerId, { attributes: ['id', 'username', 'status'] });
+  if (!newOwner) return { error: 'Usuário não encontrado.' };
+  if (newOwner.status === false) return { error: 'Não é possível transferir para um usuário inativo.' };
+
+  const previousOwnerId = report.ownerId;
+  await report.update({ ownerId: newOwner.id });
+
+  // O dono anterior costuma continuar precisando ver o relatório; mantê-lo na
+  // lista de acesso evita que ele perca de vista o próprio trabalho.
+  if (keepPreviousAccess && previousOwnerId && previousOwnerId !== newOwner.id) {
+    await db.EmeGeneratedReportAccess.findOrCreate({
+      where: { reportId: report.id, userId: previousOwnerId },
+      defaults: { reportId: report.id, userId: previousOwnerId },
+    });
+    if (report.visibility === 'private') await report.update({ visibility: 'internal' });
+  }
+
+  // O novo dono não deve receber o próprio relatório como "compartilhado".
+  await db.EmeGeneratedReportDismissal.destroy({
+    where: { reportId: report.id, userId: newOwner.id },
+  });
+
+  NotificationService.notify({
+    type: NotificationType.REPORT_SHARED,
+    recipients: { users: [newOwner.id] },
+    title: `Você agora é responsável por: ${report.title}`,
+    body: `O relatório "${report.title}" foi transferido para você e passou a ser seu para editar e compartilhar.`,
+    link: `/relatorios/${report.id}`,
+    data: { reportId: report.id },
+  }).catch((err) => console.warn('[ReportService] notify transfer:', err?.message));
+
+  return { ok: true, ownerId: newOwner.id, ownerName: newOwner.username };
 }
 
 // ── Sair de um compartilhamento (lado de quem recebeu) ───────────────────────
