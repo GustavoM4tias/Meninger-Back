@@ -13,6 +13,8 @@ import {
   normalizeSpec, canEdit, canView, listForUser, publish, getPublishedPayload,
   setInternalAccess, enablePublic, revokePublic, rotatePublicToken, renewPublic,
   scanPii, publicExposureSummary,
+  listTrash, deletionImpact, softDelete, restore, purge, TRASH_RETENTION_DAYS,
+  dismissForUser, undismissForUser,
 } from '../services/emeReports/ReportService.js';
 import { streamReportChat } from '../services/emeReports/ReportChatService.js';
 import {
@@ -87,6 +89,7 @@ router.get('/:id', async (req, res) => {
   const report = await loadReport(req, res);
   if (!report) return;
   if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  if (report.deletedAt) return res.status(410).json({ error: 'Este relatório está na lixeira. Restaure-o para editar.' });
   const messages = await db.EmeGeneratedReportMessage.findAll({
     where: { reportId: report.id },
     order: [['created_at', 'ASC']],
@@ -137,15 +140,63 @@ router.put('/:id', requireAdmin, async (req, res) => {
   res.json(report);
 });
 
+// O que será perdido — o front mostra antes de confirmar a exclusão
+router.get('/:id/deletion-impact', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  res.json(await deletionImpact(report));
+});
+
+// Exclusão vai para a LIXEIRA (reversível por 30 dias). O link público morre
+// imediatamente — não faz sentido continuar exposto depois de excluído.
 router.delete('/:id', requireAdmin, async (req, res) => {
   const report = await loadReport(req, res);
   if (!report) return;
   if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
-  await db.EmeGeneratedReportMessage.destroy({ where: { reportId: report.id } });
-  await db.EmeGeneratedReportAccess.destroy({ where: { reportId: report.id } });
-  await db.EmeGeneratedReportPublicLog.destroy({ where: { reportId: report.id } });
-  await db.EmeGeneratedReportVersion.destroy({ where: { reportId: report.id } });
-  await report.destroy();
+  await softDelete(report, req.user);
+  res.json({ ok: true, restorableUntilDays: TRASH_RETENTION_DAYS });
+});
+
+router.get('/trash/all', requireAdmin, async (req, res) => {
+  res.json(await listTrash(req.user));
+});
+
+router.post('/:id/restore', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  await restore(report);
+  res.json({ ok: true, report });
+});
+
+// Exclusão definitiva (esvaziar lixeira item a item)
+router.delete('/:id/purge', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  if (!report.deletedAt) return res.status(400).json({ error: 'Mova para a lixeira antes de excluir definitivamente.' });
+  await purge(report);
+  res.json({ ok: true });
+});
+
+// ── Compartilhado comigo: sair da própria lista ──────────────────────────────
+// NÃO exige admin: quem recebeu precisa poder se livrar do item, inclusive
+// quando o acesso veio por cargo (aí não há linha individual para remover).
+router.post('/:id/dismiss', async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!(await canView(report, req.user))) return res.status(403).json({ error: 'Sem permissão.' });
+  if (report.ownerId === req.user.id) {
+    return res.status(400).json({ error: 'Você é o dono deste relatório - use a exclusão.' });
+  }
+  await dismissForUser(report.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// Desfazer (o front oferece logo depois de remover)
+router.delete('/:id/dismiss', async (req, res) => {
+  await undismissForUser(req.params.id, req.user.id);
   res.json({ ok: true });
 });
 

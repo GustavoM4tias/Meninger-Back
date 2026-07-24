@@ -11,6 +11,7 @@ import { Op } from 'sequelize';
 import db from '../models/sequelize/index.js';
 import NotificationService from '../services/notification/NotificationService.js';
 import { NotificationType } from '../services/notification/notificationTypes.js';
+import { purge, TRASH_RETENTION_DAYS } from '../services/emeReports/ReportService.js';
 
 const TZ = process.env.TIMEZONE || 'America/Sao_Paulo';
 
@@ -50,8 +51,22 @@ async function run() {
     console.log(`[reportPublicExpiry] Link vencido revogado: ${report.id} (${report.title})`);
   }
 
-  if (expiring.length || expired.length) {
-    console.log(`[reportPublicExpiry] ${expiring.length} aviso(s) D-3, ${expired.length} revogado(s).`);
+  // 3) Lixeira: purga definitiva do que passou da janela de restauração
+  const cutoff = new Date(now.getTime() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const toPurge = await db.EmeGeneratedReport.findAll({
+    where: { deletedAt: { [Op.lt]: cutoff, [Op.ne]: null } },
+  });
+  for (const report of toPurge) {
+    try {
+      await purge(report);
+      console.log(`[reportPublicExpiry] Lixeira purgada: ${report.id} (${report.title})`);
+    } catch (err) {
+      console.warn('[reportPublicExpiry] purge:', report.id, err?.message);
+    }
+  }
+
+  if (expiring.length || expired.length || toPurge.length) {
+    console.log(`[reportPublicExpiry] ${expiring.length} aviso(s) D-3, ${expired.length} revogado(s), ${toPurge.length} purgado(s).`);
   }
 }
 
