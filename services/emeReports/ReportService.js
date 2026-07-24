@@ -32,6 +32,29 @@ export function sanitizeCustomHtml(html) {
     .replace(/(href|src)\s*=\s*(["']?)\s*javascript:[^"'\s>]*\2/gi, '');
 }
 
+// O modelo às vezes escapa as quebras de linha ("\\n" literal em vez do
+// caractere). Sem isso o markdown aparece com "\n\n" no meio do texto.
+function unescapeText(value) {
+  if (typeof value !== 'string') return value;
+  return value
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, ' ')
+    .replace(/\\"/g, '"');
+}
+
+// Aplica a correção em todo texto das props, em qualquer profundidade.
+function deepUnescape(value) {
+  if (typeof value === 'string') return unescapeText(value);
+  if (Array.isArray(value)) return value.map(deepUnescape);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = deepUnescape(v);
+    return out;
+  }
+  return value;
+}
+
 // Normaliza o spec vindo da Eme/front: garante shape, ids únicos, tipos
 // conhecidos (desconhecido vira custom-html vazio? não — mantém, o renderer
 // mostra aviso) e sanitiza custom-html.
@@ -45,7 +68,7 @@ export function normalizeSpec(rawSpec) {
       let id = typeof b.id === 'string' && b.id ? b.id : `b${i + 1}`;
       while (seen.has(id)) id = `${id}x`;
       seen.add(id);
-      const props = b.props && typeof b.props === 'object' ? b.props : {};
+      const props = deepUnescape(b.props && typeof b.props === 'object' ? b.props : {});
       if (b.type === 'custom-html') props.html = sanitizeCustomHtml(props.html);
       return { id, type: b.type, props };
     });
