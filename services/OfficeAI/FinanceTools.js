@@ -112,17 +112,23 @@ registerTool({
             const rows = expenses
                 .sort((a, b) => Number(b.amount) - Number(a.amount))
                 .slice(0, 30)
-                .map(e => [
-                    e.bill?.creditor_json?.tradeName || e.bill?.creditor_json?.name || e.bill?.document_number || `Título ${e.billId}`,
-                    e.departmentName || '-',
-                    e.departmentCategoryName || '-',
-                    fmtDate(e.paidAt || e.dueDate) || '-',
-                    fmtMoney(e.amount),
-                ]);
+                .map(e => ({
+                    fornecedor: e.bill?.creditor_json?.tradeName || e.bill?.creditor_json?.name || e.bill?.document_number || `Título ${e.billId}`,
+                    departamento: e.departmentName || '-',
+                    categoria: e.departmentCategoryName || '-',
+                    pagamento: fmtDate(e.paidAt || e.dueDate) || '-',
+                    valor: fmtMoney(e.amount),
+                }));
             out.type = 'table';
             out.title = `Custos — ${groups.map(g => g.costCenterName || g.costCenterId).slice(0, 3).join(', ')}`;
             out.subtitle = `${periodoTxt} · ${expenses.length} parcela(s) · Total ${fmtMoney(total)}`;
-            out.columns = ['Fornecedor/Título', 'Departamento', 'Categoria', 'Pagamento', 'Valor'];
+            out.columns = [
+                { key: 'fornecedor', label: 'Fornecedor/Título' },
+                { key: 'departamento', label: 'Departamento' },
+                { key: 'categoria', label: 'Categoria' },
+                { key: 'pagamento', label: 'Pagamento' },
+                { key: 'valor', label: 'Valor', type: 'currency' },
+            ];
             out.rows = rows;
             out.total = expenses.length;
         } else {
@@ -211,16 +217,24 @@ registerTool({
                 type: 'table',
                 title: 'Boletos Caixa',
                 subtitle: `Emissão ${periodoTxt} · ${rows.length} boleto(s)`,
-                columns: ['Reserva', 'Titular', 'Empreendimento', 'Valor', 'Vencimento', 'Emissão', 'Pagamento'],
-                rows: rows.slice(0, 20).map(r => [
-                    r.idreserva,
-                    r.titular_nome || '-',
-                    r.empreendimento || '-',
-                    fmtMoney(r.valor),
-                    fmtDate(r.vencimento) || '-',
-                    BOLETO_STATUS_LABEL[r.status] || r.status,
-                    PAYMENT_LABEL[r.payment_status] || r.payment_status || '-',
-                ]),
+                columns: [
+                    { key: 'reserva', label: 'Reserva' },
+                    { key: 'titular', label: 'Titular' },
+                    { key: 'empreendimento', label: 'Empreendimento' },
+                    { key: 'valor', label: 'Valor', type: 'currency' },
+                    { key: 'vencimento', label: 'Vencimento' },
+                    { key: 'emissao', label: 'Emissão' },
+                    { key: 'pagamento', label: 'Pagamento' },
+                ],
+                rows: rows.slice(0, 20).map(r => ({
+                    reserva: r.idreserva,
+                    titular: r.titular_nome || '-',
+                    empreendimento: r.empreendimento || '-',
+                    valor: fmtMoney(r.valor),
+                    vencimento: fmtDate(r.vencimento) || '-',
+                    emissao: BOLETO_STATUS_LABEL[r.status] || r.status,
+                    pagamento: PAYMENT_LABEL[r.payment_status] || r.payment_status || '-',
+                })),
                 total: rows.length,
                 message: `${rows.length} boleto(s) no filtro (emissão ${periodoTxt}). Números agregados no campo "resumo", últimos boletos no campo "recentes" (a tabela JÁ está na UI). Responda CURTO usando SOMENTE estes dados — nunca invente valor, reserva ou status. Ações (2ª via, reprocessar, marcar cancelado) são feitas na tela /financeiro/boleto-caixa.`,
             },
