@@ -50,6 +50,11 @@ export default (sequelize, DataTypes) => {
     // Versão publicada corrente (espelho de eme_generated_report_versions.version).
     publishedVersion: { type: DataTypes.INTEGER, allowNull: true },
     publishedAt: { type: DataTypes.DATE, allowNull: true },
+
+    // Lixeira: exclusão é reversível por 30 dias (o scheduler purga depois).
+    // Um relatório na lixeira some de todas as listas e do link público.
+    deletedAt: { type: DataTypes.DATE, allowNull: true },
+    deletedBy: { type: DataTypes.INTEGER, allowNull: true },
   }, {
     tableName: 'eme_generated_reports',
     underscored: true,

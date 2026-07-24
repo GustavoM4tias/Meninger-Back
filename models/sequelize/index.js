@@ -90,6 +90,7 @@ import AcademyUserBadgeDefine from './academy/userBadge.js';
 import AcademyVideoWatchDefine from './academy/videoWatch.js';
 import AcademyOnboardingRuleDefine from './academy/onboardingRule.js';
 import EmeAuditLogDefine from './emeAuditLog.js';
+import ReportExportLogDefine from './reportExportLog.js';
 
 import ExternalOrganizationDefine from './academy/external/externalOrganization.js';
 import AuthAccessCodeDefine from './academy/external/authAccessCode.js';
@@ -154,6 +155,7 @@ import EmeGeneratedReportAccessDefine      from './emeReports/generatedReportAcc
 import EmeGeneratedReportPublicLogDefine   from './emeReports/generatedReportPublicLog.js';
 import EmeGeneratedReportCustomBlockDefine from './emeReports/generatedReportCustomBlock.js';
 import EmeGeneratedReportMemoryDefine      from './emeReports/generatedReportMemory.js';
+import EmeGeneratedReportDismissalDefine   from './emeReports/generatedReportDismissal.js';
 
 // Notificações
 import NotificationDefine from './notification.js';
@@ -331,6 +333,7 @@ db.AcademyUserBadge = AcademyUserBadgeDefine(sequelize, DataTypes);
 db.AcademyVideoWatch = AcademyVideoWatchDefine(sequelize, DataTypes);
 db.AcademyOnboardingRule = AcademyOnboardingRuleDefine(sequelize, DataTypes);
 db.EmeAuditLog = EmeAuditLogDefine(sequelize, DataTypes);
+db.ReportExportLog = ReportExportLogDefine(sequelize, DataTypes);
 
 db.ExternalOrganization = ExternalOrganizationDefine(sequelize, DataTypes);
 db.AuthAccessCode = AuthAccessCodeDefine(sequelize, DataTypes);
@@ -395,6 +398,7 @@ db.EmeGeneratedReportAccess      = EmeGeneratedReportAccessDefine(sequelize, Dat
 db.EmeGeneratedReportPublicLog   = EmeGeneratedReportPublicLogDefine(sequelize, DataTypes);
 db.EmeGeneratedReportCustomBlock = EmeGeneratedReportCustomBlockDefine(sequelize, DataTypes);
 db.EmeGeneratedReportMemory      = EmeGeneratedReportMemoryDefine(sequelize, DataTypes);
+db.EmeGeneratedReportDismissal   = EmeGeneratedReportDismissalDefine(sequelize, DataTypes);
 
 // Notificações
 db.Notification           = NotificationDefine(sequelize, DataTypes);

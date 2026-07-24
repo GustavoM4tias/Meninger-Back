@@ -102,6 +102,7 @@ export function canEdit(report, user) {
 
 export async function canView(report, user) {
   if (!user) return false;
+  if (report.deletedAt) return user.role === 'admin' || report.ownerId === user.id; // só para restaurar
   if (user.role === 'admin' || report.ownerId === user.id) return true;
   if (report.visibility === 'private') return false;
   // internal (e public também conta como visível internamente p/ quem está na lista)
@@ -112,11 +113,13 @@ export async function canView(report, user) {
 export async function listForUser(user) {
   const isAdmin = user.role === 'admin';
   const own = await db.EmeGeneratedReport.findAll({
-    where: isAdmin ? {} : { ownerId: user.id },
+    where: { ...(isAdmin ? {} : { ownerId: user.id }), deletedAt: null },
     order: [['updated_at', 'DESC']],
     include: [{ model: db.User, as: 'owner', attributes: ['id', 'username'] }],
   });
-  // Compartilhados comigo (user_id direto ou pelo cargo)
+
+  // Compartilhados comigo (user_id direto ou pelo cargo), menos os que eu
+  // mesmo tirei da minha lista.
   const grants = await db.EmeGeneratedReportAccess.findAll({
     where: {
       [Op.or]: [
@@ -125,17 +128,108 @@ export async function listForUser(user) {
       ],
     },
   });
+  const dismissed = new Set(
+    (await db.EmeGeneratedReportDismissal.findAll({ where: { userId: user.id } }))
+      .map((d) => d.reportId)
+  );
   const sharedIds = [...new Set(grants.map((g) => g.reportId))].filter(
-    (id) => !own.some((r) => r.id === id)
+    (id) => !own.some((r) => r.id === id) && !dismissed.has(id)
   );
   const shared = sharedIds.length
     ? await db.EmeGeneratedReport.findAll({
-        where: { id: sharedIds, visibility: { [Op.ne]: 'private' }, status: 'published' },
+        where: {
+          id: sharedIds, visibility: { [Op.ne]: 'private' },
+          status: 'published', deletedAt: null,
+        },
         order: [['updated_at', 'DESC']],
         include: [{ model: db.User, as: 'owner', attributes: ['id', 'username'] }],
       })
     : [];
-  return { own: isAdmin ? own : own, shared };
+  return { own, shared };
+}
+
+// Lixeira do usuário (admin vê a de todos).
+export async function listTrash(user) {
+  return db.EmeGeneratedReport.findAll({
+    where: {
+      ...(user.role === 'admin' ? {} : { ownerId: user.id }),
+      deletedAt: { [Op.ne]: null },
+    },
+    order: [['deleted_at', 'DESC']],
+    include: [{ model: db.User, as: 'owner', attributes: ['id', 'username'] }],
+  });
+}
+
+// ── Exclusão ─────────────────────────────────────────────────────────────────
+
+export const TRASH_RETENTION_DAYS = 30;
+
+// O que o usuário precisa saber ANTES de excluir.
+export async function deletionImpact(report) {
+  const access = await db.EmeGeneratedReportAccess.findAll({ where: { reportId: report.id } });
+  const userIds = access.filter((a) => a.userId).map((a) => a.userId);
+  const positions = access.filter((a) => a.position).map((a) => a.position);
+
+  const users = userIds.length
+    ? await db.User.findAll({ where: { id: userIds }, attributes: ['id', 'username'] })
+    : [];
+  const versions = await db.EmeGeneratedReportVersion.count({ where: { reportId: report.id } });
+
+  return {
+    title: report.title,
+    status: report.status,
+    visibility: report.visibility,
+    peopleCount: users.length,
+    people: users.map((u) => u.username),
+    positions,
+    hasPublicLink: report.visibility === 'public' && !!report.publicToken,
+    publicViews: report.publicViews,
+    publicExpiresAt: report.publicExpiresAt,
+    versions,
+    retentionDays: TRASH_RETENTION_DAYS,
+  };
+}
+
+// Soft delete: some de todas as listas e MATA o link público na hora
+// (dado exposto não pode sobreviver à intenção de excluir).
+export async function softDelete(report, user) {
+  await report.update({
+    deletedAt: new Date(),
+    deletedBy: user.id,
+    visibility: report.visibility === 'public' ? 'private' : report.visibility,
+    publicToken: null,
+    publicExpiresAt: null,
+  });
+}
+
+// Restaurar volta o relatório como PRIVADO: quem tinha acesso interno continua
+// na lista, mas o link público precisa ser gerado de novo conscientemente.
+export async function restore(report) {
+  await report.update({ deletedAt: null, deletedBy: null });
+}
+
+export async function purge(report) {
+  const where = { reportId: report.id };
+  await db.EmeGeneratedReportMessage.destroy({ where });
+  await db.EmeGeneratedReportAccess.destroy({ where });
+  await db.EmeGeneratedReportPublicLog.destroy({ where });
+  await db.EmeGeneratedReportVersion.destroy({ where });
+  await db.EmeGeneratedReportDismissal.destroy({ where });
+  await db.EmeGeneratedReportMemory.destroy({ where: { reportId: report.id } }).catch(() => {});
+  await report.destroy();
+}
+
+// ── Sair de um compartilhamento (lado de quem recebeu) ───────────────────────
+
+export async function dismissForUser(reportId, userId) {
+  await db.EmeGeneratedReportDismissal.findOrCreate({
+    where: { reportId, userId },
+    defaults: { reportId, userId },
+  });
+}
+
+export async function undismissForUser(reportId, userId) {
+  await db.EmeGeneratedReportDismissal.destroy({ where: { reportId, userId } });
 }
 
 // ── Publicação / versões ─────────────────────────────────────────────────────
@@ -173,6 +267,9 @@ export async function getPublishedPayload(report) {
 // ── Compartilhamento interno ─────────────────────────────────────────────────
 
 export async function setInternalAccess(report, { userIds = [], positions = [] }, grantedBy) {
+  const previous = await db.EmeGeneratedReportAccess.findAll({ where: { reportId: report.id } });
+  const previousUserIds = new Set(previous.filter((a) => a.userId).map((a) => a.userId));
+
   await db.EmeGeneratedReportAccess.destroy({ where: { reportId: report.id } });
   const rows = [
     ...userIds.map((id) => ({ reportId: report.id, userId: id })),
@@ -181,10 +278,20 @@ export async function setInternalAccess(report, { userIds = [], positions = [] }
   if (rows.length) await db.EmeGeneratedReportAccess.bulkCreate(rows);
   if (report.visibility === 'private') await report.update({ visibility: 'internal' });
 
-  if (userIds.length) {
+  // Convite NOVO limpa o "não quero ver": é um novo convite, não o antigo.
+  const freshlyInvited = userIds.filter((id) => !previousUserIds.has(id));
+  if (freshlyInvited.length) {
+    await db.EmeGeneratedReportDismissal.destroy({
+      where: { reportId: report.id, userId: freshlyInvited },
+    });
+  }
+
+  // Notifica só quem é novidade — reabrir o modal e salvar de novo não deve
+  // reenviar aviso para quem já tinha acesso.
+  if (freshlyInvited.length) {
     NotificationService.notify({
       type: NotificationType.REPORT_SHARED,
-      recipients: { users: userIds },
+      recipients: { users: freshlyInvited },
       title: `Relatório compartilhado: ${report.title}`,
       body: `${grantedBy.username || 'Um colega'} compartilhou o relatório "${report.title}" com você.`,
       link: `/relatorios/${report.id}/view`,
@@ -244,6 +351,7 @@ export async function resolvePublicToken(token) {
   if (!token || typeof token !== 'string' || token.length < 16 || token.length > 64) return null;
   const report = await db.EmeGeneratedReport.findOne({ where: { publicToken: token } });
   if (!report) return null;
+  if (report.deletedAt) return null; // na lixeira = link morto
   if (report.visibility !== 'public') return null;
   if (!report.publicExpiresAt || new Date(report.publicExpiresAt) < new Date()) return null;
   if (report.status !== 'published') return null;
