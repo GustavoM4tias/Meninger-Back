@@ -20,6 +20,10 @@ export default (sequelize, DataTypes) => {
     // Empreendimento principal (opcional; relatório pode ser multi-empreendimento).
     enterpriseName: { type: DataTypes.STRING(200), allowNull: true },
 
+    // Pedido original feito no chat da Eme (tool create_report). O builder envia
+    // como 1ª mensagem quando o relatório abre vazio e sem conversa.
+    briefing: { type: DataTypes.TEXT, allowNull: true },
+
     // draft | published
     status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'draft' },
 
