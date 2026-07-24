@@ -1,15 +1,20 @@
 // services/OfficeAI/ReportsTools.js
 //
-// Tool da Eme sobre os RELATÓRIOS DA EME (tela /relatorios):
+// Tools da Eme sobre os RELATÓRIOS DA EME (tela /relatorios):
 //   - query_reports: lista os relatórios que o usuário PODE ver (próprios +
 //     compartilhados com ele por usuário/cargo, já respeitando privado/publicado),
 //     com um card de resumo (blocos, período, modo, visibilidade) e link p/ abrir.
+//   - create_report: cria um RASCUNHO com o pedido do usuário (briefing) e devolve
+//     o link do builder; ao abrir, o builder dispara o briefing como 1ª mensagem
+//     e a Eme monta os blocos lá (aqui no chat NÃO se monta relatório).
 //
 // Visibilidade: reutiliza listForUser(user) do ReportService — fonte única da
 // regra (admin vê tudo; dono vê os seus; internos/públicos por acesso; privados só
-// do dono). NÃO é adminOnly: relatórios têm audiência.
+// do dono). query_reports NÃO é adminOnly (relatórios têm audiência);
+// create_report É adminOnly — mesma alçada do POST /reports.
 
 import { registerTool } from './ToolRegistry.js';
+import db from '../../models/sequelize/index.js';
 import { listForUser, publicExposureSummary } from '../emeReports/ReportService.js';
 
 const MAX_CARDS = 8;
@@ -99,5 +104,55 @@ registerTool({
             out.screenLink = '/relatorios';
         }
         return { result: out, resultCount: total };
+    },
+});
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const cleanDate = (v) => (DATE_RE.test(String(v || '').trim()) ? String(v).trim() : null);
+
+registerTool({
+    name: 'create_report',
+    description: 'CRIA um relatório da Eme (sistema de Relatórios, tela /relatorios) como rascunho e devolve o card com link do builder, onde a Eme monta os blocos automaticamente a partir do pedido. Use SEMPRE que o usuário pedir para criar/montar/gerar/salvar um relatório com dados do sistema (funil de leads, pré-cadastros, reservas, conversão, comparativos, por empreendimento/período) — ex.: "cria um relatório disso", "quero um relatório no meu sistema de relatórios", "monta um relatório comparativo". NÃO confundir com relatório de EVENTOS (query_events) nem com abrir uma tela existente (navigate_to_page). Em briefing, passe o pedido COMPLETO do usuário (métricas, empreendimento, período, comparações desejadas) — é ele que a Eme do builder vai executar.',
+    parameters: {
+        type: 'object',
+        properties: {
+            titulo: { type: 'string', description: 'Título curto do relatório (ex.: "Funil de Vendas - Residencial Ingá").' },
+            empreendimento: { type: 'string', description: 'Empreendimento principal, se o pedido for de um específico.' },
+            briefing: { type: 'string', description: 'O pedido completo do usuário, com todas as métricas/comparações/período que o relatório deve conter. Será executado pela Eme dentro do builder.' },
+            periodo_inicio: { type: 'string', description: 'Início do período AAAA-MM-DD (opcional).' },
+            periodo_fim: { type: 'string', description: 'Fim do período AAAA-MM-DD; omita para "até hoje" (opcional).' },
+            modo: { type: 'string', enum: ['fixed', 'live'], description: '"live" quando o usuário quiser acompanhar dados atualizados; padrão "fixed" (dados congelados).' },
+        },
+        required: ['briefing'],
+    },
+    adminOnly: true,
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const briefing = String(args?.briefing || '').trim().slice(0, 4000);
+        if (!briefing) {
+            return { result: { error: 'Briefing vazio — descreva o que o relatório deve conter.' } };
+        }
+        const report = await db.EmeGeneratedReport.create({
+            ownerId: user.id,
+            title: String(args?.titulo || 'Novo relatório').trim().slice(0, 200) || 'Novo relatório',
+            enterpriseName: args?.empreendimento ? String(args.empreendimento).trim().slice(0, 200) : null,
+            dataMode: args?.modo === 'live' ? 'live' : 'fixed',
+            periodStart: cleanDate(args?.periodo_inicio),
+            periodEnd: cleanDate(args?.periodo_fim),
+            briefing,
+        });
+
+        const card = reportCard(report.get({ plain: true }), 'meu');
+        return {
+            result: {
+                type: 'report_cards',
+                title: 'Relatório criado',
+                cards: [card],
+                screenLink: '/relatorios',
+                message: `Rascunho "${report.title}" criado. A UI JÁ mostra o card com botão Abrir: ao abrir, a Eme do builder monta o relatório automaticamente a partir do pedido. Responda CURTO confirmando a criação e orientando a clicar em Abrir — NÃO invente blocos, números nem conteúdo do relatório aqui no chat.`,
+            },
+            resultIds: [report.id],
+            resultCount: 1,
+        };
     },
 });
