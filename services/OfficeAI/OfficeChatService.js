@@ -21,6 +21,11 @@ import './FinanceTools.js';
 import './PeopleTools.js';
 import './ContractTools.js';
 import './ProfileTools.js';
+// Projeção de vendas (só ativa), Relatórios da Eme e Checklist (leitura + escrita
+// com trava de propriedade/gestão e confirmação).
+import './ProjectionTools.js';
+import './ReportsTools.js';
+import './ChecklistTools.js';
 import { getToolsFor, toGeminiDeclarations, findTool } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
 
