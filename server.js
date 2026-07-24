@@ -24,6 +24,7 @@ import academyRoutes from './routes/academyRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import bucketUploadRoutes from './routes/bucketUploadRoutes.js';
 import permissionRoutes from './routes/permissionRoutes.js';
+import reportExportLogRoutes from './routes/reportExportLogRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
 import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
@@ -214,6 +215,7 @@ app.use('/api/academy', academyRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/bucket-upload', bucketUploadRoutes);
 app.use('/api/permissions', permissionRoutes);
+app.use('/api/report-exports', reportExportLogRoutes);   // trilha de exportações (GET = admin)
 app.use('/api/realestate', realEstateRoutes); // cadastro de imobiliárias (CV)
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
