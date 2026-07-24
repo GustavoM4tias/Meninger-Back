@@ -11,6 +11,20 @@ import authProfileService from './authProfileService.js';
 function approvalRequiredError() { const e = new Error('Esta tarefa precisa de autorização antes de avançar. Envie para aprovação.'); e.code = 'APPROVAL_REQUIRED'; e.httpStatus = 409; return e; }
 function lockedError() { const e = new Error('Tarefa em aprovação: edição bloqueada até a decisão.'); e.code = 'APPROVAL_LOCKED'; e.httpStatus = 409; return e; }
 function doneLockedError() { const e = new Error('Tarefa concluída não pode voltar para outra etapa.'); e.code = 'DONE_LOCKED'; e.httpStatus = 409; return e; }
+function taskForbiddenError() { const e = new Error('Você só pode alterar tarefas suas (que você é responsável) ou de checklists que você é dono.'); e.code = 'TASK_FORBIDDEN'; e.httpStatus = 403; return e; }
+
+// Trava de propriedade (o backend antes não checava): admin edita tudo; usuário
+// comum só altera tarefa SUA (é responsável) ou de checklist que ele é DONO.
+async function assertCanWriteTask(task, { userId, isAdmin }) {
+    if (isAdmin) return;
+    const uid = Number(userId);
+    if (!uid) throw taskForbiddenError();
+    if (assigneeIdsOf(task).includes(uid)) return;
+    const checklist = await db.Checklist.findByPk(task.checklist_id, { attributes: ['owner_user_id'] });
+    if (checklist && Number(checklist.owner_user_id) === uid) return;
+    throw taskForbiddenError();
+}
+
 const statusById = (statusMap, id) => (id ? statusMap.get(Number(id)) : null);
 const roleStatusId = (statusMap, role) => { for (const s of statusMap.values()) if (s.approval_role === role) return s.id; return null; };
 
@@ -203,6 +217,8 @@ export async function createTask({ checklistId, payload = {}, userId }) {
 export async function updateTask({ id, payload = {}, userId, isAdmin = false }) {
     const task = await db.ChecklistTask.findByPk(Number(id));
     if (!task) throw new Error('Tarefa não encontrada.');
+    // Propriedade: comum só altera tarefa sua/associada (admin edita tudo).
+    await assertCanWriteTask(task, { userId, isAdmin });
     // Lock: em aprovação (PENDING) a edição de campos fica bloqueada (só a decisão age).
     if (task.approval_status === 'PENDING') throw lockedError();
 
@@ -264,6 +280,8 @@ export async function updateTask({ id, payload = {}, userId, isAdmin = false }) 
 export async function setTaskStatus({ id, statusId, userId, isAdmin = false }) {
     const task = await db.ChecklistTask.findByPk(Number(id));
     if (!task) throw new Error('Tarefa não encontrada.');
+    // Propriedade: comum só altera tarefa sua/associada (admin edita tudo).
+    await assertCanWriteTask(task, { userId, isAdmin });
     const statusMap = await loadStatusMap();
     // Em aprovação: bloqueia mudança manual de status (só a decisão move).
     if (task.approval_status === 'PENDING') throw lockedError();

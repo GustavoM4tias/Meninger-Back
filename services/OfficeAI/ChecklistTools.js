@@ -6,11 +6,11 @@
 //   - update_checklist_task: atualiza a ETAPA/anotação de uma tarefa — SEMPRE confirmando
 //                            antes de gravar, e só em tarefa que o usuário PODE editar.
 //
-// ⚠️ SEGURANÇA (crítico): o backend do Checklist NÃO trava propriedade — qualquer
-// usuário interno pode editar qualquer tarefa via service. Portanto a trava de
-// escrita é feita AQUI: admin, OU responsável pela tarefa, OU dono do checklist,
-// OU gestor (cadeia de manager_id) de algum responsável. Fora disso: recusa.
-// Leitura já é escopada nos services (listChecklists/getChecklistFull com isAdmin).
+// SEGURANÇA: o backend agora trava propriedade (taskService.assertCanWriteTask):
+// comum só altera tarefa SUA (responsável) ou de checklist que é DONO; admin tudo.
+// Esta tool aplica a MESMA regra antes de gravar (evita prometer uma edição que o
+// backend rejeitaria). Leitura já é escopada nos services (listChecklists/
+// getChecklistFull); ver tarefas de OUTRA pessoa é admin-only.
 
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
@@ -27,27 +27,6 @@ const STATE_LABEL = { TODO: 'A fazer', IN_PROGRESS: 'Em andamento', BLOCKED: 'Bl
 const APPROVAL_LABEL = { NONE: null, PENDING: 'Aguardando aprovação', APPROVED: 'Aprovada', REJECTED: 'Reprovada (em ajuste)' };
 const PRIORITY_LABEL = { LOW: 'Baixa', MEDIUM: 'Média', HIGH: 'Alta', URGENT: 'Urgente' };
 
-// ── Cadeia de gestão: userId é gestor (direto/indireto) do assignee? ──────────
-// Sem cache entre requests: decisão de permissão sempre lê o estado atual (evita
-// conceder acesso com base em hierarquia desatualizada).
-async function managerChainMap() {
-    // Mapa id→manager_id de todos os usuários (barato; poucos milhares no máximo).
-    const users = await db.User.findAll({ attributes: ['id', 'manager_id'], raw: true });
-    const m = new Map(users.map(u => [Number(u.id), u.manager_id ? Number(u.manager_id) : null]));
-    return m;
-}
-function managesUser(map, managerId, subordinateId, depth = 0) {
-    if (depth > 15) return false; // guarda anti-ciclo
-    let cur = map.get(Number(subordinateId));
-    let hops = 0;
-    while (cur != null && hops < 15) {
-        if (cur === Number(managerId)) return true;
-        cur = map.get(cur);
-        hops++;
-    }
-    return false;
-}
-
 function assigneeIdsOf(task) {
     const ids = new Set();
     if (task.assignee_user_id) ids.add(Number(task.assignee_user_id));
@@ -55,17 +34,13 @@ function assigneeIdsOf(task) {
     return [...ids];
 }
 
-// Pode o `user` ESCREVER nesta tarefa? admin | responsável | dono do checklist | gestor de um responsável.
-async function canWriteTask(user, task, checklist) {
+// Pode o `user` ESCREVER nesta tarefa? admin | responsável | dono do checklist.
+// (Mesma regra do backend: comum só altera as suas e associadas.)
+function canWriteTask(user, task, checklist) {
     if (user.role === 'admin') return { ok: true, reason: 'admin' };
     const uid = Number(user.id);
-    const aIds = assigneeIdsOf(task);
-    if (aIds.includes(uid)) return { ok: true, reason: 'responsavel' };
+    if (assigneeIdsOf(task).includes(uid)) return { ok: true, reason: 'responsavel' };
     if (checklist && Number(checklist.owner_user_id) === uid) return { ok: true, reason: 'dono' };
-    if (aIds.length) {
-        const map = await managerChainMap();
-        if (aIds.some(a => managesUser(map, uid, a))) return { ok: true, reason: 'gestor' };
-    }
     return { ok: false };
 }
 
@@ -193,11 +168,11 @@ registerTool({
 // ─── my_checklist_tasks ───────────────────────────────────────────────────────
 registerTool({
     name: 'my_checklist_tasks',
-    description: 'Lista as TAREFAS de checklist do próprio usuário (todas as demandas atribuídas a ele, com etapa, prazo e status de aprovação). Também pode trazer as tarefas de OUTRA pessoa APENAS se o usuário for admin ou gestor dela (senão recusa). Use quando perguntarem "minhas tarefas", "o que eu tenho para fazer", "tarefas atrasadas minhas", "tarefas do <fulano>" (este último só passa se ele for subordinado/você admin).',
+    description: 'Lista as TAREFAS de checklist do próprio usuário (todas as demandas atribuídas a ele, com etapa, prazo e status de aprovação). Traz as tarefas de OUTRA pessoa APENAS se o usuário for admin (usuário comum vê só as suas). Use quando perguntarem "minhas tarefas", "o que eu tenho para fazer", "tarefas atrasadas minhas", "tarefas do <fulano>" (este último só se for admin).',
     parameters: {
         type: 'object',
         properties: {
-            de_usuario: { type: 'string', description: 'Nome/e-mail de outra pessoa para ver as tarefas DELA. Só funciona se o usuário for admin ou gestor dessa pessoa.' },
+            de_usuario: { type: 'string', description: 'Nome/e-mail de outra pessoa para ver as tarefas DELA. Só funciona se o usuário for admin.' },
             apenas_pendentes: { type: 'boolean', description: 'true = esconde as concluídas/canceladas. Padrão: false (traz tudo).' },
         },
     },
@@ -214,10 +189,8 @@ registerTool({
             if (!cands.length) return { result: { message: `Não encontrei ninguém como "${args.de_usuario}". Confirme o nome.` }, resultCount: 0 };
             if (cands.length > 1) return { result: { message: `"${args.de_usuario}" é ambíguo: ${cands.slice(0, 6).map(u => u.username).join('; ')}. Pergunte qual.` }, resultCount: 0 };
             const alvoUser = cands[0];
-            if (Number(alvoUser.id) !== Number(user.id)) {
-                const map = await managerChainMap();
-                const allowed = user.role === 'admin' || managesUser(map, user.id, alvoUser.id);
-                if (!allowed) return { result: { message: `Você só pode ver as tarefas de quem você gerencia (ou sendo admin). ${alvoUser.username} não é seu subordinado — recuse com clareza e educação.` }, resultCount: 0 };
+            if (Number(alvoUser.id) !== Number(user.id) && user.role !== 'admin') {
+                return { result: { message: `Só admin pode ver as tarefas de outra pessoa. Você (usuário comum) vê apenas as suas — recuse com clareza e educação, e ofereça listar as tarefas dele(a) próprias.` }, resultCount: 0 };
             }
             targetId = Number(alvoUser.id);
             targetName = `de ${alvoUser.username}`;
@@ -245,7 +218,7 @@ registerTool({
 // ─── update_checklist_task ────────────────────────────────────────────────────
 registerTool({
     name: 'update_checklist_task',
-    description: 'Atualiza uma TAREFA de checklist: muda a etapa/status (ex: marcar como concluída, mover para "em andamento") e/ou registra uma anotação. Só permite editar tarefas que o usuário PODE editar (é responsável, dono do checklist, gestor de um responsável, ou admin). SEMPRE confirma antes de gravar: chame primeiro SEM `confirmar` para o usuário revisar o que vai mudar; só chame com `confirmar:true` depois que ELE confirmar explicitamente. Use quando o usuário disser "conclui a tarefa X", "marca como em andamento", "anota que...". Resolva a tarefa por `task_id` (do resultado de query_checklists/my_checklist_tasks) — nunca invente ID.',
+    description: 'Atualiza uma TAREFA de checklist: muda a etapa/status (ex: marcar como concluída, mover para "em andamento") e/ou registra uma anotação. Só permite editar tarefas que o usuário PODE editar (é responsável, dono do checklist, ou admin). SEMPRE confirma antes de gravar: chame primeiro SEM `confirmar` para o usuário revisar o que vai mudar; só chame com `confirmar:true` depois que ELE confirmar explicitamente. Use quando o usuário disser "conclui a tarefa X", "marca como em andamento", "anota que...". Resolva a tarefa por `task_id` (do resultado de query_checklists/my_checklist_tasks) — nunca invente ID.',
     parameters: {
         type: 'object',
         properties: {
@@ -267,8 +240,8 @@ registerTool({
         const task = detail.task;
         const checklist = await db.Checklist.findByPk(task.checklist_id, { attributes: ['id', 'title', 'owner_user_id', 'template_id'], raw: true });
 
-        // Trava de escrita (backend não faz — é aqui)
-        const perm = await canWriteTask(user, task, checklist);
+        // Trava de escrita (mesma regra do backend: responsável, dono ou admin)
+        const perm = canWriteTask(user, task, checklist);
         if (!perm.ok) {
             return { result: { message: `Você não pode editar a tarefa "${task.title}": ela é de outra pessoa e você não é responsável, dono do checklist, gestor dela nem admin. Recuse com clareza e educação — sugira falar com o responsável.` } };
         }
