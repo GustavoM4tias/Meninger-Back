@@ -153,6 +153,7 @@ import EmeGeneratedReportMessageDefine     from './emeReports/generatedReportMes
 import EmeGeneratedReportAccessDefine      from './emeReports/generatedReportAccess.js';
 import EmeGeneratedReportPublicLogDefine   from './emeReports/generatedReportPublicLog.js';
 import EmeGeneratedReportCustomBlockDefine from './emeReports/generatedReportCustomBlock.js';
+import EmeGeneratedReportMemoryDefine      from './emeReports/generatedReportMemory.js';
 
 // Notificações
 import NotificationDefine from './notification.js';
@@ -393,6 +394,7 @@ db.EmeGeneratedReportMessage     = EmeGeneratedReportMessageDefine(sequelize, Da
 db.EmeGeneratedReportAccess      = EmeGeneratedReportAccessDefine(sequelize, DataTypes);
 db.EmeGeneratedReportPublicLog   = EmeGeneratedReportPublicLogDefine(sequelize, DataTypes);
 db.EmeGeneratedReportCustomBlock = EmeGeneratedReportCustomBlockDefine(sequelize, DataTypes);
+db.EmeGeneratedReportMemory      = EmeGeneratedReportMemoryDefine(sequelize, DataTypes);
 
 // Notificações
 db.Notification           = NotificationDefine(sequelize, DataTypes);

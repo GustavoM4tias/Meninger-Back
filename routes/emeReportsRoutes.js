@@ -15,6 +15,9 @@ import {
   scanPii, publicExposureSummary,
 } from '../services/emeReports/ReportService.js';
 import { streamReportChat } from '../services/emeReports/ReportChatService.js';
+import {
+  listMemories, remember, updateMemory, deleteMemory,
+} from '../services/emeReports/ReportMemoryService.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -282,6 +285,45 @@ router.get('/:id/public-log', requireAdmin, async (req, res) => {
     limit: 200,
   });
   res.json({ views: report.publicViews, logs });
+});
+
+// ── Memória do relatório ─────────────────────────────────────────────────────
+// Preferências de como o usuário quer os relatórios: globais (valem para todos)
+// e locais (só deste relatório). A Eme lê no início de cada conversa.
+
+router.get('/:id/memories', requireAdmin, async (req, res) => {
+  const rows = await listMemories(req.user.id, req.params.id);
+  res.json(rows);
+});
+
+router.post('/:id/memories', requireAdmin, async (req, res) => {
+  const result = await remember({
+    userId: req.user.id,
+    reportId: req.params.id,
+    text: req.body?.text,
+    scope: req.body?.scope === 'global' ? 'global' : 'report',
+    source: 'user',
+  });
+  if (result?.error) return res.status(400).json(result);
+  const rows = await listMemories(req.user.id, req.params.id);
+  res.json(rows);
+});
+
+router.put('/:id/memories/:memoryId', requireAdmin, async (req, res) => {
+  const row = await updateMemory(req.params.memoryId, req.user.id, {
+    ...req.body,
+    reportId: req.params.id,
+  });
+  if (!row) return res.status(404).json({ error: 'Memória não encontrada.' });
+  const rows = await listMemories(req.user.id, req.params.id);
+  res.json(rows);
+});
+
+router.delete('/:id/memories/:memoryId', requireAdmin, async (req, res) => {
+  const ok = await deleteMemory(req.params.memoryId, req.user.id);
+  if (!ok) return res.status(404).json({ error: 'Memória não encontrada.' });
+  const rows = await listMemories(req.user.id, req.params.id);
+  res.json(rows);
 });
 
 // ── Painel admin: blocos custom (pipeline de promoção) ───────────────────────

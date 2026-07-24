@@ -19,6 +19,7 @@ import {
 } from '../OfficeAI/OfficeChatService.js';
 import { buildReportSystemPrompt } from './reportPrompt.js';
 import { normalizeSpec } from './ReportService.js';
+import { buildMemoryPrompt, remember } from './ReportMemoryService.js';
 
 // Tools de DADOS liberadas no modo relatório (subset das tools do Office chat).
 const DATA_TOOL_NAMES = [
@@ -164,6 +165,21 @@ export function analyzeRows(rows, { group_by, metric = 'count', metric_field, da
   };
 }
 
+// Tool de MEMÓRIA: a Eme guarda preferências declaradas pelo usuário para não
+// precisar ouvir a mesma instrução em toda conversa.
+const REPORT_REMEMBER_DECLARATION = {
+  name: 'report_remember',
+  description: 'Guarda uma preferência do usuário sobre como fazer relatórios (estrutura, tom, recortes que sempre entram ou nunca entram, regras de negócio). Chame quando o usuário declarar um padrão que deve valer nas próximas vezes - não para pedidos pontuais.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      text: { type: 'STRING', description: 'A preferência em uma frase clara e acionável, na 3a pessoa. Ex.: "Sempre separar leads de Painel dos leads de mídia paga nas análises de conversão."' },
+      scope: { type: 'STRING', description: '"report" (só este relatório) ou "global" (todos os relatórios do usuário). Na dúvida use "report".' },
+    },
+    required: ['text'],
+  },
+};
+
 function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
@@ -275,10 +291,22 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
     ? (report.spec?.blocks || []).filter((b) => selectedBlockIds.includes(b.id))
     : [];
 
-  const systemPrompt = buildReportSystemPrompt({ user, report, selectedBlocks });
+  const memoryPrompt = await buildMemoryPrompt(user.id, report.id).catch(() => '');
+  const systemPrompt = buildReportSystemPrompt({ user, report, selectedBlocks }) + memoryPrompt;
 
   const dataDeclarations = OFFICE_TOOL_DECLARATIONS.filter((d) => DATA_TOOL_NAMES.includes(d.name));
-  const declarations = [...dataDeclarations, REPORT_ANALYZE_DECLARATION, REPORT_APPLY_DECLARATION];
+  const declarations = [
+    ...dataDeclarations,
+    REPORT_ANALYZE_DECLARATION,
+    REPORT_REMEMBER_DECLARATION,
+    REPORT_APPLY_DECLARATION,
+  ];
+
+  // Quando há blocos selecionados, o alvo vai junto da MENSAGEM (não só no
+  // system prompt): é o que faz o modelo de fato editar só o que foi marcado.
+  const effectiveMessage = selectedBlocks.length
+    ? `[O usuário selecionou ${selectedBlocks.length} bloco(s) no relatório: ${selectedBlocks.map((b) => `"${b.id}" (${b.type})`).join(', ')}. Altere APENAS esses blocos, com upsert mantendo os mesmos ids. Não use replace_all.]\n\n${userMessage}`
+    : userMessage;
 
   // Cliente com retry modelo×chave (mesma estratégia do Office chat, compacta)
   const keys = getKeys();
@@ -302,7 +330,7 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
           tools: [{ functionDeclarations: declarations }],
         });
         chat = mdl.startChat({ history });
-        firstStream = await chat.sendMessageStream(userMessage);
+        firstStream = await chat.sendMessageStream(effectiveMessage);
         break outer;
       } catch (err) {
         const status = err?.status || err?.response?.status;
@@ -341,7 +369,8 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
         const label = DATA_TOOL_LABELS[name]
           || (name === 'report_apply_ops' ? 'Montando o relatório'
             : name === 'report_analyze_data' ? `Analisando ${args?.group_by || 'os dados'}`
-              : name);
+              : name === 'report_remember' ? 'Guardando preferência'
+                : name);
         sendSSE(res, { type: 'tool_start', name, label });
         const t0 = Date.now();
         let result;
@@ -368,6 +397,15 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
               },
             });
             result = { ok: true, blockCount: spec.blocks.length, changedIds };
+          } else if (name === 'report_remember') {
+            result = await remember({
+              userId: user.id,
+              reportId: report.id,
+              text: args?.text,
+              scope: args?.scope === 'global' ? 'global' : 'report',
+              source: 'eme',
+            });
+            if (result?.ok) sendSSE(res, { type: 'memory_saved', text: args?.text, scope: args?.scope || 'report' });
           } else if (name === 'report_analyze_data') {
             const sourceTool = args?.source_tool;
             const rows = getRaw(report.id, sourceTool);
