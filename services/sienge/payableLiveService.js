@@ -351,11 +351,12 @@ export async function listExpenseRows({ startDate, endDate, costCenterId } = {})
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Linhas agregadas (mês, departamento) para os centros de custo, com competência
- * (mês do vencimento) ANTERIOR a endDate. Exclui o que não tem departamento? Não —
- * mantém department_name (pode ser null). Não há "cancelado" no backup, então não
- * há filtro de status.
- * @returns {Promise<Array<{ym:string, departmentName:string|null, amount:number}>>}
+ * Linhas agregadas (mês, CC, departamento) para os centros de custo — GASTO PAGO.
+ * MESMA régua da tela de Custos (listExpenseRows): pagamentos de CAIXA (ecpgbaixa,
+ * tipos 1 Pagamento + 10 Adiantamento, sem estorno), valor líquido desembolsado
+ * (principal + juros + multa + correção − desconto), no mês do PAGAMENTO, anterior
+ * a endDate. Parcela em aberto/vencida NÃO conta — realizado é só o que saiu do caixa.
+ * @returns {Promise<Array<{ym:string, costCenterId:number, departmentName:string|null, amount:number}>>}
  */
 export async function listMarketingSpendByMonth({ costCenterIds, endDate } = {}) {
   const views = toIntArr(costCenterIds);
@@ -367,33 +368,49 @@ export async function listMarketingSpendByMonth({ costCenterIds, endDate } = {})
   const cached = cacheGet(key);
   if (cached) return cached.map((r) => ({ ...r }));
 
+  // CTEs restritos aos títulos com pagamento (tit) — evita varrer ecpgapropfin inteira.
   const sql = `
-    WITH main_cc AS (
+    WITH pagamentos AS (
+      SELECT b.nutitulo,
+             date_trunc('month', b.dtpagto) AS ym_date,
+             SUM(b.vlpagto + COALESCE(b.vljuros,0) + COALESCE(b.vlmulta,0)
+                 + COALESCE(b.vlcormonetaria,0) - COALESCE(b.vldesconto,0)) AS valor_pago
+      FROM ecpgbaixa b
+      WHERE b.dtpagto < $2::date
+        AND b.cdtipobaixa IN (1, 10)
+        AND b.nuseqestorno IS NULL
+      GROUP BY b.nutitulo, date_trunc('month', b.dtpagto)
+    ),
+    tit AS (SELECT DISTINCT nutitulo FROM pagamentos),
+    main_cc AS (
       SELECT af.nutitulo, e.cdempreendview AS cost_center_id
       FROM (
         SELECT DISTINCT ON (nutitulo) nutitulo, cdcentrocusto
-        FROM ecpgapropfin ORDER BY nutitulo, peparticipacao DESC NULLS LAST
+        FROM ecpgapropfin
+        WHERE nutitulo IN (SELECT nutitulo FROM tit)
+        ORDER BY nutitulo, peparticipacao DESC NULLS LAST
       ) af
       JOIN ecadempreend e ON e.cdempreend = af.cdcentrocusto
       WHERE e.cdempreendview = ANY($1::int[])
-    )
-    SELECT
-      to_char(date_trunc('month', COALESCE(p.dtvencto, p.dtcompetencia, t.dtemissao)), 'YYYY-MM') AS ym,
-      main_cc.cost_center_id,
-      dep.main_department_name AS department_name,
-      SUM(p.vloriginal) AS amount
-    FROM ecpgparcela p
-    JOIN main_cc ON main_cc.nutitulo = p.nutitulo
-    JOIN ecpgtitulo t ON t.nutitulo = p.nutitulo
-    LEFT JOIN LATERAL (
-      SELECT dd.nmdepartamento AS main_department_name
+    ),
+    dep AS (
+      SELECT DISTINCT ON (d.nutitulo)
+             d.nutitulo, dd.nmdepartamento AS main_department_name
       FROM ecpgapropdepart d
       LEFT JOIN ecaddepartamento dd ON dd.cddepartamento = d.cddepartamento
-      WHERE d.nutitulo = t.nutitulo
-      ORDER BY d.peapropriado DESC NULLS LAST LIMIT 1
-    ) dep ON true
-    WHERE date_trunc('month', COALESCE(p.dtvencto, p.dtcompetencia, t.dtemissao)) < $2::date
-      AND TRIM(t.cddocumento) NOT IN (${BLOCKED_DOC_IDS.join(',')})
+      WHERE d.nutitulo IN (SELECT nutitulo FROM tit)
+      ORDER BY d.nutitulo, d.peapropriado DESC NULLS LAST
+    )
+    SELECT
+      to_char(pg.ym_date, 'YYYY-MM') AS ym,
+      main_cc.cost_center_id,
+      dep.main_department_name AS department_name,
+      SUM(pg.valor_pago) AS amount
+    FROM pagamentos pg
+    JOIN main_cc ON main_cc.nutitulo = pg.nutitulo
+    JOIN ecpgtitulo t ON t.nutitulo = pg.nutitulo
+    LEFT JOIN dep ON dep.nutitulo = pg.nutitulo
+    WHERE TRIM(t.cddocumento) NOT IN (${BLOCKED_DOC_IDS.join(',')})
     GROUP BY 1, 2, 3
   `;
   const { rows } = await siengeQuery(sql, [views, end]);
