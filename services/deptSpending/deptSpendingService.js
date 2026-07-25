@@ -769,6 +769,25 @@ export default class DeptSpendingService {
             slot.vgvTarget += u * p;
             slot.mktProjetado += u * p * (pct / 100);
         }
+        // ----- Excedente da LOJA → MKT (regra de controle) -----
+        // O teto da loja (Σ custo_loja) é um pool vida toda: acumulando o gasto PAGO
+        // da loja em ordem cronológica, o que passar do teto vira gasto de MARKETING.
+        // Mantido em campo separado (mktLojaExcedente) p/ exibição clara.
+        const tetoLoja = num(h.custoLoja);
+        const lojaCappedByYm = new Map();
+        const lojaOverflowByYm = new Map();
+        {
+            let acc = 0;
+            for (const ym of [...spend.loja.keys()].sort()) {
+                const v = num(spend.loja.get(ym));
+                const below = Math.max(0, Math.min(v, tetoLoja - acc));
+                acc += v;
+                lojaCappedByYm.set(ym, below);
+                if (v - below > 0) lojaOverflowByYm.set(ym, v - below);
+            }
+        }
+        const lojaOverflowVida = [...lojaOverflowByYm.values()].reduce((s, v) => s + v, 0);
+
         // ----- Série mensal do exercício (realizado × projetado) -----
         const months = yearMonths.map((ym) => {
             const proj = byYm.get(ym) || { unitsTarget: 0, vgvTarget: 0, mktProjetado: 0 };
@@ -779,14 +798,17 @@ export default class DeptSpendingService {
                 unitsTarget: proj.unitsTarget,
                 vgvTarget: proj.vgvTarget,
                 mktRealizado: isRealized ? (spend.mkt.get(ym) || 0) : 0,
+                mktLojaExcedente: isRealized ? (lojaOverflowByYm.get(ym) || 0) : 0,
                 mktProjetado: !isRealized ? proj.mktProjetado : 0,
-                lojaRealizado: isRealized ? (spend.loja.get(ym) || 0) : 0,
+                lojaRealizado: isRealized ? (lojaCappedByYm.get(ym) || 0) : 0,
                 lojaProjetado: 0, // fase de teste: loja sem projeção (ponto de iteração)
             };
         });
 
         // ----- Agregados do exercício -----
-        const mktRealizadoAno = months.reduce((s, m) => s + m.mktRealizado, 0);
+        const mktProprioAno = months.reduce((s, m) => s + m.mktRealizado, 0);
+        const excedenteAno = months.reduce((s, m) => s + m.mktLojaExcedente, 0);
+        const mktRealizadoAno = mktProprioAno + excedenteAno;
         const mktProjetadoAno = months.reduce((s, m) => s + m.mktProjetado, 0);
         const lojaRealizadoAno = months.reduce((s, m) => s + m.lojaRealizado, 0);
         const planoAnoMkt = mktRealizadoAno + mktProjetadoAno;
@@ -806,29 +828,39 @@ export default class DeptSpendingService {
         };
         // CONSUMIDO = gasto REALIZADO (pago de fato, mesma régua da tela de Custos).
         // Projeção NUNCA soma no consumido — fica em projetadoAno/planoAno, separada.
+        // Regra do excedente: a LOJA fica limitada ao teto; o que passa entra no MKT
+        // (campos lojaExcedente* mantêm a parcela transferida separada p/ exibição).
         const tetoMkt = num(h.budgetTotal);          // VGV vida útil × %
-        const tetoLoja = num(h.custoLoja);           // Σ custo_loja dos CCs
-        const mktRealizadoVida = num(spend.mktTotal);
-        const lojaRealizadoVida = num(spend.lojaTotal);
+        const mktProprioVida = num(spend.mktTotal);
+        const lojaPagoVida = num(spend.lojaTotal);
+        const mktConsumidoVida = mktProprioVida + lojaOverflowVida;
+        const lojaConsumidaVida = Math.min(lojaPagoVida, tetoLoja);
         const buckets = {
-            marketing: buildBucket('marketing', 'Marketing', tetoMkt, mktRealizadoVida, {
-                realizadoVida: mktRealizadoVida,
+            marketing: buildBucket('marketing', 'Marketing', tetoMkt, mktConsumidoVida, {
+                realizadoVida: mktConsumidoVida,
+                realizadoProprioVida: mktProprioVida,
+                lojaExcedenteVida: lojaOverflowVida,
+                lojaExcedenteAno: excedenteAno,
                 realizadoAno: mktRealizadoAno,
                 projetadoAno: mktProjetadoAno,
                 projetadoMes: mktProjetadoMes,
                 planoAno: planoAnoMkt,
             }),
-            loja: buildBucket('loja', 'Loja física', tetoLoja, lojaRealizadoVida, {
-                realizadoVida: lojaRealizadoVida,
+            loja: buildBucket('loja', 'Loja física', tetoLoja, lojaConsumidaVida, {
+                realizadoVida: lojaConsumidaVida,
+                pagoTotalVida: lojaPagoVida,
+                excedenteVida: lojaOverflowVida,
                 realizadoAno: lojaRealizadoAno,
                 projetadoAno: 0,
                 projetadoMes: 0,
                 planoAno: lojaRealizadoAno,
             }),
         };
+        // Teto atingido: sinaliza mesmo com o consumo travado em 100%.
+        if (lojaOverflowVida > 0) buckets.loja.status = 'acima';
         buckets.total = buildBucket('total', 'Total aprovado',
-            tetoMkt + tetoLoja, mktRealizadoVida + lojaRealizadoVida, {
-                realizadoVida: mktRealizadoVida + lojaRealizadoVida,
+            tetoMkt + tetoLoja, mktConsumidoVida + lojaConsumidaVida, {
+                realizadoVida: mktConsumidoVida + lojaConsumidaVida,
                 realizadoAno: mktRealizadoAno + lojaRealizadoAno,
                 projetadoAno: mktProjetadoAno,
                 projetadoMes: mktProjetadoMes,

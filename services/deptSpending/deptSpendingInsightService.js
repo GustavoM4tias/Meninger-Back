@@ -52,9 +52,11 @@ function fallbackBlocks(report) {
     ];
     if (loja.teto > 0 || loja.consumido > 0) {
         blocks.push({
-            title: loja.status === 'dentro' ? 'Loja dentro do previsto' : loja.status === 'atencao' ? 'Loja acima do ritmo' : 'Loja estourada',
+            title: loja.excedenteVida > 0 ? 'Loja no teto' : loja.status === 'dentro' ? 'Loja dentro do previsto' : 'Loja acima do ritmo',
             tone: toneOf(loja.status),
-            text: `A loja já pagou ${pct(loja.pctConsumido)} da verba aprovada (${brl(loja.consumido)} de ${brl(loja.teto)}). Saldo de ${brl(loja.saldo)}.`,
+            text: loja.excedenteVida > 0
+                ? `A loja atingiu o teto de ${brl(loja.teto)} (pagou ${brl(loja.pagoTotalVida)}); o excedente de ${brl(loja.excedenteVida)} passou a contar como gasto de MKT.`
+                : `A loja já pagou ${pct(loja.pctConsumido)} da verba aprovada (${brl(loja.consumido)} de ${brl(loja.teto)}). Saldo de ${brl(loja.saldo)}.`,
         });
     }
     blocks.push({
@@ -76,8 +78,8 @@ function buildPrompt(report) {
 DADOS (use SOMENTE estes números, já formatados; NÃO invente nem recalcule nada):
 - Empreendimento: ${report.company.name} | Exercício ${report.year}, realizado até o mês ${report.monthIndex}/${report.year}.
 - Ritmo linear esperado do ano até aqui: ${pct(report.governance.ritmoLinear)}.
-- MARKETING: ${fmtBucket(buckets.marketing)}.
-- LOJA FÍSICA: ${fmtBucket(buckets.loja)}.
+- MARKETING: ${fmtBucket(buckets.marketing)}${buckets.marketing.lojaExcedenteVida > 0 ? ` (inclui ${brl(buckets.marketing.lojaExcedenteVida)} de excedente da loja - regra: o que a loja gasta acima do teto vira gasto de MKT)` : ''}.
+- LOJA FÍSICA: ${fmtBucket(buckets.loja)}${buckets.loja.excedenteVida > 0 ? ` (pagou no total ${brl(buckets.loja.pagoTotalVida)}; o excedente de ${brl(buckets.loja.excedenteVida)} foi transferido ao MKT)` : ''}.
 - TOTAL APROVADO: ${fmtBucket(buckets.total)}.
 - VGV projetado no exercício: ${brl(vgv.yearVgv)} (${vgv.yearUnits} unidades de ${vgv.totalUnits}). VGV projetado para os anos seguintes: ${brl(vgv.nextYearsVgv)}.
 - Unidades vendidas de fato até o mês: ${v.soldUnitsRealYtd}. Unidades a comercializar: ${v.futureUnits} (fonte: ${v.futureUnitsSource === 'projecao' ? 'projeção de vendas' : v.futureUnitsSource === 'estoque' ? 'estoque disponível' : 'nenhuma'}).
