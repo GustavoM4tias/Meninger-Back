@@ -190,18 +190,15 @@ export default class DeptSpendingService {
     }
 
     /* Soma o snapshot de unidades dos CCs da empresa usando a COLETA UNIFICADA do serviço
-       de CV (resolveUnitsForErp) — exatamente a MESMA da tela de Projeção. */
+       de CV (resolveUnitsForErp) — exatamente a MESMA da tela de Projeção. CCs em paralelo. */
     async summarizeCompanyUnits(erpIds) {
         const acc = {
             totalUnits: 0, soldUnitsStock: 0, reservedUnits: 0,
             blockedUnits: 0, availableUnits: 0,
         };
-        const seen = new Set();
-        for (const erp of (erpIds || [])) {
-            const key = String(erp);
-            if (!key || seen.has(key)) continue;
-            seen.add(key);
-            const s = await resolveUnitsForErp(key);
+        const keys = [...new Set((erpIds || []).map((e) => String(e)).filter(Boolean))];
+        const summaries = await Promise.all(keys.map((k) => resolveUnitsForErp(k).catch(() => null)));
+        for (const s of summaries) {
             if (!s) continue;
             acc.totalUnits += num(s.totalUnits);
             acc.soldUnitsStock += num(s.soldUnitsStock ?? s.soldUnits);
@@ -312,8 +309,12 @@ export default class DeptSpendingService {
             : projectionFullUnits > 0 ? (projectionFullRevenue / projectionFullUnits)
             : defaultPriceFallback;
 
-        // ----- Unidades do CV (mesma resolução da tela de Projeção) + config de bloqueadas -----
-        const units = await this.summarizeCompanyUnits(erpIds);
+        // ----- Cargas independentes em PARALELO: unidades CV + gasto + vendas reais -----
+        const [units, spendRes, salesRes] = await Promise.all([
+            this.summarizeCompanyUnits(erpIds),
+            this.loadExpensesLifetimeByMonth({ costCenterIds, endDate, resolver, companyId: company.companyId }),
+            this.loadSalesLifetimeByMonth({ erpIds, endDate }),
+        ]);
 
         // "bloqueadas consideradas disponíveis" vem da PROJEÇÃO (por CC, somado).
         const blockedConsidered = Math.min(blockedConsideredRaw, units.blockedUnits);
@@ -328,12 +329,10 @@ export default class DeptSpendingService {
         const plannedCostPerUnit = totalUnits > 0 ? budgetTotal / totalUnits : 0;
 
         // ----- Gasto acompanhado (vida toda até o mês) -----
-        const { byMonth: spentByMonth, total: spentTotal, firstYm: firstSpendYm } =
-            await this.loadExpensesLifetimeByMonth({ costCenterIds, endDate, resolver, companyId: company.companyId });
+        const { byMonth: spentByMonth, total: spentTotal, firstYm: firstSpendYm } = spendRes;
 
         // ----- Vendas realizadas (vida toda até o mês) -----
-        const { byMonth: soldByMonth, total: soldUnitsRealYtd } =
-            await this.loadSalesLifetimeByMonth({ erpIds, endDate });
+        const { byMonth: soldByMonth, total: soldUnitsRealYtd } = salesRes;
 
         // ----- Boletagem: vendidas no CV que ainda não assinaram a instituição financeira -----
         const boletagemUnits = Math.max(0, num(units.soldUnitsStock) - num(soldUnitsRealYtd));
@@ -505,7 +504,7 @@ export default class DeptSpendingService {
     }
 
     /* ============================ Lista (por empresa) ============================ */
-    async listEnterprisesViability({ year, upToMonth = null, startMonth = null, endMonth = null, aliasId = 'default', onlyReleased = false }) {
+    async listEnterprisesViability({ year, upToMonth = null, startMonth = null, endMonth = null, aliasId = 'default', onlyReleased = false, companyIds = null }) {
         const { startMonth: startYM, endMonth: endYM } = resolveRange({ year, upToMonth, startMonth, endMonth });
         const ymList = buildYmRange(startYM, endYM);
         const endDate = ymToDateStart(nextYm(endYM));
@@ -546,25 +545,46 @@ export default class DeptSpendingService {
             if (!g.companyName && d.enterprise_name_cache) g.companyName = d.enterprise_name_cache;
         }
 
-        const results = [];
-        for (const company of groups.values()) {
-            const viability = await this.computeCompanyViability({ company, projection, range, resolver });
-            const h = viability.header;
-            // mostra só se há projeção no mês selecionado OU gasto acompanhado em algum momento
-            if (num(h.projectedUnitsMonth) <= 0 && num(h.spentTotal) <= 0) continue;
-            // governança: diretoria (onlyReleased) só vê empreendimentos CONFIGURADOS + liberados
-            if (onlyReleased && (!h.released || !resolver.isConfigured(company.companyId))) continue;
+        // Filtro server-side por empresa (deep link compartilhável: calcula SÓ as pedidas).
+        let companies = [...groups.values()];
+        const wanted = Array.isArray(companyIds) && companyIds.length
+            ? new Set(companyIds.map(Number).filter(Number.isFinite))
+            : null;
+        if (wanted) companies = companies.filter((c) => c.companyId != null && wanted.has(Number(c.companyId)));
 
-            results.push({
-                companyId: company.companyId,
-                erpId: h.erpId,
-                displayId: h.displayId,
-                enterpriseName: h.enterpriseName,
-                costCenterIds: h.costCenterIds,
-                released: h.released,
-                header: h,
-                months: viability.months,
-            });
+        // Empresas em PARALELO (lotes) — cada uma faz consultas próprias (CV/Sienge/contratos).
+        const CONCURRENCY = 4;
+        const results = [];
+        for (let i = 0; i < companies.length; i += CONCURRENCY) {
+            const batch = companies.slice(i, i + CONCURRENCY);
+            const computed = await Promise.all(batch.map((company) =>
+                this.computeCompanyViability({ company, projection, range, resolver })
+                    .then((viability) => ({ company, viability }))
+                    .catch((e) => {
+                        console.error(`[DeptSpending] falha ao computar empresa ${company.companyId}:`, e?.message);
+                        return null;
+                    })
+            ));
+            for (const item of computed) {
+                if (!item) continue;
+                const { company, viability } = item;
+                const h = viability.header;
+                // mostra só se há projeção no mês selecionado OU gasto acompanhado em algum momento
+                if (num(h.projectedUnitsMonth) <= 0 && num(h.spentTotal) <= 0) continue;
+                // governança: diretoria (onlyReleased) só vê empreendimentos CONFIGURADOS + liberados
+                if (onlyReleased && (!h.released || !resolver.isConfigured(company.companyId))) continue;
+
+                results.push({
+                    companyId: company.companyId,
+                    erpId: h.erpId,
+                    displayId: h.displayId,
+                    enterpriseName: h.enterpriseName,
+                    costCenterIds: h.costCenterIds,
+                    released: h.released,
+                    header: h,
+                    months: viability.months,
+                });
+            }
         }
 
         // maior orçamento primeiro
@@ -681,17 +701,18 @@ export default class DeptSpendingService {
         };
         const range = { startYM, endYM, ymList: buildYmRange(startYM, endYM), endDate };
 
-        // Motor existente: tetos, unidades, estoque, status, liberação, vendas reais.
-        const viability = await this.computeCompanyViability({ company, projection, range, resolver });
-        const h = viability.header;
-
         const enterpriseKeys = ccRows.map((r) => String(r.enterprise_key));
         const costCenterIds = ccRows.map((r) => Number(r.erp_id)).filter((n) => Number.isFinite(n));
 
-        // ----- Projeção do exercício (mês a mês) + saldo p/ anos seguintes -----
-        const yearLines = await this.loadYearProjectionLines({
-            projectionId: projection.id, aliasId, enterpriseKeys, year,
-        });
+        // Cargas independentes em PARALELO: motor (tetos/estoque/status) + projeção do
+        // exercício + saldo dos anos seguintes + gasto bucketed (marketing × loja).
+        const [viability, yearLines, nextYears, spend] = await Promise.all([
+            this.computeCompanyViability({ company, projection, range, resolver }),
+            this.loadYearProjectionLines({ projectionId: projection.id, aliasId, enterpriseKeys, year }),
+            this.loadNextYearsProjection({ projectionId: projection.id, aliasId, enterpriseKeys, year }),
+            this.loadBucketSpendByMonth({ costCenterIds, endDate, resolver, companyId: cid }),
+        ]);
+        const h = viability.header;
         const pctFallback = num(h.marketingPct);
         const byYm = new Map(); // ym -> { unitsTarget, vgvTarget, mktProjetado }
         for (const ym of yearMonths) byYm.set(ym, { unitsTarget: 0, vgvTarget: 0, mktProjetado: 0 });
@@ -706,13 +727,6 @@ export default class DeptSpendingService {
             slot.vgvTarget += u * p;
             slot.mktProjetado += u * p * (pct / 100);
         }
-        const nextYears = await this.loadNextYearsProjection({
-            projectionId: projection.id, aliasId, enterpriseKeys, year,
-        });
-
-        // ----- Gasto realizado bucketed (vida toda até refMonth) -----
-        const spend = await this.loadBucketSpendByMonth({ costCenterIds, endDate, resolver, companyId: cid });
-
         // ----- Série mensal do exercício (realizado × projetado) -----
         const months = yearMonths.map((ym) => {
             const proj = byYm.get(ym) || { unitsTarget: 0, vgvTarget: 0, mktProjetado: 0 };
