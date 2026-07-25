@@ -100,7 +100,8 @@ export const getEnterprisesSpending = async (req, res) => {
 
         // Filtro por empresa (deep link compartilhável): ?company_ids=106,103
         const companyIds = String(req.query.company_ids || '')
-            .split(',').map((s) => Number(s.trim())).filter(Number.isFinite);
+            .split(',').map((s) => s.trim()).filter(Boolean)
+            .map(Number).filter(Number.isFinite);
 
         const out = await service.listEnterprisesViability({
             year: parsedYear,
