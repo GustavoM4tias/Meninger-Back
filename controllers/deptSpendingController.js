@@ -98,6 +98,10 @@ export const getEnterprisesSpending = async (req, res) => {
         // Governança: só admin enxerga rascunhos. Diretoria (não-admin) recebe só os liberados.
         const isAdmin = req.user?.role === 'admin';
 
+        // Filtro por empresa (deep link compartilhável): ?company_ids=106,103
+        const companyIds = String(req.query.company_ids || '')
+            .split(',').map((s) => Number(s.trim())).filter(Number.isFinite);
+
         const out = await service.listEnterprisesViability({
             year: parsedYear,
             upToMonth: month ? normYM(month) : null,
@@ -105,6 +109,7 @@ export const getEnterprisesSpending = async (req, res) => {
             endMonth: end_month,
             aliasId: aliasId || 'default',
             onlyReleased: !isAdmin,
+            companyIds: companyIds.length ? companyIds : null,
         });
 
         return res.json({ ...out, isAdmin });
