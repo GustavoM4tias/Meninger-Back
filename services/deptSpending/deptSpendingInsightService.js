@@ -47,14 +47,14 @@ function fallbackBlocks(report) {
         {
             title: mkt.status === 'dentro' ? 'Marketing sob controle' : mkt.status === 'atencao' ? 'Marketing acima do ritmo' : 'Marketing estourado',
             tone: toneOf(mkt.status),
-            text: `O plano do ano consome ${pct(mkt.pctConsumido)} do teto aprovado (${brl(mkt.teto)}), contra um ritmo linear esperado de ${pct(ritmo)}. Saldo de ${brl(mkt.saldo)} para sustentar as vendas projetadas.`,
+            text: `Já foi pago ${pct(mkt.pctConsumido)} do teto aprovado (${brl(mkt.consumido)} de ${brl(mkt.teto)}), contra um ritmo linear esperado de ${pct(ritmo)}. Somando a projeção futura, o plano do ano chega a ${brl(mkt.planoAno)}. Saldo de ${brl(mkt.saldo)}.`,
         },
     ];
     if (loja.teto > 0 || loja.consumido > 0) {
         blocks.push({
             title: loja.status === 'dentro' ? 'Loja dentro do previsto' : loja.status === 'atencao' ? 'Loja acima do ritmo' : 'Loja estourada',
             tone: toneOf(loja.status),
-            text: `A loja já comprometeu ${pct(loja.pctConsumido)} da verba aprovada (${brl(loja.consumido)} de ${brl(loja.teto)}). Saldo de ${brl(loja.saldo)}.`,
+            text: `A loja já pagou ${pct(loja.pctConsumido)} da verba aprovada (${brl(loja.consumido)} de ${brl(loja.teto)}). Saldo de ${brl(loja.saldo)}.`,
         });
     }
     blocks.push({
@@ -69,7 +69,7 @@ function fallbackBlocks(report) {
 function buildPrompt(report) {
     const { buckets, vgv } = report.kpis;
     const v = report.viability;
-    const fmtBucket = (b) => `teto ${brl(b.teto)}, consumido ${brl(b.consumido)} (${pct(b.pctConsumido)}), saldo ${brl(b.saldo)}, realizado no ano ${brl(b.realizadoAno)}, projetado no restante do ano ${brl(b.projetadoAno)}, status calculado "${b.status}"`;
+    const fmtBucket = (b) => `teto ${brl(b.teto)}, PAGO até o mês ${brl(b.consumido)} (${pct(b.pctConsumido)} do teto), saldo ${brl(b.saldo)}, pago dentro do ano ${brl(b.realizadoAno)}, projetado no restante do ano ${brl(b.projetadoAno)} (projeção NÃO é gasto), status calculado "${b.status}"`;
 
     return `Você é analista financeiro de uma incorporadora. Escreva a seção "Leitura para decisão" de um relatório gerencial de investimento em marketing de UM empreendimento, para a diretoria.
 

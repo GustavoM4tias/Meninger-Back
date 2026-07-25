@@ -15,8 +15,9 @@
 //
 // Regras remanescentes (inalteradas):
 //  - Custo planejado/unidade = orçamento / totalUnits.
-//  - Gasto = despesas dos CCs da empresa, SOMENTE departamentos acompanhados
-//    (config admin global + exceções por empresa), competência ≤ mês.
+//  - Gasto = PAGAMENTOS de caixa dos CCs da empresa (mesma régua da tela de Custos:
+//    ecpgbaixa, sem estorno, líquido desembolsado), SOMENTE departamentos acompanhados
+//    (config admin global + exceções por empresa), mês do pagamento ≤ mês selecionado.
 //  - Saldo = orçamento − gasto; saldo/unidade a vender = saldo / inventário.
 //  - Recomendado do mês = saldo/unidade × meta de unidades do mês (diluição).
 //  - Unidades: reservada conta como disponível; bloqueada NÃO conta por padrão
@@ -803,20 +804,22 @@ export default class DeptSpendingService {
                 : pctConsumido > ritmoLinear ? 'atencao' : 'dentro';
             return { key, label, teto, consumido, saldo: teto - consumido, pctConsumido, status, ...extra };
         };
+        // CONSUMIDO = gasto REALIZADO (pago de fato, mesma régua da tela de Custos).
+        // Projeção NUNCA soma no consumido — fica em projetadoAno/planoAno, separada.
         const tetoMkt = num(h.budgetTotal);          // VGV vida útil × %
         const tetoLoja = num(h.custoLoja);           // Σ custo_loja dos CCs
-        const mktConsumido = num(spend.mktTotal) + mktProjetadoAno; // vida toda + projetado do exercício
-        const lojaConsumido = num(spend.lojaTotal);
+        const mktRealizadoVida = num(spend.mktTotal);
+        const lojaRealizadoVida = num(spend.lojaTotal);
         const buckets = {
-            marketing: buildBucket('marketing', 'Marketing', tetoMkt, mktConsumido, {
-                realizadoVida: num(spend.mktTotal),
+            marketing: buildBucket('marketing', 'Marketing', tetoMkt, mktRealizadoVida, {
+                realizadoVida: mktRealizadoVida,
                 realizadoAno: mktRealizadoAno,
                 projetadoAno: mktProjetadoAno,
                 projetadoMes: mktProjetadoMes,
                 planoAno: planoAnoMkt,
             }),
-            loja: buildBucket('loja', 'Loja física', tetoLoja, lojaConsumido, {
-                realizadoVida: num(spend.lojaTotal),
+            loja: buildBucket('loja', 'Loja física', tetoLoja, lojaRealizadoVida, {
+                realizadoVida: lojaRealizadoVida,
                 realizadoAno: lojaRealizadoAno,
                 projetadoAno: 0,
                 projetadoMes: 0,
@@ -824,8 +827,8 @@ export default class DeptSpendingService {
             }),
         };
         buckets.total = buildBucket('total', 'Total aprovado',
-            tetoMkt + tetoLoja, mktConsumido + lojaConsumido, {
-                realizadoVida: num(spend.mktTotal) + num(spend.lojaTotal),
+            tetoMkt + tetoLoja, mktRealizadoVida + lojaRealizadoVida, {
+                realizadoVida: mktRealizadoVida + lojaRealizadoVida,
                 realizadoAno: mktRealizadoAno + lojaRealizadoAno,
                 projetadoAno: mktProjetadoAno,
                 projetadoMes: mktProjetadoMes,
