@@ -84,6 +84,8 @@ DADOS (use SOMENTE estes números, já formatados; NÃO invente nem recalcule na
 - VGV projetado no exercício: ${brl(vgv.yearVgv)} (${vgv.yearUnits} unidades de ${vgv.totalUnits}). VGV projetado para os anos seguintes: ${brl(vgv.nextYearsVgv)}.
 - Unidades vendidas de fato até o mês: ${v.soldUnitsRealYtd}. Unidades a comercializar: ${v.futureUnits} (fonte: ${v.futureUnitsSource === 'projecao' ? 'projeção de vendas' : v.futureUnitsSource === 'estoque' ? 'estoque disponível' : 'nenhuma'}).
 
+NOTA: o "projetado no restante do ano" é o saldo do exercício dividido igualmente pelos meses restantes (não segue a curva de vendas); valor negativo significa que o teto do exercício já foi ultrapassado.
+
 REGRAS DE ANÁLISE (siga nesta ordem):
 1. Compare o % consumido de cada verba com o ritmo linear do ano: abaixo = sob controle; acima = atenção; acima de 100% = estouro.
 2. Avalie se o saldo de marketing sustenta as vendas que ainda vão acontecer (unidades a comercializar / VGV futuro).
