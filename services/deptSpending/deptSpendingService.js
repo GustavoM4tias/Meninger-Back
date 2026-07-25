@@ -902,7 +902,7 @@ export default class DeptSpendingService {
                 vgvTarget: proj.vgvTarget,
                 mktRealizado: isRealized ? (spend.mkt.get(ym) || 0) : 0,
                 mktLojaExcedente: isRealized ? (lojaOverflowByYm.get(ym) || 0) : 0,
-                mktProjetado: !isRealized ? proj.mktProjetado : 0,
+                mktProjetado: 0, // preenchido abaixo (saldo ÷ meses restantes)
                 lojaRealizado: isRealized ? (lojaCappedByYm.get(ym) || 0) : 0,
                 lojaProjetado: 0, // fase de teste: loja sem projeção (ponto de iteração)
             };
@@ -912,11 +912,16 @@ export default class DeptSpendingService {
         const mktProprioAno = months.reduce((s, m) => s + m.mktRealizado, 0);
         const excedenteAno = months.reduce((s, m) => s + m.mktLojaExcedente, 0);
         const mktRealizadoAno = mktProprioAno + excedenteAno;
-        const mktProjetadoAno = months.reduce((s, m) => s + m.mktProjetado, 0);
         const lojaRealizadoAno = months.reduce((s, m) => s + m.lojaRealizado, 0);
-        const planoAnoMkt = mktRealizadoAno + mktProjetadoAno;
+
+        // PROJETADO (regra do usuário): NÃO segue a curva de vendas. O valor a
+        // investir dos meses futuros = saldo do exercício (teto − pago no ano)
+        // dividido IGUALMENTE pelos meses restantes — mesmo que fique negativo.
         const mesesFuturos = 12 - monthIndex;
-        const mktProjetadoMes = mesesFuturos > 0 ? mktProjetadoAno / mesesFuturos : 0;
+        const mktProjetadoMes = mesesFuturos > 0 ? (tetoMktAno - mktRealizadoAno) / mesesFuturos : 0;
+        for (const m of months) if (!m.isRealized) m.mktProjetado = mktProjetadoMes;
+        const mktProjetadoAno = mktProjetadoMes * mesesFuturos;
+        const planoAnoMkt = mktRealizadoAno + mktProjetadoAno; // ≡ teto do exercício (quando há meses restantes)
 
         const yearUnits = months.reduce((s, m) => s + m.unitsTarget, 0);
         const yearVgv = months.reduce((s, m) => s + m.vgvTarget, 0);
