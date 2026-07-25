@@ -769,6 +769,12 @@ export default class DeptSpendingService {
             slot.vgvTarget += u * p;
             slot.mktProjetado += u * p * (pct / 100);
         }
+        // TETO DO EXERCÍCIO (regra do usuário): a viabilidade de MKT do relatório é a
+        // do PERÍODO = Σ (unidades × preço × %) de TODAS as lines do ano — cada
+        // exercício controla a própria verba; as unidades dos anos seguintes geram
+        // viabilidade quando forem projetadas.
+        const tetoMktAno = [...byYm.values()].reduce((s, v) => s + v.mktProjetado, 0);
+
         // ----- Excedente da LOJA → MKT (regra de controle) -----
         // O teto da loja (Σ custo_loja) é um pool vida toda: acumulando o gasto PAGO
         // da loja em ordem cronológica, o que passar do teto vira gasto de MARKETING.
@@ -822,25 +828,32 @@ export default class DeptSpendingService {
         const ritmoLinear = monthIndex / 12;
         const buildBucket = (key, label, teto, consumido, extra = {}) => {
             const pctConsumido = teto > 0 ? consumido / teto : 0;
-            const status = pctConsumido > 1 ? 'acima'
-                : pctConsumido > ritmoLinear ? 'atencao' : 'dentro';
+            const status = (teto <= 0 && consumido > 0) ? 'acima'
+                : pctConsumido > 1 ? 'acima'
+                    : pctConsumido > ritmoLinear ? 'atencao' : 'dentro';
             return { key, label, teto, consumido, saldo: teto - consumido, pctConsumido, status, ...extra };
         };
         // CONSUMIDO = gasto REALIZADO (pago de fato, mesma régua da tela de Custos).
         // Projeção NUNCA soma no consumido — fica em projetadoAno/planoAno, separada.
         // Regra do excedente: a LOJA fica limitada ao teto; o que passa entra no MKT
         // (campos lojaExcedente* mantêm a parcela transferida separada p/ exibição).
-        const tetoMkt = num(h.budgetTotal);          // VGV vida útil × %
+        //
+        // MKT controla no EXERCÍCIO: teto = viabilidade do período (tetoMktAno) e
+        // consumido = pago dentro do ano (incl. excedente da loja no ano). A
+        // viabilidade vida útil (VGV total × %) fica de referência em tetoVidaUtil.
+        // LOJA segue pool vida toda (custo_loja).
+        const tetoVidaUtil = num(h.budgetTotal);     // VGV vida útil × % (referência)
         const mktProprioVida = num(spend.mktTotal);
         const lojaPagoVida = num(spend.lojaTotal);
         const mktConsumidoVida = mktProprioVida + lojaOverflowVida;
         const lojaConsumidaVida = Math.min(lojaPagoVida, tetoLoja);
         const buckets = {
-            marketing: buildBucket('marketing', 'Marketing', tetoMkt, mktConsumidoVida, {
+            marketing: buildBucket('marketing', 'Marketing', tetoMktAno, mktRealizadoAno, {
+                tetoVidaUtil,
                 realizadoVida: mktConsumidoVida,
-                realizadoProprioVida: mktProprioVida,
-                lojaExcedenteVida: lojaOverflowVida,
+                realizadoProprioAno: mktProprioAno,
                 lojaExcedenteAno: excedenteAno,
+                lojaExcedenteVida: lojaOverflowVida,
                 realizadoAno: mktRealizadoAno,
                 projetadoAno: mktProjetadoAno,
                 projetadoMes: mktProjetadoMes,
@@ -859,7 +872,8 @@ export default class DeptSpendingService {
         // Teto atingido: sinaliza mesmo com o consumo travado em 100%.
         if (lojaOverflowVida > 0) buckets.loja.status = 'acima';
         buckets.total = buildBucket('total', 'Total aprovado',
-            tetoMkt + tetoLoja, mktConsumidoVida + lojaConsumidaVida, {
+            tetoMktAno + tetoLoja, mktRealizadoAno + lojaConsumidaVida, {
+                tetoVidaUtil: tetoVidaUtil + tetoLoja,
                 realizadoVida: mktConsumidoVida + lojaConsumidaVida,
                 realizadoAno: mktRealizadoAno + lojaRealizadoAno,
                 projetadoAno: mktProjetadoAno,
