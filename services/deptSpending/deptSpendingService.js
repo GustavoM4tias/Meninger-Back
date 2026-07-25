@@ -147,7 +147,27 @@ export default class DeptSpendingService {
         );
         const futureByKey = new Map(futureRows.map((r) => [String(r.enterprise_key), Number(r.units || 0)]));
 
-        return { defaults: defaults.map((d) => d.toJSON()), linesByKey, fullByKey, futureByKey };
+        // Lines do EXERCÍCIO inteiro (ano do endYM) — base do teto por exercício
+        // (mesma regra do relatório aplicada também à lista).
+        const yr = String(endYM).slice(0, 4);
+        const yearRows = await db.sequelize.query(
+            `SELECT enterprise_key, year_month, units_target, avg_price_target, marketing_pct
+               FROM sales_projection_lines
+              WHERE projection_id = :pid AND alias_id = :alias
+                AND year_month BETWEEN :y01 AND :y12`,
+            {
+                replacements: { pid: projectionId, alias: String(aliasId), y01: `${yr}-01`, y12: `${yr}-12` },
+                type: db.Sequelize.QueryTypes.SELECT,
+            }
+        );
+        const yearLinesByKey = new Map();
+        for (const r of yearRows) {
+            const k = String(r.enterprise_key);
+            if (!yearLinesByKey.has(k)) yearLinesByKey.set(k, []);
+            yearLinesByKey.get(k).push(r);
+        }
+
+        return { defaults: defaults.map((d) => d.toJSON()), linesByKey, fullByKey, futureByKey, yearLinesByKey };
     }
 
     /* erp_id (CC) -> { companyId, companyName } via enterprise_cities (idCompany do Sienge). */
@@ -520,6 +540,69 @@ export default class DeptSpendingService {
         };
     }
 
+    /* ===== Regra do EXERCÍCIO aplicada ao header da lista (mesma régua do relatório) =====
+       Teto = Σ (unidades × preço × %) das lines do ANO; gasto = pago DENTRO do ano
+       (incl. excedente da loja no ano); vida útil vira referência (tetoVidaUtil). */
+    async applyExerciseHeader({ company, viability, prefetch, resolver, endYM, endDate }) {
+        const h = viability.header;
+        const year = String(endYM).slice(0, 4);
+        const y01 = `${year}-01`;
+        const costCenterIds = company.ccRows.map((r) => Number(r.erp_id)).filter(Number.isFinite);
+
+        const spend = await this.loadBucketSpendByMonth({
+            costCenterIds, endDate, resolver, companyId: company.companyId, prefetch,
+        });
+        const tetoLoja = num(h.custoLoja);
+        const { overflowByYm, overflowTotal } = this.applyLojaOverflow(spend.loja, tetoLoja);
+
+        const pctFallback = num(h.marketingPct);
+        let tetoMktAno = 0;
+        let yearUnits = 0;
+        for (const r of company.ccRows) {
+            for (const l of (company.yearLinesByKey?.get(String(r.enterprise_key)) || [])) {
+                const u = num(l.units_target);
+                const p = num(l.avg_price_target);
+                const pct = num(l.marketing_pct) > 0 ? num(l.marketing_pct) : pctFallback;
+                tetoMktAno += u * p * (pct / 100);
+                yearUnits += u;
+            }
+        }
+
+        let mktAnoPago = 0;
+        for (const [ym, v] of spend.mkt) if (ym >= y01 && ym <= endYM) mktAnoPago += num(v);
+        let excedAno = 0;
+        for (const [ym, v] of overflowByYm) if (ym >= y01 && ym <= endYM) excedAno += num(v);
+        const consumido = mktAnoPago + excedAno;
+        const saldo = tetoMktAno - consumido;
+
+        // Sobrescreve os campos que a UI da lista já lê, agora na base do exercício.
+        h.tetoVidaUtil = h.budgetTotal;
+        h.budgetTotal = tetoMktAno;
+        h.budgetUpToMonth = tetoMktAno;
+        h.spentTotal = consumido;
+        h.spentAccumulated = consumido;
+        h.remainingBudgetTotal = saldo;
+        h.pctInvested = tetoMktAno > 0 ? consumido / tetoMktAno : (consumido > 0 ? 1.01 : 0);
+        h.plannedCostPerUnit = yearUnits > 0 ? tetoMktAno / yearUnits : 0;
+        h.yearUnits = yearUnits;
+        h.lojaExcedenteAno = excedAno;
+        h.lojaPagoTotal = num(spend.lojaTotal);
+        h.lojaConsumida = Math.min(num(spend.lojaTotal), tetoLoja);
+        h.tetoLoja = tetoLoja;
+        h.saldoPerUnit = num(h.availableInventory) > 0 ? saldo / num(h.availableInventory) : 0;
+        h.recommendedCostPerUnit = h.saldoPerUnit;
+        h.recommendedPerFutureUnit = num(h.futureUnits) > 0 ? saldo / num(h.futureUnits) : 0;
+        h.diffTotal = consumido - tetoMktAno;
+        h.diffPerUnit = num(h.currentRealCostPerUnit) - num(h.plannedCostPerUnit);
+        if (h.monthContext) {
+            const mb = h.saldoPerUnit * num(h.monthContext.unitsTargetMonth);
+            h.monthContext.adjustedBudgetMonth = mb;
+            h.monthContext.monthBudget = mb;
+            h.monthContext.remainingBudgetMonth = mb - num(h.monthContext.monthSpent);
+            h.monthContext.monthRemaining = mb - num(h.monthContext.monthSpent);
+        }
+    }
+
     /* ============================ Lista (por empresa) ============================ */
     async listEnterprisesViability({ year, upToMonth = null, startMonth = null, endMonth = null, aliasId = 'default', onlyReleased = false, companyIds = null }) {
         const { startMonth: startYM, endMonth: endYM } = resolveRange({ year, upToMonth, startMonth, endMonth });
@@ -528,7 +611,7 @@ export default class DeptSpendingService {
         const range = { startYM, endYM, ymList, endDate };
 
         const projection = await this.getActiveProjection();
-        const { defaults, linesByKey, fullByKey, futureByKey } = await this.loadProjectionAggregates({
+        const { defaults, linesByKey, fullByKey, futureByKey, yearLinesByKey } = await this.loadProjectionAggregates({
             projectionId: projection.id, aliasId, startYM, endYM,
         });
 
@@ -555,6 +638,7 @@ export default class DeptSpendingService {
                     linesByKey,
                     fullByKey,
                     futureByKey,
+                    yearLinesByKey,
                 });
             }
             const g = groups.get(groupKey);
@@ -601,7 +685,11 @@ export default class DeptSpendingService {
             const batch = companies.slice(i, i + CONCURRENCY);
             const computed = await Promise.all(batch.map((company) =>
                 this.computeCompanyViability({ company, projection, range, resolver, prefetch })
-                    .then((viability) => ({ company, viability }))
+                    .then(async (viability) => {
+                        // mesma regra do relatório: base do EXERCÍCIO no header da lista
+                        await this.applyExerciseHeader({ company, viability, prefetch, resolver, endYM, endDate });
+                        return { company, viability };
+                    })
                     .catch((e) => {
                         console.error(`[DeptSpending] falha ao computar empresa ${company.companyId}:`, e?.message);
                         return null;
@@ -681,15 +769,35 @@ export default class DeptSpendingService {
         return { units: num(row?.units), vgv: num(row?.vgv) };
     }
 
+    /* Pool da loja (vida toda, cronológico): parte dentro do teto fica na loja; o que
+       passa vira excedente (→ MKT). Regra compartilhada entre relatório e lista. */
+    applyLojaOverflow(lojaByYm, tetoLoja) {
+        const cappedByYm = new Map();
+        const overflowByYm = new Map();
+        let acc = 0;
+        for (const ym of [...lojaByYm.keys()].sort()) {
+            const v = num(lojaByYm.get(ym));
+            const below = Math.max(0, Math.min(v, tetoLoja - acc));
+            acc += v;
+            cappedByYm.set(ym, below);
+            if (v - below > 0) overflowByYm.set(ym, v - below);
+        }
+        const overflowTotal = [...overflowByYm.values()].reduce((s, v) => s + v, 0);
+        return { cappedByYm, overflowByYm, overflowTotal };
+    }
+
     /* Gasto ao vivo bucketed (marketing × loja), vida toda até endDate, por mês.
-       Loja tem precedência (config explícita por empresa) p/ não contar 2×. */
-    async loadBucketSpendByMonth({ costCenterIds, endDate, resolver, companyId }) {
+       Loja tem precedência (config explícita por empresa) p/ não contar 2×.
+       Com `prefetch.spendByCc` usa as linhas já buscadas (zero I/O). */
+    async loadBucketSpendByMonth({ costCenterIds, endDate, resolver, companyId, prefetch = null }) {
         const mkt = new Map();   // ym -> amount
         const loja = new Map();  // ym -> amount
         const ids = (costCenterIds || []).map(Number).filter((n) => Number.isFinite(n));
         if (!ids.length) return { mkt, loja, mktTotal: 0, lojaTotal: 0 };
 
-        const rows = await listMarketingSpendByMonth({ costCenterIds: ids, endDate });
+        const rows = prefetch?.spendByCc
+            ? ids.flatMap((id) => prefetch.spendByCc.get(id) || [])
+            : await listMarketingSpendByMonth({ costCenterIds: ids, endDate });
         let mktTotal = 0;
         let lojaTotal = 0;
         for (const r of rows) {
@@ -780,19 +888,8 @@ export default class DeptSpendingService {
         // da loja em ordem cronológica, o que passar do teto vira gasto de MARKETING.
         // Mantido em campo separado (mktLojaExcedente) p/ exibição clara.
         const tetoLoja = num(h.custoLoja);
-        const lojaCappedByYm = new Map();
-        const lojaOverflowByYm = new Map();
-        {
-            let acc = 0;
-            for (const ym of [...spend.loja.keys()].sort()) {
-                const v = num(spend.loja.get(ym));
-                const below = Math.max(0, Math.min(v, tetoLoja - acc));
-                acc += v;
-                lojaCappedByYm.set(ym, below);
-                if (v - below > 0) lojaOverflowByYm.set(ym, v - below);
-            }
-        }
-        const lojaOverflowVida = [...lojaOverflowByYm.values()].reduce((s, v) => s + v, 0);
+        const { cappedByYm: lojaCappedByYm, overflowByYm: lojaOverflowByYm, overflowTotal: lojaOverflowVida } =
+            this.applyLojaOverflow(spend.loja, tetoLoja);
 
         // ----- Série mensal do exercício (realizado × projetado) -----
         const months = yearMonths.map((ym) => {
