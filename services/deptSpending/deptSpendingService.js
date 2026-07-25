@@ -210,14 +210,17 @@ export default class DeptSpendingService {
     }
 
     /* Despesas acompanhadas dos CCs, vida toda até endDate, por mês. Filtra por
-       departamento acompanhado (resolver). */
-    async loadExpensesLifetimeByMonth({ costCenterIds, endDate, resolver, companyId }) {
+       departamento acompanhado (resolver). Com `prefetch.spendByCc` (lista) usa as
+       linhas já buscadas em UMA query p/ todas as empresas — zero I/O aqui. */
+    async loadExpensesLifetimeByMonth({ costCenterIds, endDate, resolver, companyId, prefetch = null }) {
         const byMonth = new Map();
         const ids = (costCenterIds || []).map(Number).filter((n) => Number.isFinite(n));
         if (!ids.length) return { byMonth, total: 0, firstYm: null };
 
         // Lê AO VIVO do backup do Sienge (agregado por mês de competência + departamento).
-        const rows = await listMarketingSpendByMonth({ costCenterIds: ids, endDate });
+        const rows = prefetch?.spendByCc
+            ? ids.flatMap((id) => prefetch.spendByCc.get(id) || [])
+            : await listMarketingSpendByMonth({ costCenterIds: ids, endDate });
 
         let total = 0;
         let firstYm = null;
@@ -232,20 +235,32 @@ export default class DeptSpendingService {
         return { byMonth, total, firstYm };
     }
 
-    /* Vendas (unidades) realizadas dos CCs até endDate, por mês. */
-    async loadSalesLifetimeByMonth({ erpIds, endDate }) {
-        const byMonth = new Map();
+    /* Linhas cruas de contratos (com o ERP em cada linha) p/ vários CCs numa query só. */
+    async fetchSalesRows({ erpIds, endDate }) {
         const ids = [...new Set((erpIds || []).map((e) => String(e)).filter(Boolean))];
-        if (!ids.length) return { byMonth, total: 0 };
-
-        const rows = await db.sequelize.query(
-            `SELECT to_char(c.financial_institution_date, 'YYYY-MM') AS ym, c.units
+        if (!ids.length) return [];
+        return await db.sequelize.query(
+            `SELECT c.enterprise_id::text AS erp,
+                    to_char(c.financial_institution_date, 'YYYY-MM') AS ym,
+                    c.units
                FROM contracts c
               WHERE c.enterprise_id::text IN (:ids)
                 AND c.financial_institution_date < :end
                 AND c.situation IN ('Emitido','Autorizado')`,
             { replacements: { ids, end: endDate }, type: db.Sequelize.QueryTypes.SELECT }
         );
+    }
+
+    /* Vendas (unidades) realizadas dos CCs até endDate, por mês. Com `prefetch.salesByErp`
+       usa as linhas já buscadas em UMA query p/ todas as empresas. */
+    async loadSalesLifetimeByMonth({ erpIds, endDate, prefetch = null }) {
+        const byMonth = new Map();
+        const ids = [...new Set((erpIds || []).map((e) => String(e)).filter(Boolean))];
+        if (!ids.length) return { byMonth, total: 0 };
+
+        const rows = prefetch?.salesByErp
+            ? ids.flatMap((id) => prefetch.salesByErp.get(id) || [])
+            : await this.fetchSalesRows({ erpIds: ids, endDate });
 
         let total = 0;
         for (const r of rows) {
@@ -257,7 +272,7 @@ export default class DeptSpendingService {
     }
 
     /* ============================ Núcleo: 1 empresa ============================ */
-    async computeCompanyViability({ company, projection, range, resolver }) {
+    async computeCompanyViability({ company, projection, range, resolver, prefetch = null }) {
         const { startYM, endYM, ymList, endDate } = range;
         const ccRows = company.ccRows; // defaults da projeção dos CCs da empresa
         const erpIds = ccRows.map((r) => r.erp_id).filter(Boolean).map(String);
@@ -310,10 +325,11 @@ export default class DeptSpendingService {
             : defaultPriceFallback;
 
         // ----- Cargas independentes em PARALELO: unidades CV + gasto + vendas reais -----
+        // Com prefetch (lista), gasto/vendas viram agregação em memória (zero I/O).
         const [units, spendRes, salesRes] = await Promise.all([
             this.summarizeCompanyUnits(erpIds),
-            this.loadExpensesLifetimeByMonth({ costCenterIds, endDate, resolver, companyId: company.companyId }),
-            this.loadSalesLifetimeByMonth({ erpIds, endDate }),
+            this.loadExpensesLifetimeByMonth({ costCenterIds, endDate, resolver, companyId: company.companyId, prefetch }),
+            this.loadSalesLifetimeByMonth({ erpIds, endDate, prefetch }),
         ]);
 
         // "bloqueadas consideradas disponíveis" vem da PROJEÇÃO (por CC, somado).
@@ -552,13 +568,38 @@ export default class DeptSpendingService {
             : null;
         if (wanted) companies = companies.filter((c) => c.companyId != null && wanted.has(Number(c.companyId)));
 
-        // Empresas em PARALELO (lotes) — cada uma faz consultas próprias (CV/Sienge/contratos).
-        const CONCURRENCY = 4;
+        // PREFETCH em 1 query por fonte p/ TODAS as empresas (gasto Sienge + contratos).
+        // A query do Sienge varre tabelas grandes — rodá-la 1× no lote inteiro é muito
+        // mais barato que 1× por empresa. Distribuição por CC/ERP fica em memória.
+        const allCcIds = [...new Set(companies.flatMap((c) =>
+            c.ccRows.map((r) => Number(r.erp_id)).filter(Number.isFinite)))];
+        const allErpIds = [...new Set(companies.flatMap((c) =>
+            c.ccRows.map((r) => r.erp_id).filter(Boolean).map(String)))];
+        const [spendRows, salesRows] = await Promise.all([
+            allCcIds.length ? listMarketingSpendByMonth({ costCenterIds: allCcIds, endDate }) : [],
+            this.fetchSalesRows({ erpIds: allErpIds, endDate }),
+        ]);
+        const spendByCc = new Map();
+        for (const r of spendRows) {
+            const k = Number(r.costCenterId);
+            if (!spendByCc.has(k)) spendByCc.set(k, []);
+            spendByCc.get(k).push(r);
+        }
+        const salesByErp = new Map();
+        for (const r of salesRows) {
+            const k = String(r.erp);
+            if (!salesByErp.has(k)) salesByErp.set(k, []);
+            salesByErp.get(k).push(r);
+        }
+        const prefetch = { spendByCc, salesByErp };
+
+        // Empresas em PARALELO (lotes) — sobrou só a consulta local de unidades por CC.
+        const CONCURRENCY = 8;
         const results = [];
         for (let i = 0; i < companies.length; i += CONCURRENCY) {
             const batch = companies.slice(i, i + CONCURRENCY);
             const computed = await Promise.all(batch.map((company) =>
-                this.computeCompanyViability({ company, projection, range, resolver })
+                this.computeCompanyViability({ company, projection, range, resolver, prefetch })
                     .then((viability) => ({ company, viability }))
                     .catch((e) => {
                         console.error(`[DeptSpending] falha ao computar empresa ${company.companyId}:`, e?.message);

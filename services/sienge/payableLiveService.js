@@ -379,6 +379,7 @@ export async function listMarketingSpendByMonth({ costCenterIds, endDate } = {})
     )
     SELECT
       to_char(date_trunc('month', COALESCE(p.dtvencto, p.dtcompetencia, t.dtemissao)), 'YYYY-MM') AS ym,
+      main_cc.cost_center_id,
       dep.main_department_name AS department_name,
       SUM(p.vloriginal) AS amount
     FROM ecpgparcela p
@@ -393,11 +394,12 @@ export async function listMarketingSpendByMonth({ costCenterIds, endDate } = {})
     ) dep ON true
     WHERE date_trunc('month', COALESCE(p.dtvencto, p.dtcompetencia, t.dtemissao)) < $2::date
       AND TRIM(t.cddocumento) NOT IN (${BLOCKED_DOC_IDS.join(',')})
-    GROUP BY 1, 2
+    GROUP BY 1, 2, 3
   `;
   const { rows } = await siengeQuery(sql, [views, end]);
   const result = rows.map((r) => ({
     ym: r.ym,
+    costCenterId: Number(r.cost_center_id),
     departmentName: r.department_name,
     amount: Number(r.amount) || 0,
   }));
