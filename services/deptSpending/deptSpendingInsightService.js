@@ -78,7 +78,7 @@ function buildPrompt(report) {
 DADOS (use SOMENTE estes números, já formatados; NÃO invente nem recalcule nada):
 - Empreendimento: ${report.company.name} | Exercício ${report.year}, realizado até o mês ${report.monthIndex}/${report.year}.
 - Ritmo linear esperado do ano até aqui: ${pct(report.governance.ritmoLinear)}.
-- MARKETING: ${fmtBucket(buckets.marketing)}${buckets.marketing.lojaExcedenteVida > 0 ? ` (inclui ${brl(buckets.marketing.lojaExcedenteVida)} de excedente da loja - regra: o que a loja gasta acima do teto vira gasto de MKT)` : ''}.
+- MARKETING (controle do EXERCÍCIO: teto = VGV projetado do ano × %; viabilidade vida útil de referência ${brl(buckets.marketing.tetoVidaUtil)}): ${fmtBucket(buckets.marketing)}${buckets.marketing.lojaExcedenteAno > 0 ? ` (inclui ${brl(buckets.marketing.lojaExcedenteAno)} de excedente da loja - regra: o que a loja gasta acima do teto vira gasto de MKT)` : ''}. Plano do ano (pago + projetado): ${brl(buckets.marketing.planoAno)}.
 - LOJA FÍSICA: ${fmtBucket(buckets.loja)}${buckets.loja.excedenteVida > 0 ? ` (pagou no total ${brl(buckets.loja.pagoTotalVida)}; o excedente de ${brl(buckets.loja.excedenteVida)} foi transferido ao MKT)` : ''}.
 - TOTAL APROVADO: ${fmtBucket(buckets.total)}.
 - VGV projetado no exercício: ${brl(vgv.yearVgv)} (${vgv.yearUnits} unidades de ${vgv.totalUnits}). VGV projetado para os anos seguintes: ${brl(vgv.nextYearsVgv)}.
