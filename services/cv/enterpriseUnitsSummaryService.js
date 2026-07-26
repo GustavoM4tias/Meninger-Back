@@ -32,10 +32,12 @@ export function classifyUnitStatus(unit) {
         if (s.includes('bloq')) isBlocked = true;
     }
 
-    if (unit?.data_bloqueio) {
+    // `data_bloqueio` marca "bloqueado" APENAS quando a unidade não está vendida
+    // nem reservada. No CV a unidade VENDIDA também recebe data_bloqueio (trava a
+    // revenda), então sem essa ressalva as vendidas viravam "bloqueadas" em massa
+    // (ex.: CC 10401 mostrava 159 bloq. quando são 151 vendidas).
+    if (unit?.data_bloqueio && !isSold && !isReserved) {
         isBlocked = true;
-        isSold = false;
-        isReserved = false;
     }
 
     return { isSold, isReserved, isBlocked };
