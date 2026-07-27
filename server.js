@@ -104,6 +104,8 @@ import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
 import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
 import { ensureFaturamentoRulesSchema } from './lib/ensureFaturamentoRulesSchema.js';
 import { ensureProjectionLinkSchema } from './lib/ensureProjectionLinkSchema.js';
+import { ensureEmeAuditSchema } from './lib/ensureEmeAuditSchema.js';
+import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
@@ -435,6 +437,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['DepartmentVisibility', ensureDepartmentVisibilitySchema],
     ['ComercialConditions', ensureComercialConditionsSchema],
     ['Organogram', ensureOrganogramSchema],
+    ['EmeAudit', ensureEmeAuditSchema],
     ['InitialTypes', seedInitialTypes],
     ['SalesStandModels', seedSalesStandModels],
     ['Checklist', ensureChecklistSchema],
@@ -445,6 +448,11 @@ async function syncModelsAndPatches(fingerprint) {
   }
 
   seedChecklist().catch(err => console.warn('⚠️  seedChecklist falhou:', err?.message || err)); // background: não bloqueia o boot
+
+  // Com o schema aplicado, confere se sobrou algum model declarando coluna que o
+  // banco não tem. Só reclama no log — mas reclama com nome e sobrenome, para o
+  // erro não reaparecer depois disfarçado de falha genérica numa tela.
+  await schemaDriftCheck();
 
   // Fingerprint só quando TUDO passou. Com algum patch quebrado, o próximo boot
   // tenta de novo em vez de pular a fase achando que o schema está em dia.
