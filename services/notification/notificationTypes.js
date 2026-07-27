@@ -68,9 +68,6 @@ export const NotificationType = {
     CHECKLIST_APPROVAL_REQUESTED: 'checklist.approval.requested',
     CHECKLIST_APPROVAL_DECIDED:   'checklist.approval.decided',
 
-    // To Do (Microsoft) — tarefas pessoais
-    TODO_DAILY_DIGEST: 'todo.daily_digest',
-
     // Relatórios da Eme (relatórios customizados gerados por IA)
     REPORT_SHARED:          'report.shared',
     REPORT_PUBLIC_EXPIRING: 'report.public.expiring',
@@ -479,18 +476,6 @@ export const NOTIFICATION_CATALOG = {
         // Resultado direcionado ao solicitante: sempre chega.
         defaults: { inapp: true, email: true, whatsapp: true },
         userOptional: false,
-    },
-
-    // ── To Do (Microsoft) ───────────────────────────────────────────────────────
-    [NotificationType.TODO_DAILY_DIGEST]: {
-        label: 'Resumo diário do To Do',
-        group: 'To Do',
-        description: 'Um resumo, pela manhã, das suas tarefas do Microsoft To Do para hoje, amanhã e em atraso.',
-        emailType: 'generic.notification',
-        whatsapp: null,
-        // Só in-app por padrão (digest diário) — o usuário pode ligar e-mail/WhatsApp.
-        defaults: { inapp: true, email: false, whatsapp: false },
-        userOptional: true,
     },
 };
 

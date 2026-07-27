@@ -233,10 +233,8 @@ import ChecklistReminderRuleDefine    from './checklist/checklistReminderRule.js
 import ChecklistAuthProfileDefine     from './checklist/checklistAuthProfile.js';
 import ChecklistTaskApprovalDefine    from './checklist/checklistTaskApproval.js';
 
-// To Do (Microsoft) — índice local de enriquecimento das tarefas
 import RealEstateRegistrationDefine from './realestate/registration.js';
 import CvImobiliariaDefine from './cv/imobiliaria.js';
-import TodoTaskRefDefine from './todo/todoTaskRef.js';
 
 const env = process.env.NODE_ENV || 'development';
 
@@ -489,9 +487,6 @@ db.ChecklistSettings        = ChecklistSettingsDefine(sequelize, DataTypes);
 db.ChecklistReminderRule    = ChecklistReminderRuleDefine(sequelize, DataTypes);
 db.ChecklistAuthProfile     = ChecklistAuthProfileDefine(sequelize, DataTypes);
 db.ChecklistTaskApproval    = ChecklistTaskApprovalDefine(sequelize, DataTypes);
-
-// To Do (Microsoft)
-db.TodoTaskRef = TodoTaskRefDefine(sequelize, DataTypes);
 
 // Cadastro de imobiliárias (CV CRM)
 db.RealEstateRegistration = RealEstateRegistrationDefine(sequelize, DataTypes);
