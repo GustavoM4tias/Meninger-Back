@@ -1,7 +1,8 @@
 import express from 'express';
 import multer from 'multer';
-import { getContracts, listEnterprises, listCompanies, clearCache, getDistratos } from '../controllers/sienge/contractSalesController.js';
+import { getContracts, listEnterprises, listCompanies, clearCache } from '../controllers/sienge/contractSalesController.js';
 import authenticate from '../middlewares/authMiddleware.js';
+import requireAdmin from '../middlewares/requireAdmin.js';
 import bulkDataController from '../controllers/sienge/bulkDataController.js';
 import BillsController from '../controllers/sienge/billsController.js';
 import {
@@ -50,10 +51,8 @@ const upload = multer({
 router.get('/contracts', authenticate, getContracts);
 router.get('/contracts/enterprises', authenticate, listEnterprises);
 router.get('/contracts/companies', authenticate, listCompanies);
-router.post('/contracts/cache/clear', authenticate, clearCache);
-
-// Distratos (rescisões) — filtro por cancellation_date, inclui campos de cancelamento
-router.get('/distratos', authenticate, getDistratos);
+// Limpar cache de empreendimentos: operação de manutenção, só admin.
+router.post('/contracts/cache/clear', authenticate, requireAdmin, clearCache);
 
 router.post('/contracts/sync/full', bulk.fullSync.bind(bulk));
 router.post('/contracts/sync/delta', bulk.deltaSync.bind(bulk));

@@ -5,9 +5,11 @@ const { StageCommissionRule } = db;
 
 export async function listStageCommissionRules(req, res) {
     try {
+        // stage_id NULL (regra fixa do empreendimento) vem primeiro: é a regra
+        // mais abrangente e o front resolve na ordem em que chega.
         const rows = await StageCommissionRule.findAll({
             where: { active: true },
-            order: [['enterprise_id', 'ASC'], ['stage_id', 'ASC']]
+            order: [['enterprise_id', 'ASC'], db.Sequelize.literal('stage_id ASC NULLS FIRST')]
         });
         return res.json({
             count: rows.length,
@@ -33,11 +35,14 @@ export async function addStageCommissionRule(req, res) {
 
         const { enterprise_id, enterprise_name, stage_id, stage_name, commission_pct, description } = req.body;
         const eid = Number(enterprise_id);
-        const sid = Number(stage_id);
         const pct = Number(commission_pct);
 
+        // stage_id ausente/vazio = regra FIXA do empreendimento (vale sempre).
+        const hasStage = stage_id !== null && stage_id !== undefined && String(stage_id).trim() !== '';
+        const sid = hasStage ? Number(stage_id) : null;
+
         if (!Number.isInteger(eid) || eid <= 0) return res.status(400).json({ error: 'enterprise_id inválido.' });
-        if (!Number.isInteger(sid) || sid <= 0) return res.status(400).json({ error: 'stage_id inválido.' });
+        if (hasStage && (!Number.isInteger(sid) || sid <= 0)) return res.status(400).json({ error: 'stage_id inválido.' });
         if (!Number.isFinite(pct) || pct <= 0 || pct >= 1) return res.status(400).json({ error: 'commission_pct inválido (deve ser entre 0 e 1, ex: 0.04).' });
 
         const [row, created] = await StageCommissionRule.findOrCreate({

@@ -54,6 +54,12 @@ import {
 } from '../controllers/stageCommissionRuleController.js';
 
 import {
+  listEnterpriseValueRules,
+  addEnterpriseValueRule,
+  removeEnterpriseValueRule
+} from '../controllers/enterpriseValueRuleController.js';
+
+import {
   listTrSatellites,
   addTrSatellite,
   updateTrSatellite,
@@ -117,8 +123,11 @@ router.delete('/land-sync-enterprises/:id', authMiddleware, requireAdmin, remove
  
 router.post( '/land-sync-obstit/run', authMiddleware, requireAdmin, landDataController.run );
 
-// Hidden Dashboard Enterprises (admin only)
-router.get('/hidden-enterprises', authMiddleware, requireAdmin, listHiddenEnterprises);
+// Hidden Dashboard Enterprises — GET: todos autenticados; mutações: admin only.
+// O admin configura, mas a ocultação vale para TODOS os usuários do dashboard;
+// por isso a leitura precisa estar liberada (antes o não-admin recebia 403 e
+// acabava enxergando justamente os empreendimentos que deveriam sumir).
+router.get('/hidden-enterprises', authMiddleware, listHiddenEnterprises);
 router.post('/hidden-enterprises', authMiddleware, requireAdmin, addHiddenEnterprise);
 router.delete('/hidden-enterprises/:id', authMiddleware, requireAdmin, removeHiddenEnterprise);
 
@@ -126,6 +135,11 @@ router.delete('/hidden-enterprises/:id', authMiddleware, requireAdmin, removeHid
 router.get('/stage-commission-rules', authMiddleware, listStageCommissionRules);
 router.post('/stage-commission-rules', authMiddleware, requireAdmin, addStageCommissionRule);
 router.delete('/stage-commission-rules/:id', authMiddleware, requireAdmin, removeStageCommissionRule);
+
+// Enterprise Value Rules (composição de VGV) — GET: todos autenticados; mutações: admin only
+router.get('/enterprise-value-rules', authMiddleware, listEnterpriseValueRules);
+router.post('/enterprise-value-rules', authMiddleware, requireAdmin, addEnterpriseValueRule);
+router.delete('/enterprise-value-rules/:id', authMiddleware, requireAdmin, removeEnterpriseValueRule);
 
 // TR Satellite Enterprises — GET: todos autenticados; mutações: admin only
 router.get('/tr-satellite-enterprises', authMiddleware, listTrSatellites);

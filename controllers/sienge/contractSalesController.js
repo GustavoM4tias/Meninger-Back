@@ -25,10 +25,13 @@ export async function getContracts(req, res) {
 
     const isDetail = String(view).toLowerCase() === 'detail'
 
-    const enterpriseIdNum =
+    const enterpriseIdNumRaw =
       enterpriseId != null && enterpriseId !== '' ? Number(enterpriseId) : null
 
-    const enterpriseIdSafe = Number.isFinite(enterpriseIdNum) && enterpriseIdNum > 0 ? enterpriseIdNum : null
+    // Só IDs positivos viram filtro. Antes um ?enterpriseId=0 virava
+    // "AND enterprise_id = 0" e zerava o dashboard sem erro.
+    const enterpriseIdNum =
+      Number.isFinite(enterpriseIdNumRaw) && enterpriseIdNumRaw > 0 ? enterpriseIdNumRaw : null
 
     const enterpriseIdsArr =
       typeof enterpriseIds === 'string'
@@ -64,7 +67,7 @@ export async function getContracts(req, res) {
         : ''
 
     const whereEnterpriseIdClause =
-      Number.isFinite(enterpriseIdNum) ? ` AND sc.enterprise_id = :enterpriseId` : ''
+      enterpriseIdNum != null ? ` AND sc.enterprise_id = :enterpriseId` : ''
 
     // ✅ NOVO: lista de enterpriseIds (para seleção em massa)
     const whereEnterpriseIdsClause = hasEnterpriseIds
@@ -86,72 +89,12 @@ export async function getContracts(req, res) {
     const isAdmin = req.user?.role === 'admin'
     const userCityRaw = isAdmin ? null : (req.user?.city || null)
 
-    // ⚠️ Se quiser habilitar fallback por nome (caro), mude para true.
-    const ENABLE_REPASSE_NAME_FALLBACK = false
-
-    const sql = `
-WITH base AS (
-  SELECT sc.*
-  FROM contracts sc
-  WHERE sc.financial_institution_date BETWEEN :start AND :end
-    AND sc.situation = :situation
-    ${whereNameClause}
-    ${whereEnterpriseIdClause}
-    ${whereEnterpriseIdsClause}
-    ${whereCompanyIdClause}
-    ${whereCompanyIdsClause}
-),
-
-pivots AS (
-  SELECT
-    b.id AS contract_id,
-    b.enterprise_id,
-    b.enterprise_name,
-    b.company_id,
-    b.company_name,
-    b.company_id::text AS company_id_str,
-    b.financial_institution_date,
-
-    CASE
-      WHEN b.land_value IS NULL THEN NULL
-      WHEN position(',' in b.land_value::text) > 0
-        THEN replace(regexp_replace(b.land_value::text, '\\.', '', 'g'), ',', '.')::numeric
-      ELSE
-        regexp_replace(b.land_value::text, '[^0-9\\.]', '', 'g')::numeric
-    END AS land_value,
-
-    COALESCE(
-      (SELECT u ->> 'name'
-       FROM jsonb_array_elements(b.units) u
-       WHERE (u ->> 'main')::boolean = true
-       LIMIT 1),
-      (SELECT u ->> 'name'
-       FROM jsonb_array_elements(b.units) u
-       LIMIT 1)
-    ) AS unit_name,
-
-    COALESCE(
-      (SELECT NULLIF(u ->> 'id','')::int
-       FROM jsonb_array_elements(b.units) u
-       WHERE (u ->> 'main')::boolean = true
-       LIMIT 1),
-      (SELECT NULLIF(u ->> 'id','')::int
-       FROM jsonb_array_elements(b.units) u
-       LIMIT 1)
-    ) AS unit_id,
-
-    COALESCE(
-      (SELECT c
-       FROM jsonb_array_elements(b.customers) c
-       WHERE (c ->> 'main')::boolean = true
-       LIMIT 1),
-      (SELECT c
-       FROM jsonb_array_elements(b.customers) c
-       ORDER BY (c ->> 'id')::int NULLS LAST
-       LIMIT 1)
-    ) AS main_customer,
-
-    COALESCE(
+    // ── Co-titulares (associates) ─────────────────────────────────────────────
+    // Bloco caro: normaliza nome (unaccent + regex) de cada cliente do contrato
+    // para descartar o titular e cônjuges repetidos. Só o modal de detalhe usa
+    // esses dados, então no dashboard devolvemos array vazio e economizamos o
+    // processamento em cima de TODOS os contratos do período.
+    const associatesExpr = isDetail ? `COALESCE(
       (
         WITH cust AS (
           SELECT
@@ -219,10 +162,103 @@ pivots AS (
         FROM picked
       ),
       '[]'::jsonb
-    ) AS associates,
+    )` : `'[]'::jsonb`
+
+    // ── Repasse / reserva ─────────────────────────────────────────────────────
+    // O objeto do CV traz dezenas de campos (titular, corretor, imobiliária,
+    // condições, unidade_json...) que só o modal de detalhe consome. No
+    // dashboard mandamos apenas o que decide número: status do repasse (para
+    // excluir distrato) e o histórico de etapas (para a regra de comissão).
+    const repasseExpr = isDetail
+      ? `jsonb_build_array(rf.repasse_obj)`
+      : `jsonb_build_array(jsonb_build_object(
+          'idrepasse',          rf.repasse_obj -> 'idrepasse',
+          'idreserva',          rf.repasse_obj -> 'idreserva',
+          'status_repasse',     rf.repasse_obj -> 'status_repasse',
+          'idsituacao_repasse', rf.repasse_obj -> 'idsituacao_repasse',
+          'status',             COALESCE(rf.repasse_obj -> 'status', '[]'::jsonb)
+        ))`
+
+    const reservaExpr = isDetail
+      ? `to_jsonb(res)`
+      : `jsonb_build_object(
+          'idreserva',      to_jsonb(res) -> 'idreserva',
+          'status_repasse', to_jsonb(res) -> 'status_repasse'
+        )`
+
+    const sql = `
+WITH base AS (
+  SELECT sc.*
+  FROM contracts sc
+  WHERE sc.financial_institution_date BETWEEN :start AND :end
+    AND sc.situation = :situation
+    -- Empreendimentos ocultos pelo admin somem para TODO mundo, e já no SQL:
+    -- não adianta filtrar no cliente (o não-admin não enxerga a lista) nem
+    -- faz sentido trafegar contrato que ninguém vai ver.
+    AND NOT EXISTS (
+      SELECT 1 FROM hidden_dashboard_enterprises h
+      WHERE h.active = true AND h.enterprise_id = sc.enterprise_id
+    )
+    ${whereNameClause}
+    ${whereEnterpriseIdClause}
+    ${whereEnterpriseIdsClause}
+    ${whereCompanyIdClause}
+    ${whereCompanyIdsClause}
+),
+
+pivots AS (
+  SELECT
+    b.id AS contract_id,
+    b.enterprise_id,
+    b.enterprise_name,
+    b.company_id,
+    b.company_name,
+    b.company_id::text AS company_id_str,
+    b.financial_institution_date,
+
+    CASE
+      WHEN b.land_value IS NULL THEN NULL
+      WHEN position(',' in b.land_value::text) > 0
+        THEN replace(regexp_replace(b.land_value::text, '\\.', '', 'g'), ',', '.')::numeric
+      ELSE
+        regexp_replace(b.land_value::text, '[^0-9\\.]', '', 'g')::numeric
+    END AS land_value,
+
+    COALESCE(
+      (SELECT u ->> 'name'
+       FROM jsonb_array_elements(b.units) u
+       WHERE (u ->> 'main')::boolean = true
+       LIMIT 1),
+      (SELECT u ->> 'name'
+       FROM jsonb_array_elements(b.units) u
+       LIMIT 1)
+    ) AS unit_name,
+
+    COALESCE(
+      (SELECT NULLIF(u ->> 'id','')::int
+       FROM jsonb_array_elements(b.units) u
+       WHERE (u ->> 'main')::boolean = true
+       LIMIT 1),
+      (SELECT NULLIF(u ->> 'id','')::int
+       FROM jsonb_array_elements(b.units) u
+       LIMIT 1)
+    ) AS unit_id,
+
+    COALESCE(
+      (SELECT c
+       FROM jsonb_array_elements(b.customers) c
+       WHERE (c ->> 'main')::boolean = true
+       LIMIT 1),
+      (SELECT c
+       FROM jsonb_array_elements(b.customers) c
+       ORDER BY (c ->> 'id')::int NULLS LAST
+       LIMIT 1)
+    ) AS main_customer,
+
+    ${associatesExpr} AS associates,
 
     COALESCE(b.payment_conditions, '[]'::jsonb) AS payment_conditions,
-    COALESCE(b.links_json, '[]'::jsonb) AS links,
+    ${isDetail ? `COALESCE(b.links_json, '[]'::jsonb)` : `'[]'::jsonb`} AS links,
 
     regexp_replace(upper(
       COALESCE(
@@ -370,12 +406,12 @@ SELECT
   ec.city_resolved AS erp_city,
 
   CASE
-    WHEN rf.repasse_obj IS NOT NULL THEN jsonb_build_array(rf.repasse_obj)
+    WHEN rf.repasse_obj IS NOT NULL THEN ${repasseExpr}
     ELSE '[]'::jsonb
   END AS repasse,
 
   CASE
-    WHEN res.idreserva IS NOT NULL THEN to_jsonb(res)
+    WHEN res.idreserva IS NOT NULL THEN ${reservaExpr}
     ELSE NULL
   END AS reserva
 
@@ -581,173 +617,5 @@ export async function listCompanies(req, res) {
   } catch (err) {
     console.error('[listCompanies]', err)
     return res.status(500).json({ error: 'Erro ao listar empresas.' })
-  }
-}
-
-/**
- * GET /api/sienge/distratos
- * Retorna contratos cancelados (situation = 'Cancelado') com todos os campos
- * de distrato, filtrando por cancellation_date (não financial_institution_date).
- *
- * Query params:
- *   startDate      YYYY-MM-DD  (default: primeiro dia do ano atual)
- *   endDate        YYYY-MM-DD  (default: hoje)
- *   enterpriseName string|string[]  nome(s) de empreendimento
- *   enterpriseId   number
- *   enterpriseIds  string  IDs separados por vírgula
- */
-export async function getDistratos(req, res) {
-  try {
-    const {
-      startDate,
-      endDate,
-      enterpriseName,
-      enterpriseId,
-      enterpriseIds,
-    } = req.query
-
-    const today = dayjs()
-    const start = startDate ? dayjs(startDate) : dayjs().startOf('year')
-    const end   = endDate   ? dayjs(endDate)   : today
-
-    // ── Enterprise name filter ─────────────────────────────────────────────
-    let nameList = []
-    if (Array.isArray(enterpriseName)) {
-      nameList = enterpriseName.map((n) => n.trim()).filter(Boolean)
-    } else if (typeof enterpriseName === 'string' && enterpriseName.trim()) {
-      nameList = enterpriseName.split(',').map((n) => n.trim()).filter(Boolean)
-    }
-
-    const whereNameClause = nameList.length > 0
-      ? ` AND (${nameList.map((_, i) => `LOWER(sc.enterprise_name) = LOWER(:name${i})`).join(' OR ')})`
-      : ''
-
-    // ── Enterprise ID filter ───────────────────────────────────────────────
-    const enterpriseIdNum  = enterpriseId != null && enterpriseId !== '' ? Number(enterpriseId) : null
-    const enterpriseIdSafe = Number.isFinite(enterpriseIdNum) && enterpriseIdNum > 0 ? enterpriseIdNum : null
-    const whereEnterpriseIdClause = enterpriseIdSafe ? ` AND sc.enterprise_id = :enterpriseId` : ''
-
-    const enterpriseIdsArr = typeof enterpriseIds === 'string'
-      ? enterpriseIds.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0)
-      : []
-    const hasEnterpriseIds = enterpriseIdsArr.length > 0
-    const whereEnterpriseIdsClause = hasEnterpriseIds ? ` AND sc.enterprise_id IN (:enterpriseIds)` : ''
-
-    // ── Auth ───────────────────────────────────────────────────────────────
-    const isAdmin    = req.user?.role === 'admin'
-    const userCityRaw = isAdmin ? null : (req.user?.city || null)
-
-    const sql = `
-SELECT
-  sc.id                           AS contract_id,
-  sc.number,
-  sc.enterprise_id,
-  sc.enterprise_name,
-  sc.company_id,
-  sc.company_name,
-  sc.cancellation_date,
-  sc.cancellation_reason,
-  sc.total_cancellation_amount,
-  sc.value                        AS contract_value,
-  sc.total_selling_value,
-  sc.contract_date,
-  sc.financial_institution_date,
-
-  -- Cadeia de fallback para data efetiva de distrato:
-  --   1) cancellation_date         → data real do distrato (Sienge)
-  --   2) last_update_date          → última atualização pelo Sienge (≈ data do distrato quando 1 é NULL)
-  --   3) updated_at::date          → quando nosso cron gravou a situação Cancelado
-  --   4) financial_institution_date → data de repasse (menos precisa)
-  --   5) contract_date             → último recurso (data da compra original)
-  COALESCE(
-    sc.cancellation_date,
-    sc.last_update_date,
-    sc.updated_at::date,
-    sc.financial_institution_date,
-    sc.contract_date
-  ) AS effective_date,
-
-  COALESCE(
-    (SELECT c ->> 'name'
-     FROM jsonb_array_elements(sc.customers) c
-     WHERE (c ->> 'main')::boolean = true
-     LIMIT 1),
-    (SELECT c ->> 'name'
-     FROM jsonb_array_elements(sc.customers) c
-     ORDER BY (c ->> 'id')::int NULLS LAST
-     LIMIT 1)
-  ) AS customer_name,
-
-  COALESCE(
-    (SELECT u ->> 'name'
-     FROM jsonb_array_elements(sc.units) u
-     WHERE (u ->> 'main')::boolean = true
-     LIMIT 1),
-    (SELECT u ->> 'name'
-     FROM jsonb_array_elements(sc.units) u
-     LIMIT 1)
-  ) AS unit_name,
-
-  ec.city_resolved
-
-FROM contracts sc
-
-LEFT JOIN LATERAL (
-  SELECT COALESCE(ec2.city_override, ec2.default_city) AS city_resolved
-  FROM enterprise_cities ec2
-  WHERE ec2.erp_id IS NOT NULL
-    AND ec2.erp_id = sc.enterprise_id::text
-  ORDER BY ec2.updated_at DESC
-  LIMIT 1
-) ec ON TRUE
-
-WHERE sc.situation = 'Cancelado'
-  -- Usa a mesma cadeia de fallback do SELECT para garantir consistência.
-  -- Contratos sem cancellation_date são filtrados por last_update_date ou updated_at,
-  -- evitando que contract_date (data de compra, geralmente anos atrás) exclua o registro.
-  AND COALESCE(
-        sc.cancellation_date,
-        sc.last_update_date,
-        sc.updated_at::date,
-        sc.financial_institution_date,
-        sc.contract_date
-      ) BETWEEN :start AND :end
-  ${whereNameClause}
-  ${whereEnterpriseIdClause}
-  ${whereEnterpriseIdsClause}
-  AND (
-    :isAdmin = TRUE
-    OR (
-      ec.city_resolved IS NOT NULL
-      AND unaccent(upper(regexp_replace(ec.city_resolved,   '[^A-Z0-9]+',' ','g'))) =
-          unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g')))
-    )
-  )
-
-ORDER BY
-  COALESCE(sc.cancellation_date, sc.last_update_date, sc.updated_at::date, sc.financial_institution_date, sc.contract_date) DESC NULLS LAST,
-  sc.id DESC
-`
-
-    const replacements = {
-      start:    start.format('YYYY-MM-DD'),
-      end:      end.format('YYYY-MM-DD'),
-      isAdmin,
-      userCity: userCityRaw,
-    }
-
-    if (enterpriseIdSafe)    replacements.enterpriseId  = enterpriseIdSafe
-    if (hasEnterpriseIds)    replacements.enterpriseIds = enterpriseIdsArr
-    nameList.forEach((val, i) => { replacements[`name${i}`] = val })
-
-    const results = await db.sequelize.query(sql, {
-      replacements,
-      type: db.Sequelize.QueryTypes.SELECT,
-    })
-
-    return res.json({ count: results.length, results })
-  } catch (err) {
-    console.error('[getDistratos]', err)
-    return res.status(500).json({ error: 'Erro ao buscar distratos.' })
   }
 }

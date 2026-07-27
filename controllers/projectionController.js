@@ -1375,27 +1375,21 @@ export async function getProjectionLogs(req, res) {
 
 /**
  * =============================================================================
- * REPORT: REALIZADO × PROJETADO
+ * REPORT: METAS DA PROJEÇÃO (lado projetado)
  * GET /api/projections/report
  *   Aceita os MESMOS parâmetros do Faturamento (/api/sienge/contracts):
  *   ?startDate=YYYY-MM-DD   (padrão: primeiro dia do mês corrente)
  *   ?endDate=YYYY-MM-DD     (padrão: hoje)
- *   ?situation=Emitido      (padrão: Emitido)
  *   ?enterpriseName=Nome1,Nome2  (opcional, filtra por nome)
+ *   ?companyIds / ?enterpriseIds (CSV, opcional)
  *   ?projection_id=N        (padrão: projeção ativa)
  *
- * Regras de VGV (idênticas ao Faturamento):
- *  - VGV Net  = soma de condições que NÃO são DC/DESCONTO_CONSTRUTORA
- *  - VGV Gross = VGV Net + abs(condições de desconto)
- *  - Enterprise 17004: usa land_value diretamente (LAND_VALUE_ONLY)
+ * Devolve APENAS metas (projected_units / projected_vgv por mês e acumulado),
+ * mais o recorte de tempo (time_elapsed_pct) usado no cálculo de ritmo.
  *
- * Status (baseado em performance_ratio = achievement_pct / time_elapsed_pct):
- *  ahead    ≥ 1.10
- *  on_track 0.80–1.10
- *  behind   0.40–0.80
- *  at_risk  < 0.40
- *  no_sales sem realized_vgv no período
- *  no_projection sem projected_vgv no período
+ * O REALIZADO não sai daqui: a tela Vendas × Projeção o obtém do
+ * /api/sienge/contracts, a mesma fonte do Faturamento, para que os dois
+ * relatórios nunca divirjam. Ver contractsStore.realizedValueForRow.
  * =============================================================================
  */
 export async function getProjectionReport(req, res) {
@@ -1426,9 +1420,8 @@ export async function getProjectionReport(req, res) {
     const startMonth = startDateStr.slice(0, 7);
     const endMonth   = endDateStr.slice(0, 7);
 
-    // Situação (igual ao Faturamento, default 'Emitido')
-    const validSituations = ['Emitido', 'Autorizado', 'Cancelado'];
-    const situation = validSituations.includes(req.query.situation) ? req.query.situation : 'Emitido';
+    // ?situation continua sendo aceito para compatibilidade de URL, mas não tem
+    // efeito aqui: metas não dependem da situação do contrato.
 
     // Filtro por nome de empreendimento (igual ao Faturamento)
     let nameList = [];
@@ -1516,13 +1509,7 @@ export async function getProjectionReport(req, res) {
       current_month: todayYM, current_day: today.getDate(),
       days_in_current_month: new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate(),
       time_elapsed_pct: 0,
-      summary: {
-        projected_units: 0, realized_units: 0, projected_vgv: 0,
-        realized_vgv_net: 0, realized_vgv_gross: 0, realized_vgv: 0,
-        achievement_pct: 0, enterprises_total: 0, enterprises_ahead: 0,
-        enterprises_on_track: 0, enterprises_behind: 0, enterprises_at_risk: 0,
-        enterprises_no_sales: 0,
-      },
+      summary: { projected_units: 0, projected_vgv: 0, enterprises_total: 0 },
       enterprises: [],
     });
 
@@ -1544,93 +1531,22 @@ export async function getProjectionReport(req, res) {
       type: db.Sequelize.QueryTypes.SELECT,
     });
 
-    // ── Busca contratos realizados — MESMA lógica do Faturamento (replacements + IN) ──
-    const erpIds = [...new Set(
-      defaults.map(d => d.erp_id).filter(v => v != null && String(v) !== 'null').map(String)
-    )];
-    let contractRows = [];
-    if (erpIds.length > 0) {
-      // Usa replacements + IN (:erpIds) — exatamente igual ao getContracts do Faturamento
-      const whereNameClauses = nameList.map((_, i) => `LOWER(c.enterprise_name) = LOWER(:cname${i})`).join(' OR ');
-      const whereNameClause  = nameList.length > 0 ? `AND (${whereNameClauses})` : '';
-
-      const contractSql = `
-        SELECT
-          c.enterprise_id::text AS erp_id,
-          TO_CHAR(c.financial_institution_date, 'YYYY-MM') AS year_month,
-          COUNT(*) AS realized_units,
-
-          SUM(
-            CASE
-              WHEN c.enterprise_id = 17004
-                THEN COALESCE(
-                  CASE
-                    WHEN position(',' in c.land_value::text) > 0
-                      THEN replace(regexp_replace(c.land_value::text, E'\\.', '', 'g'), ',', '.')::numeric
-                    ELSE regexp_replace(c.land_value::text, E'[^0-9.]', '', 'g')::numeric
-                  END, 0)
-              ELSE COALESCE((
-                SELECT SUM(
-                  CASE WHEN upper(pc->>'condition_type_id') NOT IN ('DC','DESCONTO_CONSTRUTORA')
-                       THEN (pc->>'total_value')::numeric ELSE 0 END
-                )
-                FROM jsonb_array_elements(COALESCE(c.payment_conditions, '[]'::jsonb)) pc
-              ), 0)
-            END
-          ) AS realized_vgv_net,
-
-          SUM(
-            CASE
-              WHEN c.enterprise_id = 17004
-                THEN COALESCE(
-                  CASE
-                    WHEN position(',' in c.land_value::text) > 0
-                      THEN replace(regexp_replace(c.land_value::text, E'\\.', '', 'g'), ',', '.')::numeric
-                    ELSE regexp_replace(c.land_value::text, E'[^0-9.]', '', 'g')::numeric
-                  END, 0)
-              ELSE COALESCE((
-                SELECT SUM(
-                  CASE WHEN upper(pc->>'condition_type_id') NOT IN ('DC','DESCONTO_CONSTRUTORA')
-                       THEN (pc->>'total_value')::numeric
-                       ELSE ABS((pc->>'total_value')::numeric) END
-                )
-                FROM jsonb_array_elements(COALESCE(c.payment_conditions, '[]'::jsonb)) pc
-              ), 0)
-            END
-          ) AS realized_vgv_gross
-
-        FROM contracts c
-        WHERE c.enterprise_id::text IN (:erpIds)
-          AND c.situation = :situation
-          AND c.financial_institution_date BETWEEN :startDate::date AND :endDate::date
-          ${whereNameClause}
-        GROUP BY c.enterprise_id::text,
-                 TO_CHAR(c.financial_institution_date, 'YYYY-MM')
-      `;
-
-      const replacements = { erpIds, situation, startDate: startDateStr, endDate: endDateStr };
-      nameList.forEach((val, i) => { replacements[`cname${i}`] = val; });
-
-      contractRows = await db.sequelize.query(contractSql, {
-        replacements,
-        type: db.Sequelize.QueryTypes.SELECT,
-      });
-    }
-
+    // ⚠️ Este endpoint devolve SOMENTE o lado projetado (metas).
+    //
+    // Até 2026-07 ele também agregava os contratos realizados aqui, com uma
+    // versão simplificada das regras do Faturamento (sem uplift de comissão,
+    // sem exclusão de distrato, sem TR-satélite, contando CONTRATOS em vez de
+    // vendas únicas). O resultado nunca era exibido: a tela Vendas × Projeção
+    // monta o realizado a partir do contractsStore, exatamente como o
+    // Faturamento. Manter os dois cálculos só criava divergência silenciosa e
+    // uma agregação cara sobre `contracts` a cada request.
+    //
+    // Regra: realizado tem UMA fonte só, o /api/sienge/contracts.
     // ── Índices auxiliares ────────────────────────────────────────────────────
     // lines: { `${enterprise_key}|||${alias_id}|||${year_month}` → row }
     const linesIdx = new Map();
     for (const l of lines) {
       linesIdx.set(`${l.enterprise_key}|||${l.alias_id}|||${l.year_month}`, l);
-    }
-    // contracts: { `${erp_id}|||${year_month}` → { units, vgv_net, vgv_gross } }
-    const contractIdx = new Map();
-    for (const c of contractRows) {
-      contractIdx.set(`${c.erp_id}|||${c.year_month}`, {
-        realized_units:    Number(c.realized_units)    || 0,
-        realized_vgv_net:  Number(c.realized_vgv_net)  || 0,
-        realized_vgv_gross: Number(c.realized_vgv_gross) || 0,
-      });
     }
 
     // ── Meses no intervalo ────────────────────────────────────────────────────
@@ -1679,61 +1595,19 @@ export async function getProjectionReport(req, res) {
 
       // Meses deste empreendimento
       const monthsData = allMonths.map(ym => {
-        const lineKey     = `${ek}|||${aid}|||${ym}`;
-        const line        = linesIdx.get(lineKey);
-        const contractKey = erp ? `${erp}|||${ym}` : null;
-        const contract    = contractKey ? (contractIdx.get(contractKey) || {}) : {};
+        const lineKey = `${ek}|||${aid}|||${ym}`;
+        const line    = linesIdx.get(lineKey);
 
         const avgPrice        = line?.avg_price_target > 0 ? Number(line.avg_price_target) : Number(d.default_avg_price);
-        const projected_units  = line ? Number(line.units_target) : 0;
-        const projected_vgv    = projected_units * avgPrice;
-        const realized_units   = Number(contract.realized_units    || 0);
-        const realized_vgv_net  = Number(contract.realized_vgv_net  || 0);
-        const realized_vgv_gross = Number(contract.realized_vgv_gross || 0);
+        const projected_units = line ? Number(line.units_target) : 0;
+        const projected_vgv   = projected_units * avgPrice;
 
-        const is_future_month = ym > todayYM;
-        // achievement sempre baseado em VGV net
-        const achievement_pct = projected_vgv > 0
-          ? parseFloat(((realized_vgv_net / projected_vgv) * 100).toFixed(2))
-          : 0;
-
-        return { year_month: ym, projected_units, projected_vgv, realized_units, realized_vgv_net, realized_vgv_gross, achievement_pct, is_future_month };
+        return { year_month: ym, projected_units, projected_vgv, is_future_month: ym > todayYM };
       });
 
       // Summary do empreendimento (acumulado no período)
-      const totalProjectedUnits  = monthsData.reduce((s, m) => s + m.projected_units,   0);
-      const totalRealizedUnits   = monthsData.reduce((s, m) => s + m.realized_units,    0);
-      const totalProjectedVgv    = monthsData.reduce((s, m) => s + m.projected_vgv,     0);
-      const totalRealizedVgvNet  = monthsData.reduce((s, m) => s + m.realized_vgv_net,  0);
-      const totalRealizedVgvGross = monthsData.reduce((s, m) => s + m.realized_vgv_gross, 0);
-
-      // achievement_pct sempre por VGV net
-      const achievement_pct = totalProjectedVgv > 0
-        ? parseFloat(((totalRealizedVgvNet / totalProjectedVgv) * 100).toFixed(2))
-        : 0;
-
-      // performance_ratio: compara atingimento com % do tempo decorrido
-      const performance_ratio = (timeElapsedPct > 0 && totalProjectedVgv > 0)
-        ? parseFloat((achievement_pct / timeElapsedPct).toFixed(4))
-        : null;
-
-      // Status baseado em VGV net
-      let status;
-      if (totalProjectedVgv === 0) {
-        status = 'no_projection';
-      } else if (totalRealizedVgvNet === 0) {
-        status = 'no_sales';
-      } else if (performance_ratio === null) {
-        status = 'on_track';
-      } else if (performance_ratio >= 1.1) {
-        status = 'ahead';
-      } else if (performance_ratio >= 0.8) {
-        status = 'on_track';
-      } else if (performance_ratio >= 0.4) {
-        status = 'behind';
-      } else {
-        status = 'at_risk';
-      }
+      const totalProjectedUnits = monthsData.reduce((s, m) => s + m.projected_units, 0);
+      const totalProjectedVgv   = monthsData.reduce((s, m) => s + m.projected_vgv,   0);
 
       enterprisesMap.set(key, {
         enterprise_key: ek,
@@ -1743,22 +1617,14 @@ export async function getProjectionReport(req, res) {
         city,
         months: monthsData,
         summary: {
-          projected_units:     totalProjectedUnits,
-          realized_units:      totalRealizedUnits,
-          projected_vgv:       totalProjectedVgv,
-          realized_vgv_net:    totalRealizedVgvNet,
-          realized_vgv_gross:  totalRealizedVgvGross,
-          // compat: realized_vgv aponta para net (usado no sort padrão)
-          realized_vgv:        totalRealizedVgvNet,
-          achievement_pct,
-          performance_ratio,
-          status,
+          projected_units: totalProjectedUnits,
+          projected_vgv:   totalProjectedVgv,
         },
       });
     }
 
     const enterprises = [...enterprisesMap.values()].sort((a, b) =>
-      (b.summary.realized_vgv) - (a.summary.realized_vgv)
+      (b.summary.projected_vgv) - (a.summary.projected_vgv)
     );
 
     // ── Enriquece cada empreendimento com company_id via enterprise_cities ────
@@ -1805,31 +1671,11 @@ export async function getProjectionReport(req, res) {
       })
     }
 
-    // ── Summary global ────────────────────────────────────────────────────────
-    const totalProjectedVgv    = filteredEnterprises.reduce((s, e) => s + e.summary.projected_vgv,      0);
-    const totalRealizedVgvNet  = filteredEnterprises.reduce((s, e) => s + e.summary.realized_vgv_net,   0);
-    const totalRealizedVgvGross = filteredEnterprises.reduce((s, e) => s + e.summary.realized_vgv_gross, 0);
-    const totalProjectedUnits  = filteredEnterprises.reduce((s, e) => s + e.summary.projected_units,    0);
-    const totalRealizedUnits   = filteredEnterprises.reduce((s, e) => s + e.summary.realized_units,     0);
-    const achievement_pct      = totalProjectedVgv > 0
-      ? parseFloat(((totalRealizedVgvNet / totalProjectedVgv) * 100).toFixed(2))
-      : 0;
-
+    // ── Summary global (só metas) ─────────────────────────────────────────────
     const summary = {
-      projected_units:       totalProjectedUnits,
-      realized_units:        totalRealizedUnits,
-      projected_vgv:         totalProjectedVgv,
-      realized_vgv_net:      totalRealizedVgvNet,
-      realized_vgv_gross:    totalRealizedVgvGross,
-      // compat
-      realized_vgv:          totalRealizedVgvNet,
-      achievement_pct,
-      enterprises_total:     filteredEnterprises.length,
-      enterprises_ahead:     filteredEnterprises.filter(e => e.summary.status === 'ahead').length,
-      enterprises_on_track:  filteredEnterprises.filter(e => e.summary.status === 'on_track').length,
-      enterprises_behind:    filteredEnterprises.filter(e => e.summary.status === 'behind').length,
-      enterprises_at_risk:   filteredEnterprises.filter(e => e.summary.status === 'at_risk').length,
-      enterprises_no_sales:  filteredEnterprises.filter(e => ['no_sales','no_projection'].includes(e.summary.status)).length,
+      projected_units:   filteredEnterprises.reduce((s, e) => s + e.summary.projected_units, 0),
+      projected_vgv:     filteredEnterprises.reduce((s, e) => s + e.summary.projected_vgv,   0),
+      enterprises_total: filteredEnterprises.length,
     };
 
     return res.json({
