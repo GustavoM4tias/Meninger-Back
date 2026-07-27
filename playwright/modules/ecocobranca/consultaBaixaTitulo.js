@@ -430,16 +430,36 @@ export async function baixarTitulo(page, nossoNumero, opts = {}) {
 
     log('ECO_BAIXA', `Iniciando baixa por devolução do título ${dados.nossoNumeroFull}...`);
 
-    // Passo 1: seleciona o radio do título
-    await page.evaluate((value) => {
-        const r = document.querySelector(`input[name="rdEscolha"][value="${value.replace(/"/g, '\\"')}"]`);
-        if (r) {
-            r.checked = true;
-            if (typeof ativa_radio === 'function') {
-                try { ativa_radio(r.form, 0); } catch (_) {}
-            }
-        }
-    }, dados.radioValue);
+    // Passo 1: seleciona o radio do título com CLIQUE REAL — `alvo.click()`
+    // dispara o onclick="ativa_radio(this.form, 0)" do legado, que registra a
+    // seleção no formulário. O matching é pelo nosso número completo (1º campo
+    // do `value`, separado por "&"), não pelo value inteiro: o seletor por
+    // value exato falhava silenciosamente (nome/valor/vencimento no atributo)
+    // e o fluxo confirmava SEM título selecionado — a Caixa devolvia a página
+    // genérica em vez da confirmação de baixa.
+    await page.waitForSelector('input[name="rdEscolha"]', { timeout: 10000 }).catch(() => {});
+    const selecao = await page.evaluate((nossoNumeroFull) => {
+        const radios = Array.from(document.querySelectorAll('input[name="rdEscolha"]'));
+        if (!radios.length) return { ok: false, motivo: 'lista sem radios rdEscolha (página pode ter redirecionado)', total: 0 };
+        let alvo = radios.find(r => (r.value || '').split('&')[0] === nossoNumeroFull);
+        if (!alvo && radios.length === 1) alvo = radios[0];
+        if (!alvo) return { ok: false, motivo: 'nenhum radio com o nosso número esperado', total: radios.length };
+        alvo.click();
+        if (!alvo.checked) alvo.checked = true;
+        return { ok: true, total: radios.length };
+    }, dados.nossoNumeroFull);
+
+    if (!selecao.ok) {
+        error('ECO_BAIXA', `✗ Não consegui selecionar o título na lista (${selecao.motivo}; radios na tela: ${selecao.total}). Abortando ANTES de confirmar pra não submeter baixa sem seleção.`);
+        return {
+            found: true,
+            situacao: dados.situacao,
+            baixaConfirmada: false,
+            abortReason: `radio_nao_selecionado:${selecao.motivo}`,
+            dados,
+        };
+    }
+    log('ECO_BAIXA', `Título selecionado na lista (${selecao.total} título(s) na tela).`);
 
     // Passo 2: clica em Confirmar — vai pra tela de detalhamento
     log('ECO_BAIXA', 'Clicando Confirmar (1/2)...');
