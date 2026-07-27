@@ -4,7 +4,9 @@ export default (sequelize, DataTypes) => {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         enterprise_id: { type: DataTypes.INTEGER, allowNull: false },
         enterprise_name: { type: DataTypes.STRING, allowNull: true },
-        stage_id: { type: DataTypes.INTEGER, allowNull: false },
+        // NULL = regra fixa do empreendimento (vale para qualquer venda dele).
+        // Preenchido = só vale se o repasse passou por essa etapa do CV.
+        stage_id: { type: DataTypes.INTEGER, allowNull: true },
         stage_name: { type: DataTypes.STRING, allowNull: true },
         // Stored as decimal, e.g. 0.04 = 4%
         commission_pct: { type: DataTypes.DECIMAL(5, 4), allowNull: false },
