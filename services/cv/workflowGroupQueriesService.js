@@ -113,9 +113,34 @@ reservas_enriquecidas AS (
 reservas_com_link AS (
   SELECT
     re.*,
-    lnk.erp_enterprise_id AS idemp_erp_link,
-    proj_lnk.erp_id_int   AS idemp_erp_projecao
+    lnk.erp_enterprise_id     AS idemp_erp_link,
+    proj_lnk.erp_id_int       AS idemp_erp_projecao,
+    proj_fase_lnk.erp_id_int  AS idemp_erp_projecao_fase
   FROM reservas_enriquecidas re
+  /*
+    Ponte pelo cadastro da projeção, casando EMPREENDIMENTO + Nº DA FASE.
+    Os três sistemas escrevem a fase de formas diferentes:
+      CV        "TERRAS DE SÃO PAULO V" + etapa "MÓDULO 03"
+      projeção  "TERRAS DE SÃO PAULO V - MÓD 3"  → erp_id 99905
+      Sienge    "... TERRAS DE SÃO PAULO V - FASE 3 - COMERCIAL/INCORPORAÇÃO"
+    menin_base_name/menin_stage_num reduzem os três ao mesmo par (nome, número).
+
+    Sem isto, a reserva do MÓDULO 03 caía no fallback por crm_id, que aponta o
+    empreendimento inteiro para a FASE 1 — ou seja, a projeção ia parar no
+    módulo errado, calada. Fase ambígua ("FASE I e II") devolve NULL e não
+    resolve, que é o comportamento correto.
+  */
+  LEFT JOIN LATERAL (
+    SELECT NULLIF(spe.erp_id, '')::int AS erp_id_int
+    FROM sales_projection_enterprises spe
+    JOIN sales_projections sp ON sp.id = spe.projection_id AND sp.is_active = true
+    WHERE spe.erp_id IS NOT NULL
+      AND menin_stage_num(re.etapa_nome) IS NOT NULL
+      AND menin_base_name(spe.enterprise_name_cache) = menin_base_name(re.empreendimento_nome)
+      AND menin_stage_num(spe.enterprise_name_cache) = menin_stage_num(re.etapa_nome)
+    ORDER BY spe.updated_at DESC
+    LIMIT 1
+  ) proj_fase_lnk ON TRUE
   /*
     Ponte pelo cadastro da PROJEÇÃO ATIVA.
     O editor de projeção já amarra "nome do empreendimento" a um erp_id do
@@ -180,8 +205,20 @@ reservas_com_cidade AS (
   SELECT
     re.*,
     ec_city.city_resolved,
-    /* Prioridade: vínculo manual > cadastro da projeção > enterprise_cities */
-    COALESCE(re.idemp_erp_link, re.idemp_erp_projecao, ec_city.erp_id_int) AS idemp_erp_resolvido
+    /*
+      Prioridade, do mais específico para o mais genérico:
+        1. vínculo manual (com ou sem fase)
+        2. cadastro da projeção por nome exato
+        3. cadastro da projeção por nome + nº da fase
+        4. enterprise_cities (não conhece fase: aponta o empreendimento inteiro
+           para um único ERP, por isso vem por último)
+    */
+    COALESCE(
+      re.idemp_erp_link,
+      re.idemp_erp_projecao,
+      re.idemp_erp_projecao_fase,
+      ec_city.erp_id_int
+    ) AS idemp_erp_resolvido
   FROM reservas_com_link re
 
   LEFT JOIN LATERAL (
