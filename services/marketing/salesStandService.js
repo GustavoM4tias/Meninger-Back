@@ -146,7 +146,8 @@ export async function createModel({ payload = {}, userId }) {
         description: payload.description?.trim() || null,
         avg_value_min: min,
         avg_value_max: max,
-        avg_area_m2: Number(payload.avg_area_m2) || 0,
+        avg_area_min: Number(payload.avg_area_min) || 0,
+        avg_area_max: Number(payload.avg_area_max) || 0,
         items: cleanItems(payload.items),
         is_active: payload.is_active !== false,
         created_by: userId || null,
@@ -162,7 +163,11 @@ export async function updateModel({ id, payload = {}, userId }) {
     if ('description' in payload) row.description = payload.description?.trim() || null;
     if ('avg_value_min' in payload) row.avg_value_min = Number(payload.avg_value_min) || 0;
     if ('avg_value_max' in payload) row.avg_value_max = Number(payload.avg_value_max) || 0;
-    if ('avg_area_m2' in payload) row.avg_area_m2 = Number(payload.avg_area_m2) || 0;
+    if ('avg_area_min' in payload) row.avg_area_min = Number(payload.avg_area_min) || 0;
+    if ('avg_area_max' in payload) row.avg_area_max = Number(payload.avg_area_max) || 0;
+    if (Number(row.avg_area_max) && Number(row.avg_area_min) > Number(row.avg_area_max)) {
+        throw httpError('A metragem "de" não pode ser maior que a metragem "até".', 400);
+    }
     if (Number(row.avg_value_max) && Number(row.avg_value_min) > Number(row.avg_value_max)) {
         throw httpError('O valor "de" não pode ser maior que o valor "até".', 400);
     }
@@ -194,7 +199,7 @@ async function ccNameMap() {
 export async function listStands() {
     const rows = await db.SalesStand.findAll({
         where: { is_active: true },
-        include: [{ model: db.SalesStandModel, as: 'model', attributes: ['id', 'name', 'avg_value_min', 'avg_value_max', 'avg_area_m2', 'items'] }],
+        include: [{ model: db.SalesStandModel, as: 'model', attributes: ['id', 'name', 'avg_value_min', 'avg_value_max', 'avg_area_min', 'avg_area_max', 'items'] }],
         order: [['name', 'ASC']],
     });
     const stands = rows.map(plain);
@@ -347,14 +352,16 @@ export async function undefineStand({ id, userId }) {
 }
 
 // ── Seed dos 4 modelos padrão (Standard/Medium/Plus/Premium) ─────────────────
-// Idempotente: só roda com a tabela vazia, p/ não recriar modelo editado ou
-// excluído pelo usuário. Faixa de valor fica 0 (preenchida pela tela).
+// Faixas propositalmente ambíguas (de/até; máx 0 = aberta "X+").
 
 const DEFAULT_MODELS = [
     {
         name: 'Stand Standard',
         description: 'Contêiner ou sala comercial. Praticidade e custo-benefício para lançamentos de entrada: ambiente funcional, direto ao ponto, otimizado para o primeiro contato com o cliente e a captação eficiente de leads.',
-        avg_area_m2: 18,
+        avg_value_min: 20000,
+        avg_value_max: 50000,
+        avg_area_min: 14,
+        avg_area_max: 22,
         items: [
             'Estrutura: contêiner ou sala comercial',
             'Ar-condicionado',
@@ -371,7 +378,10 @@ const DEFAULT_MODELS = [
     {
         name: 'Stand Medium',
         description: 'Contêiner ou espaço comercial. Equilíbrio e versatilidade para empreendimentos de médio padrão: espaço confortável que valoriza a marca, facilita a apresentação de maquetes e a simulação de condições de compra.',
-        avg_area_m2: 30,
+        avg_value_min: 50000,
+        avg_value_max: 80000,
+        avg_area_min: 25,
+        avg_area_max: 40,
         items: [
             'Estrutura: contêiner ou espaço comercial',
             'Ar-condicionado',
@@ -392,7 +402,10 @@ const DEFAULT_MODELS = [
     {
         name: 'Stand Plus',
         description: 'Espaço comercial + executivo, com mais área e salas de reunião privativas. Sofisticação e conforto para projetos de alto padrão: atmosfera refinada, materiais de melhor acabamento e iluminação planejada.',
-        avg_area_m2: 60,
+        avg_value_min: 80000,
+        avg_value_max: 110000,
+        avg_area_min: 45,
+        avg_area_max: 70,
         items: [
             'Estrutura: espaço comercial + executivo',
             'Ar-condicionado central',
@@ -415,7 +428,10 @@ const DEFAULT_MODELS = [
     {
         name: 'Stand Premium',
         description: 'Espaço executivo amplo, com decorado. O ápice do mercado de luxo e grandes lançamentos: galeria imersiva e imponente, arquitetura marcante, elegância e experiência sensorial completa para o comprador.',
-        avg_area_m2: 100,
+        avg_value_min: 110000,
+        avg_value_max: 0, // 110 mil ou mais
+        avg_area_min: 80,
+        avg_area_max: 0, // 80 m² ou mais
         items: [
             'Estrutura: espaço executivo amplo',
             'Ar-condicionado central',
@@ -446,14 +462,17 @@ export async function seedSalesStandModels() {
         console.log('✅ Stand de Vendas: 4 modelos padrão criados (Standard/Medium/Plus/Premium).');
         return;
     }
-    // Tabela já populada: atualiza descrição/metragem/itens dos modelos padrão
+    // Tabela já populada: atualiza faixas/descrição/itens dos modelos padrão
     // que NUNCA foram editados na tela (updated_by null = ainda como o seed
     // deixou). Modelo editado ou excluído pelo usuário fica intocado.
     for (const def of DEFAULT_MODELS) {
         const row = await db.SalesStandModel.findOne({ where: { name: def.name, updated_by: null } });
         if (!row) continue;
         row.description = def.description;
-        row.avg_area_m2 = def.avg_area_m2;
+        row.avg_value_min = def.avg_value_min;
+        row.avg_value_max = def.avg_value_max;
+        row.avg_area_min = def.avg_area_min;
+        row.avg_area_max = def.avg_area_max;
         row.items = def.items;
         await row.save();
     }
