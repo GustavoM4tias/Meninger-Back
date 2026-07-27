@@ -102,6 +102,7 @@ import { ensureComercialConditionsSchema } from './lib/ensureComercialConditions
 import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
 import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
 import { ensureFaturamentoRulesSchema } from './lib/ensureFaturamentoRulesSchema.js';
+import { ensureProjectionLinkSchema } from './lib/ensureProjectionLinkSchema.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
@@ -408,6 +409,7 @@ async function syncModelsAndPatches(fingerprint) {
   await ensureComercialConditionsSchema();
   await ensureOrganogramSchema();
   await ensureFaturamentoRulesSchema();
+  await ensureProjectionLinkSchema();
 
   await seedInitialTypes();
   await ensureChecklistSchema(); // adiciona colunas novas (ex.: reminder_mode) em tabelas já existentes

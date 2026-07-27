@@ -37,23 +37,35 @@ export async function syncWorkflowGroups(tipo) {
             nome: situacoesById[id] || '(Removida do workflow)'
         })),
         // 👇 inclui segmentos no payload
-        segmentos: Array.isArray(g.segmentos) ? g.segmentos : []
+        segmentos: Array.isArray(g.segmentos) ? g.segmentos : [],
+        stale_days: g.stale_days ?? null
     }));
 }
 
-/** Upsert agora aceita segmentos */
-export async function upsertWorkflowGroup({ tipo, nome, descricao, situacoes_ids, segmentos }) {
+/** Upsert aceita segmentos e o corte por inatividade (stale_days) */
+export async function upsertWorkflowGroup({ tipo, nome, descricao, situacoes_ids, segmentos, stale_days }) {
     const segs = Array.isArray(segmentos)
         ? segmentos
         : (typeof segmentos === 'string' && segmentos.trim() ? [segmentos.trim()] : []);
 
+    // null/vazio mantém o default (30); 0 desliga o corte.
+    const staleRaw = Number(stale_days);
+    const stale = stale_days === null || stale_days === undefined || stale_days === ''
+        ? undefined
+        : (Number.isFinite(staleRaw) && staleRaw >= 0 ? Math.floor(staleRaw) : undefined);
+
     const [group, created] = await CvWorkflowGroup.findOrCreate({
         where: { tipo, nome },
-        defaults: { descricao, situacoes_ids, segmentos: segs }
+        defaults: { descricao, situacoes_ids, segmentos: segs, ...(stale !== undefined ? { stale_days: stale } : {}) }
     });
 
     if (!created) {
-        await group.update({ descricao, situacoes_ids, segmentos: segs });
+        await group.update({
+            descricao,
+            situacoes_ids,
+            segmentos: segs,
+            ...(stale !== undefined ? { stale_days: stale } : {})
+        });
     }
 
     return group;
