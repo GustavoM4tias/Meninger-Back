@@ -18,12 +18,12 @@ export const fetchWorkflowGroups = async (req, res) => {
 
 export const createOrUpdateWorkflowGroup = async (req, res) => {
     try {
-        const { tipo, nome, descricao, situacoes_ids, segmentos } = req.body;
+        const { tipo, nome, descricao, situacoes_ids, segmentos, stale_days } = req.body;
         if (!tipo || !nome || !Array.isArray(situacoes_ids)) {
             return res.status(400).json({ error: 'Campos obrigatórios: tipo, nome, situacoes_ids' });
         }
-        // segmentos é opcional (array ou string). O service já normaliza.
-        const grupo = await upsertWorkflowGroup({ tipo, nome, descricao, situacoes_ids, segmentos });
+        // segmentos e stale_days são opcionais. O service já normaliza.
+        const grupo = await upsertWorkflowGroup({ tipo, nome, descricao, situacoes_ids, segmentos, stale_days });
 
         res.json(grupo);
     } catch (err) {

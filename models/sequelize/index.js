@@ -58,6 +58,7 @@ import landSyncEnterpriseDefine from './landSyncEnterprise.js';
 import hiddenDashboardEnterpriseDefine from './hiddenDashboardEnterprise.js';
 import stageCommissionRuleDefine from './stageCommissionRule.js';
 import enterpriseValueRuleDefine from './enterpriseValueRule.js';
+import enterpriseErpLinkDefine from './enterpriseErpLink.js';
 import trSatelliteEnterpriseDefine from './trSatelliteEnterprise.js';
 
 import PaymentLaunchDefine from './sienge/paymentLaunch.js';
@@ -304,6 +305,7 @@ db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
 db.HiddenDashboardEnterprise = hiddenDashboardEnterpriseDefine(sequelize, DataTypes);
 db.StageCommissionRule = stageCommissionRuleDefine(sequelize, DataTypes);
 db.EnterpriseValueRule = enterpriseValueRuleDefine(sequelize, DataTypes);
+db.EnterpriseErpLink = enterpriseErpLinkDefine(sequelize, DataTypes);
 db.TrSatelliteEnterprise = trSatelliteEnterpriseDefine(sequelize, DataTypes);
 
 db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);

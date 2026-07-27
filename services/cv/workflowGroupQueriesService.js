@@ -16,6 +16,13 @@ export async function getGroupProjections({
     ? group.situacoes_ids.filter(Number.isInteger)
     : []
 
+  // Corte por inatividade: reserva/repasse parada há mais que isso deixa de
+  // contar como próxima entrada. Encalhado não é previsão de venda. 0/null
+  // desliga o corte.
+  const staleDaysRaw = Number(group.stale_days)
+  const staleDays = Number.isFinite(staleDaysRaw) && staleDaysRaw > 0 ? Math.floor(staleDaysRaw) : 0
+  const hasStaleCut = staleDays > 0
+
   const segmentos = Array.isArray(group.segmentos)
     ? group.segmentos.filter((s) => typeof s === 'string' && s.trim().length)
     : []
@@ -90,12 +97,48 @@ reservas_enriquecidas AS (
   Antes as condições 2-4 ficavam bloqueadas pelos IS NULL guards, impedindo
   que módulos/fases fossem resolvidos quando idempreendimento_int estava preenchido.
 */
+/*
+  Vínculo MANUAL CV → Sienge (enterprise_erp_links).
+  Tem prioridade sobre qualquer resolução automática: é a única fonte que o
+  usuário controla quando o cadastro do CV está sem idempreendimento_int.
+  Casa por id do CV (preferido) ou pelo nome do empreendimento normalizado.
+*/
+reservas_com_link AS (
+  SELECT
+    re.*,
+    lnk.erp_enterprise_id AS idemp_erp_link
+  FROM reservas_enriquecidas re
+  LEFT JOIN LATERAL (
+    SELECT l.erp_enterprise_id
+    FROM enterprise_erp_links l
+    WHERE l.active = true
+      AND (
+        (l.cv_enterprise_id IS NOT NULL AND l.cv_enterprise_id = re.idemp_cv_from_reserva)
+        OR (l.cv_enterprise_id IS NOT NULL AND l.cv_enterprise_id = re.idemp_int_from_reserva)
+        OR (
+          l.cv_enterprise_name IS NOT NULL
+          AND re.empreendimento_nome IS NOT NULL
+          AND unaccent(upper(regexp_replace(l.cv_enterprise_name,   '[^A-Za-z0-9]+',' ','g'))) =
+              unaccent(upper(regexp_replace(re.empreendimento_nome, '[^A-Za-z0-9]+',' ','g')))
+        )
+      )
+    ORDER BY
+      CASE
+        WHEN l.cv_enterprise_id = re.idemp_cv_from_reserva  THEN 1
+        WHEN l.cv_enterprise_id = re.idemp_int_from_reserva THEN 2
+        ELSE 3
+      END,
+      l.updated_at DESC
+    LIMIT 1
+  ) lnk ON TRUE
+),
+
 reservas_com_cidade AS (
   SELECT
     re.*,
     ec_city.city_resolved,
-    ec_city.erp_id_int AS idemp_erp_resolvido
-  FROM reservas_enriquecidas re
+    COALESCE(re.idemp_erp_link, ec_city.erp_id_int) AS idemp_erp_resolvido
+  FROM reservas_com_link re
 
   LEFT JOIN LATERAL (
     SELECT
@@ -245,9 +288,24 @@ last_status AS (
   GROUP BY rce.idreserva
 )
 
-SELECT rce.*, ls.last_status_at
+SELECT
+  rce.*,
+  ls.last_status_at,
+  /* Dias desde a última movimentação — o front usa para explicar o corte. */
+  GREATEST(0, EXTRACT(DAY FROM (
+    NOW() - COALESCE(ls.last_status_at, rce.data_reserva::timestamptz)
+  ))::int) AS dias_parado
 FROM reservas_com_empresa rce
 LEFT JOIN last_status ls USING (idreserva)
+${hasStaleCut ? `
+/*
+  Corte por inatividade: parado há mais de :staleDays dias deixa de contar como
+  próxima entrada. Sem data nenhuma (last_status_at e data_reserva nulos) a
+  reserva é mantida — não dá para afirmar que está encalhada.
+*/
+WHERE COALESCE(ls.last_status_at, rce.data_reserva::timestamptz) IS NULL
+   OR COALESCE(ls.last_status_at, rce.data_reserva::timestamptz) >= NOW() - (:staleDays * INTERVAL '1 day')
+` : ``}
 ORDER BY
   ls.last_status_at DESC NULLS LAST,
   rce.data_reserva DESC NULLS LAST,
@@ -262,6 +320,7 @@ ORDER BY
   if (!isAdmin) replacements.userCity = userCity
   if (hasCompanyIds) replacements.companyIds = companyIdsSafe
   if (hasEnterpriseIds) replacements.enterpriseIds = enterpriseIdsSafe
+  if (hasStaleCut) replacements.staleDays = staleDays
 
   const results = await db.sequelize.query(sql, {
     replacements,
@@ -277,7 +336,8 @@ ORDER BY
       situacoes,
       city: isAdmin ? null : userCity,
       companyIds: companyIdsSafe,
-      enterpriseIds: enterpriseIdsSafe
+      enterpriseIds: enterpriseIdsSafe,
+      staleDays: hasStaleCut ? staleDays : null
     }
   }
 }

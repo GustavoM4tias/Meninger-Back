@@ -60,6 +60,13 @@ import {
 } from '../controllers/enterpriseValueRuleController.js';
 
 import {
+  listErpLinks,
+  addErpLink,
+  removeErpLink,
+  listUnlinkedProjections
+} from '../controllers/enterpriseErpLinkController.js';
+
+import {
   listTrSatellites,
   addTrSatellite,
   updateTrSatellite,
@@ -140,6 +147,12 @@ router.delete('/stage-commission-rules/:id', authMiddleware, requireAdmin, remov
 router.get('/enterprise-value-rules', authMiddleware, listEnterpriseValueRules);
 router.post('/enterprise-value-rules', authMiddleware, requireAdmin, addEnterpriseValueRule);
 router.delete('/enterprise-value-rules/:id', authMiddleware, requireAdmin, removeEnterpriseValueRule);
+
+// Vínculo CV ↔ Sienge das projeções — GET: todos autenticados; mutações: admin only
+router.get('/enterprise-erp-links/pendentes', authMiddleware, listUnlinkedProjections);
+router.get('/enterprise-erp-links', authMiddleware, listErpLinks);
+router.post('/enterprise-erp-links', authMiddleware, requireAdmin, addErpLink);
+router.delete('/enterprise-erp-links/:id', authMiddleware, requireAdmin, removeErpLink);
 
 // TR Satellite Enterprises — GET: todos autenticados; mutações: admin only
 router.get('/tr-satellite-enterprises', authMiddleware, listTrSatellites);
