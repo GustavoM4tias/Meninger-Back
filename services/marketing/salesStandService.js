@@ -353,9 +353,10 @@ export async function undefineStand({ id, userId }) {
 const DEFAULT_MODELS = [
     {
         name: 'Stand Standard',
-        description: 'Praticidade e custo-benefício para lançamentos de entrada: ambiente funcional, direto ao ponto, otimizado para o primeiro contato com o cliente e a captação eficiente de leads.',
+        description: 'Contêiner ou sala comercial. Praticidade e custo-benefício para lançamentos de entrada: ambiente funcional, direto ao ponto, otimizado para o primeiro contato com o cliente e a captação eficiente de leads.',
         avg_area_m2: 60,
         items: [
+            'Estrutura: contêiner ou sala comercial',
             'Ar-condicionado',
             'Recepção com balcão de atendimento',
             'Mesas de atendimento (2)',
@@ -369,9 +370,10 @@ const DEFAULT_MODELS = [
     },
     {
         name: 'Stand Medium',
-        description: 'Equilíbrio e versatilidade para empreendimentos de médio padrão: espaço confortável que valoriza a marca, facilita a apresentação de maquetes e a simulação de condições de compra.',
+        description: 'Contêiner ou espaço comercial. Equilíbrio e versatilidade para empreendimentos de médio padrão: espaço confortável que valoriza a marca, facilita a apresentação de maquetes e a simulação de condições de compra.',
         avg_area_m2: 100,
         items: [
+            'Estrutura: contêiner ou espaço comercial',
             'Ar-condicionado',
             'Recepção com balcão de atendimento',
             'Mesas de atendimento (4)',
@@ -389,14 +391,14 @@ const DEFAULT_MODELS = [
     },
     {
         name: 'Stand Plus',
-        description: 'Sofisticação e conforto para projetos de alto padrão: atmosfera refinada, materiais de melhor acabamento, iluminação planejada e salas de atendimento privativas que transmitem maior valor agregado.',
+        description: 'Espaço comercial + executivo, com mais área e salas de reunião privativas. Sofisticação e conforto para projetos de alto padrão: atmosfera refinada, materiais de melhor acabamento e iluminação planejada.',
         avg_area_m2: 160,
         items: [
+            'Estrutura: espaço comercial + executivo',
             'Ar-condicionado central',
             'Recepção com lounge de espera',
             'Mesas de atendimento (4)',
             'Salas de reunião privativas (2)',
-            'Apartamento decorado',
             'Maquete do empreendimento',
             'Painel de LED',
             'Ambiente instagramável',
@@ -412,9 +414,10 @@ const DEFAULT_MODELS = [
     },
     {
         name: 'Stand Premium',
-        description: 'O ápice do mercado de luxo e grandes lançamentos: galeria imersiva e imponente, com arquitetura marcante, elegância e uma experiência sensorial completa para o comprador.',
+        description: 'Espaço executivo amplo, com decorado. O ápice do mercado de luxo e grandes lançamentos: galeria imersiva e imponente, arquitetura marcante, elegância e experiência sensorial completa para o comprador.',
         avg_area_m2: 250,
         items: [
+            'Estrutura: espaço executivo amplo',
             'Ar-condicionado central',
             'Galeria imersiva de vendas',
             'Recepção com lounge e bar de café gourmet',
@@ -438,9 +441,22 @@ const DEFAULT_MODELS = [
 
 export async function seedSalesStandModels() {
     const count = await db.SalesStandModel.count();
-    if (count > 0) return;
-    await db.SalesStandModel.bulkCreate(DEFAULT_MODELS);
-    console.log('✅ Stand de Vendas: 4 modelos padrão criados (Standard/Medium/Plus/Premium).');
+    if (count === 0) {
+        await db.SalesStandModel.bulkCreate(DEFAULT_MODELS);
+        console.log('✅ Stand de Vendas: 4 modelos padrão criados (Standard/Medium/Plus/Premium).');
+        return;
+    }
+    // Tabela já populada: atualiza descrição/metragem/itens dos modelos padrão
+    // que NUNCA foram editados na tela (updated_by null = ainda como o seed
+    // deixou). Modelo editado ou excluído pelo usuário fica intocado.
+    for (const def of DEFAULT_MODELS) {
+        const row = await db.SalesStandModel.findOne({ where: { name: def.name, updated_by: null } });
+        if (!row) continue;
+        row.description = def.description;
+        row.avg_area_m2 = def.avg_area_m2;
+        row.items = def.items;
+        await row.save();
+    }
 }
 
 export default {
