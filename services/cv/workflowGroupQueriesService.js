@@ -80,6 +80,17 @@ reservas_enriquecidas AS (
     NULLIF((b.unidade_json->>'idempreendimento_cv'), '')::int  AS idemp_cv_from_reserva,
     NULLIF((b.unidade_json->>'idbloco'), '')::int AS idbloco_cv_from_reserva,
 
+    /*
+      Código interno da ETAPA — é ele que carrega o centro de custo do Sienge.
+      No CV, idempreendimento_int às vezes vem com o código da EMPRESA (ex.: 99
+      em TERRAS DE SÃO PAULO V, 78 em PARQUE DOS IPÊS), que não é centro de
+      custo nenhum. Já o idetapa_int é sempre o CC da fase (99905 = FASE 3).
+      Como no Sienge cada fase é um empreendimento próprio, é este o código que
+      identifica o destino corretamente.
+    */
+    NULLIF((b.unidade_json->>'idetapa_int'), '')::int AS idetapa_int_from_reserva,
+    NULLIF((b.unidade_json->>'idetapa_cv'), '')::int  AS idetapa_cv_from_reserva,
+
     /* nomes */
     COALESCE(NULLIF(trim(both from (b.unidade_json->>'empreendimento')), ''), NULLIF(trim(both from b.empreendimento), '')) AS empreendimento_nome,
     /*
@@ -94,109 +105,50 @@ reservas_enriquecidas AS (
 ),
 
 /*
-  Resolve cidade (e também o ERP ID) tentando todas as estratégias em paralelo,
-  com ordem de prioridade explícita:
-  1) erp_id = idempreendimento_int  (CV interno == Sienge ERP — caso de integração direta)
-  2) crm_id = idempreendimento_int  (CV interno == CRM ID da tabela enterprise_cities)
-  3) crm_id = idempreendimento_cv   (campo CRM explícito da reserva)
-  4) match por nome exato normalizado (fallback)
+  Vínculo do CV para o Sienge — 100% POR CÓDIGO, sem comparar nome.
 
-  Antes as condições 2-4 ficavam bloqueadas pelos IS NULL guards, impedindo
-  que módulos/fases fossem resolvidos quando idempreendimento_int estava preenchido.
-*/
-/*
-  Vínculo MANUAL CV → Sienge (enterprise_erp_links).
-  Tem prioridade sobre qualquer resolução automática: é a única fonte que o
-  usuário controla quando o cadastro do CV está sem idempreendimento_int.
-  Casa por id do CV (preferido) ou pelo nome do empreendimento normalizado.
+  A chave é o idetapa_int: no CV, cada ETAPA (fase/módulo) carrega o código do
+  centro de custo do Sienge. O idempreendimento_int NÃO serve como chave: em
+  vários empreendimentos ele vem com o código da EMPRESA (99 em TERRAS DE SÃO
+  PAULO V, 78 em PARQUE DOS IPÊS, 89 em JARDIM MÔNACO, 107 em SANTA STELLA),
+  que não é centro de custo nenhum. Como no Sienge cada fase é um
+  empreendimento próprio, é a etapa que identifica o destino.
+
+  Casar por nome foi abandonado: além de frágil, mandava valor para o centro de
+  custo errado sem avisar (o MÓDULO 02 do RESIDENCIAL DOS ANJOS ia para o CC do
+  MÓDULO 01).
 */
 reservas_com_link AS (
   SELECT
     re.*,
-    lnk.erp_enterprise_id     AS idemp_erp_link,
-    proj_lnk.erp_id_int       AS idemp_erp_projecao,
-    proj_fase_lnk.erp_id_int  AS idemp_erp_projecao_fase
+    lnk.erp_enterprise_id AS idemp_erp_link,
+    /* Fallback: quando a reserva não traz idetapa_int, busca no cadastro de
+       etapas do CV pelo idetapa_cv. Mesma informação, outra origem. */
+    st.idetapa_int_cadastro
   FROM reservas_enriquecidas re
-  /*
-    Ponte pelo cadastro da projeção, casando EMPREENDIMENTO + Nº DA FASE.
-    Os três sistemas escrevem a fase de formas diferentes:
-      CV        "TERRAS DE SÃO PAULO V" + etapa "MÓDULO 03"
-      projeção  "TERRAS DE SÃO PAULO V - MÓD 3"  → erp_id 99905
-      Sienge    "... TERRAS DE SÃO PAULO V - FASE 3 - COMERCIAL/INCORPORAÇÃO"
-    menin_base_name/menin_stage_num reduzem os três ao mesmo par (nome, número).
-
-    Sem isto, a reserva do MÓDULO 03 caía no fallback por crm_id, que aponta o
-    empreendimento inteiro para a FASE 1 — ou seja, a projeção ia parar no
-    módulo errado, calada. Fase ambígua ("FASE I e II") devolve NULL e não
-    resolve, que é o comportamento correto.
-  */
   LEFT JOIN LATERAL (
-    SELECT NULLIF(spe.erp_id, '')::int AS erp_id_int
-    FROM sales_projection_enterprises spe
-    JOIN sales_projections sp ON sp.id = spe.projection_id AND sp.is_active = true
-    WHERE spe.erp_id IS NOT NULL
-      AND menin_stage_num(re.etapa_nome) IS NOT NULL
-      AND menin_base_name(spe.enterprise_name_cache) = menin_base_name(re.empreendimento_nome)
-      AND menin_stage_num(spe.enterprise_name_cache) = menin_stage_num(re.etapa_nome)
-    ORDER BY spe.updated_at DESC
+    SELECT NULLIF(s.idetapa_int, '')::int AS idetapa_int_cadastro
+    FROM cv_enterprise_stages s
+    WHERE s.idetapa = re.idetapa_cv_from_reserva
     LIMIT 1
-  ) proj_fase_lnk ON TRUE
+  ) st ON TRUE
   /*
-    Ponte pelo cadastro da PROJEÇÃO ATIVA.
-    O editor de projeção já amarra "nome do empreendimento" a um erp_id do
-    Sienge. Esse cadastro é mantido pelo usuário e cobre justamente os casos em
-    que o nome no CV é mais curto que o do Sienge (ex.: "RESIDENCIAL DOS ANJOS"
-    para "...RESIDENCIAL JARDIM DOS ANJOS..."). Reaproveitar aqui evita pedir
-    ao usuário que amarre a mesma coisa duas vezes.
-    Fica ABAIXO do vínculo manual: quem amarra na mão manda.
+    Vínculo MANUAL (enterprise_erp_links): override explícito para exceções.
+    Casa por código — etapa do CV (preferido) ou empreendimento do CV.
   */
-  LEFT JOIN LATERAL (
-    SELECT NULLIF(spe.erp_id, '')::int AS erp_id_int
-    FROM sales_projection_enterprises spe
-    JOIN sales_projections sp ON sp.id = spe.projection_id AND sp.is_active = true
-    WHERE spe.erp_id IS NOT NULL
-      AND spe.enterprise_name_cache IS NOT NULL
-      AND re.empreendimento_nome IS NOT NULL
-      AND unaccent(upper(regexp_replace(spe.enterprise_name_cache, '[^A-Za-z0-9]+',' ','g'))) =
-          unaccent(upper(regexp_replace(re.empreendimento_nome,    '[^A-Za-z0-9]+',' ','g')))
-    ORDER BY spe.updated_at DESC
-    LIMIT 1
-  ) proj_lnk ON TRUE
   LEFT JOIN LATERAL (
     SELECT l.erp_enterprise_id
     FROM enterprise_erp_links l
     WHERE l.active = true
-      /* A origem (empreendimento) tem que casar por id ou por nome... */
       AND (
-        (l.cv_enterprise_id IS NOT NULL AND l.cv_enterprise_id = re.idemp_cv_from_reserva)
-        OR (l.cv_enterprise_id IS NOT NULL AND l.cv_enterprise_id = re.idemp_int_from_reserva)
+        (l.cv_stage_id IS NOT NULL AND l.cv_stage_id = re.idetapa_cv_from_reserva)
         OR (
-          l.cv_enterprise_name IS NOT NULL
-          AND re.empreendimento_nome IS NOT NULL
-          AND unaccent(upper(regexp_replace(l.cv_enterprise_name,   '[^A-Za-z0-9]+',' ','g'))) =
-              unaccent(upper(regexp_replace(re.empreendimento_nome, '[^A-Za-z0-9]+',' ','g')))
+          l.cv_stage_id IS NULL
+          AND l.cv_enterprise_id IS NOT NULL
+          AND l.cv_enterprise_id IN (re.idemp_cv_from_reserva, re.idemp_int_from_reserva)
         )
       )
-      /* ...e a etapa, quando o vínculo especifica uma. Vínculo sem etapa vale
-         para o empreendimento inteiro. */
-      AND (
-        l.cv_stage_name IS NULL
-        OR (
-          re.etapa_nome IS NOT NULL
-          AND unaccent(upper(regexp_replace(l.cv_stage_name, '[^A-Za-z0-9]+',' ','g'))) =
-              unaccent(upper(regexp_replace(re.etapa_nome,   '[^A-Za-z0-9]+',' ','g')))
-        )
-      )
-    ORDER BY
-      /* Vínculo POR ETAPA ganha do vínculo do empreendimento inteiro: é o mais
-         específico, e é ele que resolve um CV 1 → Sienge N. */
-      (l.cv_stage_name IS NOT NULL) DESC,
-      CASE
-        WHEN l.cv_enterprise_id = re.idemp_cv_from_reserva  THEN 1
-        WHEN l.cv_enterprise_id = re.idemp_int_from_reserva THEN 2
-        ELSE 3
-      END,
-      l.updated_at DESC
+    ORDER BY (l.cv_stage_id IS NOT NULL) DESC, l.updated_at DESC
     LIMIT 1
   ) lnk ON TRUE
 ),
@@ -206,17 +158,19 @@ reservas_com_cidade AS (
     re.*,
     ec_city.city_resolved,
     /*
-      Prioridade, do mais específico para o mais genérico:
-        1. vínculo manual (com ou sem fase)
-        2. cadastro da projeção por nome exato
-        3. cadastro da projeção por nome + nº da fase
-        4. enterprise_cities (não conhece fase: aponta o empreendimento inteiro
-           para um único ERP, por isso vem por último)
+      Prioridade, do mais confiável para o menos:
+        1. vínculo manual (exceção configurada na tela)
+        2. idetapa_int da reserva      → CC da fase, direto do CV
+        3. idetapa_int do cadastro     → mesma informação, quando a reserva não traz
+        4. idempreendimento_int        → só serve quando é CC de verdade
+        5. enterprise_cities           → último recurso; não conhece fase, então
+           aponta o empreendimento inteiro para um único CC
     */
     COALESCE(
       re.idemp_erp_link,
-      re.idemp_erp_projecao,
-      re.idemp_erp_projecao_fase,
+      re.idetapa_int_from_reserva,
+      re.idetapa_int_cadastro,
+      re.idemp_int_from_reserva,
       ec_city.erp_id_int
     ) AS idemp_erp_resolvido
   FROM reservas_com_link re
@@ -234,28 +188,27 @@ reservas_com_cidade AS (
       LIMIT 1
     ) blk ON TRUE
     WHERE
-      /* 0) Block's ERP code (most precise for fase/módulo) */
-      (blk.idbloco_int IS NOT NULL AND ec.erp_id = regexp_replace(blk.idbloco_int, '[^0-9].*', ''))
-      /* 1) idempreendimento_int é o próprio Sienge ERP ID */
+      /* 0) CC da ETAPA — o código mais preciso que o CV tem */
+      (re.idetapa_int_from_reserva IS NOT NULL AND ec.erp_id = re.idetapa_int_from_reserva::text)
+      OR (re.idetapa_int_cadastro IS NOT NULL AND ec.erp_id = re.idetapa_int_cadastro::text)
+      /* 1) CC do bloco */
+      OR (blk.idbloco_int IS NOT NULL AND ec.erp_id = regexp_replace(blk.idbloco_int, '[^0-9].*', ''))
+      /* 2) idempreendimento_int é o próprio Sienge ERP ID */
       OR (re.idemp_int_from_reserva IS NOT NULL AND ec.erp_id = re.idemp_int_from_reserva::text)
-      /* 2) idempreendimento_int é o CRM ID do CV */
+      /* 3) idempreendimento_int é o CRM ID do CV */
       OR (re.idemp_int_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_int_from_reserva)
-      /* 3) campo idempreendimento_cv é o CRM ID do CV */
+      /* 4) campo idempreendimento_cv é o CRM ID do CV */
       OR (re.idemp_cv_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_cv_from_reserva)
-      /* 4) fallback por nome exato normalizado */
-      OR (
-        re.empreendimento_nome IS NOT NULL
-        AND re.empreendimento_nome <> ''
-        AND unaccent(upper(regexp_replace(COALESCE(ec.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
-            unaccent(upper(regexp_replace(re.empreendimento_nome,         '[^A-Z0-9]+',' ','g')))
-      )
+      /* Sem fallback por nome: casar texto mandava valor para o CC errado. */
     ORDER BY
       CASE
-        WHEN blk.idbloco_int IS NOT NULL AND ec.erp_id = regexp_replace(blk.idbloco_int, '[^0-9].*', '') THEN 1
-        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.erp_id = re.idemp_int_from_reserva::text THEN 2
-        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_int_from_reserva       THEN 3
-        WHEN re.idemp_cv_from_reserva  IS NOT NULL AND ec.crm_id = re.idemp_cv_from_reserva        THEN 4
-        ELSE 5
+        WHEN re.idetapa_int_from_reserva IS NOT NULL AND ec.erp_id = re.idetapa_int_from_reserva::text THEN 1
+        WHEN re.idetapa_int_cadastro     IS NOT NULL AND ec.erp_id = re.idetapa_int_cadastro::text     THEN 2
+        WHEN blk.idbloco_int IS NOT NULL AND ec.erp_id = regexp_replace(blk.idbloco_int, '[^0-9].*', '') THEN 3
+        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.erp_id = re.idemp_int_from_reserva::text THEN 4
+        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_int_from_reserva       THEN 5
+        WHEN re.idemp_cv_from_reserva  IS NOT NULL AND ec.crm_id = re.idemp_cv_from_reserva        THEN 6
+        ELSE 7
       END,
       ec.updated_at DESC
     LIMIT 1

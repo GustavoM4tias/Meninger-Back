@@ -22,13 +22,16 @@ export default (sequelize, DataTypes) => {
 
         // Lado CV
         cv_enterprise_id: { type: DataTypes.INTEGER, allowNull: true },
-        // Nome como aparece na reserva; comparado normalizado (sem acento/pontuação).
+        // Código da ETAPA (fase/módulo) no CV. É a chave preferida: no CV a
+        // hierarquia é empreendimento → etapa → bloco → unidade, e no Sienge
+        // cada fase é um empreendimento próprio, então é a etapa que identifica
+        // o destino. Vazio = o vínculo vale para o empreendimento inteiro.
+        cv_stage_id: { type: DataTypes.INTEGER, allowNull: true },
+
+        // Nomes são apenas RÓTULO para exibição na tela. O casamento é sempre
+        // por código: comparar texto mandava valor para o centro de custo
+        // errado sem avisar.
         cv_enterprise_name: { type: DataTypes.STRING(255), allowNull: true },
-        // Etapa (fase/módulo) do CV. No CV a hierarquia é empreendimento →
-        // etapa → bloco → unidade; no Sienge cada fase costuma ser um
-        // empreendimento próprio. Preenchido = o vínculo vale só para as
-        // reservas daquela etapa, que é como se resolve um CV 1 → Sienge N.
-        // Vazio = vale para o empreendimento inteiro.
         cv_stage_name: { type: DataTypes.STRING(255), allowNull: true },
 
         // Lado Sienge
