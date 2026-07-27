@@ -82,6 +82,13 @@ reservas_enriquecidas AS (
 
     /* nomes */
     COALESCE(NULLIF(trim(both from (b.unidade_json->>'empreendimento')), ''), NULLIF(trim(both from b.empreendimento), '')) AS empreendimento_nome,
+    /*
+      Etapa (fase/módulo). No CV a hierarquia é empreendimento → etapa → bloco →
+      unidade; no Sienge cada fase costuma ser um empreendimento (centro de
+      custo) próprio. Quando isso acontece, o empreendimento do CV sozinho não
+      identifica o destino no Sienge — só a etapa desempata.
+    */
+    COALESCE(NULLIF(trim(both from (b.unidade_json->>'etapa')), ''), NULLIF(trim(both from b.etapa), '')) AS etapa_nome,
     trim(both from (b.unidade_json->>'unidade')) AS unidade_nome
   FROM base_reservas b
 ),
@@ -134,6 +141,7 @@ reservas_com_link AS (
     SELECT l.erp_enterprise_id
     FROM enterprise_erp_links l
     WHERE l.active = true
+      /* A origem (empreendimento) tem que casar por id ou por nome... */
       AND (
         (l.cv_enterprise_id IS NOT NULL AND l.cv_enterprise_id = re.idemp_cv_from_reserva)
         OR (l.cv_enterprise_id IS NOT NULL AND l.cv_enterprise_id = re.idemp_int_from_reserva)
@@ -144,7 +152,20 @@ reservas_com_link AS (
               unaccent(upper(regexp_replace(re.empreendimento_nome, '[^A-Za-z0-9]+',' ','g')))
         )
       )
+      /* ...e a etapa, quando o vínculo especifica uma. Vínculo sem etapa vale
+         para o empreendimento inteiro. */
+      AND (
+        l.cv_stage_name IS NULL
+        OR (
+          re.etapa_nome IS NOT NULL
+          AND unaccent(upper(regexp_replace(l.cv_stage_name, '[^A-Za-z0-9]+',' ','g'))) =
+              unaccent(upper(regexp_replace(re.etapa_nome,   '[^A-Za-z0-9]+',' ','g')))
+        )
+      )
     ORDER BY
+      /* Vínculo POR ETAPA ganha do vínculo do empreendimento inteiro: é o mais
+         específico, e é ele que resolve um CV 1 → Sienge N. */
+      (l.cv_stage_name IS NOT NULL) DESC,
       CASE
         WHEN l.cv_enterprise_id = re.idemp_cv_from_reserva  THEN 1
         WHEN l.cv_enterprise_id = re.idemp_int_from_reserva THEN 2

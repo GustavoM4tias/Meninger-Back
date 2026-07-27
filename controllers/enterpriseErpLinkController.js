@@ -13,6 +13,7 @@ const serialize = (r) => ({
     id: r.id,
     cv_enterprise_id: r.cv_enterprise_id,
     cv_enterprise_name: r.cv_enterprise_name,
+    cv_stage_name: r.cv_stage_name,
     erp_enterprise_id: r.erp_enterprise_id,
     erp_enterprise_name: r.erp_enterprise_name,
     description: r.description,
@@ -36,7 +37,10 @@ export async function addErpLink(req, res) {
     try {
         if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Acesso negado.' });
 
-        const { cv_enterprise_id, cv_enterprise_name, erp_enterprise_id, erp_enterprise_name, description } = req.body;
+        const {
+            cv_enterprise_id, cv_enterprise_name, cv_stage_name,
+            erp_enterprise_id, erp_enterprise_name, description
+        } = req.body;
 
         const erpId = Number(erp_enterprise_id);
         if (!Number.isInteger(erpId) || erpId <= 0) {
@@ -51,19 +55,24 @@ export async function addErpLink(req, res) {
         }
 
         const cvName = (cv_enterprise_name || '').trim() || null;
+        const cvStage = (cv_stage_name || '').trim() || null;
         if (cvId == null && !cvName) {
             return res.status(400).json({ error: 'Informe o id ou o nome do empreendimento no CV.' });
         }
 
         // Reativa/atualiza o vínculo existente da mesma origem em vez de criar
-        // um segundo, que reintroduziria a ambiguidade.
-        const where = cvId != null ? { cv_enterprise_id: cvId } : { cv_enterprise_name: cvName };
+        // um segundo, que reintroduziria a ambiguidade. A origem inclui a etapa:
+        // o mesmo empreendimento pode ter um vínculo por fase.
+        const where = cvId != null
+            ? { cv_enterprise_id: cvId, cv_stage_name: cvStage }
+            : { cv_enterprise_name: cvName, cv_stage_name: cvStage };
         const existing = await EnterpriseErpLink.findOne({ where });
 
         if (existing) {
             existing.active = true;
             existing.cv_enterprise_id = cvId;
             existing.cv_enterprise_name = cvName;
+            existing.cv_stage_name = cvStage;
             existing.erp_enterprise_id = erpId;
             existing.erp_enterprise_name = erp_enterprise_name || existing.erp_enterprise_name;
             if (description !== undefined) existing.description = description || null;
@@ -75,6 +84,7 @@ export async function addErpLink(req, res) {
         const row = await EnterpriseErpLink.create({
             cv_enterprise_id: cvId,
             cv_enterprise_name: cvName,
+            cv_stage_name: cvStage,
             erp_enterprise_id: erpId,
             erp_enterprise_name: erp_enterprise_name || null,
             description: description || null,
@@ -140,6 +150,10 @@ WITH base AS (
       NULLIF(trim(both from (r.unidade_json->>'empreendimento')), ''),
       NULLIF(trim(both from r.empreendimento), '')
     ) AS nome,
+    COALESCE(
+      NULLIF(trim(both from (r.unidade_json->>'etapa')), ''),
+      NULLIF(trim(both from r.etapa), '')
+    ) AS etapa,
     r.idreserva,
     r.data_reserva
   FROM reservas r
@@ -167,6 +181,12 @@ resolvido AS (
               AND unaccent(upper(regexp_replace(l.cv_enterprise_name, '[^A-Za-z0-9]+',' ','g'))) =
                   unaccent(upper(regexp_replace(b.nome,               '[^A-Za-z0-9]+',' ','g'))))
         )
+        AND (
+          l.cv_stage_name IS NULL
+          OR (b.etapa IS NOT NULL
+              AND unaccent(upper(regexp_replace(l.cv_stage_name, '[^A-Za-z0-9]+',' ','g'))) =
+                  unaccent(upper(regexp_replace(b.etapa,         '[^A-Za-z0-9]+',' ','g'))))
+        )
       LIMIT 1) AS erp_link,
     /* Ponte pelo cadastro da projeção ativa — mesma regra da query de projeção */
     (SELECT NULLIF(spe.erp_id, '')::int
@@ -181,12 +201,25 @@ resolvido AS (
   FROM base b
 )
 
+/*
+  Agrupa por empreendimento + ETAPA. No CV as fases/módulos são etapas dentro de
+  um mesmo empreendimento, enquanto no Sienge cada fase costuma ser um
+  empreendimento próprio — então é no nível da etapa que o vínculo precisa ser
+  feito. Empreendimento sem etapa cai numa linha só, como antes.
+*/
 SELECT
   nome                              AS cv_enterprise_name,
+  etapa                             AS cv_stage_name,
   MAX(idemp_cv)                     AS cv_enterprise_id,
   MAX(idemp_int)                    AS cv_enterprise_int_id,
   COUNT(*)::int                     AS reservas,
   MAX(data_reserva)                 AS ultima_reserva,
+  /* Quantas etapas distintas o mesmo empreendimento tem em aberto: > 1 indica
+     que ele se divide em fases e que o vínculo tem que ser por etapa. */
+  (SELECT COUNT(DISTINCT r2.etapa)
+     FROM resolvido r2
+    WHERE r2.nome = resolvido.nome
+      AND r2.etapa IS NOT NULL)::int AS etapas_no_empreendimento,
   CASE
     WHEN MAX(COALESCE(idemp_int, idemp_cv)) IS NULL THEN 'sem_id_cv'
     ELSE 'sem_ponte'
@@ -196,8 +229,8 @@ WHERE erp_auto IS NULL
   AND erp_link IS NULL
   AND erp_projecao IS NULL
   AND nome IS NOT NULL
-GROUP BY nome
-ORDER BY COUNT(*) DESC, nome;
+GROUP BY nome, etapa
+ORDER BY COUNT(*) DESC, nome, etapa;
 `;
 
         const rows = await db.sequelize.query(sql, {
