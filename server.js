@@ -60,6 +60,7 @@ import checklistRoutes from './routes/checklistRoutes.js';
 import organogramRoutes from './routes/organogramRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
+import { seedSalesStandModels } from './services/marketing/salesStandService.js';
 import seedChecklist from './services/checklist/seedChecklist.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
@@ -435,6 +436,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['ComercialConditions', ensureComercialConditionsSchema],
     ['Organogram', ensureOrganogramSchema],
     ['InitialTypes', seedInitialTypes],
+    ['SalesStandModels', seedSalesStandModels],
     ['Checklist', ensureChecklistSchema],
   ];
 

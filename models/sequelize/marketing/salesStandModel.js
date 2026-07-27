@@ -8,6 +8,8 @@ export default (sequelize, DataTypes) => {
         // Faixa de valor médio de referência do modelo (construção completa): de/até.
         avg_value_min: { type: DataTypes.DECIMAL(15, 2), allowNull: false, defaultValue: 0 },
         avg_value_max: { type: DataTypes.DECIMAL(15, 2), allowNull: false, defaultValue: 0 },
+        // Metragem média do stand (m²).
+        avg_area_m2: { type: DataTypes.DECIMAL(8, 2), allowNull: false, defaultValue: 0 },
         // ["Contêiner 12m", "Ar-condicionado", ...] — itens que o stand modelo possui.
         items: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
