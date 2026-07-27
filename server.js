@@ -49,6 +49,7 @@ import emeReportsPublicRoutes from './routes/emeReportsPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import marketingApprovalRoutes from './routes/marketingApprovalRoutes.js';
+import salesStandRoutes from './routes/salesStandRoutes.js';
 import metaAppRoutes from './routes/metaAppRoutes.js';
 import { campaignsOAuthCallback as metaCampaignsOAuthCallback } from './controllers/meta/metaAppConfigController.js';
 import alertRoutes from './routes/alertRoutes.js';
@@ -235,6 +236,7 @@ app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/marketing-approvals', marketingApprovalRoutes);
+app.use('/api/sales-stands', salesStandRoutes);
 app.use('/api/bolao', bolaoRoutes);
 app.use('/api/comunicados', comunicadoRoutes);
 app.use('/api/checklists', checklistRoutes);
@@ -373,6 +375,9 @@ async function syncModelsAndPatches(fingerprint) {
     ['MarketingApprovalAttachment', db.MarketingApprovalAttachment],
     ['MarketingApprovalWaMessage', db.MarketingApprovalWaMessage],
     ['MarketingApprovalSettings', db.MarketingApprovalSettings],
+    // Stand de Vendas (módulo novo em evolução)
+    ['SalesStandModel', db.SalesStandModel],
+    ['SalesStand', db.SalesStand],
   ]) {
     if (!model) continue;
     try {

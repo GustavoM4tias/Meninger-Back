@@ -205,6 +205,9 @@ import MarketingApprovalDecisionDefine    from './marketing/marketingApprovalDec
 import MarketingApprovalAttachmentDefine  from './marketing/marketingApprovalAttachment.js';
 import MarketingApprovalWaMessageDefine   from './marketing/marketingApprovalWaMessage.js';
 import MarketingApprovalSettingsDefine    from './marketing/marketingApprovalSettings.js';
+// Marketing — Stand de Vendas (modelos/categorias + stands reais)
+import SalesStandModelDefine from './marketing/salesStandModel.js';
+import SalesStandDefine      from './marketing/salesStand.js';
 
 // Bolão da Copa
 import BolaoDefine            from './bolao/bolao.js';
@@ -460,6 +463,10 @@ db.MarketingApprovalDecision    = MarketingApprovalDecisionDefine(sequelize, Dat
 db.MarketingApprovalAttachment  = MarketingApprovalAttachmentDefine(sequelize, DataTypes);
 db.MarketingApprovalWaMessage   = MarketingApprovalWaMessageDefine(sequelize, DataTypes);
 db.MarketingApprovalSettings    = MarketingApprovalSettingsDefine(sequelize, DataTypes);
+
+// Marketing — Stand de Vendas
+db.SalesStandModel = SalesStandModelDefine(sequelize, DataTypes);
+db.SalesStand      = SalesStandDefine(sequelize, DataTypes);
 
 // Bolão da Copa
 db.Bolao            = BolaoDefine(sequelize, DataTypes);
