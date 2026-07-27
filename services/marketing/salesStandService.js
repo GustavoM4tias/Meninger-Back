@@ -138,10 +138,14 @@ export async function listModels() {
 export async function createModel({ payload = {}, userId }) {
     const name = (payload.name || '').trim();
     if (!name) throw httpError('Nome do modelo é obrigatório.', 400);
+    const min = Number(payload.avg_value_min) || 0;
+    const max = Number(payload.avg_value_max) || 0;
+    if (max && min > max) throw httpError('O valor "de" não pode ser maior que o valor "até".', 400);
     const row = await db.SalesStandModel.create({
         name,
         description: payload.description?.trim() || null,
-        avg_value: Number(payload.avg_value) || 0,
+        avg_value_min: min,
+        avg_value_max: max,
         items: cleanItems(payload.items),
         is_active: payload.is_active !== false,
         created_by: userId || null,
@@ -155,7 +159,11 @@ export async function updateModel({ id, payload = {}, userId }) {
     if (!row) throw httpError('Modelo não encontrado.', 404);
     if ('name' in payload) row.name = (payload.name || '').trim() || row.name;
     if ('description' in payload) row.description = payload.description?.trim() || null;
-    if ('avg_value' in payload) row.avg_value = Number(payload.avg_value) || 0;
+    if ('avg_value_min' in payload) row.avg_value_min = Number(payload.avg_value_min) || 0;
+    if ('avg_value_max' in payload) row.avg_value_max = Number(payload.avg_value_max) || 0;
+    if (Number(row.avg_value_max) && Number(row.avg_value_min) > Number(row.avg_value_max)) {
+        throw httpError('O valor "de" não pode ser maior que o valor "até".', 400);
+    }
     if ('items' in payload) row.items = cleanItems(payload.items);
     if ('is_active' in payload) row.is_active = !!payload.is_active;
     row.updated_by = userId || null;
@@ -184,7 +192,7 @@ async function ccNameMap() {
 export async function listStands() {
     const rows = await db.SalesStand.findAll({
         where: { is_active: true },
-        include: [{ model: db.SalesStandModel, as: 'model', attributes: ['id', 'name', 'avg_value', 'items'] }],
+        include: [{ model: db.SalesStandModel, as: 'model', attributes: ['id', 'name', 'avg_value_min', 'avg_value_max', 'items'] }],
         order: [['name', 'ASC']],
     });
     const stands = rows.map(plain);
