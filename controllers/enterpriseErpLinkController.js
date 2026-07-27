@@ -167,7 +167,17 @@ resolvido AS (
               AND unaccent(upper(regexp_replace(l.cv_enterprise_name, '[^A-Za-z0-9]+',' ','g'))) =
                   unaccent(upper(regexp_replace(b.nome,               '[^A-Za-z0-9]+',' ','g'))))
         )
-      LIMIT 1) AS erp_link
+      LIMIT 1) AS erp_link,
+    /* Ponte pelo cadastro da projeção ativa — mesma regra da query de projeção */
+    (SELECT NULLIF(spe.erp_id, '')::int
+       FROM sales_projection_enterprises spe
+       JOIN sales_projections sp ON sp.id = spe.projection_id AND sp.is_active = true
+      WHERE spe.erp_id IS NOT NULL
+        AND spe.enterprise_name_cache IS NOT NULL
+        AND b.nome IS NOT NULL
+        AND unaccent(upper(regexp_replace(spe.enterprise_name_cache, '[^A-Za-z0-9]+',' ','g'))) =
+            unaccent(upper(regexp_replace(b.nome,                    '[^A-Za-z0-9]+',' ','g')))
+      LIMIT 1) AS erp_projecao
   FROM base b
 )
 
@@ -184,6 +194,7 @@ SELECT
 FROM resolvido
 WHERE erp_auto IS NULL
   AND erp_link IS NULL
+  AND erp_projecao IS NULL
   AND nome IS NOT NULL
 GROUP BY nome
 ORDER BY COUNT(*) DESC, nome;
