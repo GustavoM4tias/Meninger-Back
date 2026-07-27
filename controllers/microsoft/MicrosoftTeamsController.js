@@ -3,9 +3,13 @@ import teamsService from '../../services/microsoft/MicrosoftTeamsService.js';
 import db from '../../models/sequelize/index.js';
 
 function handleErr(res, err, ctx) {
-    const msg = err?.message || '';
+    // Prioriza a mensagem real do Graph (err.response.data.error.message) —
+    // sem ela o front só via "Request failed with status code 4xx".
+    const graphMsg = err?.response?.data?.error?.message;
+    const msg = graphMsg || err?.message || 'Erro inesperado na integração Microsoft.';
     console.error(`❌ [Teams] ${ctx}:`, err?.response?.data || msg);
-    const isAuth = msg.toLowerCase().includes('não conectada') || msg.toLowerCase().includes('expirada');
+    const authProbe = (err?.message || '').toLowerCase();
+    const isAuth = authProbe.includes('não conectada') || authProbe.includes('expirada');
     return res.status(isAuth ? 401 : err?.response?.status || 500).json({ error: msg });
 }
 
@@ -72,7 +76,8 @@ class MicrosoftTeamsController {
     async cancelEvent(req, res) {
         if (!req.user.microsoft_id) return res.status(401).json({ error: 'Conta Microsoft não conectada.' });
         try {
-            await teamsService.cancelEvent(req.user, req.params.eventId, req.body?.comment || '');
+            const { comment = '', scope = 'single', seriesMasterId = null } = req.body || {};
+            await teamsService.cancelEvent(req.user, req.params.eventId, { comment, scope, seriesMasterId });
             res.status(204).end();
         } catch (err) { handleErr(res, err, 'cancelEvent'); }
     }
@@ -80,7 +85,8 @@ class MicrosoftTeamsController {
     async deleteEvent(req, res) {
         if (!req.user.microsoft_id) return res.status(401).json({ error: 'Conta Microsoft não conectada.' });
         try {
-            await teamsService.deleteEvent(req.user, req.params.eventId);
+            const { scope = 'occurrence', seriesMasterId = null } = req.query || {};
+            await teamsService.deleteEvent(req.user, req.params.eventId, { scope, seriesMasterId });
             res.status(204).end();
         } catch (err) { handleErr(res, err, 'deleteEvent'); }
     }

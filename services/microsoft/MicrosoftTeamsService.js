@@ -7,7 +7,43 @@ const EVENT_SELECT = [
     'location', 'organizer', 'attendees',
     'webLink', 'showAs', 'sensitivity',
     'responseStatus', 'isCancelled', 'importance', 'recurrence',
+    'type', 'seriesMasterId', 'isOrganizer',
 ].join(',');
+
+// Converte o objeto recurrence do Graph para o shape simplificado usado pela UI
+// ({ type, interval, endType, endDate, occurrences }). Padrões fora do subset
+// suportado (relativeMonthly, yearly, múltiplos dias da semana) retornam
+// { unsupported: true } — a UI exibe read-only e nunca envia PATCH de recorrência.
+function simplifyRecurrence(rec) {
+    if (!rec?.pattern || !rec?.range) return null;
+
+    const { pattern, range } = rec;
+    const out = { interval: pattern.interval || 1 };
+
+    if (pattern.type === 'daily') {
+        out.type = 'daily';
+    } else if (pattern.type === 'weekly' && (pattern.daysOfWeek || []).length === 1) {
+        out.type = 'weekly';
+    } else if (pattern.type === 'absoluteMonthly') {
+        out.type = 'monthly';
+    } else {
+        return { unsupported: true };
+    }
+
+    if (range.type === 'noEnd') {
+        out.endType = 'noEnd';
+    } else if (range.type === 'endDate') {
+        out.endType = 'endDate';
+        out.endDate = range.endDate || null;
+    } else if (range.type === 'numbered') {
+        out.endType = 'count';
+        out.occurrences = range.numberOfOccurrences || 1;
+    } else {
+        return { unsupported: true };
+    }
+
+    return out;
+}
 
 function normalizeEvent(e) {
     return {
@@ -39,7 +75,14 @@ function normalizeEvent(e) {
         responseStatus: e.responseStatus?.response || 'none',
         isCancelled: e.isCancelled || false,
         importance: e.importance || 'normal',
-        isRecurring: !!e.recurrence,
+        // calendarView devolve ocorrências expandidas (type: 'occurrence') sem o
+        // objeto recurrence — este só existe no seriesMaster. Por isso o flag
+        // deriva do type, não da presença de recurrence.
+        type: e.type || 'singleInstance',            // singleInstance | occurrence | exception | seriesMaster
+        seriesMasterId: e.seriesMasterId || null,
+        isOrganizer: e.isOrganizer === true,
+        isRecurring: e.type === 'occurrence' || e.type === 'exception' || e.type === 'seriesMaster' || !!e.recurrence,
+        recurrence: e.recurrence ? simplifyRecurrence(e.recurrence) : null,
     };
 }
 
@@ -117,7 +160,8 @@ class MicrosoftTeamsService {
         if (type === 'weekly')  { pattern.type = 'weekly'; pattern.daysOfWeek = [DAY_NAMES[startDay.getDay()]]; }
         if (type === 'monthly') { pattern.type = 'absoluteMonthly'; pattern.dayOfMonth = startDay.getDate(); }
 
-        const range = { startDate };
+        // recurrenceTimeZone evita off-by-one na última ocorrência (Graph usa UTC por padrão no range)
+        const range = { startDate, recurrenceTimeZone: 'America/Sao_Paulo' };
         if (endType === 'noEnd')   { range.type = 'noEnd'; }
         if (endType === 'endDate') { range.type = 'endDate'; range.endDate = endDate; }
         if (endType === 'count')   { range.type = 'numbered'; range.numberOfOccurrences = Number(occurrences) || 10; }
@@ -169,13 +213,46 @@ class MicrosoftTeamsService {
 
     // ── Cancelar / excluir evento ─────────────────────────────────────────────
 
-    /** Envia notificação de cancelamento para os participantes e remove o evento. */
-    async cancelEvent(user, eventId, comment = '') {
+    /** Resolve o id do seriesMaster de um evento recorrente. */
+    async _resolveSeriesMasterId(user, eventId, seriesMasterId) {
+        if (seriesMasterId) return seriesMasterId;
+        const event = await this.getEvent(user, eventId);
+        return event.seriesMasterId || eventId;
+    }
+
+    /**
+     * Cancela o evento como ORGANIZADOR (Graph envia notificação aos participantes).
+     * @param {string} scope
+     *   - 'single':     evento não recorrente — cancel direto no id.
+     *   - 'occurrence': só esta ocorrência da série — o Graph NÃO aceita /cancel em
+     *                   ocorrência, então usamos DELETE (o Graph vira uma exceção de
+     *                   ocorrência excluída e avisa os participantes; sem comentário).
+     *   - 'series':     toda a série — cancel no seriesMaster.
+     */
+    async cancelEvent(user, eventId, { comment = '', scope = 'single', seriesMasterId = null } = {}) {
+        if (scope === 'series') {
+            const masterId = await this._resolveSeriesMasterId(user, eventId, seriesMasterId);
+            await graph.post(user, `/me/events/${masterId}/cancel`, { comment });
+            return;
+        }
+        if (scope === 'occurrence') {
+            await graph.delete(user, `/me/events/${eventId}`);
+            return;
+        }
         await graph.post(user, `/me/events/${eventId}/cancel`, { comment });
     }
 
-    /** Remove o evento sem enviar notificação (para eventos que só o organizador vê). */
-    async deleteEvent(user, eventId) {
+    /**
+     * Remove o evento do calendário do PRÓPRIO usuário, sem notificar ninguém
+     * (caminho do participante; ou eventos que só o organizador vê).
+     * scope 'series' remove a série inteira via seriesMaster.
+     */
+    async deleteEvent(user, eventId, { scope = 'occurrence', seriesMasterId = null } = {}) {
+        if (scope === 'series') {
+            const masterId = await this._resolveSeriesMasterId(user, eventId, seriesMasterId);
+            await graph.delete(user, `/me/events/${masterId}`);
+            return;
+        }
         await graph.delete(user, `/me/events/${eventId}`);
     }
 }
