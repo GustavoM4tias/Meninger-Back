@@ -119,17 +119,25 @@ export async function removeErpLink(req, res) {
     }
 }
 
+
 /**
  * GET /api/admin/enterprise-erp-links/pendentes
  *
- * Diagnóstico: empreendimentos que aparecem nas projeções dos grupos de
- * workflow ativos e NÃO conseguem resolver o id do Sienge. São exatamente os
- * que caem como linha solta no dashboard.
+ * Raio-X do vínculo: para CADA origem do CV que está gerando projeção
+ * (empreendimento + fase), mostra qual centro de custo do Sienge ela resolve e
+ * por qual caminho. É o "de onde saiu esse número" da tela.
  *
- * Para cada um devolve o motivo, para o usuário saber o que corrigir:
- *   sem_id_cv    → a reserva não traz idempreendimento_int nem idempreendimento_cv
- *   sem_ponte    → tem id do CV, mas enterprise_cities não tem erp_id para ele
- *                  (é o caso de `idempreendimento_int` vazio no cadastro do CV)
+ * A cascata é a mesma da query de projeção, na mesma ordem:
+ *   manual         → vínculo criado à mão nesta tela
+ *   projecao       → cadastro da projeção ativa, por nome exato
+ *   projecao_fase  → cadastro da projeção ativa, por nome + nº da fase
+ *   cadastro_cv    → enterprise_cities (a ponte automática do CV)
+ *   (nenhum)       → não resolve: cai como linha solta no dashboard
+ *
+ * `alerta` sinaliza o caso traiçoeiro: resolveu pelo cadastro_cv num
+ * empreendimento que tem VÁRIAS fases em aberto. Como enterprise_cities não
+ * conhece fase, todas as fases vão para o mesmo centro de custo — o número
+ * aparece, mas no módulo errado.
  */
 export async function listUnlinkedProjections(req, res) {
     try {
@@ -142,95 +150,95 @@ export async function listUnlinkedProjections(req, res) {
         if (!situacoes.length) return res.json({ count: 0, results: [] });
 
         const sql = `
-WITH base AS (
+WITH origem AS (
   SELECT
-    NULLIF((r.unidade_json->>'idempreendimento_int'), '')::int AS idemp_int,
-    NULLIF((r.unidade_json->>'idempreendimento_cv'), '')::int  AS idemp_cv,
-    COALESCE(
-      NULLIF(trim(both from (r.unidade_json->>'empreendimento')), ''),
-      NULLIF(trim(both from r.empreendimento), '')
-    ) AS nome,
-    COALESCE(
-      NULLIF(trim(both from (r.unidade_json->>'etapa')), ''),
-      NULLIF(trim(both from r.etapa), '')
-    ) AS etapa,
-    r.idreserva,
-    r.data_reserva
+    COALESCE(NULLIF(trim(both from (r.unidade_json->>'empreendimento')), ''),
+             NULLIF(trim(both from r.empreendimento), ''))            AS cv_enterprise_name,
+    COALESCE(NULLIF(trim(both from (r.unidade_json->>'etapa')), ''),
+             NULLIF(trim(both from r.etapa), ''))                     AS cv_stage_name,
+    NULLIF((r.unidade_json->>'idempreendimento_int'), '')::int        AS cv_int_id,
+    NULLIF((r.unidade_json->>'idempreendimento_cv'), '')::int         AS cv_id,
+    COUNT(*)::int                                                     AS reservas,
+    MAX(r.data_reserva)                                               AS ultima_reserva
   FROM reservas r
   WHERE (r.situacao->>'idsituacao')::int IN (:ids)
+  GROUP BY 1,2,3,4
 ),
 
 resolvido AS (
   SELECT
-    b.*,
-    /* mesma cascata da query de projeção, resumida */
-    (SELECT NULLIF(ec.erp_id, '')::int
-       FROM enterprise_cities ec
-      WHERE (b.idemp_int IS NOT NULL AND ec.erp_id = b.idemp_int::text)
-         OR (b.idemp_int IS NOT NULL AND ec.crm_id = b.idemp_int)
-         OR (b.idemp_cv  IS NOT NULL AND ec.crm_id = b.idemp_cv)
-      ORDER BY (ec.erp_id IS NOT NULL) DESC, ec.updated_at DESC
-      LIMIT 1) AS erp_auto,
-    (SELECT l.erp_enterprise_id
-       FROM enterprise_erp_links l
+    o.*,
+    (SELECT l.erp_enterprise_id FROM enterprise_erp_links l
       WHERE l.active = true
-        AND (
-          l.cv_enterprise_id = b.idemp_cv
-          OR l.cv_enterprise_id = b.idemp_int
-          OR (l.cv_enterprise_name IS NOT NULL AND b.nome IS NOT NULL
-              AND unaccent(upper(regexp_replace(l.cv_enterprise_name, '[^A-Za-z0-9]+',' ','g'))) =
-                  unaccent(upper(regexp_replace(b.nome,               '[^A-Za-z0-9]+',' ','g'))))
-        )
-        AND (
-          l.cv_stage_name IS NULL
-          OR (b.etapa IS NOT NULL
-              AND unaccent(upper(regexp_replace(l.cv_stage_name, '[^A-Za-z0-9]+',' ','g'))) =
-                  unaccent(upper(regexp_replace(b.etapa,         '[^A-Za-z0-9]+',' ','g'))))
-        )
-      LIMIT 1) AS erp_link,
-    /* Ponte pelo cadastro da projeção ativa — mesma regra da query de projeção */
-    (SELECT NULLIF(spe.erp_id, '')::int
-       FROM sales_projection_enterprises spe
+        AND (l.cv_enterprise_id = o.cv_id
+             OR l.cv_enterprise_id = o.cv_int_id
+             OR (l.cv_enterprise_name IS NOT NULL AND o.cv_enterprise_name IS NOT NULL
+                 AND menin_base_name(l.cv_enterprise_name) = menin_base_name(o.cv_enterprise_name)))
+        AND (l.cv_stage_name IS NULL
+             OR menin_base_name(l.cv_stage_name) = menin_base_name(o.cv_stage_name))
+      ORDER BY (l.cv_stage_name IS NOT NULL) DESC LIMIT 1) AS erp_manual,
+
+    (SELECT NULLIF(spe.erp_id,'')::int FROM sales_projection_enterprises spe
        JOIN sales_projections sp ON sp.id = spe.projection_id AND sp.is_active = true
       WHERE spe.erp_id IS NOT NULL
-        AND spe.enterprise_name_cache IS NOT NULL
-        AND b.nome IS NOT NULL
-        AND unaccent(upper(regexp_replace(spe.enterprise_name_cache, '[^A-Za-z0-9]+',' ','g'))) =
-            unaccent(upper(regexp_replace(b.nome,                    '[^A-Za-z0-9]+',' ','g')))
-      LIMIT 1) AS erp_projecao
-  FROM base b
+        AND menin_base_name(spe.enterprise_name_cache) = menin_base_name(o.cv_enterprise_name)
+        AND menin_stage_num(spe.enterprise_name_cache) IS NULL
+      LIMIT 1) AS erp_projecao,
+
+    (SELECT NULLIF(spe.erp_id,'')::int FROM sales_projection_enterprises spe
+       JOIN sales_projections sp ON sp.id = spe.projection_id AND sp.is_active = true
+      WHERE spe.erp_id IS NOT NULL
+        AND menin_stage_num(o.cv_stage_name) IS NOT NULL
+        AND menin_base_name(spe.enterprise_name_cache) = menin_base_name(o.cv_enterprise_name)
+        AND menin_stage_num(spe.enterprise_name_cache) = menin_stage_num(o.cv_stage_name)
+      LIMIT 1) AS erp_projecao_fase,
+
+    (SELECT NULLIF(ec.erp_id,'')::int FROM enterprise_cities ec
+      WHERE (o.cv_int_id IS NOT NULL AND ec.erp_id = o.cv_int_id::text)
+         OR (o.cv_int_id IS NOT NULL AND ec.crm_id = o.cv_int_id AND ec.erp_id IS NOT NULL)
+         OR (o.cv_id     IS NOT NULL AND ec.crm_id = o.cv_id     AND ec.erp_id IS NOT NULL)
+      ORDER BY (ec.erp_id = o.cv_int_id::text) DESC, ec.updated_at DESC
+      LIMIT 1) AS erp_cadastro_cv,
+
+    (SELECT COUNT(DISTINCT o2.cv_stage_name) FROM origem o2
+      WHERE o2.cv_enterprise_name = o.cv_enterprise_name
+        AND o2.cv_stage_name IS NOT NULL)::int AS fases_no_empreendimento
+  FROM origem o
 )
 
-/*
-  Agrupa por empreendimento + ETAPA. No CV as fases/módulos são etapas dentro de
-  um mesmo empreendimento, enquanto no Sienge cada fase costuma ser um
-  empreendimento próprio — então é no nível da etapa que o vínculo precisa ser
-  feito. Empreendimento sem etapa cai numa linha só, como antes.
-*/
 SELECT
-  nome                              AS cv_enterprise_name,
-  etapa                             AS cv_stage_name,
-  MAX(idemp_cv)                     AS cv_enterprise_id,
-  MAX(idemp_int)                    AS cv_enterprise_int_id,
-  COUNT(*)::int                     AS reservas,
-  MAX(data_reserva)                 AS ultima_reserva,
-  /* Quantas etapas distintas o mesmo empreendimento tem em aberto: > 1 indica
-     que ele se divide em fases e que o vínculo tem que ser por etapa. */
-  (SELECT COUNT(DISTINCT r2.etapa)
-     FROM resolvido r2
-    WHERE r2.nome = resolvido.nome
-      AND r2.etapa IS NOT NULL)::int AS etapas_no_empreendimento,
+  cv_enterprise_name,
+  cv_stage_name,
+  cv_id            AS cv_enterprise_id,
+  cv_int_id        AS cv_enterprise_int_id,
+  reservas,
+  ultima_reserva,
+  fases_no_empreendimento,
+  COALESCE(erp_manual, erp_projecao, erp_projecao_fase, erp_cadastro_cv) AS erp_enterprise_id,
   CASE
-    WHEN MAX(COALESCE(idemp_int, idemp_cv)) IS NULL THEN 'sem_id_cv'
-    ELSE 'sem_ponte'
-  END                               AS motivo
+    WHEN erp_manual        IS NOT NULL THEN 'manual'
+    WHEN erp_projecao      IS NOT NULL THEN 'projecao'
+    WHEN erp_projecao_fase IS NOT NULL THEN 'projecao_fase'
+    WHEN erp_cadastro_cv   IS NOT NULL THEN 'cadastro_cv'
+    ELSE NULL
+  END AS via,
+  (SELECT c.enterprise_name FROM contracts c
+    WHERE c.enterprise_id = COALESCE(erp_manual, erp_projecao, erp_projecao_fase, erp_cadastro_cv)
+    LIMIT 1) AS erp_enterprise_name,
+  /* Resolveu pelo cadastro do CV num empreendimento com várias fases: todas as
+     fases apontam para o mesmo centro de custo, então há grande chance de estar
+     no módulo errado. */
+  (erp_manual IS NULL AND erp_projecao IS NULL AND erp_projecao_fase IS NULL
+   AND erp_cadastro_cv IS NOT NULL
+   AND (SELECT COUNT(DISTINCT o2.cv_stage_name) FROM origem o2
+         WHERE o2.cv_enterprise_name = resolvido.cv_enterprise_name
+           AND o2.cv_stage_name IS NOT NULL) > 1) AS alerta_fase_generica
 FROM resolvido
-WHERE erp_auto IS NULL
-  AND erp_link IS NULL
-  AND erp_projecao IS NULL
-  AND nome IS NOT NULL
-GROUP BY nome, etapa
-ORDER BY COUNT(*) DESC, nome, etapa;
+WHERE cv_enterprise_name IS NOT NULL
+ORDER BY
+  (COALESCE(erp_manual, erp_projecao, erp_projecao_fase, erp_cadastro_cv) IS NULL) DESC,
+  reservas DESC,
+  cv_enterprise_name, cv_stage_name;
 `;
 
         const rows = await db.sequelize.query(sql, {
@@ -241,6 +249,6 @@ ORDER BY COUNT(*) DESC, nome, etapa;
         return res.json({ count: rows.length, results: rows });
     } catch (err) {
         console.error('[listUnlinkedProjections]', err);
-        return res.status(500).json({ error: 'Erro ao diagnosticar vínculos pendentes.' });
+        return res.status(500).json({ error: 'Erro ao diagnosticar vínculos.' });
     }
 }
