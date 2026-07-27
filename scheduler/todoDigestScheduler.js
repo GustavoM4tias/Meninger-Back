@@ -69,7 +69,7 @@ async function runDigest() {
                 title,
                 body,
                 data: { overdue: overdue.length, today: today.length, tomorrow: tomorrow.length },
-                link: '/microsoft/todo',
+                link: '/microsoft/teams?tab=tarefas', // aba Tarefas da Central Microsoft
                 importance: 7,
                 emailData: { title, body },
             });

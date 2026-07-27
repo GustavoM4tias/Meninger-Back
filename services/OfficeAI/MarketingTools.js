@@ -51,7 +51,7 @@ export const TOOL_DECLARATIONS = [
             'Financeiro: /financeiro/titulos (Títulos), /financeiro/custos (Custos), /financeiro/gastos-departamento (Gastos por Departamento), /financeiro/inadimplencia (Inadimplência), /financeiro/paymentflow (Fluxo de Pagamento), /financeiro/boleto-caixa (Boleto Caixa). ' +
             'Operação: /checklists (Checklists). ' +
             'Academy: /academy/panel (Painel do Academy), /academy/kb (Base de Conhecimento), /academy/tracks (Trilhas). ' +
-            'Microsoft: /microsoft/sharepoint (SharePoint), /microsoft/teams (Teams), /microsoft/planner (Planner), /microsoft/todo (To Do), /microsoft/transcripts (Transcrições de reuniões). ' +
+            'Microsoft: /microsoft/teams (Central Microsoft: agenda Teams na aba padrão, To Do em ?tab=tarefas, transcrições de reuniões em ?tab=reunioes), /microsoft/sharepoint (SharePoint), /microsoft/planner (Planner). ' +
             'Outros: /mural (Mural de Avisos), /notifications (Notificações), /settings/alerts (Alertas), /settings/organograma (Organograma), /settings/account (Minha Conta), /tools/validator (Validador de Contratos), /report (Reportar Problema).',
         },
         filters: { type: 'OBJECT', description: 'Filtros como query params. Ex: { data_inicio: "2025-01-01", empreendimento: "Nome" }' },
