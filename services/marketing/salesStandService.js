@@ -354,7 +354,7 @@ const DEFAULT_MODELS = [
     {
         name: 'Stand Standard',
         description: 'Contêiner ou sala comercial. Praticidade e custo-benefício para lançamentos de entrada: ambiente funcional, direto ao ponto, otimizado para o primeiro contato com o cliente e a captação eficiente de leads.',
-        avg_area_m2: 60,
+        avg_area_m2: 18,
         items: [
             'Estrutura: contêiner ou sala comercial',
             'Ar-condicionado',
@@ -371,7 +371,7 @@ const DEFAULT_MODELS = [
     {
         name: 'Stand Medium',
         description: 'Contêiner ou espaço comercial. Equilíbrio e versatilidade para empreendimentos de médio padrão: espaço confortável que valoriza a marca, facilita a apresentação de maquetes e a simulação de condições de compra.',
-        avg_area_m2: 100,
+        avg_area_m2: 30,
         items: [
             'Estrutura: contêiner ou espaço comercial',
             'Ar-condicionado',
@@ -392,7 +392,7 @@ const DEFAULT_MODELS = [
     {
         name: 'Stand Plus',
         description: 'Espaço comercial + executivo, com mais área e salas de reunião privativas. Sofisticação e conforto para projetos de alto padrão: atmosfera refinada, materiais de melhor acabamento e iluminação planejada.',
-        avg_area_m2: 160,
+        avg_area_m2: 60,
         items: [
             'Estrutura: espaço comercial + executivo',
             'Ar-condicionado central',
@@ -415,7 +415,7 @@ const DEFAULT_MODELS = [
     {
         name: 'Stand Premium',
         description: 'Espaço executivo amplo, com decorado. O ápice do mercado de luxo e grandes lançamentos: galeria imersiva e imponente, arquitetura marcante, elegância e experiência sensorial completa para o comprador.',
-        avg_area_m2: 250,
+        avg_area_m2: 100,
         items: [
             'Estrutura: espaço executivo amplo',
             'Ar-condicionado central',
