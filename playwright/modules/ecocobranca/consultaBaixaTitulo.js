@@ -400,8 +400,8 @@ export async function consultarTitulo(page, nossoNumero) {
  *
  * Fluxo:
  *   1. busca o título (tela /baixa_titulo)
- *   2. seleciona o radio
- *   3. confirma → tela de detalhamento
+ *   2. seleciona o radio (clique real, matching pelo nosso número)
+ *   3. confirma → valida a tela de detalhamento (cabeçalho + nosso número)
  *   4. confirma novamente → tela de resultado
  *   5. lê a mensagem ("BAIXA POR DEVOLUCAO EFETUADA COM SUCESSO" ou erro)
  *
@@ -471,7 +471,32 @@ export async function baixarTitulo(page, nossoNumero, opts = {}) {
     ]).catch(() => {});
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 
-    // Passo 3: tela de detalhamento — clica em Confirmar novamente
+    // Passo 3: valida a tela de detalhamento ANTES do confirm final — último
+    // checkpoint antes da ação destrutiva. A tela traz o cabeçalho
+    // "Detalhamento de Título a ser Baixado" e o hidden nossoNumero com o
+    // título que será baixado; qualquer divergência aborta. O cabeçalho é
+    // obrigatório no check: a tela de LISTA também tem input nossoNumero
+    // (o campo de busca, preenchido com o mesmo valor) — sem o cabeçalho,
+    // ficar parado na lista passaria como falso positivo.
+    const detalhe = await safeReadEvaluate(page, () => {
+        const hidden = document.querySelector('form input[name="nossoNumero"]');
+        const temCabecalho = /Detalhamento de T[ií]tulo a ser Baixado/i.test(document.body?.innerText || '');
+        return { nossoNumero: (hidden?.value || '').trim(), temCabecalho };
+    }).catch(() => null);
+
+    if (!detalhe || !detalhe.temCabecalho || detalhe.nossoNumero !== dados.nossoNumeroFull) {
+        error('ECO_BAIXA', `✗ Tela de detalhamento inesperada antes do confirm final (cabeçalho: ${detalhe?.temCabecalho ? 'ok' : 'AUSENTE'}; nosso número lido: "${detalhe?.nossoNumero || '?'}", esperado "${dados.nossoNumeroFull}"). Abortando sem confirmar.`);
+        return {
+            found: true,
+            situacao: dados.situacao,
+            baixaConfirmada: false,
+            abortReason: 'detalhamento_invalido',
+            dados,
+        };
+    }
+    log('ECO_BAIXA', `Detalhamento confere (título ${detalhe.nossoNumero}) — confirmando baixa...`);
+
+    // Passo 4: tela de detalhamento — clica em Confirmar novamente
     log('ECO_BAIXA', 'Clicando Confirmar (2/2)...');
     await Promise.all([
         page.waitForLoadState('domcontentloaded', { timeout: 30000 }),
@@ -481,7 +506,7 @@ export async function baixarTitulo(page, nossoNumero, opts = {}) {
     ]).catch(() => {});
     await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
 
-    // Passo 4: lê resultado. A msg de sucesso aparece na .Descr01 — ex.:
+    // Passo 5: lê resultado. A msg de sucesso aparece na .Descr01 — ex.:
     // "BAIXA POR DEVOLUCAO EFETUADA COM SUCESSO"
     // Usa safeReadEvaluate (tolera redirect interno pós-load).
     const mensagemBaixa = await safeReadEvaluate(page, () => {
