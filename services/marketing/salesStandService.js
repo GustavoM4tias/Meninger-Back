@@ -146,6 +146,7 @@ export async function createModel({ payload = {}, userId }) {
         description: payload.description?.trim() || null,
         avg_value_min: min,
         avg_value_max: max,
+        avg_area_m2: Number(payload.avg_area_m2) || 0,
         items: cleanItems(payload.items),
         is_active: payload.is_active !== false,
         created_by: userId || null,
@@ -161,6 +162,7 @@ export async function updateModel({ id, payload = {}, userId }) {
     if ('description' in payload) row.description = payload.description?.trim() || null;
     if ('avg_value_min' in payload) row.avg_value_min = Number(payload.avg_value_min) || 0;
     if ('avg_value_max' in payload) row.avg_value_max = Number(payload.avg_value_max) || 0;
+    if ('avg_area_m2' in payload) row.avg_area_m2 = Number(payload.avg_area_m2) || 0;
     if (Number(row.avg_value_max) && Number(row.avg_value_min) > Number(row.avg_value_max)) {
         throw httpError('O valor "de" não pode ser maior que o valor "até".', 400);
     }
@@ -192,7 +194,7 @@ async function ccNameMap() {
 export async function listStands() {
     const rows = await db.SalesStand.findAll({
         where: { is_active: true },
-        include: [{ model: db.SalesStandModel, as: 'model', attributes: ['id', 'name', 'avg_value_min', 'avg_value_max', 'items'] }],
+        include: [{ model: db.SalesStandModel, as: 'model', attributes: ['id', 'name', 'avg_value_min', 'avg_value_max', 'avg_area_m2', 'items'] }],
         order: [['name', 'ASC']],
     });
     const stands = rows.map(plain);
@@ -344,6 +346,103 @@ export async function undefineStand({ id, userId }) {
     return plain(row);
 }
 
+// ── Seed dos 4 modelos padrão (Standard/Medium/Plus/Premium) ─────────────────
+// Idempotente: só roda com a tabela vazia, p/ não recriar modelo editado ou
+// excluído pelo usuário. Faixa de valor fica 0 (preenchida pela tela).
+
+const DEFAULT_MODELS = [
+    {
+        name: 'Stand Standard',
+        description: 'Praticidade e custo-benefício para lançamentos de entrada: ambiente funcional, direto ao ponto, otimizado para o primeiro contato com o cliente e a captação eficiente de leads.',
+        avg_area_m2: 60,
+        items: [
+            'Ar-condicionado',
+            'Recepção com balcão de atendimento',
+            'Mesas de atendimento (2)',
+            'TV para apresentação do empreendimento',
+            'Impressora multifuncional',
+            'Máquina de café e água',
+            'Banheiro',
+            'Fachada com identidade visual',
+            'Wi-Fi para a equipe',
+        ],
+    },
+    {
+        name: 'Stand Medium',
+        description: 'Equilíbrio e versatilidade para empreendimentos de médio padrão: espaço confortável que valoriza a marca, facilita a apresentação de maquetes e a simulação de condições de compra.',
+        avg_area_m2: 100,
+        items: [
+            'Ar-condicionado',
+            'Recepção com balcão de atendimento',
+            'Mesas de atendimento (4)',
+            'Sala de reunião (1)',
+            'Maquete do empreendimento',
+            'TV / painel de apresentação',
+            'Ambiente instagramável',
+            'Impressora multifuncional',
+            'Máquina de café e água',
+            'Copa de apoio',
+            'Banheiros (2)',
+            'Fachada com identidade visual',
+            'Wi-Fi para clientes e equipe',
+        ],
+    },
+    {
+        name: 'Stand Plus',
+        description: 'Sofisticação e conforto para projetos de alto padrão: atmosfera refinada, materiais de melhor acabamento, iluminação planejada e salas de atendimento privativas que transmitem maior valor agregado.',
+        avg_area_m2: 160,
+        items: [
+            'Ar-condicionado central',
+            'Recepção com lounge de espera',
+            'Mesas de atendimento (4)',
+            'Salas de reunião privativas (2)',
+            'Apartamento decorado',
+            'Maquete do empreendimento',
+            'Painel de LED',
+            'Ambiente instagramável',
+            'Iluminação planejada',
+            'Café gourmet e água',
+            'Impressora multifuncional',
+            'Espaço kids',
+            'Copa de apoio',
+            'Banheiros (2)',
+            'Paisagismo na entrada',
+            'Wi-Fi para clientes e equipe',
+        ],
+    },
+    {
+        name: 'Stand Premium',
+        description: 'O ápice do mercado de luxo e grandes lançamentos: galeria imersiva e imponente, com arquitetura marcante, elegância e uma experiência sensorial completa para o comprador.',
+        avg_area_m2: 250,
+        items: [
+            'Ar-condicionado central',
+            'Galeria imersiva de vendas',
+            'Recepção com lounge e bar de café gourmet',
+            'Salas de reunião privativas (3)',
+            'Decorado completo mobiliado',
+            'Maquete interativa',
+            'Painéis de LED e projeção',
+            'Ambiente instagramável',
+            'Experiência sensorial (som e aromatização)',
+            'Iluminação cênica planejada',
+            'Espaço kids',
+            'Impressora multifuncional',
+            'Copa completa',
+            'Banheiros (3)',
+            'Paisagismo e fachada arquitetônica',
+            'Estacionamento para clientes',
+            'Wi-Fi para clientes e equipe',
+        ],
+    },
+];
+
+export async function seedSalesStandModels() {
+    const count = await db.SalesStandModel.count();
+    if (count > 0) return;
+    await db.SalesStandModel.bulkCreate(DEFAULT_MODELS);
+    console.log('✅ Stand de Vendas: 4 modelos padrão criados (Standard/Medium/Plus/Premium).');
+}
+
 export default {
     listCostCenters,
     listModels,
@@ -358,4 +457,5 @@ export default {
     defineStand,
     undefineStand,
     clearSpendCache,
+    seedSalesStandModels,
 };
