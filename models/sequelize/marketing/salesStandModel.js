@@ -5,8 +5,9 @@ export default (sequelize, DataTypes) => {
     const SalesStandModel = sequelize.define('SalesStandModel', {
         name: { type: DataTypes.STRING(120), allowNull: false },
         description: { type: DataTypes.STRING(300), allowNull: true },
-        // Valor médio de referência do modelo (construção completa).
-        avg_value: { type: DataTypes.DECIMAL(15, 2), allowNull: false, defaultValue: 0 },
+        // Faixa de valor médio de referência do modelo (construção completa): de/até.
+        avg_value_min: { type: DataTypes.DECIMAL(15, 2), allowNull: false, defaultValue: 0 },
+        avg_value_max: { type: DataTypes.DECIMAL(15, 2), allowNull: false, defaultValue: 0 },
         // ["Contêiner 12m", "Ar-condicionado", ...] — itens que o stand modelo possui.
         items: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
