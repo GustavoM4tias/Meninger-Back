@@ -333,6 +333,26 @@ async function runSchemaPhase() {
 // Alters por model em evolução + patches ensure* + seeds + grava fingerprint.
 // Roda em SEGUNDO PLANO (depois do listen), com timeout — ver runSchemaPhase.
 async function syncModelsAndPatches(fingerprint) {
+  // ⚠️ ADD COLUMN vem ANTES de tudo.
+  //
+  // Quando um model passa a declarar uma coluna nova, TODA query dele quebra
+  // ("column X does not exist") até o ALTER rodar. Como esta fase roda depois
+  // do listen, o app já está atendendo request nesse meio-tempo. Os patches que
+  // só adicionam coluna custam milissegundos, então rodam primeiro e fecham
+  // essa janela.
+  const failedPatches = [];
+  const runPatch = async (name, fn) => {
+    try {
+      await fn();
+    } catch (err) {
+      failedPatches.push(name);
+      console.error(`❌ [SchemaPatch] ${name} falhou (os demais seguem):`, err?.message || err);
+    }
+  };
+
+  await runPatch('ProjectionLink', ensureProjectionLinkSchema);     // cv_workflow_groups.stale_days
+  await runPatch('FaturamentoRules', ensureFaturamentoRulesSchema); // stage_commission_rules.stage_id nullable
+
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
   // sync normal via db.sequelize.sync({ alter: false }) no boot, que cria
@@ -392,31 +412,44 @@ async function syncModelsAndPatches(fingerprint) {
   // Patch defensivo: ALTER TABLE ADD COLUMN IF NOT EXISTS para campos novos.
   // Cobre casos onde sync({ alter: true }) falha silenciosamente (ENUM, etc.).
   // Idempotente — pode rodar a cada boot sem efeito colateral.
-  await ensureFinanceOverridesSchema();
-  await ensureSiengeBackupLogSchema();
-  await ensureBoletoSchema();
-  await ensureReservaCancelSchema();
-  await ensureAcademyPostSync();
-  await ensureMarketingCaptureSchema();
-  await ensureEmeBrainSchema();
-  await ensureEmeReportsSchema();
-  await ensureWhatsappAutomationSchema();
-  await ensureWhatsappMessagesSchema();
-  await ensureEmeAtendeSeed();
-  await ensureAlertSharesSchema();
-  await ensureDeptSpendingSchema();
-  await ensureDepartmentVisibilitySchema();
-  await ensureComercialConditionsSchema();
-  await ensureOrganogramSchema();
-  await ensureFaturamentoRulesSchema();
-  await ensureProjectionLinkSchema();
+  //
+  // Cada patch roda ISOLADO: antes eram `await` encadeados e o primeiro que
+  // lançasse abortava todos os seguintes, deixando o schema pela metade sem
+  // nenhum aviso claro (o sintoma aparecia depois, como "column X does not
+  // exist" numa tela qualquer). Um patch quebrado não pode derrubar os outros.
+  const patches = [
+    ['FinanceOverrides', ensureFinanceOverridesSchema],
+    ['SiengeBackupLog', ensureSiengeBackupLogSchema],
+    ['Boleto', ensureBoletoSchema],
+    ['ReservaCancel', ensureReservaCancelSchema],
+    ['AcademyPostSync', ensureAcademyPostSync],
+    ['MarketingCapture', ensureMarketingCaptureSchema],
+    ['EmeBrain', ensureEmeBrainSchema],
+    ['EmeReports', ensureEmeReportsSchema],
+    ['WhatsappAutomation', ensureWhatsappAutomationSchema],
+    ['WhatsappMessages', ensureWhatsappMessagesSchema],
+    ['EmeAtendeSeed', ensureEmeAtendeSeed],
+    ['AlertShares', ensureAlertSharesSchema],
+    ['DeptSpending', ensureDeptSpendingSchema],
+    ['DepartmentVisibility', ensureDepartmentVisibilitySchema],
+    ['ComercialConditions', ensureComercialConditionsSchema],
+    ['Organogram', ensureOrganogramSchema],
+    ['InitialTypes', seedInitialTypes],
+    ['Checklist', ensureChecklistSchema],
+  ];
 
-  await seedInitialTypes();
-  await ensureChecklistSchema(); // adiciona colunas novas (ex.: reminder_mode) em tabelas já existentes
+  for (const [name, fn] of patches) {
+    await runPatch(name, fn);
+  }
+
   seedChecklist().catch(err => console.warn('⚠️  seedChecklist falhou:', err?.message || err)); // background: não bloqueia o boot
 
-  // Fase de schema completa e sem erro fatal → grava o fingerprint; os
-  // próximos boots pulam tudo isso até algo mudar.
+  // Fingerprint só quando TUDO passou. Com algum patch quebrado, o próximo boot
+  // tenta de novo em vez de pular a fase achando que o schema está em dia.
+  if (failedPatches.length) {
+    console.error(`❌ [SchemaPatch] ${failedPatches.length} patch(es) falharam: ${failedPatches.join(', ')}. Fingerprint NÃO gravado — a fase roda de novo no próximo boot.`);
+    return;
+  }
   await recordSchemaSync(db.sequelize, fingerprint);
 }
 
