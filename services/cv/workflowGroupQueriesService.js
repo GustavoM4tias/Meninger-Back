@@ -106,8 +106,30 @@ reservas_enriquecidas AS (
 reservas_com_link AS (
   SELECT
     re.*,
-    lnk.erp_enterprise_id AS idemp_erp_link
+    lnk.erp_enterprise_id AS idemp_erp_link,
+    proj_lnk.erp_id_int   AS idemp_erp_projecao
   FROM reservas_enriquecidas re
+  /*
+    Ponte pelo cadastro da PROJEÇÃO ATIVA.
+    O editor de projeção já amarra "nome do empreendimento" a um erp_id do
+    Sienge. Esse cadastro é mantido pelo usuário e cobre justamente os casos em
+    que o nome no CV é mais curto que o do Sienge (ex.: "RESIDENCIAL DOS ANJOS"
+    para "...RESIDENCIAL JARDIM DOS ANJOS..."). Reaproveitar aqui evita pedir
+    ao usuário que amarre a mesma coisa duas vezes.
+    Fica ABAIXO do vínculo manual: quem amarra na mão manda.
+  */
+  LEFT JOIN LATERAL (
+    SELECT NULLIF(spe.erp_id, '')::int AS erp_id_int
+    FROM sales_projection_enterprises spe
+    JOIN sales_projections sp ON sp.id = spe.projection_id AND sp.is_active = true
+    WHERE spe.erp_id IS NOT NULL
+      AND spe.enterprise_name_cache IS NOT NULL
+      AND re.empreendimento_nome IS NOT NULL
+      AND unaccent(upper(regexp_replace(spe.enterprise_name_cache, '[^A-Za-z0-9]+',' ','g'))) =
+          unaccent(upper(regexp_replace(re.empreendimento_nome,    '[^A-Za-z0-9]+',' ','g')))
+    ORDER BY spe.updated_at DESC
+    LIMIT 1
+  ) proj_lnk ON TRUE
   LEFT JOIN LATERAL (
     SELECT l.erp_enterprise_id
     FROM enterprise_erp_links l
@@ -137,7 +159,8 @@ reservas_com_cidade AS (
   SELECT
     re.*,
     ec_city.city_resolved,
-    COALESCE(re.idemp_erp_link, ec_city.erp_id_int) AS idemp_erp_resolvido
+    /* Prioridade: vínculo manual > cadastro da projeção > enterprise_cities */
+    COALESCE(re.idemp_erp_link, re.idemp_erp_projecao, ec_city.erp_id_int) AS idemp_erp_resolvido
   FROM reservas_com_link re
 
   LEFT JOIN LATERAL (
