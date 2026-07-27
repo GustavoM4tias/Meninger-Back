@@ -99,13 +99,11 @@ import { ensureMarketingApprovalWhatsappTemplates } from './lib/ensureMarketingA
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
 import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
-import { ensureTodoSchema } from './lib/ensureTodoSchema.js';
 import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
 import { ensureFaturamentoRulesSchema } from './lib/ensureFaturamentoRulesSchema.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
-import todoDigestScheduler from './scheduler/todoDigestScheduler.js';
 import reportPublicExpiryScheduler from './scheduler/reportPublicExpiryScheduler.js';
 import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
 import seedBolaoPublico from './services/bolao/seedBolaoPublico.js';
@@ -408,7 +406,6 @@ async function syncModelsAndPatches(fingerprint) {
 
   await seedInitialTypes();
   await ensureChecklistSchema(); // adiciona colunas novas (ex.: reminder_mode) em tabelas já existentes
-  await ensureTodoSchema(); // cria/ajusta todo_task_refs (índice local do módulo To Do)
   seedChecklist().catch(err => console.warn('⚠️  seedChecklist falhou:', err?.message || err)); // background: não bloqueia o boot
 
   // Fase de schema completa e sem erro fatal → grava o fingerprint; os
@@ -477,7 +474,6 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
   if (schedulerOn('ENABLE_BOLETO_SITUACAO_APPLY')) boletoSituacaoApplyScheduler.start(); // 1min: aplica situações CV agendadas (delay lote Sienge)
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
-  if (schedulerOn('ENABLE_TODO_DIGEST')) todoDigestScheduler.start(); // resumo diário do Microsoft To Do (07:00)
   if (schedulerOn('ENABLE_REPORT_PUBLIC_EXPIRY')) reportPublicExpiryScheduler.start(); // links públicos de relatórios: aviso D-3 + revoga vencidos (08:00)
   if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
   if (schedulerOn('ENABLE_ACADEMY_RECERTIFY')) startAcademyRecertifyScheduler(); // recertificação periódica (expira certificado + reassign mandatory)
