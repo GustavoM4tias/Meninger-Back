@@ -40,14 +40,14 @@ function resolvePeriod(args) {
 // ─── query_custos ────────────────────────────────────────────────────────────
 registerTool({
     name: 'query_custos',
-    description: 'Consulta os CUSTOS FINANCEIROS pagos (parcelas efetivamente pagas, ao vivo do Sienge — mesma fonte da tela /financeiro/custos): total do período, quebra por empreendimento (centro de custo), por departamento ou por categoria, e detalhe das parcelas de um empreendimento. Use quando o usuário perguntar "quanto gastamos", "quanto foi pago", "maiores custos/despesas do mês", "custos por departamento". NÃO use para "Custos Menin × Cliente" / custos de VENDA de um produto (comissão, ITBI, cartório, CCA, documentação repassada ao cliente) — isso é da Ficha Comercial (get_condition_sheet). Regra prática: pergunta sobre DESPESA PAGA/orçamento → aqui; pergunta sobre o que compõe a condição comercial de um empreendimento → ficha. O usuário só enxerga os departamentos que a alçada dele permite (regra aplicada automaticamente). Período padrão: mês atual.',
+    description: 'Consulta os CUSTOS FINANCEIROS pagos (parcelas efetivamente pagas, ao vivo do Sienge — mesma fonte da tela /financeiro/custos): total do período, quebra por empreendimento (centro de custo) ou por departamento, e detalhe das parcelas de um empreendimento. Use quando o usuário perguntar "quanto gastamos", "quanto foi pago", "maiores custos/despesas do mês", "custos por departamento". NÃO use para "Custos Menin × Cliente" / custos de VENDA de um produto (comissão, ITBI, cartório, CCA, documentação repassada ao cliente) — isso é da Ficha Comercial (get_condition_sheet). Regra prática: pergunta sobre DESPESA PAGA/orçamento → aqui; pergunta sobre o que compõe a condição comercial de um empreendimento → ficha. O usuário só enxerga os departamentos que a alçada dele permite (regra aplicada automaticamente). Período padrão: mês atual.',
     parameters: {
         type: 'object',
         properties: {
             data_inicio: { type: 'string', description: 'Início do período (YYYY-MM-DD ou YYYY-MM). Padrão: início do mês atual.' },
             data_fim: { type: 'string', description: 'Fim do período (YYYY-MM-DD ou YYYY-MM). Padrão: fim do mês atual.' },
             empreendimento: { type: 'string', description: 'Nome (ou parte do nome) do empreendimento/centro de custo para focar a consulta.' },
-            agrupar: { type: 'string', enum: ['empreendimento', 'departamento', 'categoria'], description: 'Gera gráfico com a quebra pedida. Sem agrupar + com empreendimento → tabela com as parcelas.' },
+            agrupar: { type: 'string', enum: ['empreendimento', 'departamento'], description: 'Gera gráfico com a quebra pedida. Sem agrupar + com empreendimento → tabela com as parcelas.' },
         },
     },
     requiredPermissions: ['/financeiro/custos'],
@@ -81,13 +81,12 @@ registerTool({
             };
         }
 
-        const agrupar = ['empreendimento', 'departamento', 'categoria'].includes(args?.agrupar) ? args.agrupar : null;
+        const agrupar = ['empreendimento', 'departamento'].includes(args?.agrupar) ? args.agrupar : null;
 
         // Quebra pedida (ou padrão por empreendimento quando não há filtro focado)
         const keyOf = {
             empreendimento: (e) => e.costCenterName || `CC ${e.costCenterId}`,
             departamento: (e) => e.departmentName || 'Sem departamento',
-            categoria: (e) => e.departmentCategoryName || 'Sem categoria',
         }[agrupar || 'empreendimento'];
 
         const byKey = new Map();
@@ -115,7 +114,6 @@ registerTool({
                 .map(e => ({
                     fornecedor: e.bill?.creditor_json?.tradeName || e.bill?.creditor_json?.name || e.bill?.document_number || `Título ${e.billId}`,
                     departamento: e.departmentName || '-',
-                    categoria: e.departmentCategoryName || '-',
                     pagamento: fmtDate(e.paidAt || e.dueDate) || '-',
                     valor: fmtMoney(e.amount),
                 }));
@@ -125,7 +123,6 @@ registerTool({
             out.columns = [
                 { key: 'fornecedor', label: 'Fornecedor/Título' },
                 { key: 'departamento', label: 'Departamento' },
-                { key: 'categoria', label: 'Categoria' },
                 { key: 'pagamento', label: 'Pagamento' },
                 { key: 'valor', label: 'Valor', type: 'currency' },
             ];

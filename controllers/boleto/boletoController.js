@@ -10,112 +10,14 @@ import axios from 'axios';
 import WhatsAppService from '../../services/whatsapp/WhatsAppService.js';
 import WhatsAppTemplateService from '../../services/whatsapp/WhatsAppTemplateService.js';
 import apiCv from '../../lib/apiCv.js';
-import { getReservaWorkflow } from '../cv/reservas.js';
-import { getRepasseWorkflow } from '../../services/cv/repasseWorkflowService.js';
-
-// ── Etapa CV (reserva + repasse) na listagem ──────────────────────────────────
-// A listagem do histórico mostra a etapa ATUAL da reserva e do repasse no CV,
-// lidas da tabela local `reservas` (sincronizada de hora em hora) — nenhuma
-// chamada à API do CV por linha. As cores (cor_bg/cor_nome) vêm dos workflows
-// do CV, que já têm cache de 1h nos respectivos serviços; se a busca de cores
-// falhar, a listagem segue sem cor (best-effort).
-
-function csvInts(v) {
-    return String(v || '')
-        .split(',')
-        .map(s => Number(s.trim()))
-        .filter(n => Number.isFinite(n) && n > 0);
-}
-
-async function getCvWorkflowColorMaps() {
-    const maps = { reserva: new Map(), repasse: new Map() };
-    try {
-        const wf = await getReservaWorkflow();
-        for (const s of wf?.situacoes || []) {
-            maps.reserva.set(Number(s.idsituacao), { cor_bg: s.cor_bg || null, cor_nome: s.cor_nome || null });
-        }
-    } catch (err) {
-        console.warn('[BOLETO] Workflow de reservas indisponível (segue sem cor):', err.message);
-    }
-    try {
-        const wf = await getRepasseWorkflow();
-        for (const s of wf?.situacoes || []) {
-            maps.repasse.set(Number(s.idsituacao), { cor_bg: s.cor_bg || null, cor_nome: s.cor_nome || null });
-        }
-    } catch (err) {
-        console.warn('[BOLETO] Workflow de repasses indisponível (segue sem cor):', err.message);
-    }
-    return maps;
-}
-
-async function fetchCvEtapaByReserva(idreservas) {
-    const out = new Map();
-    const ids = [...new Set(idreservas.map(Number).filter(Number.isFinite))];
-    if (!ids.length) return out;
-    const rows = await db.sequelize.query(`
-        SELECT r.idreserva,
-               (r.situacao->>'idsituacao')::int AS cv_idsituacao,
-               r.situacao->>'situacao'          AS cv_situacao,
-               r.idsituacao_repasse             AS cv_idsituacao_repasse,
-               r.status_repasse                 AS cv_situacao_repasse,
-               rp.idrepasse                     AS cv_idrepasse
-          FROM reservas r
-          LEFT JOIN LATERAL (
-            SELECT MAX(idrepasse) AS idrepasse FROM repasses WHERE idreserva = r.idreserva
-          ) rp ON TRUE
-         WHERE r.idreserva IN (:ids)`,
-        { replacements: { ids }, type: db.Sequelize.QueryTypes.SELECT });
-    const maps = await getCvWorkflowColorMaps();
-    for (const r of rows) {
-        const corR = maps.reserva.get(Number(r.cv_idsituacao)) || {};
-        const corP = maps.repasse.get(Number(r.cv_idsituacao_repasse)) || {};
-        out.set(Number(r.idreserva), {
-            cv_idsituacao: r.cv_idsituacao,
-            cv_situacao: r.cv_situacao,
-            cv_situacao_cor_bg: corR.cor_bg || null,
-            cv_situacao_cor_nome: corR.cor_nome || null,
-            cv_idsituacao_repasse: r.cv_idsituacao_repasse,
-            cv_situacao_repasse: r.cv_situacao_repasse,
-            cv_repasse_cor_bg: corP.cor_bg || null,
-            cv_repasse_cor_nome: corP.cor_nome || null,
-            cv_idrepasse: r.cv_idrepasse,
-        });
-    }
-    return out;
-}
-
-/**
- * Resolve o filtro por etapa CV (cvSituacao/cvRepasse, CSV de ids) em uma
- * lista de idreservas que casam. Retorna null quando o filtro não foi usado.
- */
-async function resolveCvEtapaFilter({ cvSituacao, cvRepasse }) {
-    const sit = csvInts(cvSituacao);
-    const rep = csvInts(cvRepasse);
-    if (!sit.length && !rep.length) return null;
-    const conds = [];
-    const repl = {};
-    if (sit.length) { conds.push(`(situacao->>'idsituacao')::int IN (:sit)`); repl.sit = sit; }
-    if (rep.length) { conds.push(`idsituacao_repasse IN (:rep)`); repl.rep = rep; }
-    const rows = await db.sequelize.query(
-        `SELECT idreserva FROM reservas WHERE ${conds.join(' AND ')}`,
-        { replacements: repl, type: db.Sequelize.QueryTypes.SELECT },
-    );
-    return rows.map(r => Number(r.idreserva));
-}
-
-/**
- * Aplica o filtro de etapa CV no `where` do boleto_history: restringe
- * idreserva à interseção com as reservas que casam no CV. `[-1]` força
- * resultado vazio quando nada casa (Op.in com array vazio vira `IN (NULL)`).
- */
-function applyCvIdsToWhere(where, cvIds, Op) {
-    if (!cvIds) return;
-    if (typeof where.idreserva === 'number') {
-        where.idreserva = cvIds.includes(where.idreserva) ? where.idreserva : -1;
-    } else {
-        where.idreserva = { [Op.in]: cvIds.length ? cvIds : [-1] };
-    }
-}
+// Etapa CV (reserva + repasse) da listagem - helpers compartilhados com o
+// módulo Cancelamento de Reservas (lib/cvEtapaLookup.js).
+import {
+    fetchCvEtapaByReserva,
+    resolveCvEtapaFilter,
+    applyCvIdsToWhere,
+    fetchCvEtapaFacets,
+} from '../../lib/cvEtapaLookup.js';
 
 // ── Webhook ───────────────────────────────────────────────────────────────────
 
@@ -601,35 +503,14 @@ export async function getHistoryFacets(req, res) {
         // Etapas CV presentes entre as reservas do histórico — alimentam os
         // filtros "Etapa (reserva)" e "Etapa (repasse)", já com as cores do
         // workflow do CV pro front pintar no padrão de lá.
-        const [cvSituacoes] = await db.sequelize.query(`
-            SELECT (r.situacao->>'idsituacao')::int AS id,
-                   r.situacao->>'situacao'          AS nome,
-                   COUNT(DISTINCT h.idreserva)::int AS qty
-              FROM boleto_history h
-              JOIN reservas r ON r.idreserva = h.idreserva
-             WHERE r.situacao->>'idsituacao' IS NOT NULL
-          GROUP BY 1, 2
-          ORDER BY 2
-        `);
-        const [cvRepasses] = await db.sequelize.query(`
-            SELECT r.idsituacao_repasse             AS id,
-                   r.status_repasse                 AS nome,
-                   COUNT(DISTINCT h.idreserva)::int AS qty
-              FROM boleto_history h
-              JOIN reservas r ON r.idreserva = h.idreserva
-             WHERE r.idsituacao_repasse IS NOT NULL
-          GROUP BY 1, 2
-          ORDER BY 2
-        `);
-        const maps = await getCvWorkflowColorMaps();
-        const withColor = (list, map) => list.map(i => ({ ...i, ...(map.get(Number(i.id)) || {}) }));
+        const { cvSituacoes, cvRepasses } = await fetchCvEtapaFacets('boleto_history');
 
         return res.json({
             empreendimentos,
             statusCounts,
             paymentCounts,
-            cvSituacoes: withColor(cvSituacoes, maps.reserva),
-            cvRepasses: withColor(cvRepasses, maps.repasse),
+            cvSituacoes,
+            cvRepasses,
         });
     } catch (err) {
         return res.status(500).json({ error: err.message });

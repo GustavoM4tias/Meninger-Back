@@ -20,6 +20,9 @@ export default (sequelize, DataTypes) => {
       primaryKey: true,
       allowNull: false,
     },
+    // LEGADO (2026-07): o cadastro de Categorias foi descontinuado. As colunas
+    // ficam apenas como histórico do que já foi classificado — nada mais grava
+    // ou exibe estes campos.
     department_category_id: {
       type: DataTypes.INTEGER,
       allowNull: true,

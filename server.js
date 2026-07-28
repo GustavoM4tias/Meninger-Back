@@ -108,6 +108,7 @@ import { ensureProjectionLinkSchema } from './lib/ensureProjectionLinkSchema.js'
 import { ensureEmeAuditSchema } from './lib/ensureEmeAuditSchema.js';
 import { ensurePermissionRouteRenames } from './lib/ensurePermissionRouteRenames.js';
 import { ensureSignupApprovalColumns, seedDepartmentDefaultProfiles } from './lib/ensureSignupApprovalSchema.js';
+import { ensureLegacyDrops } from './lib/ensureLegacyDrops.js';
 import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
@@ -447,6 +448,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['InitialTypes', seedInitialTypes],
     ['SalesStandModels', seedSalesStandModels],
     ['Checklist', ensureChecklistSchema],
+    ['LegacyDrops', ensureLegacyDrops],
   ];
 
   for (const [name, fn] of patches) {
