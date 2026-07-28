@@ -79,7 +79,7 @@ const landDataController = new LandDataController();
 
 const router = express.Router();
 
-router.post('/admin/drop-legacy-sienge', authMiddleware, async (req, res) => {
+router.post('/admin/drop-legacy-sienge', authMiddleware, requireAdmin, async (req, res) => {
   try {
     const sql = ` 
       DROP VIEW  IF EXISTS sales_contracts_v; 
@@ -93,11 +93,13 @@ router.post('/admin/drop-legacy-sienge', authMiddleware, async (req, res) => {
   }
 });
 
-// enterprise-cities
-router.post('/enterprise-cities/sync/crm', authMiddleware, syncCRM);
-router.post('/enterprise-cities/sync/erp', authMiddleware, syncERP);
+// enterprise-cities — GET: telas de Títulos/Custos consomem a listagem para
+// qualquer autenticado; syncs e override alteram a fonte do filtro de cidade
+// do sistema inteiro, portanto são estritamente admin.
+router.post('/enterprise-cities/sync/crm', authMiddleware, requireAdmin, syncCRM);
+router.post('/enterprise-cities/sync/erp', authMiddleware, requireAdmin, syncERP);
 router.get('/enterprise-cities', authMiddleware, listCities);
-router.put('/enterprise-cities/:id/override', authMiddleware, setOverride);
+router.put('/enterprise-cities/:id/override', authMiddleware, requireAdmin, setOverride);
 router.get('/enterprise-cities/resolve', authMiddleware, resolveCityController);
 
 // Positions (cargos) – APENAS ADMIN
