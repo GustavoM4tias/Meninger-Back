@@ -427,6 +427,27 @@ async function buildHistory(sessionId) {
  * pedir "abra o relatório", o contexto da consulta de DADOS anterior continue
  * disponível para a próxima pergunta.
  */
+// Extrai os RÓTULOS dos itens de uma action (linhas de tabela, cards de
+// campanhas/pessoas/relatórios, etc.) para o bridge — genérico por chaves
+// de nome comuns. É o que permite continuar uma conversa plural ("a ficha
+// dos 3", "detalhe de cada um") com os itens EXATOS da consulta anterior,
+// qualquer que seja a tool.
+const ITEM_LABEL_KEYS = ['empreendimento', 'nome', 'name', 'titulo', 'title', 'campanha', 'cliente', 'username', 'label'];
+function extractItemLabels(action, cap = 30) {
+  const labels = new Set();
+  for (const v of Object.values(action || {})) {
+    if (!Array.isArray(v) || !v.length || typeof v[0] !== 'object') continue;
+    for (const item of v.slice(0, 60)) {
+      if (!item || typeof item !== 'object') continue;
+      for (const k of ITEM_LABEL_KEYS) {
+        if (typeof item[k] === 'string' && item[k].trim()) { labels.add(item[k].trim()); break; }
+      }
+      if (labels.size >= cap) return [...labels];
+    }
+  }
+  return [...labels];
+}
+
 async function getLastBridgeContext(sessionId) {
   const candidates = await db.ChatMessage.findAll({
     where: {
@@ -455,7 +476,10 @@ async function getLastBridgeContext(sessionId) {
       // pedidos como "quero a ficha dos 3" — sem ela o modelo já citou nomes errados.
       const hasConditionsCtx = ctx.source === 'conditions'
         && (Array.isArray(ctx.empreendimentos) && ctx.empreendimentos.length || ctx.ficha_id);
-      if (hasIds || hasFilters || hasConditionsCtx) { action = a; break; }
+      // Genérico: qualquer action com itens nomeáveis (linhas/cards) serve de
+      // ponte — o mesmo problema de "continuação plural" existe em todas as tools.
+      const hasItems = extractItemLabels(a).length > 0;
+      if (hasIds || hasFilters || hasConditionsCtx || hasItems) { action = a; break; }
     } catch { /* skip */ }
   }
   if (!action || !action.context) return '';
@@ -493,6 +517,10 @@ async function getLastBridgeContext(sessionId) {
   }
   if (c.ficha_id)               bits.push(`ficha_id=${c.ficha_id}`);
   if (c.foco)                   bits.push(`foco=${c.foco}`);
+  // Itens nomeáveis da última consulta (qualquer tool): referência exata para
+  // continuações plurais — "detalhe de cada um", "a ficha dos 3", "e o segundo?".
+  const itemLabels = extractItemLabels(action);
+  if (itemLabels.length) bits.push(`itens_anteriores=[${itemLabels.join(' | ')}]`);
   if (c.empresa_correspondente) bits.push(`cca=${c.empresa_correspondente}`);
   if (c.situacao_nome)          bits.push(`situacao=${c.situacao_nome}`);
   if (c.with_lead)              bits.push('with_lead=true');
@@ -1378,6 +1406,28 @@ function summarizeForFeedback(result) {
  * Remove arrays volumosos do resultado da tool antes de enviar ao Gemini.
  * Evita que o modelo reproduza o JSON bruto na resposta de texto.
  */
+// Compactação profunda de um valor para envio ao modelo: preserva a ESTRUTURA
+// (o modelo precisa ver os dados para não deduzir), mas limita itens de array,
+// profundidade e tamanho de string. Substitui o descarte cego de arrays que
+// deixava o modelo sem os dados que o card mostra — e ele preenchia a lacuna
+// inventando ("geralmente envolve descontos").
+function compactForModel(value, depth = 0, { maxArray = 20, maxStr = 300, maxDepth = 4 } = {}) {
+  if (value == null) return value;
+  if (typeof value === 'string') return value.length > maxStr ? `${value.slice(0, maxStr)}…` : value;
+  if (typeof value !== 'object') return value;
+  if (depth >= maxDepth) return Array.isArray(value) ? `[${value.length} itens]` : '[detalhe omitido]';
+  if (Array.isArray(value)) {
+    const out = value.slice(0, maxArray).map(v => compactForModel(v, depth + 1, { maxArray, maxStr, maxDepth }));
+    if (value.length > maxArray) out.push(`…(+${value.length - maxArray} itens omitidos — refaça a consulta com filtro se precisar deles)`);
+    return out;
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = compactForModel(v, depth + 1, { maxArray, maxStr, maxDepth });
+  }
+  return out;
+}
+
 function summarizeForGemini(result) {
   if (!result || typeof result !== 'object') return result;
   if (result.error) return { error: result.error };
@@ -1392,9 +1442,16 @@ function summarizeForGemini(result) {
       `Sua resposta = 1 frase curta de introdução. NADA além disso. ` +
       `PROIBIDO: listar linhas, escrever nomes/CPFs/valores/JSON, parafrasear, inventar números ou nomes não presentes neste result.json. ` +
       `Se faltar dado: "veja na tabela acima" e pare.`;
-    // Para tabelas pequenas, inclui os dados para o modelo citar valores corretos
-    if (summary.total <= 5 && result.rows?.length) {
-      summary.rows = result.rows;
+    // Inclui as linhas (compactadas) para o modelo citar valores corretos.
+    // Antes só ia com ≤5 linhas: acima disso o modelo não via NADA das linhas
+    // e deduzia quando o usuário perguntava um detalhe ("qual valor de cada").
+    if (result.rows?.length) {
+      const cap = 30;
+      summary.rows = result.rows.slice(0, cap).map(r => compactForModel(r, 1, { maxStr: 200 }));
+      if (result.rows.length > cap) {
+        summary.rows_omitidas = `${result.rows.length - cap} linhas omitidas por tamanho (todas visíveis na tabela da UI). ` +
+          `Se a resposta depende delas, refaça a consulta com filtro mais específico — NÃO deduza.`;
+      }
     }
   } else if (type === 'chart') {
     const dataArr = Array.isArray(result.data) ? result.data : [];
@@ -1448,9 +1505,26 @@ function summarizeForGemini(result) {
     }));
     summary.message = result.message;
   } else {
-    // detail ou outros — passa campos escalares, exclui arrays grandes
+    // detail, condition_sheet, condition_compare e outros — compacta TUDO em
+    // vez de descartar arrays (o descarte deixava o modelo sem os dados que o
+    // card mostra, e ele preenchia a lacuna deduzindo).
     for (const [k, v] of Object.entries(result)) {
-      if (!Array.isArray(v)) summary[k] = v;
+      summary[k] = compactForModel(v);
+    }
+    // Guarda de tamanho: se mesmo compactado ficou grande demais, reduz mais —
+    // e AVISA o modelo do corte (ele precisa saber que está sem o dado, senão
+    // não distingue "não existe" de "foi omitido").
+    if (JSON.stringify(summary).length > 15000) {
+      for (const [k, v] of Object.entries(result)) {
+        summary[k] = compactForModel(v, 0, { maxArray: 6, maxStr: 120, maxDepth: 3 });
+      }
+      if (JSON.stringify(summary).length > 15000) {
+        for (const [k, v] of Object.entries(result)) {
+          summary[k] = Array.isArray(v) ? `[${v.length} itens omitidos por tamanho]` : compactForModel(v, 0, { maxStr: 120 });
+        }
+      }
+      summary.aviso_dados = 'Parte dos dados foi omitida por tamanho. Se a resposta depende de algo ausente aqui, ' +
+        'diga que precisa re-consultar com filtro mais específico — NUNCA deduza ou complete de memória.';
     }
   }
 
