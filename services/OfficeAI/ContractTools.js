@@ -1,6 +1,6 @@
 // services/OfficeAI/ContractTools.js
 //
-// Tool da Eme sobre o VALIDADOR DE CONTRATOS (tela /tools/validator):
+// Tool da Eme sobre o VALIDADOR DE CONTRATOS (tela /validator):
 //   - query_repasses_contratos: estatísticas dos repasses do CV — quantos contratos
 //     estão em cada etapa, quantos aguardam a análise automática ("Analise Contratos"),
 //     quebra por empreendimento.
@@ -16,7 +16,7 @@ const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toL
 
 registerTool({
     name: 'query_repasses_contratos',
-    description: 'Consulta os REPASSES/CONTRATOS do CV usados pelo Validador de Contratos (tela /tools/validator): quantos contratos/repasses existem em cada etapa (ex: "Analise Contratos" = fila do validador automático), quebra por empreendimento e filtro por etapa. Use quando o usuário perguntar "quantos contratos temos", "quantos aguardam análise/validação", "repasses do empreendimento X", "situação dos contratos". A análise automática valida CONFISSÃO DE DÍVIDA + CONTRATO CEF e aprova/reprova direto no CV. NUNCA invente números — só afirme o que vier desta ferramenta.',
+    description: 'Consulta os REPASSES/CONTRATOS do CV usados pelo Validador de Contratos (tela /validator): quantos contratos/repasses existem em cada etapa (ex: "Analise Contratos" = fila do validador automático), quebra por empreendimento e filtro por etapa. Use quando o usuário perguntar "quantos contratos temos", "quantos aguardam análise/validação", "repasses do empreendimento X", "situação dos contratos". A análise automática valida CONFISSÃO DE DÍVIDA + CONTRATO CEF e aprova/reprova direto no CV. NUNCA invente números — só afirme o que vier desta ferramenta.',
     parameters: {
         type: 'object',
         properties: {
@@ -25,7 +25,7 @@ registerTool({
             agrupar: { type: 'string', enum: ['etapa', 'empreendimento'], description: 'Quebra do gráfico. Padrão: etapa.' },
         },
     },
-    requiredPermissions: ['/tools/validator'],
+    requiredPermissions: ['/validator'],
     contexts: ['OFFICE'],
     async handler(user, args) {
         let repasses;
@@ -35,7 +35,7 @@ registerTool({
             if (!Array.isArray(repasses)) throw new Error('Resposta inválida da API de repasses do CV');
         } catch (err) {
             return {
-                result: { message: `Não consegui consultar os repasses no CV agora (${String(err?.message || err).slice(0, 150)}). Diga que a consulta falhou e sugira tentar de novo em instantes ou conferir a tela /tools/validator — NÃO invente números.` },
+                result: { message: `Não consegui consultar os repasses no CV agora (${String(err?.message || err).slice(0, 150)}). Diga que a consulta falhou e sugira tentar de novo em instantes ou conferir a tela /validator — NÃO invente números.` },
                 resultCount: 0,
             };
         }
@@ -49,7 +49,7 @@ registerTool({
         const total = rows.length;
         if (!total) {
             return {
-                result: { total: 0, message: 'Nenhum repasse encontrado nesse filtro no CV. Diga isso com clareza — não invente. Tela do validador: /tools/validator.' },
+                result: { total: 0, message: 'Nenhum repasse encontrado nesse filtro no CV. Diga isso com clareza — não invente. Tela do validador: /validator.' },
                 resultCount: 0,
             };
         }
@@ -77,7 +77,7 @@ registerTool({
                 subtitle: `${total} repasse(s) no filtro`,
                 labels: sorted.slice(0, 15).map(([k]) => k),
                 data: sorted.slice(0, 15).map(([, v]) => v),
-                message: `${total} repasse(s)/contrato(s) no filtro. Quebra por ${agrupar} no campo "quebra" (o gráfico JÁ está na UI). No total geral, ${filaValidador} está(ão) na etapa "Analise Contratos" — a fila do validador automático. Responda CURTO usando SOMENTE estes dados. Para rodar a análise automática ou ver um contrato: tela /tools/validator.`,
+                message: `${total} repasse(s)/contrato(s) no filtro. Quebra por ${agrupar} no campo "quebra" (o gráfico JÁ está na UI). No total geral, ${filaValidador} está(ão) na etapa "Analise Contratos" — a fila do validador automático. Responda CURTO usando SOMENTE estes dados. Para rodar a análise automática ou ver um contrato: tela /validator.`,
             },
             resultCount: total,
             filtersApplied: { etapa: args?.etapa || undefined, empreendimento: args?.empreendimento || undefined },

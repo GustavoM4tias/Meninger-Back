@@ -470,7 +470,7 @@ export const NOTIFICATION_CATALOG = {
         description: 'Quando sua solicitação é aprovada, aprovada com ressalva ou reprovada.',
         emailType: 'generic.notification',
         whatsapp: {
-            template: 'marketing_approval_decided_v1',
+            template: 'approval_decided_v1',
             language: 'pt_BR',
             category: 'UTILITY',
             variables: ['protocol', 'resultLabel', 'note'],

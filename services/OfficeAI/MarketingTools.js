@@ -52,7 +52,7 @@ export const TOOL_DECLARATIONS = [
             'Ferramentas: /checklists (Checklists), /relatorios (Relatórios), /aprovacoes (Aprovações). ' +
             'Academy: /academy/panel (Painel do Academy), /academy/kb (Base de Conhecimento), /academy/tracks (Trilhas). ' +
             'Microsoft: /microsoft/teams (Central Microsoft: agenda Teams na aba padrão, transcrições de reuniões em ?tab=reunioes), /microsoft/sharepoint (SharePoint), /microsoft/planner (Planner). ' +
-            'Outros: /mural (Mural de Avisos), /notifications (Notificações), /settings/alerts (Alertas), /settings/organograma (Organograma), /settings/account (Minha Conta), /tools/validator (Validador de Contratos), /report (Reportar Problema).',
+            'Outros: /mural (Mural de Avisos), /notifications (Notificações), /settings/alerts (Alertas), /settings/organograma (Organograma), /settings/account (Minha Conta), /validator (Validador de Contratos), /report (Reportar Problema).',
         },
         filters: { type: 'OBJECT', description: 'Filtros como query params. Ex: { data_inicio: "2025-01-01", empreendimento: "Nome" }' },
         message: { type: 'STRING', description: 'Mensagem curta para exibir enquanto navega.' },
