@@ -193,7 +193,7 @@ async function notifyRequested({ request, actorId }) {
             title: `Aprovação pendente ${request.protocol}: ${request.type_label}`,
             body: `${amount}${request.cost_center_name ? ` · ${request.cost_center_name}` : ''}`,
             data: { requestId: request.id, protocol: request.protocol },
-            link: `/marketing/aprovacoes/${request.id}`,
+            link: `/aprovacoes/${request.id}`,
             importance: 7,
         });
     } catch (err) { console.warn('[marketingApproval.notifyRequested]', err?.message || err); }
@@ -213,7 +213,7 @@ async function notifyDecided({ request, note }) {
                 resultLabel,
                 note: note || '-',
             },
-            link: `/marketing/aprovacoes/${request.id}`,
+            link: `/aprovacoes/${request.id}`,
             importance: 7,
         });
     } catch (err) { console.warn('[marketingApproval.notifyDecided]', err?.message || err); }

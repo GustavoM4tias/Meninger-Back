@@ -35,6 +35,7 @@ import {
     getDetail as inadimplenciaDetail,
     exportCsv as inadimplenciaExport,
 } from '../controllers/sienge/inadimplenciaController.js';
+import { listCefEnterprises, searchCef } from '../controllers/sienge/cefConsultaController.js';
 
 
 const router = express.Router();
@@ -60,6 +61,11 @@ router.get('/contracts/sync/status', bulk.syncStatus.bind(bulk));
 
 // Títulos (contas a pagar) — leitura AO VIVO do backup do Sienge
 router.get('/bills', authenticate, ctrl.list);
+
+// ── Consulta de nº CEF (Contas a Receber) — contratos sincronizados do Sienge ─
+// Alçada por cidade aplicada dentro do controller (admin vê tudo).
+router.get('/cef/enterprises', authenticate, listCefEnterprises);
+router.get('/cef/search', authenticate, searchCef);
 
 // ── Inadimplência (admin-only) — lê do backup diário do Sienge (sie214801) ────
 // Gate de admin é aplicado dentro do controller (req.user.role).

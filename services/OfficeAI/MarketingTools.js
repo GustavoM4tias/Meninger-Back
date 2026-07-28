@@ -46,10 +46,10 @@ export const TOOL_DECLARATIONS = [
         route: {
           type: 'STRING',
           description: 'Rota Vue do sistema. Rotas disponíveis — ' +
-            'Marketing: /marketing/leads (Leads), /marketing/events (Eventos), /marketing/aprovacoes (Aprovações de Marketing), /marketing/captacao (Captação de Leads), /marketing/formularios (Formulários), /marketing/vinculos (Vínculos CV), /marketing/campanhas (Campanhas Meta). ' +
+            'Marketing: /marketing/leads (Leads), /marketing/events (Eventos), /marketing/viabilidade (Viabilidade), /marketing/captacao (Captação de Leads), /marketing/formularios (Formulários), /marketing/vinculos (Vínculos CV), /marketing/campanhas (Campanhas Meta). ' +
             'Comercial: /comercial/precadastros (Pré-Cadastros), /comercial/reservas-report (Reservas), /comercial/faturamento (Faturamento), /comercial/distratos (Distratos), /comercial/sales-projection (Vendas x Projeção), /comercial/projections (Projeção), /comercial/buildings (Empreendimentos), /comercial/conditions (Fichas Comerciais), /comercial/imobiliarias (Imobiliárias), /comercial/mcmv (MCMV). ' +
-            'Financeiro: /financeiro/titulos (Títulos), /financeiro/custos (Custos), /financeiro/gastos-departamento (Gastos por Departamento), /financeiro/inadimplencia (Inadimplência), /financeiro/paymentflow (Fluxo de Pagamento), /financeiro/boleto-caixa (Boleto Caixa). ' +
-            'Operação: /checklists (Checklists). ' +
+            'Financeiro: /financeiro/titulos (Títulos), /financeiro/custos (Custos), /financeiro/consulta-cef (Consulta de nº CEF), /financeiro/paymentflow (Fluxo de Pagamento), /financeiro/boleto-caixa (Boleto Caixa). ' +
+            'Ferramentas: /checklists (Checklists), /relatorios (Relatórios), /aprovacoes (Aprovações). ' +
             'Academy: /academy/panel (Painel do Academy), /academy/kb (Base de Conhecimento), /academy/tracks (Trilhas). ' +
             'Microsoft: /microsoft/teams (Central Microsoft: agenda Teams na aba padrão, transcrições de reuniões em ?tab=reunioes), /microsoft/sharepoint (SharePoint), /microsoft/planner (Planner). ' +
             'Outros: /mural (Mural de Avisos), /notifications (Notificações), /settings/alerts (Alertas), /settings/organograma (Organograma), /settings/account (Minha Conta), /tools/validator (Validador de Contratos), /report (Reportar Problema).',
