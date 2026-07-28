@@ -190,6 +190,10 @@ export const requestSignup = async (req, res) => {
 };
 
 // ── POST /api/auth/users/:id/reject (admin) ──────────────────────────────────
+// Reprovar EXCLUI o cadastro: a pessoa é avisada por e-mail e pode solicitar
+// acesso novamente do zero (um novo login Microsoft cria outro cadastro).
+// Manter o registro bloqueado no banco fazia o retry cair em "usuário
+// inválido/inativo" sem explicação.
 export const rejectUser = async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -201,16 +205,43 @@ export const rejectUser = async (req, res) => {
     if (user.approval_status === 'approved') {
       return responseHandler.error(res, 'Este usuário já foi ativado. Use "Acesso ao sistema" para bloquear.');
     }
-    if (user.approval_status === 'rejected') {
-      return responseHandler.error(res, 'Este cadastro já foi reprovado.');
-    }
 
-    await user.update({ approval_status: 'rejected', status: false });
+    const { username, email } = user;
+
+    // Remove o cadastro e qualquer resto que aponte para ele (tokens de sessão
+    // etc.), varrendo as FKs dinamicamente para não quebrar com tabela nova.
+    const t = await db.sequelize.transaction();
+    try {
+      const fks = await db.sequelize.query(`
+        SELECT tc.table_name, kcu.column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+        JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
+        WHERE tc.constraint_type = 'FOREIGN KEY' AND ccu.table_name = 'users' AND ccu.column_name = 'id'
+      `, { type: db.Sequelize.QueryTypes.SELECT, transaction: t });
+
+      for (const fk of fks) {
+        if (fk.table_name === 'users') {
+          await db.sequelize.query(
+            `UPDATE users SET ${fk.column_name} = NULL WHERE ${fk.column_name} = :id`,
+            { replacements: { id }, transaction: t });
+        } else {
+          await db.sequelize.query(
+            `DELETE FROM ${fk.table_name} WHERE ${fk.column_name} = :id`,
+            { replacements: { id }, transaction: t });
+        }
+      }
+      await db.sequelize.query('DELETE FROM users WHERE id = :id', { replacements: { id }, transaction: t });
+      await t.commit();
+    } catch (err) {
+      await t.rollback();
+      throw err;
+    }
 
     let emailSent = true;
     try {
-      await sendEmail('user.rejected', user.email, {
-        name: user.username,
+      await sendEmail('user.rejected', email, {
+        name: username,
         reason: reason || null,
       });
     } catch (err) {
@@ -220,8 +251,8 @@ export const rejectUser = async (req, res) => {
 
     return responseHandler.success(res, {
       message: emailSent
-        ? `Cadastro reprovado. ${user.email} foi avisado por e-mail.`
-        : 'Cadastro reprovado, mas o e-mail de aviso FALHOU.',
+        ? `Cadastro reprovado e removido. ${email} foi avisado por e-mail.`
+        : 'Cadastro reprovado e removido, mas o e-mail de aviso FALHOU.',
       emailSent,
     });
   } catch (error) {
@@ -242,7 +273,6 @@ export const activateUser = async (req, res) => {
       return responseHandler.error(res, 'Este usuário já foi ativado.');
     }
     // A ativação só vale DEPOIS do formulário de primeiro acesso enviado.
-    // ('pending' ativa; 'rejected' também pode — reconsideração do admin.)
     if (user.approval_status === 'incomplete') {
       return responseHandler.error(res, 'Este usuário ainda não concluiu o formulário de primeiro acesso.');
     }

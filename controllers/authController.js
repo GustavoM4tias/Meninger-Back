@@ -128,9 +128,6 @@ export const loginUser = async (req, res) => {
     if (user.approval_status === 'pending') {
       return responseHandler.error(res, 'Cadastro aguardando aprovação do gestor responsável. Você receberá um e-mail quando for liberado.', 403);
     }
-    if (user.approval_status === 'rejected') {
-      return responseHandler.error(res, 'Seu cadastro não foi aprovado. Fale com seu gestor.', 403);
-    }
 
     if (!user.status) {
       return responseHandler.error(res, 'Conta inativa. Entre em contato com o administrador.', 403);
