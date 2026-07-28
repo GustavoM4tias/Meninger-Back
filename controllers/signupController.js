@@ -2,15 +2,17 @@
 //
 // Fluxo de cadastro de primeiro acesso (login Microsoft auto-provisionado):
 //
-//   1. GET  /api/auth/signup-options   — opções do formulário (departamentos,
-//      cargos ativos internos e cidades ativas). Qualquer autenticado, inclusive
-//      pendente de aprovação (é justamente quem precisa).
-//   2. POST /api/auth/complete-signup  — usuário PENDENTE conclui o formulário
-//      (nome, nascimento, telefone, departamento, cargo, cidade). Notifica os
-//      administradores (sino + e-mail) com deep-link para o painel de Usuários.
-//   3. POST /api/auth/users/:id/activate — admin ativa o usuário: aplica as
-//      alçadas padrão do departamento (PermissionProfile vinculado), gera senha
-//      provisória e envia e-mail de liberação ao usuário.
+//   1. GET  /api/auth/signup-options   — opções do formulário (departamentos e
+//      cidades ativas). Qualquer autenticado, inclusive não-aprovado (é
+//      justamente quem precisa). O usuário NÃO escolhe o próprio cargo.
+//   2. POST /api/auth/complete-signup  — usuário 'incomplete' conclui o
+//      formulário (nome, nascimento, telefone, departamento, cidade) e vira
+//      'pending' (fila de aprovação). Notifica os administradores (sino +
+//      e-mail) com deep-link para o painel de Usuários.
+//   3. POST /api/auth/users/:id/activate — admin ativa um usuário 'pending'
+//      (o cargo é definido pelo admin no modal antes de ativar): aplica as
+//      alçadas padrão do departamento do cargo (PermissionProfile vinculado),
+//      gera senha provisória e envia e-mail de liberação ao usuário.
 
 import db from '../models/sequelize/index.js';
 import responseHandler from '../utils/responseHandler.js';
@@ -23,15 +25,47 @@ const { User, Position, UserCity, Department, PermissionProfile, UserPermission 
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
+// Sino + e-mail para todos os admins com deep-link que abre o modal do usuário
+// direto no painel (bypassPrefs: aviso operacional crítico).
+async function notifyAdminsSignup(user, departmentName, cityName) {
+  const admins = await User.findAll({
+    where: { role: 'admin', status: true },
+    attributes: ['id'],
+  });
+  if (!admins.length) return;
+
+  const body = `${user.username} concluiu o cadastro de primeiro acesso e aguarda liberação. ` +
+    `Departamento: ${departmentName || 'não informado'}, cidade: ${cityName || 'não informada'}.`;
+  await NotificationService.notify({
+    type: NotificationType.USER_SIGNUP_PENDING,
+    recipients: { users: admins.map(a => a.id) },
+    title: 'Novo cadastro aguardando aprovação',
+    body,
+    link: `/settings/users?user=${user.id}`,
+    importance: 8,
+    bypassPrefs: true,
+    data: { userId: user.id },
+    emailData: {
+      title: 'Novo cadastro aguardando aprovação',
+      preview: `${user.username} aguarda liberação de acesso`,
+      body: `${body}\n\nAcesse o painel de Usuários do Menin Office para revisar e ativar.`,
+    },
+  });
+}
+
+async function uniqueUsername(base) {
+  let name = base;
+  let counter = 1;
+  while (await User.findOne({ where: { username: name } })) {
+    name = `${base} ${counter++}`;
+  }
+  return name;
+}
+
 // ── GET /api/auth/signup-options ─────────────────────────────────────────────
 export const getSignupOptions = async (req, res) => {
   try {
-    const [positions, cities, departments] = await Promise.all([
-      Position.findAll({
-        where: { active: true, is_internal: true },
-        attributes: ['id', 'name', 'description', 'department_id'],
-        order: [['name', 'ASC']],
-      }),
+    const [cities, departments] = await Promise.all([
       UserCity.findAll({
         where: { active: true },
         attributes: ['id', 'name', 'uf'],
@@ -44,7 +78,7 @@ export const getSignupOptions = async (req, res) => {
       }),
     ]);
 
-    return responseHandler.success(res, { positions, cities, departments });
+    return responseHandler.success(res, { cities, departments });
   } catch (error) {
     console.error('[Signup] getSignupOptions erro:', error);
     return responseHandler.error(res, 'Erro ao carregar opções de cadastro');
@@ -53,65 +87,42 @@ export const getSignupOptions = async (req, res) => {
 
 // ── POST /api/auth/complete-signup ───────────────────────────────────────────
 export const completeSignup = async (req, res) => {
-  const { username, birth_date, phone, department_id, position, city } = req.body || {};
+  const { username, birth_date, phone, department_id, city } = req.body || {};
 
-  if (!username?.trim() || !birth_date || !department_id || !position || !city) {
-    return responseHandler.error(res, 'Preencha nome, nascimento, departamento, cargo e cidade.');
+  if (!username?.trim() || !birth_date || !department_id || !city) {
+    return responseHandler.error(res, 'Preencha nome, nascimento, departamento e cidade.');
   }
 
   try {
     const user = await User.findByPk(req.user.id);
     if (!user) return responseHandler.error(res, 'Usuário não encontrado');
-    if (user.approval_status !== 'pending') {
+    if (user.approval_status === 'approved') {
       return responseHandler.error(res, 'Seu cadastro já foi concluído.');
     }
+    // 'incomplete' envia pela primeira vez; 'pending' pode reenviar (corrige
+    // dados enquanto aguarda) sem notificar os admins de novo.
+    const firstSubmit = user.approval_status === 'incomplete';
 
-    const [positionRecord, cityRecord] = await Promise.all([
-      Position.findOne({ where: { name: position, active: true, is_internal: true } }),
+    const [department, cityRecord] = await Promise.all([
+      Department.findOne({ where: { id: Number(department_id), active: true }, attributes: ['id', 'name'] }),
       UserCity.findOne({ where: { name: city, active: true } }),
     ]);
 
-    if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
-    if (Number(positionRecord.department_id) !== Number(department_id)) {
-      return responseHandler.error(res, 'O cargo selecionado não pertence ao departamento escolhido.');
-    }
+    if (!department) return responseHandler.error(res, 'Departamento inválido ou inativo');
     if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
 
     await user.update({
       username: username.trim(),
       birth_date,
       phone: phone || null,
-      position: positionRecord.name,
       city: cityRecord.name,
+      signup_department_id: department.id,
+      approval_status: 'pending',
     });
 
-    const department = await Department.findByPk(positionRecord.department_id, { attributes: ['id', 'name'] });
-
-    // Avisa os administradores: sino + e-mail com deep-link que abre o modal
-    // do usuário direto no painel (bypassPrefs: aviso operacional crítico).
-    const admins = await User.findAll({
-      where: { role: 'admin', status: true },
-      attributes: ['id'],
-    });
-
-    if (admins.length) {
-      const body = `${user.username} concluiu o cadastro de primeiro acesso e aguarda liberação. ` +
-        `Cargo: ${positionRecord.name} (${department?.name || 'sem departamento'}), cidade: ${cityRecord.name}.`;
-      NotificationService.notify({
-        type: NotificationType.USER_SIGNUP_PENDING,
-        recipients: { users: admins.map(a => a.id) },
-        title: 'Novo cadastro aguardando aprovação',
-        body,
-        link: `/settings/users?user=${user.id}`,
-        importance: 8,
-        bypassPrefs: true,
-        data: { userId: user.id },
-        emailData: {
-          title: 'Novo cadastro aguardando aprovação',
-          preview: `${user.username} aguarda liberação de acesso`,
-          body: `${body}\n\nAcesse o painel de Usuários do Menin Office para revisar e ativar.`,
-        },
-      }).catch(err => console.error('[Signup] notificação de pendência falhou:', err?.message || err));
+    if (firstSubmit) {
+      notifyAdminsSignup(user, department.name, cityRecord.name)
+        .catch(err => console.error('[Signup] notificação de pendência falhou:', err?.message || err));
     }
 
     return responseHandler.success(res, {
@@ -123,6 +134,102 @@ export const completeSignup = async (req, res) => {
   }
 };
 
+// ── POST /api/auth/signup-request (público, rate-limited) ────────────────────
+// "Solicite acesso" da tela de login: cria a conta SEM Microsoft, já direto na
+// fila de aprovação ('pending'). A senha chega por e-mail na ativação.
+export const requestSignup = async (req, res) => {
+  const { username, email, birth_date, phone, department_id, city } = req.body || {};
+
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!username?.trim() || !cleanEmail || !birth_date || !department_id || !city) {
+    return responseHandler.error(res, 'Preencha nome, e-mail, nascimento, departamento e cidade.');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return responseHandler.error(res, 'E-mail inválido.');
+  }
+
+  try {
+    const existing = await User.findOne({ where: { email: cleanEmail } });
+    if (existing) {
+      return responseHandler.error(res, 'Este e-mail já possui cadastro. Use "Esqueceu a senha?" ou fale com seu gestor.');
+    }
+
+    const [department, cityRecord] = await Promise.all([
+      Department.findOne({ where: { id: Number(department_id), active: true }, attributes: ['id', 'name'] }),
+      UserCity.findOne({ where: { name: city, active: true } }),
+    ]);
+    if (!department) return responseHandler.error(res, 'Departamento inválido ou inativo');
+    if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
+
+    const user = await User.create({
+      username: await uniqueUsername(username.trim()),
+      // Senha aleatória inutilizável: a provisória real é gerada na ativação.
+      password: generateSecurePassword() + generateSecurePassword(),
+      email: cleanEmail,
+      position: '',
+      city: cityRecord.name,
+      birth_date,
+      phone: phone || null,
+      role: 'user',
+      status: false,
+      approval_status: 'pending',
+      signup_department_id: department.id,
+      auth_provider: 'INTERNAL',
+    });
+
+    notifyAdminsSignup(user, department.name, cityRecord.name)
+      .catch(err => console.error('[Signup] notificação de pendência falhou:', err?.message || err));
+
+    return responseHandler.success(res, {
+      message: 'Cadastro enviado. Aguardando aprovação do gestor responsável; você receberá um e-mail quando for liberado.',
+    });
+  } catch (error) {
+    console.error('[Signup] requestSignup erro:', error);
+    return responseHandler.error(res, 'Erro ao enviar o cadastro');
+  }
+};
+
+// ── POST /api/auth/users/:id/reject (admin) ──────────────────────────────────
+export const rejectUser = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return responseHandler.error(res, 'ID inválido');
+    const reason = String(req.body?.reason || '').trim();
+
+    const user = await User.findByPk(id);
+    if (!user) return responseHandler.error(res, 'Usuário não encontrado');
+    if (user.approval_status === 'approved') {
+      return responseHandler.error(res, 'Este usuário já foi ativado. Use "Acesso ao sistema" para bloquear.');
+    }
+    if (user.approval_status === 'rejected') {
+      return responseHandler.error(res, 'Este cadastro já foi reprovado.');
+    }
+
+    await user.update({ approval_status: 'rejected', status: false });
+
+    let emailSent = true;
+    try {
+      await sendEmail('user.rejected', user.email, {
+        name: user.username,
+        reason: reason || null,
+      });
+    } catch (err) {
+      emailSent = false;
+      console.error('[Signup] e-mail de reprovação falhou:', err?.message || err);
+    }
+
+    return responseHandler.success(res, {
+      message: emailSent
+        ? `Cadastro reprovado. ${user.email} foi avisado por e-mail.`
+        : 'Cadastro reprovado, mas o e-mail de aviso FALHOU.',
+      emailSent,
+    });
+  } catch (error) {
+    console.error('[Signup] rejectUser erro:', error);
+    return responseHandler.error(res, 'Erro ao reprovar cadastro');
+  }
+};
+
 // ── POST /api/auth/users/:id/activate (admin) ────────────────────────────────
 export const activateUser = async (req, res) => {
   try {
@@ -131,8 +238,13 @@ export const activateUser = async (req, res) => {
 
     const user = await User.findByPk(id);
     if (!user) return responseHandler.error(res, 'Usuário não encontrado');
-    if (user.approval_status !== 'pending') {
+    if (user.approval_status === 'approved') {
       return responseHandler.error(res, 'Este usuário já foi ativado.');
+    }
+    // A ativação só vale DEPOIS do formulário de primeiro acesso enviado.
+    // ('pending' ativa; 'rejected' também pode — reconsideração do admin.)
+    if (user.approval_status === 'incomplete') {
+      return responseHandler.error(res, 'Este usuário ainda não concluiu o formulário de primeiro acesso.');
     }
 
     // Alçadas padrão do departamento (perfil vinculado via department_id).

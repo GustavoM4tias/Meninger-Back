@@ -93,6 +93,11 @@ const META = {
         preview: (d) => `Olá ${d.name || ''}! Acesse com sua conta Microsoft.`,
         file: 'invite.microsoft.user.hbs',
     },
+    'user.rejected': {
+        subject: () => 'Sobre sua solicitação de acesso ao Menin Office',
+        preview: () => 'Não foi possível aprovar seu cadastro',
+        file: 'user.rejected.hbs',
+    },
     'user.activated': {
         subject: () => 'Seu acesso ao Menin Office foi liberado',
         preview: (d) => `Olá ${d.name || ''}! Sua conta está pronta.`,

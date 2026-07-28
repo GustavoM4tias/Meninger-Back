@@ -98,9 +98,9 @@ export default class MicrosoftAuthController {
             loginCodeStore.delete(code); // uso único
 
             const user = await db.User.findByPk(entry.userId);
-            // Pendente de aprovação pode trocar o code: precisa do token para
-            // concluir o formulário de cadastro (authMiddleware restringe o resto).
-            const pending = user?.approval_status === 'pending';
+            // Primeiro acesso ainda não aprovado pode trocar o code: precisa do
+            // token para concluir o formulário (authMiddleware restringe o resto).
+            const pending = user?.approval_status === 'incomplete' || user?.approval_status === 'pending';
             if (!user || (user.status === false && !pending)) {
                 return res.status(401).json({ success: false, error: 'Usuário inválido/inativo.' });
             }
@@ -115,7 +115,8 @@ export default class MicrosoftAuthController {
                     refreshToken,
                     isNew: entry.isNew,
                     pending,
-                    profileComplete: Boolean(user.city && user.birth_date),
+                    // true = formulário JÁ enviado (fila de aprovação); false = ainda falta preencher
+                    profileComplete: user.approval_status === 'pending',
                 },
             });
         } catch (err) {
