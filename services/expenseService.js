@@ -3,13 +3,14 @@
 // Tela "Custos" — agora lê AO VIVO do backup do Sienge (payableLiveService), não
 // mais da tabela `expenses` populada pelo Auto-Sync. Cada "expense" é uma parcela
 // (ecpgparcela) atribuída ao centro de custo principal do título. Departamento vem
-// sempre do Sienge; categoria + observação são personalizações do Office,
-// guardadas em `expense_personalizations` (chave nutitulo+nuparcela) e mescladas
-// por cima dos dados ao vivo.
+// sempre do Sienge; a observação é personalização do Office, guardada em
+// `expense_personalizations` (chave nutitulo+nuparcela) e mesclada por cima dos
+// dados ao vivo. (Categoria por departamento foi descontinuada em 2026-07;
+// as colunas department_category_* seguem no banco só como histórico.)
 
 import db from '../models/sequelize/index.js';
 import { getHiddenDepartmentsForUser } from './permissions/departmentVisibilityService.js';
-import { listExpenseRows, listLinkRows } from './sienge/payableLiveService.js';
+import { listExpenseRows } from './sienge/payableLiveService.js';
 
 const { ExpensePersonalization, Sequelize, sequelize } = db;
 const { Op } = Sequelize;
@@ -159,8 +160,6 @@ export default class expenseService {
             installmentsNumber: e.installmentsNumber ?? null,
             departmentId: e.departmentId,
             departmentName: e.departmentName,
-            departmentCategoryId: pers?.department_category_id ?? null,
-            departmentCategoryName: pers?.department_category_name ?? null,
             status: e.status || 'open',
             paidAt: e.paidAt || null,
             costCenterId: e.costCenterId,
@@ -181,40 +180,12 @@ export default class expenseService {
     };
   }
 
-  /** Vínculos por título (tela Títulos): contagem/soma de parcelas + categoria representativa. */
-  async listLinksByBill({ billIds }) {
-    const links = await listLinkRows({ billIds });
-    // categoria representativa por título (qualquer parcela personalizada)
-    const ids = [...new Set((billIds || []).map(Number).filter(Number.isFinite))];
-    const catByBill = new Map();
-    if (ids.length) {
-      const pers = await ExpensePersonalization.findAll({
-        where: { nutitulo: { [Op.in]: ids }, department_category_id: { [Op.ne]: null } },
-      });
-      for (const p of pers) {
-        if (!catByBill.has(p.nutitulo)) {
-          catByBill.set(p.nutitulo, {
-            departmentCategoryId: p.department_category_id,
-            departmentCategoryName: p.department_category_name,
-          });
-        }
-      }
-    }
-    return links.map(l => ({
-      billId: l.billId,
-      count: l.count,
-      total: l.total,
-      departmentCategoryId: catByBill.get(l.billId)?.departmentCategoryId ?? null,
-      departmentCategoryName: catByBill.get(l.billId)?.departmentCategoryName ?? null,
-    }));
-  }
-
   /**
-   * Atualiza a personalização (categoria + observação) de UMA parcela. O id é o
-   * sintético "<nutitulo>-<nuparcela>". Departamento NÃO é editável (vem do Sienge),
+   * Atualiza a personalização (observação) de UMA parcela. O id é o sintético
+   * "<nutitulo>-<nuparcela>". Departamento NÃO é editável (vem do Sienge),
    * então departmentId/departmentName são ignorados se vierem no payload.
    */
-  async updateExpense({ id, description, departmentCategoryId, departmentCategoryName, updatedBy }) {
+  async updateExpense({ id, description, updatedBy }) {
     const parsed = parseSyntheticId(id);
     if (!parsed) throw new Error('Identificador de custo inválido.');
     const { nutitulo, nuparcela } = parsed;
@@ -226,8 +197,6 @@ export default class expenseService {
 
     await row.update({
       description: description !== undefined ? description : row.description,
-      department_category_id: departmentCategoryId !== undefined ? departmentCategoryId : row.department_category_id,
-      department_category_name: departmentCategoryName !== undefined ? departmentCategoryName : row.department_category_name,
       updated_by: updatedBy || row.updated_by,
     });
 
@@ -236,8 +205,6 @@ export default class expenseService {
       billId: nutitulo,
       installmentNumber: nuparcela,
       description: row.description,
-      departmentCategoryId: row.department_category_id,
-      departmentCategoryName: row.department_category_name,
     };
   }
 

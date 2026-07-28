@@ -15,7 +15,11 @@
 //   2. Exatamente 1 contrato ativo no Sienge com externalId = idreserva.
 //   3. Contrato na situação 'Autorizado' (aguardando emissão) e SEM data de emissão.
 //   4. Unidade do contrato = unidade da reserva (id interno; nome como fallback).
-//   5. Empreendimento do contrato = empreendimento da reserva.
+//   5. Empreendimento OU empresa do contrato conferem com a reserva (por
+//      código, várias fontes - ver conferirEmpreendimento). Quando a unidade
+//      já foi confirmada pelo código interno, divergência aqui é aviso, não
+//      bloqueio: o id da unidade é único no Sienge e sozinho já amarra o
+//      contrato à reserva.
 //   6. Cliente do contrato = titular da reserva (CPF/CNPJ via /customers; nome como fallback).
 //   7. Nenhuma parcela paga (amountPaid total = 0).
 //   8. Gate do Ato (Boleto Caixa): só segue sem ato/série, ato baixado por
@@ -276,6 +280,119 @@ async function validarAto(idreserva) {
         default:
             return { ok: false, detalhe: `Estado do ato incerto (boleto #${boleto.id}, payment_status=${boleto.payment_status}) - bloqueado por segurança.` };
     }
+}
+
+/**
+ * Confere se o contrato do Sienge pertence ao mesmo empreendimento/empresa da
+ * reserva. Sempre por CÓDIGO, nunca por nome.
+ *
+ * Por que não basta comparar `idempreendimento_int` com o `enterpriseId` do
+ * contrato: no CV esse campo muitas vezes traz o código da EMPRESA (99 em
+ * TERRAS DE SÃO PAULO V, 78 em PARQUE DOS IPÊS, 89 em JARDIM MÔNACO, 107 em
+ * SANTA STELLA), que não é centro de custo nenhum. Quem carrega o CC da fase é
+ * a ETAPA (`idetapa_int`; 99905 = FASE 3), porque no Sienge cada fase é um
+ * empreendimento próprio. É a mesma regra já usada nos relatórios
+ * (services/cv/workflowGroupQueriesService.js).
+ *
+ * Por isso a conferência tenta várias fontes, da mais forte pra mais fraca:
+ *   1. etapa da reserva (idetapa_int)          → CC da fase
+ *   2. etapa no cadastro do CV (mesma info)    → CC da fase
+ *   3. vínculo manual CV × Sienge              → exceção configurada na tela
+ *   4. código interno do empreendimento        → só serve quando é CC de verdade
+ *   5. empresa × empresa                       → confirma o grupo quando o CC não veio
+ *
+ * @returns {{ok:boolean, forte:boolean, detalhe:string}}
+ */
+async function conferirEmpreendimento(contrato, unidade) {
+    const ccContrato = digits(contrato?.enterpriseId);
+    const empresaContrato = digits(contrato?.companyId);
+
+    const ccs = [];       // candidatos a empreendimento (centro de custo) Sienge
+    const empresas = [];  // candidatos a empresa Sienge
+    const push = (lista, codigo, fonte) => {
+        const d = digits(codigo);
+        if (d && !lista.some(c => c.codigo === d && c.fonte === fonte)) lista.push({ codigo: d, fonte });
+    };
+
+    const idetapaCv = Number(digits(unidade?.idetapa_cv)) || null;
+    const idempCv = Number(digits(unidade?.idempreendimento_cv)) || null;
+    const idempIntCv = digits(unidade?.idempreendimento_int);
+
+    // 1. Etapa que veio junto da reserva.
+    push(ccs, unidade?.idetapa_int, 'etapa da reserva (idetapa_int)');
+
+    // 2. Etapa no cadastro do CV (quando a reserva não trouxe o código).
+    try {
+        if (idetapaCv && db.CvEnterpriseStage) {
+            const etapa = await db.CvEnterpriseStage.findByPk(idetapaCv);
+            push(ccs, etapa?.idetapa_int, 'etapa no cadastro do CV');
+        }
+    } catch (err) {
+        console.warn(`[RESERVA-CANCEL] Cadastro de etapas indisponível: ${err.message}`);
+    }
+
+    // 3. Vínculo manual CV × Sienge (exceções configuradas na tela).
+    try {
+        if (db.EnterpriseErpLink) {
+            const { Op } = db.Sequelize;
+            const ors = [];
+            if (idetapaCv) ors.push({ cv_stage_id: idetapaCv });
+            const empIds = [idempCv, Number(idempIntCv) || null].filter(Boolean);
+            if (empIds.length) ors.push({ cv_stage_id: null, cv_enterprise_id: { [Op.in]: empIds } });
+            if (ors.length) {
+                const links = await db.EnterpriseErpLink.findAll({ where: { active: true, [Op.or]: ors } });
+                links.forEach(l => push(ccs, l.erp_enterprise_id, 'vínculo manual CV × Sienge'));
+            }
+        }
+    } catch (err) {
+        console.warn(`[RESERVA-CANCEL] Vínculos manuais indisponíveis: ${err.message}`);
+    }
+
+    // 4/5. Código interno do empreendimento: serve como CC quando é CC de
+    // verdade e como empresa quando o CV preencheu com o código da empresa.
+    push(ccs, idempIntCv, 'código interno do empreendimento no CV');
+    push(empresas, idempIntCv, 'código interno do empreendimento no CV (preenchido com o código da empresa)');
+    push(empresas, unidade?.idempresa_int, 'empresa da unidade no CV');
+
+    try {
+        if (idempCv && db.CvEnterprise) {
+            const emp = await db.CvEnterprise.findByPk(idempCv);
+            push(ccs, emp?.idempreendimento_int, 'código interno do empreendimento no cadastro do CV');
+            push(empresas, emp?.idempreendimento_int, 'código interno do empreendimento no cadastro do CV');
+            push(empresas, emp?.raw?.idempresa_int ?? emp?.idempresa, 'empresa do cadastro do CV');
+        }
+    } catch (err) {
+        console.warn(`[RESERVA-CANCEL] Cadastro de empreendimentos indisponível: ${err.message}`);
+    }
+
+    const ccHit = ccContrato ? ccs.find(c => c.codigo === ccContrato) : null;
+    const empresaHit = empresaContrato ? empresas.find(c => c.codigo === empresaContrato) : null;
+    const nomeContrato = contrato?.enterpriseName || contrato?.enterprise?.name || null;
+    const listar = lista => (lista.length ? lista.map(c => `${c.codigo} (${c.fonte})`).join(', ') : 'nenhum código disponível');
+
+    if (ccHit) {
+        return {
+            ok: true,
+            forte: true,
+            detalhe: `empreendimento ${ccContrato}${nomeContrato ? ` (${nomeContrato})` : ''} confere com ${ccHit.fonte}`
+                + `${empresaHit ? `; empresa ${empresaContrato} também confere` : ''}.`,
+        };
+    }
+    if (empresaHit) {
+        return {
+            ok: true,
+            forte: true,
+            detalhe: `empresa ${empresaContrato} confere com ${empresaHit.fonte}. O centro de custo da fase não veio na reserva`
+                + ` (contrato no empreendimento ${ccContrato || '?'}${nomeContrato ? ` - ${nomeContrato}` : ''}; códigos da reserva: ${listar(ccs)}),`
+                + ' então a conferência foi por empresa.',
+        };
+    }
+    return {
+        ok: false,
+        forte: false,
+        detalhe: `contrato no empreendimento ${ccContrato || '?'}${nomeContrato ? ` (${nomeContrato})` : ''} / empresa ${empresaContrato || '?'}`
+            + ` não bate com nenhum código da reserva - empreendimento: ${listar(ccs)} | empresa: ${listar(empresas)}.`,
+    };
 }
 
 // ── Mensagens CV ──────────────────────────────────────────────────────────────
@@ -651,11 +768,13 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         // 3.2 Unidade do contrato = unidade da reserva
         const unidadesContrato = [].concat(contrato.salesContractUnits || []);
         let unidadeOk = false;
+        let unidadePorId = false; // casou pelo id interno (único no Sienge) = identidade forte
         let unidadeDetalhe = '';
         if (unidadesContrato.length !== 1) {
             unidadeDetalhe = `contrato com ${unidadesContrato.length} unidades vinculadas (esperado: 1).`;
         } else if (unitIdSienge && Number(unidadesContrato[0].id) === unitIdSienge) {
             unidadeOk = true;
+            unidadePorId = true;
             unidadeDetalhe = `unidade ${unidadesContrato[0].id} ("${unidadesContrato[0].name}") = código interno da reserva.`;
         } else if (!unitIdSienge && normalizeName(unidadesContrato[0].name) === normalizeName(unidade?.unidade)) {
             unidadeOk = true;
@@ -666,14 +785,22 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         }
         allOk = (await addCheck('Unidade do contrato = unidade da reserva', unidadeOk, unidadeDetalhe)) && allOk;
 
-        // 3.3 Empreendimento
-        const empIntCv = digits(unidade?.idempreendimento_int);
-        if (empIntCv) {
-            const empOk = digits(contrato.enterpriseId) === empIntCv;
-            allOk = (await addCheck('Empreendimento do contrato = empreendimento da reserva', empOk,
-                empOk
-                    ? `empreendimento ${contrato.enterpriseId} (${contrato.enterpriseName || '-'}).`
-                    : `contrato no empreendimento ${contrato.enterpriseId} × reserva no ${empIntCv}.`)) && allOk;
+        // 3.3 Empreendimento/empresa - por código, com várias fontes.
+        const CHECK_EMP = 'Empreendimento/empresa do contrato conferem com a reserva';
+        const vinculo = await conferirEmpreendimento(contrato, unidade);
+        if (vinculo.ok) {
+            await addCheck(CHECK_EMP, true, vinculo.detalhe);
+        } else if (unidadePorId) {
+            // O id da unidade é único no Sienge e o contrato aponta exatamente
+            // pra unidade da reserva - isso já amarra contrato × reserva. Uma
+            // divergência de código aqui é cadastro do CV (empreendimento sem
+            // CC, etapa sem código), não contrato de outra venda. Vira aviso.
+            await addCheck(CHECK_EMP, true,
+                `conferido pela unidade ${unitIdSienge}, cujo id é único no Sienge - os códigos de empreendimento/empresa não confirmaram (${vinculo.detalhe}).`);
+            warnings.push({ etapa: 'validacao_empreendimento', erro: vinculo.detalhe });
+        } else {
+            allOk = (await addCheck(CHECK_EMP, false,
+                `${vinculo.detalhe} A unidade também não foi confirmada por código interno - bloqueado por segurança.`)) && allOk;
         }
 
         // 3.4 Cliente

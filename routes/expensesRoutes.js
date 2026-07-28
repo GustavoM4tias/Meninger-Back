@@ -16,11 +16,10 @@ const ctrl = new expenseController();
 
 router.use(authenticate);
 
-// ── Custos (leitura ao vivo do backup) + personalização (categoria/observação) ──
+// ── Custos (leitura ao vivo do backup) + personalização (observação) ──────
 router.get('', ctrl.listMonth);
-router.put('/:id', ctrl.update);     // edita categoria/observação (id = "<nutitulo>-<nuparcela>")
+router.put('/:id', ctrl.update);     // edita observação (id = "<nutitulo>-<nuparcela>")
 router.delete('/:id', ctrl.remove);  // limpa personalização da parcela
-router.get('/links', ctrl.listLinks);
 
 // ── Leitura do mapa de overrides (qualquer usuário autenticado) ──────────
 router.get('/cost-center-overrides/map', getCostCenterOverrideMap);

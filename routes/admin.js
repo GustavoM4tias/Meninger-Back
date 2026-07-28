@@ -29,13 +29,6 @@ import {
 } from '../controllers/departmentController.js';
 
 import {
-  listDepartmentCategories,
-  createDepartmentCategory,
-  updateDepartmentCategory,
-  deleteDepartmentCategory,
-} from '../controllers/departmentCategoryController.js';
-
-import {
   listLandSyncEnterprises,
   addLandSyncEnterprise,
   removeLandSyncEnterprise
@@ -119,12 +112,6 @@ router.get('/departments', authMiddleware, requireAdmin, listDepartments);
 router.post('/departments', authMiddleware, requireAdmin, createDepartment);
 router.put('/departments/:id', authMiddleware, requireAdmin, updateDepartment);
 router.delete('/departments/:id', authMiddleware, requireAdmin, deleteDepartment);
-
-// Department Categories – APENAS ADMIN
-router.get('/department-categories', authMiddleware, requireAdmin, listDepartmentCategories);
-router.post('/department-categories', authMiddleware, requireAdmin, createDepartmentCategory);
-router.put('/department-categories/:id', authMiddleware, requireAdmin, updateDepartmentCategory);
-router.delete('/department-categories/:id', authMiddleware, requireAdmin, deleteDepartmentCategory);
 
 router.get('/land-sync-enterprises', authMiddleware, requireAdmin, listLandSyncEnterprises);
 router.post('/land-sync-enterprises', authMiddleware, requireAdmin, addLandSyncEnterprise);

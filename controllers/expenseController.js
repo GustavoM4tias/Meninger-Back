@@ -32,40 +32,16 @@ export default class expenseController {
     }
   };
 
-  // GET /api/expenses/links?billIds=1,2,3
-  listLinks = async (req, res) => {
-    try {
-      const { billIds } = req.query;
-      if (!billIds) {
-        return res.status(400).json({ error: 'billIds é obrigatório' });
-      }
-
-      const ids = billIds
-        .split(',')
-        .map(n => Number(n))
-        .filter(Boolean);
-
-      const data = await this.service.listLinksByBill({ billIds: ids });
-
-      res.json(data);
-    } catch (e) {
-      console.error(e);
-      res.status(500).send('Erro ao listar vínculos de custos');
-    }
-  };
-
   // PUT /api/expenses/:id  (id sintético "<nutitulo>-<nuparcela>")
-  // Edita só categoria + observação (personalização). Departamento vem do Sienge.
+  // Edita só a observação (personalização). Departamento vem do Sienge.
   update = async (req, res) => {
     try {
       const { id } = req.params;
-      const { description, departmentCategoryId, departmentCategoryName } = req.body;
+      const { description } = req.body;
 
       const exp = await this.service.updateExpense({
         id,
         description,
-        departmentCategoryId,
-        departmentCategoryName,
         updatedBy: req.user?.name || req.user?.email || null,
       });
 

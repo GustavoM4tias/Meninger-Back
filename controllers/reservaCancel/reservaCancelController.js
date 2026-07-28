@@ -2,6 +2,12 @@
 import db from '../../models/sequelize/index.js';
 import { processReservaCancel } from '../../services/reservaCancel/ReservaCancelService.js';
 import EventLogger from '../../services/reservaCancel/ReservaCancelEventLogger.js';
+import {
+    fetchCvEtapaByReserva,
+    resolveCvEtapaFilter,
+    applyCvIdsToWhere,
+    fetchCvEtapaFacets,
+} from '../../lib/cvEtapaLookup.js';
 
 // ── Webhook (público — chamado pelo CV no cancelamento da reserva) ────────────
 
@@ -107,15 +113,20 @@ export async function updateSettings(req, res) {
 
 // ── History ───────────────────────────────────────────────────────────────────
 
-function buildHistoryWhere(query) {
+function statusArrFromQuery(query) {
+    const arr = String(query?.status || '').split(',').map(s => s.trim()).filter(Boolean);
+    return arr.length ? arr : null;
+}
+
+function buildHistoryWhere(query, { skipStatus = false } = {}) {
     const { Op } = db.Sequelize;
-    const { status, idreserva, empreendimento, dateFrom, dateTo, q } = query;
+    const { idreserva, empreendimento, dateFrom, dateTo, q } = query;
     const where = {};
 
-    if (status) {
-        const arr = String(status).split(',').map(s => s.trim()).filter(Boolean);
-        if (arr.length === 1) where.status = arr[0];
-        else if (arr.length > 1) where.status = { [Op.in]: arr };
+    const statusArr = skipStatus ? null : statusArrFromQuery(query);
+    if (statusArr) {
+        if (statusArr.length === 1) where.status = statusArr[0];
+        else where.status = { [Op.in]: statusArr };
     }
     if (idreserva) where.idreserva = Number(idreserva);
     if (empreendimento) {
@@ -136,35 +147,125 @@ function buildHistoryWhere(query) {
     return where;
 }
 
+// ── Ordenação (whitelist) ─────────────────────────────────────────────────────
+// Chaves da UI → atributo do model. Default: caso mais recente primeiro.
+const SORT_MAP = {
+    caso: 'id',
+    reserva: 'idreserva',
+    titular: 'titular_nome',
+    unidade: 'unidade_nome',
+    contrato: 'contrato_numero',
+    status: 'status',
+    quando: 'createdAt',
+};
+const NUMERIC_SORT = new Set(['id', 'idreserva']);
+const DATE_SORT = new Set(['createdAt']);
+
+function sortSpec(query) {
+    return {
+        key: SORT_MAP[String(query.sortBy || '')] || 'id',
+        dir: String(query.sortDir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC',
+    };
+}
+
+/** Ordena em memória (caminho agrupado, que trabalha sobre toJSON()). */
+function sortRows(list, { key, dir }) {
+    const mult = dir === 'ASC' ? 1 : -1;
+    return list.sort((a, b) => {
+        let va = key === 'createdAt' ? (a.createdAt ?? a.created_at) : a[key];
+        let vb = key === 'createdAt' ? (b.createdAt ?? b.created_at) : b[key];
+        if (NUMERIC_SORT.has(key)) { va = Number(va) || 0; vb = Number(vb) || 0; }
+        else if (DATE_SORT.has(key)) { va = va ? new Date(va).getTime() : 0; vb = vb ? new Date(vb).getTime() : 0; }
+        else { va = String(va ?? '').toLowerCase(); vb = String(vb ?? '').toLowerCase(); }
+        if (va < vb) return -mult;
+        if (va > vb) return mult;
+        return (Number(b.id) || 0) - (Number(a.id) || 0); // desempate estável
+    });
+}
+
+/**
+ * Une as ocorrências: cada RESERVA vira 1 linha (o caso ATUAL = mais recente),
+ * com `casos_count` = quantas vezes a reserva passou pela automação. Sem isso,
+ * a mesma reserva reprocessada aparecia várias vezes na lista e ficava difícil
+ * saber em que pé ela está - o histórico completo continua no modal.
+ *
+ * Os filtros de escopo (reserva, empreendimento, datas, busca, etapa CV)
+ * definem QUAIS reservas entram: qualquer ocorrência que case traz a reserva.
+ * Já o filtro de STATUS é avaliado sobre o caso atual - senão uma reserva já
+ * resolvida voltava a aparecer ao filtrar "Pendência" por causa de uma
+ * tentativa antiga.
+ */
+async function casosAtuaisPorReserva(query) {
+    const { Op } = db.Sequelize;
+    const scopeWhere = buildHistoryWhere(query, { skipStatus: true });
+    const cvIds = await resolveCvEtapaFilter({ cvSituacao: query.cvSituacao, cvRepasse: query.cvRepasse });
+    applyCvIdsToWhere(scopeWhere, cvIds, Op);
+
+    const grupos = await db.ReservaCancelHistory.findAll({
+        where: scopeWhere,
+        attributes: ['idreserva', [db.Sequelize.fn('COUNT', db.Sequelize.col('id')), 'casos']],
+        group: ['idreserva'],
+        raw: true,
+    });
+    if (!grupos.length) return [];
+    const casosPorReserva = new Map(grupos.map(g => [Number(g.idreserva), Number(g.casos)]));
+
+    // Caso atual = MAX(id) por reserva SEM o recorte de datas, pra refletir o
+    // estado de agora mesmo que a última ocorrência esteja fora do período.
+    const atuais = await db.ReservaCancelHistory.findAll({
+        where: { idreserva: { [Op.in]: [...casosPorReserva.keys()] } },
+        attributes: [[db.Sequelize.fn('MAX', db.Sequelize.col('id')), 'max_id']],
+        group: ['idreserva'],
+        raw: true,
+    });
+    const found = await db.ReservaCancelHistory.findAll({
+        where: { id: { [Op.in]: atuais.map(a => Number(a.max_id)) } },
+    });
+
+    const statusArr = statusArrFromQuery(query);
+    return found
+        .filter(r => !statusArr || statusArr.includes(r.status))
+        .map(r => {
+            const j = r.toJSON();
+            j.casos_count = casosPorReserva.get(Number(r.idreserva)) || 1;
+            return j;
+        });
+}
+
 export async function listHistory(req, res) {
     try {
         const page = Math.max(1, Number(req.query.page) || 1);
         const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
-        const where = buildHistoryWhere(req.query);
+        const offset = (page - 1) * limit;
+        const sort = sortSpec(req.query);
+        // Agrupado por reserva é o padrão da tela; `groupByReserva=false` volta
+        // a listar 1 linha por ocorrência.
+        const agrupar = String(req.query.groupByReserva ?? 'true') !== 'false';
 
-        // ── Ordenação (whitelist) ──────────────────────────────────────────────
-        // Chaves da UI → atributo do model. Default: caso mais recente primeiro.
-        const SORT_MAP = {
-            caso: 'id',
-            titular: 'titular_nome',
-            unidade: 'unidade_nome',
-            contrato: 'contrato_numero',
-            status: 'status',
-            quando: 'createdAt',
-        };
-        const sortKey = SORT_MAP[String(req.query.sortBy || '')] || 'id';
-        const sortDir = String(req.query.sortDir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-        const order = sortKey === 'id'
-            ? [['id', sortDir]]
-            : [[sortKey, sortDir], ['id', 'DESC']];
+        let rows;
+        let total;
+        if (agrupar) {
+            const todos = sortRows(await casosAtuaisPorReserva(req.query), sort);
+            total = todos.length;
+            rows = todos.slice(offset, offset + limit);
+        } else {
+            const { Op } = db.Sequelize;
+            const where = buildHistoryWhere(req.query);
+            const cvIds = await resolveCvEtapaFilter({ cvSituacao: req.query.cvSituacao, cvRepasse: req.query.cvRepasse });
+            applyCvIdsToWhere(where, cvIds, Op);
+            const order = sort.key === 'id'
+                ? [['id', sort.dir]]
+                : [[sort.key, sort.dir], ['id', 'DESC']];
+            const found = await db.ReservaCancelHistory.findAndCountAll({ where, order, limit, offset });
+            rows = found.rows.map(r => r.toJSON());
+            total = found.count;
+        }
 
-        const { rows, count } = await db.ReservaCancelHistory.findAndCountAll({
-            where,
-            order,
-            limit,
-            offset: (page - 1) * limit,
-        });
-        return res.json({ rows, total: count, page, limit });
+        // Etapa ATUAL da reserva e do repasse no CV (lida do banco local).
+        const etapas = await fetchCvEtapaByReserva(rows.map(r => r.idreserva));
+        for (const r of rows) Object.assign(r, etapas.get(Number(r.idreserva)) || {});
+
+        return res.json({ rows, total, page, limit, grouped: agrupar });
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
@@ -172,16 +273,29 @@ export async function listHistory(req, res) {
 
 export async function getHistoryStats(req, res) {
     try {
-        const where = buildHistoryWhere(req.query);
+        const agrupar = String(req.query.groupByReserva ?? 'true') !== 'false';
+        const byStatus = {};
+
+        if (agrupar) {
+            // KPIs contam RESERVAS (pelo status do caso atual), pra bater com a
+            // lista agrupada. Ignora o filtro de status: os chips são o filtro.
+            const atuais = await casosAtuaisPorReserva({ ...req.query, status: '' });
+            for (const r of atuais) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+            return res.json({ byStatus, grouped: true });
+        }
+
+        const { Op } = db.Sequelize;
+        const where = buildHistoryWhere({ ...req.query, status: '' });
+        const cvIds = await resolveCvEtapaFilter({ cvSituacao: req.query.cvSituacao, cvRepasse: req.query.cvRepasse });
+        applyCvIdsToWhere(where, cvIds, Op);
         const rows = await db.ReservaCancelHistory.findAll({
             where,
             attributes: ['status', [db.Sequelize.fn('COUNT', db.Sequelize.col('id')), 'count']],
             group: ['status'],
             raw: true,
         });
-        const byStatus = {};
         for (const r of rows) byStatus[r.status] = Number(r.count);
-        return res.json({ byStatus });
+        return res.json({ byStatus, grouped: false });
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
@@ -195,7 +309,10 @@ export async function getHistoryFacets(req, res) {
             raw: true,
         });
         const empreendimentos = rows.map(r => r.empreendimento).filter(Boolean).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-        return res.json({ empreendimentos });
+        // Etapas do CV (reserva e repasse) presentes no histórico, com as cores
+        // do workflow - alimenta os filtros de etapa.
+        const { cvSituacoes, cvRepasses } = await fetchCvEtapaFacets('reserva_cancel_history');
+        return res.json({ empreendimentos, cvSituacoes, cvRepasses });
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
@@ -205,7 +322,8 @@ export async function getHistoryItem(req, res) {
     try {
         const item = await db.ReservaCancelHistory.findByPk(req.params.id);
         if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
-        return res.json(item);
+        const etapas = await fetchCvEtapaByReserva([item.idreserva]);
+        return res.json({ ...item.toJSON(), ...(etapas.get(Number(item.idreserva)) || {}) });
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
