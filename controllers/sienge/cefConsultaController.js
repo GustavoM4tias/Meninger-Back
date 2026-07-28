@@ -108,6 +108,20 @@ export async function searchCef(req, res) {
         const qRaw = String(req.query.q || '').trim()
         const cef = ['com', 'sem'].includes(req.query.cef) ? req.query.cef : ''
 
+        // Consulta dirigida: sem busca nem empreendimento selecionado não varre a
+        // base inteira — o front instrui o usuário a filtrar primeiro.
+        if (!qRaw && !enterpriseIds.length) {
+            return res.json({
+                page: 1,
+                pageSize: Math.min(200, Math.max(1, Number(req.query.pageSize) || 50)),
+                total: 0,
+                isAdmin: scope.isAdmin,
+                needsFilter: true,
+                summary: { total: 0, withCef: 0, withoutCef: 0 },
+                rows: [],
+            })
+        }
+
         const page = Math.max(1, Number(req.query.page) || 1)
         const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
         const sortCol = SORTABLE[req.query.sort] || SORTABLE.financial_institution_date

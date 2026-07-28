@@ -10,7 +10,7 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.JSON,
             allowNull: false,
             defaultValue: [],
-            comment: 'Array de rotas liberadas para o usuário, ex: ["/comercial/faturamento", "/tools/validator"]',
+            comment: 'Array de rotas liberadas para o usuário, ex: ["/comercial/faturamento", "/validator"]',
         },
     }, {
         tableName: 'user_permissions',

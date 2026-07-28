@@ -21,7 +21,7 @@ import svc from './marketingApprovalService.js';
 
 const { User, WhatsappMessage, MarketingApprovalWaMessage, MarketingApprovalRequest } = db;
 
-const TEMPLATE_NAME = 'marketing_approval_v1';
+const TEMPLATE_NAME = 'approval_request_v1';
 const TEMPLATE_LANG = 'pt_BR';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://office.menin.com.br';
 
