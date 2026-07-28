@@ -41,6 +41,14 @@ registerTools(CONDITION_DECLARATIONS, conditionExecuteTool);
 
 const TOOL_DECLARATIONS = [...TOOLS.values()].map(t => t.declaration);
 
+// Quantas tools a Eme pode encadear em UMA resposta antes de ser obrigada a
+// responder em texto. Cobre o caso comum de "não achei pelo nome exato, vou
+// procurar no cadastro e tentar de novo" sem abrir espaço para laço infinito.
+// Só vale no Office; no Academy o follow-up roda em modo NONE de propósito.
+const MAX_TOOL_STEPS = Number(process.env.EME_MAX_TOOL_STEPS) > 0
+  ? Number(process.env.EME_MAX_TOOL_STEPS)
+  : 5;
+
 async function executeTool(name, args, user) {
   const tool = TOOLS.get(name);
   if (!tool) return { error: `Ferramenta desconhecida: ${name}` };
@@ -623,7 +631,26 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
             sendSSE(res, { type: 'clear' });
           }
 
-          const { name, args } = part.functionCall;
+          // ── Encadeamento de tools ──────────────────────────────────────
+          // Uma pergunta real raramente se resolve com UMA consulta: a Eme
+          // procura o empreendimento, não acha pelo nome exato, e precisa
+          // buscar no cadastro para tentar de novo.
+          //
+          // Antes, o follow-up só lia `text` e DESCARTAVA qualquer tool call
+          // que viesse junto. O modelo pedia a segunda consulta, o pedido ia
+          // para o lixo e sobrava só a frase que ele escreveu no caminho
+          // ("vou verificar", "um momento") — daí a impressão de que a Eme
+          // promete continuar e abandona. Ela tentava; nós é que travávamos.
+          //
+          // Agora o resultado volta para o modelo enquanto ele pedir novas
+          // tools, até o teto abaixo (evita laço infinito e custo sem fim).
+          let pendingCall = { name: part.functionCall.name, args: part.functionCall.args };
+          let toolStep = 0;
+
+          while (pendingCall && toolStep < MAX_TOOL_STEPS) {
+          toolStep++;
+          const { name, args } = pendingCall;
+          pendingCall = null;
           const toolStart = Date.now();
 
           // Roteamento da tool:
@@ -698,16 +725,39 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
                 { functionResponse: { name, response: summarizeForGemini(toolResult) } },
               ])).stream;
             }
+            // No último passo permitido não faz sentido aceitar nova tool: o
+            // teto já foi atingido e o que precisamos é do texto final.
+            const canChainMore = !isAcademy && toolStep < MAX_TOOL_STEPS;
+
             for await (const followChunk of followStream) {
               const followCandidate = followChunk.candidates?.[0];
               if (followCandidate?.finishReason) lastFinishReason = followCandidate.finishReason;
               for (const followPart of followCandidate?.content?.parts || []) {
                 if (followPart.text) emitTextChunk(followPart.text);
+
+                // O modelo quer consultar mais alguma coisa antes de responder.
+                if (followPart.functionCall && canChainMore && !pendingCall) {
+                  // O texto escrito até aqui é só o "vou verificar" — descarta,
+                  // porque a resposta de verdade vem depois da próxima consulta.
+                  if (fullAssistantText || bridgeFilter.flush()) {
+                    fullAssistantText = '';
+                    sendSSE(res, { type: 'clear' });
+                  }
+                  pendingCall = {
+                    name: followPart.functionCall.name,
+                    args: followPart.functionCall.args,
+                  };
+                }
               }
             }
           } catch (followErr) {
             console.warn('[OfficeChatService] Falha no follow-up após tool call:', followErr?.status || followErr?.message);
             // Mantém a actionResult — o frontend já exibe os dados sem texto final.
+          }
+          } // while (pendingCall)
+
+          if (pendingCall) {
+            console.warn(`[OfficeChatService] Teto de ${MAX_TOOL_STEPS} tools atingido; a chamada "${pendingCall.name}" não foi executada.`);
           }
         }
       }
