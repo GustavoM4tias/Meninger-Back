@@ -339,7 +339,9 @@ export async function listHistoryEvents(req, res) {
             where: { idreserva: item.idreserva },
             order: [['id', 'ASC']],
         });
-        return res.json({ history: item, events, attempts });
+        const etapas = await fetchCvEtapaByReserva([item.idreserva]);
+        const cv = etapas.get(Number(item.idreserva)) || {};
+        return res.json({ history: { ...item.toJSON(), ...cv }, events, attempts, cv });
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
