@@ -96,7 +96,7 @@ const TOOL_DECLARATIONS = [
     {
         name: 'search_condition_campaigns',
         description:
-            'Busca CAMPANHAS nas Fichas Comerciais de TODOS os empreendimentos visíveis de uma vez. Use SEMPRE que a pergunta sobre campanha envolver vários/todos os empreendimentos ou não citar um específico: "quais empreendimentos têm a campanha X?", "tem campanha roleta?", "quais campanhas estão ativas/vigentes?". Retorna uma linha por empreendimento × campanha, considerando a ficha mais recente e a última autorizada de cada série, com período, valor e fonte (mês + status). NUNCA varra ficha por ficha com get_condition_sheet para responder isso — é lento e incompleto.',
+            'Busca CAMPANHAS nas Fichas Comerciais de TODOS os empreendimentos visíveis de uma vez, com DESCRIÇÃO e REGULAMENTO completos de cada campanha. Use SEMPRE que a pergunta sobre campanha envolver vários/todos os empreendimentos ou não citar um específico: "quais empreendimentos têm a campanha X?", "tem campanha roleta?", "quais campanhas estão ativas/vigentes?", "qual o valor/prêmio/regra da campanha Y?". Considera a ficha mais recente e a última autorizada de cada série; a resposta traz cards visuais por campanha. NUNCA varra ficha por ficha com get_condition_sheet para responder sobre campanhas — os detalhes (descrição, regulamento, valores) já vêm AQUI.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -689,16 +689,22 @@ async function executeSearchCampaigns(args, user) {
         if (!prev || (isAuth && !prev.isAuth)) picked.set(k, { camp, meta, isAuth });
     }
 
-    const rows = [...picked.values()].map(({ camp, meta, isAuth }) => ({
+    const campanhas = [...picked.values()].map(({ camp, meta, isAuth }) => clean({
         empreendimento: meta.serie.nome,
         cidade: meta.serie.cidade,
-        campanha: camp.title,
-        periodo: [camp.start_date, camp.end_date].filter(Boolean).map(d => dayjs(d).format('DD/MM/YYYY')).join(' a ') || null,
-        valor: camp.value != null ? round2(camp.value) : null,
-        pago_por: PAYER_LABEL[camp.paid_by] || null,
+        titulo: camp.title,
+        descricao: camp.description ? String(camp.description).slice(0, 600) : undefined,
+        regulamento: camp.rules ? String(camp.rules).slice(0, 600) : undefined,
+        periodo: [camp.start_date, camp.end_date].filter(Boolean).map(d => dayjs(d).format('DD/MM/YYYY')).join(' a ') || undefined,
+        valor: camp.value != null ? round2(camp.value) : undefined,
+        pago_por: PAYER_LABEL[camp.paid_by] || undefined,
+        modulo: camp.module?.module_name || undefined,
+        ficha_id: meta.cond.id,
+        mes_referencia: fmtMonth(meta.cond.reference_month),
+        status: STATUS_LABEL[meta.cond.status],
+        autorizada: isAuth || undefined,
         fonte: `${fmtMonth(meta.cond.reference_month)} · ${STATUS_LABEL[meta.cond.status]}${isAuth ? '' : ' (NÃO autorizada)'}`,
-        modulo: camp.module?.module_name || null,
-    })).sort((a, b) => String(a.empreendimento).localeCompare(String(b.empreendimento)));
+    }) || {}).sort((a, b) => String(a.empreendimento).localeCompare(String(b.empreendimento)));
 
     const filtroTxt = [
         args?.campanha ? `campanha contendo "${args.campanha}"` : null,
@@ -706,7 +712,7 @@ async function executeSearchCampaigns(args, user) {
         args?.empreendimento ? `filtro "${args.empreendimento}"` : null,
     ].filter(Boolean).join(', ');
 
-    if (!rows.length) {
+    if (!campanhas.length) {
         return {
             total: 0,
             context: { source: 'conditions' },
@@ -714,30 +720,22 @@ async function executeSearchCampaigns(args, user) {
         };
     }
 
-    // Resumo compacto por linha — sobrevive ao summarize via context (o modelo
-    // precisa ver TODAS as ocorrências para responder a pergunta plural).
-    const resumo = rows.slice(0, 60).map(r =>
-        `${r.empreendimento}${r.cidade ? ` (${r.cidade})` : ''}: ${r.campanha}` +
-        `${r.periodo ? `, ${r.periodo}` : ''}${r.valor != null ? `, R$ ${r.valor}` : ''}` +
-        `${r.pago_por ? `, pago por ${r.pago_por}` : ''} — ficha ${r.fonte}`);
+    // Nomes dos empreendimentos — vão para o bridge (turnos seguintes referem-se
+    // a "os 3 que têm X"; sem isso o modelo já citou empreendimentos errados).
+    const empreendimentos = [...new Set(campanhas.map(c => c.empreendimento))];
 
     return {
-        type: 'table',
+        type: 'campaign_cards',
         title: args?.campanha ? `Campanhas: "${args.campanha}"` : 'Campanhas das Fichas Comerciais',
         subtitle: args?.apenas_vigentes ? 'Somente vigentes hoje' : undefined,
-        columns: [
-            { key: 'empreendimento', label: 'Empreendimento' },
-            { key: 'cidade',         label: 'Cidade' },
-            { key: 'campanha',       label: 'Campanha' },
-            { key: 'periodo',        label: 'Período' },
-            { key: 'valor',          label: 'Valor (R$)' },
-            { key: 'pago_por',       label: 'Pago por' },
-            { key: 'fonte',          label: 'Fonte (ficha)' },
-        ],
-        rows,
-        total: rows.length,
-        context: { source: 'conditions', campanhas: resumo },
-        message: `${rows.length} ocorrência(s) de campanha. Responda em lista markdown por empreendimento (nome em negrito), citando período, valor e a FONTE (mês + status) de cada um. Destaque explicitamente as que vêm de ficha NÃO autorizada (rascunho/em autorização). A lista completa está em context.campanhas.`,
+        campanhas,
+        total: campanhas.length,
+        context: { source: 'conditions', empreendimentos, foco: 'campanhas' },
+        message:
+            `${campanhas.length} campanha(s) encontrada(s) em: ${empreendimentos.join(', ')}. ` +
+            `Os cards visuais já mostram descrição/regulamento — seu texto: 1-2 frases citando os empreendimentos NOMINALMENTE (nomes EXATOS acima). ` +
+            `Sobre valores/prêmios: use APENAS o campo valor ou o que está ESCRITO em descricao/regulamento de cada campanha; se não constar, diga que a ficha não especifica — NUNCA deduza ("geralmente envolve descontos" é proibido). ` +
+            `Destaque campanhas de ficha NÃO autorizada (rascunho/em autorização).`,
     };
 }
 

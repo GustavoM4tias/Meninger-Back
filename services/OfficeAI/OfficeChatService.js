@@ -451,7 +451,11 @@ async function getLastBridgeContext(sessionId) {
       const hasIds = ['idleads', 'idprecadastros', 'idreservas', 'documentos']
         .some(k => Array.isArray(ctx[k]) && ctx[k].length);
       const hasFilters = ctx.source && (ctx.data_inicio || hasIds);
-      if (hasIds || hasFilters) { action = a; break; }
+      // Conditions: a lista de empreendimentos da última busca é a "ponte" para
+      // pedidos como "quero a ficha dos 3" — sem ela o modelo já citou nomes errados.
+      const hasConditionsCtx = ctx.source === 'conditions'
+        && (Array.isArray(ctx.empreendimentos) && ctx.empreendimentos.length || ctx.ficha_id);
+      if (hasIds || hasFilters || hasConditionsCtx) { action = a; break; }
     } catch { /* skip */ }
   }
   if (!action || !action.context) return '';
@@ -484,6 +488,11 @@ async function getLastBridgeContext(sessionId) {
   if (c.cidade)                 bits.push(`cidade=${c.cidade}`);
   if (c.bucket)                 bits.push(`bucket=${c.bucket}`);
   if (c.empreendimento)         bits.push(`empreendimento=${c.empreendimento}`);
+  if (Array.isArray(c.empreendimentos) && c.empreendimentos.length) {
+    bits.push(`empreendimentos_anteriores=[${c.empreendimentos.slice(0, 30).join(' | ')}]`);
+  }
+  if (c.ficha_id)               bits.push(`ficha_id=${c.ficha_id}`);
+  if (c.foco)                   bits.push(`foco=${c.foco}`);
   if (c.empresa_correspondente) bits.push(`cca=${c.empresa_correspondente}`);
   if (c.situacao_nome)          bits.push(`situacao=${c.situacao_nome}`);
   if (c.with_lead)              bits.push('with_lead=true');
@@ -1427,6 +1436,16 @@ function summarizeForGemini(result) {
   } else if (type === 'navigate') {
     summary.route   = result.route;
     summary.filters = result.filters;
+    summary.message = result.message;
+  } else if (type === 'campaign_cards') {
+    // O modelo PRECISA ver as campanhas (descrição/regulamento) para responder
+    // sobre valores/prêmios/regras sem deduzir — o else genérico descartaria o array.
+    summary.total = total ?? result.campanhas?.length ?? 0;
+    summary.campanhas = (result.campanhas || []).slice(0, 40).map(c => ({
+      ...c,
+      descricao: c.descricao ? String(c.descricao).slice(0, 300) : undefined,
+      regulamento: c.regulamento ? String(c.regulamento).slice(0, 300) : undefined,
+    }));
     summary.message = result.message;
   } else {
     // detail ou outros — passa campos escalares, exclui arrays grandes

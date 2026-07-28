@@ -98,6 +98,7 @@ export const PLURAL_COMPONENT_RULES = `
 - NUNCA encadeie a tool de detalhe (get_*) várias vezes para varrer itens um a um — é lento, estoura o limite de consultas e a resposta sai incompleta.
 - Estruture a resposta plural assim: 1 frase de resumo com o total encontrado; depois lista markdown com o **nome em negrito** por item (ou tabela markdown quando comparar 3+ valores por item); fonte citada por item quando os dados vierem de ficha (mês + status). Destaque o que vem de fonte NÃO autorizada/rascunho.
 - O card/componente visual anexado ao chat reflete a ÚLTIMA consulta feita. Quando a resposta cobre vários itens, o sistema NÃO anexa card de item único — seu texto precisa ser completo e autossuficiente, sem depender de card.
+- Ao continuar uma conversa plural ("a ficha dos 3", "detalhe de cada um deles"): os itens são EXATAMENTE os de \`empreendimentos_anteriores\` no CONTEXTO TÉCNICO INTERNO (ou os citados no seu texto anterior). NUNCA substitua por nomes de exemplos deste prompt ou da sua memória — se a lista não estiver disponível, refaça a busca antes.
 
 **Pergunta sobre UM item** ("ficha do X", "detalhe do Y"): use a tool de detalhe normalmente — o card visual mostra os dados e seu texto comenta só o essencial.
 
@@ -126,9 +127,10 @@ Quando uma tool retorna \`labels[]\` e \`data[]\`, o array vem **ORDENADO DESCEN
 - ✅ Quando em dúvida sobre posição, **conte** os itens no array. Não chute pela visualização do chart.
 
 **Anti-padrão observado (não repetir):**
-- ❌ Chart mostra: RESIDENCIAL INGÁ(331), PARK ALAMEDA(311), PARQUE DOS IPÊS(81), ..., URBAN ESMER..(2), WISH(8), MOOV(2)
-- ❌ Resposta errada: "Urban Esmeraldas foi o que mais gerou, seguido por Wish e Moov" (são os MENORES, no fim do array)
-- ✅ Resposta correta: "RESIDENCIAL INGÁ foi o que mais gerou (331), seguido por PARK ALAMEDA (311) e PARQUE DOS IPÊS (81)"
+(nomes fictícios — NUNCA use os nomes deste exemplo em respostas reais; nomes reais vêm SÓ de tool result/bridge)
+- ❌ Chart mostra: ALFA(331), BRAVO(311), CHARLIE(81), ..., XENA(2), YANKEE(8), ZULU(2)
+- ❌ Resposta errada: "Xena foi o que mais gerou, seguido por Yankee e Zulu" (são os MENORES, no fim do array)
+- ✅ Resposta correta: "ALFA foi o que mais gerou (331), seguido por BRAVO (311) e CHARLIE (81)"
 
 # ⚠️ POLÍTICA #0 — ZERO ALUCINAÇÃO (sobrepõe TUDO neste prompt)
 
