@@ -82,7 +82,7 @@ const TOOL_DECLARATIONS = [
     {
         name: 'get_condition_sheet',
         description:
-            'Retorna a Ficha Comercial COMPLETA de um empreendimento/produto: comissão, prazo de entrega, DEMANDA MÍNIMA (nº de unidades) e demanda fracionada, tabelas de preço, regras de negociação (entrada máxima, parcelas, RP, correções), subsídio estadual, campanhas, documentação (pacote CEF, ITBI, cartório), operacional (CCA, certificação digital, registro de contrato) e custos Menin × Cliente. Use para QUALQUER pergunta sobre condições comerciais de um empreendimento. IMPORTANTE: "demanda mínima", "demanda fracionada", "valor de demanda" são conceitos DESTA ficha (campo do produto), NÃO do MCMV — se perguntarem "demanda" de uma cidade/empreendimento, é AQUI. O nome também casa por CIDADE (ex: "votuporanga" acha as fichas de lá). NUNCA pergunte ao usuário qual mês: sem `mes`, a tool já retorna a ficha mais recente e, se ela não estiver autorizada, a última autorizada junto em `ficha_autorizada` — responda direto com isso. SEMPRE cite a fonte (mês + status) na resposta.',
+            'Retorna a Ficha Comercial COMPLETA de um empreendimento/produto: comissão, prazo de entrega, DEMANDA MÍNIMA (nº de unidades) e demanda fracionada, tabelas de preço, regras de negociação (entrada máxima, parcelas, RP, correções), subsídio estadual, campanhas, documentação (pacote CEF, ITBI, cartório), operacional (CCA, certificação digital, registro de contrato) e custos Menin × Cliente. Use para QUALQUER pergunta sobre condições comerciais de um empreendimento. IMPORTANTE: "demanda mínima", "demanda fracionada", "valor de demanda" são conceitos DESTA ficha (campo do produto), NÃO do MCMV — se perguntarem "demanda" de uma cidade/empreendimento, é AQUI. O nome também casa por CIDADE (ex: "votuporanga" acha as fichas de lá). NUNCA pergunte ao usuário qual mês: sem `mes`, a tool já retorna a ficha mais recente e, se ela não estiver autorizada, a última autorizada junto em `ficha_autorizada` — responda direto com isso. SEMPRE cite a fonte (mês + status) na resposta. Esta tool é para UM empreendimento por vez: se a pergunta cobre vários/todos os empreendimentos, use search_condition_campaigns (campanhas) ou query_condition_sheets (fichas existentes) — NUNCA chame esta tool repetidamente para varrer.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -91,6 +91,19 @@ const TOOL_DECLARATIONS = [
                 foco: { type: 'STRING', description: 'SEMPRE passe o tema principal da pergunta: "campanhas" | "custos" | "negociacao" (entrada/parcelas/correções/DEMANDA mínima/fracionada) | "comissao" | "precos" (tabelas/valores) | "documentacao" (ITBI/cartório/CEF) | "prazo" | "geral". Controla as sugestões exibidas no card.' },
             },
             required: ['empreendimento'],
+        },
+    },
+    {
+        name: 'search_condition_campaigns',
+        description:
+            'Busca CAMPANHAS nas Fichas Comerciais de TODOS os empreendimentos visíveis de uma vez. Use SEMPRE que a pergunta sobre campanha envolver vários/todos os empreendimentos ou não citar um específico: "quais empreendimentos têm a campanha X?", "tem campanha roleta?", "quais campanhas estão ativas/vigentes?". Retorna uma linha por empreendimento × campanha, considerando a ficha mais recente e a última autorizada de cada série, com período, valor e fonte (mês + status). NUNCA varra ficha por ficha com get_condition_sheet para responder isso — é lento e incompleto.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                campanha: { type: 'STRING', description: 'Trecho do nome ou descrição da campanha (ex: "roleta"). Busca parcial, sem acento. Omita para listar TODAS as campanhas.' },
+                apenas_vigentes: { type: 'BOOLEAN', description: 'true = só campanhas ativas com período vigente hoje. Omita/false para incluir também as encerradas ou futuras.' },
+                empreendimento: { type: 'STRING', description: 'Filtro opcional por empreendimento/produto/cidade (busca parcial). Omita para buscar em todos.' },
+            },
         },
     },
     {
@@ -507,8 +520,9 @@ async function executeGetSheet(args, user) {
         return { error: `Nenhuma ficha encontrada para "${args.empreendimento}". Use query_condition_sheets para ver as fichas disponíveis.` };
     }
     if (series.length > 1) {
+        // Sem `type` de propósito: um pedido de desambiguação não deve renderizar
+        // o card de ficha (aparecia com header vazio) — é só contexto para o modelo.
         return {
-            type: 'condition_sheet',
             precisa_desambiguar: true,
             candidatos: Object.fromEntries(series.map((s, i) => [i + 1, `${s.nome}${s.kind === 'avulsa' ? ' (avulsa)' : ''}`])),
             message: 'Mais de um empreendimento/produto bate com esse nome. Pergunte ao usuário qual ele quer e chame de novo com o nome exato.',
@@ -583,6 +597,147 @@ async function executeGetSheet(args, user) {
         sem_ficha_autorizada: (!isAuthorizedStatus(cond) && !condAutorizada) || undefined,
         context: { source: 'conditions', ficha_id: cond.id, foco: sanitizeFoco(args.foco) },
         message: 'Responda com base na ficha acima e CITE A FONTE: mês de referência + status. O card visual já mostra os detalhes — seja direto no texto. Valores monetários em R$.',
+    };
+}
+
+// ─── Tool: search_condition_campaigns ────────────────────────────────────────
+// Busca plural: campanhas em TODAS as fichas visíveis de uma vez. Por série,
+// só interessam a ficha mais recente e a última autorizada (as mesmas que
+// get_condition_sheet apresentaria) — fichas antigas ficam de fora.
+
+async function executeSearchCampaigns(args, user) {
+    const scope = await buildViewScope(user);
+    if (!hasAccess(scope)) return NO_ACCESS;
+
+    const where = {};
+    if (!scope.privileged) {
+        where.status = { [Op.in]: ['approved', 'closed'] };
+        where.idempreendimento = scope.ids;
+    }
+    if (args?.empreendimento) {
+        const series = await findSeries(args.empreendimento, scope);
+        if (!series.length) {
+            return { error: `Nenhuma ficha encontrada para "${args.empreendimento}". Confira o nome ou busque sem filtro de empreendimento.` };
+        }
+        const cvIds = series.filter(s => s.kind === 'cv').map(s => s.idempreendimento);
+        const seriesIds = series.filter(s => s.kind === 'avulsa' && s.series_id != null).map(s => s.series_id);
+        const looseIds = series.filter(s => s.kind === 'avulsa' && s.series_id == null).map(s => s.id);
+        const or = [];
+        if (cvIds.length) or.push({ idempreendimento: cvIds });
+        if (seriesIds.length) or.push({ series_id: seriesIds });
+        if (looseIds.length) or.push({ id: looseIds });
+        where[Op.or] = or;
+    }
+
+    // Fichas visíveis (leve, sem módulos/campanhas), mês DESC.
+    const conditions = await EnterpriseCondition.findAll({
+        where,
+        attributes: ['id', 'idempreendimento', 'series_id', 'display_name', 'reference_month', 'status'],
+        include: [{ model: CvEnterprise, as: 'enterprise', attributes: ['idempreendimento', 'nome', 'cidade'] }],
+        order: [['reference_month', 'DESC']],
+    });
+    if (!conditions.length) {
+        return { total: 0, message: 'Nenhuma Ficha Comercial visível para buscar campanhas — diga isso ao usuário.' };
+    }
+
+    // Por série: ficha mais recente + última autorizada (lista já em DESC).
+    const bySeries = new Map();
+    for (const c of conditions) {
+        const key = c.idempreendimento != null ? `cv:${c.idempreendimento}` : `av:${c.series_id ?? `id${c.id}`}`;
+        let e = bySeries.get(key);
+        if (!e) {
+            e = {
+                nome: c.enterprise?.nome || c.display_name || `Ficha #${c.id}`,
+                cidade: c.enterprise?.cidade || null,
+                latest: c,
+                auth: null,
+            };
+            bySeries.set(key, e);
+        }
+        if (!e.auth && isAuthorizedStatus(c)) e.auth = c;
+    }
+    const condMeta = new Map(); // condition_id → { key, serie, cond }
+    for (const [key, e] of bySeries) {
+        condMeta.set(e.latest.id, { key, serie: e, cond: e.latest });
+        if (e.auth && e.auth.id !== e.latest.id) condMeta.set(e.auth.id, { key, serie: e, cond: e.auth });
+    }
+
+    let camps = await EnterpriseConditionCampaign.findAll({
+        where: { condition_id: [...condMeta.keys()] },
+        include: [{ model: EnterpriseConditionModule, as: 'module', attributes: ['module_name'] }],
+    });
+
+    const term = normText(args?.campanha);
+    if (term) {
+        camps = camps.filter(c => normText(c.title).includes(term) || normText(c.description).includes(term));
+    }
+    if (args?.apenas_vigentes) {
+        const hoje = dayjs().format('YYYY-MM-DD');
+        camps = camps.filter(c => c.is_active !== false
+            && (!c.start_date || String(c.start_date) <= hoje)
+            && (!c.end_date || String(c.end_date) >= hoje));
+    }
+
+    // 1 linha por série × campanha — prefere a ocorrência da ficha AUTORIZADA.
+    const picked = new Map();
+    for (const camp of camps) {
+        const meta = condMeta.get(camp.condition_id);
+        if (!meta) continue;
+        const k = `${meta.key}|${normText(camp.title)}`;
+        const prev = picked.get(k);
+        const isAuth = isAuthorizedStatus(meta.cond);
+        if (!prev || (isAuth && !prev.isAuth)) picked.set(k, { camp, meta, isAuth });
+    }
+
+    const rows = [...picked.values()].map(({ camp, meta, isAuth }) => ({
+        empreendimento: meta.serie.nome,
+        cidade: meta.serie.cidade,
+        campanha: camp.title,
+        periodo: [camp.start_date, camp.end_date].filter(Boolean).map(d => dayjs(d).format('DD/MM/YYYY')).join(' a ') || null,
+        valor: camp.value != null ? round2(camp.value) : null,
+        pago_por: PAYER_LABEL[camp.paid_by] || null,
+        fonte: `${fmtMonth(meta.cond.reference_month)} · ${STATUS_LABEL[meta.cond.status]}${isAuth ? '' : ' (NÃO autorizada)'}`,
+        modulo: camp.module?.module_name || null,
+    })).sort((a, b) => String(a.empreendimento).localeCompare(String(b.empreendimento)));
+
+    const filtroTxt = [
+        args?.campanha ? `campanha contendo "${args.campanha}"` : null,
+        args?.apenas_vigentes ? 'apenas vigentes hoje' : null,
+        args?.empreendimento ? `filtro "${args.empreendimento}"` : null,
+    ].filter(Boolean).join(', ');
+
+    if (!rows.length) {
+        return {
+            total: 0,
+            context: { source: 'conditions' },
+            message: `Nenhuma campanha encontrada (${filtroTxt || 'sem filtros'}) nas fichas mais recentes/autorizadas. Diga isso claramente ao usuário — NÃO invente campanhas.`,
+        };
+    }
+
+    // Resumo compacto por linha — sobrevive ao summarize via context (o modelo
+    // precisa ver TODAS as ocorrências para responder a pergunta plural).
+    const resumo = rows.slice(0, 60).map(r =>
+        `${r.empreendimento}${r.cidade ? ` (${r.cidade})` : ''}: ${r.campanha}` +
+        `${r.periodo ? `, ${r.periodo}` : ''}${r.valor != null ? `, R$ ${r.valor}` : ''}` +
+        `${r.pago_por ? `, pago por ${r.pago_por}` : ''} — ficha ${r.fonte}`);
+
+    return {
+        type: 'table',
+        title: args?.campanha ? `Campanhas: "${args.campanha}"` : 'Campanhas das Fichas Comerciais',
+        subtitle: args?.apenas_vigentes ? 'Somente vigentes hoje' : undefined,
+        columns: [
+            { key: 'empreendimento', label: 'Empreendimento' },
+            { key: 'cidade',         label: 'Cidade' },
+            { key: 'campanha',       label: 'Campanha' },
+            { key: 'periodo',        label: 'Período' },
+            { key: 'valor',          label: 'Valor (R$)' },
+            { key: 'pago_por',       label: 'Pago por' },
+            { key: 'fonte',          label: 'Fonte (ficha)' },
+        ],
+        rows,
+        total: rows.length,
+        context: { source: 'conditions', campanhas: resumo },
+        message: `${rows.length} ocorrência(s) de campanha. Responda em lista markdown por empreendimento (nome em negrito), citando período, valor e a FONTE (mês + status) de cada um. Destaque explicitamente as que vêm de ficha NÃO autorizada (rascunho/em autorização). A lista completa está em context.campanhas.`,
     };
 }
 
@@ -883,9 +1038,10 @@ async function executeCompareSheets(args, user) {
 async function executeTool(name, args, user) {
     try {
         switch (name) {
-            case 'query_condition_sheets':   return await executeQuerySheets(args, user);
-            case 'get_condition_sheet':      return await executeGetSheet(args, user);
-            case 'compare_condition_sheets': return await executeCompareSheets(args, user);
+            case 'query_condition_sheets':      return await executeQuerySheets(args, user);
+            case 'get_condition_sheet':         return await executeGetSheet(args, user);
+            case 'search_condition_campaigns':  return await executeSearchCampaigns(args, user);
+            case 'compare_condition_sheets':    return await executeCompareSheets(args, user);
             default: return { error: `Ferramenta desconhecida: ${name}` };
         }
     } catch (err) {
