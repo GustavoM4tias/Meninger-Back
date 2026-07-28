@@ -20,6 +20,11 @@ export default (sequelize, DataTypes) => {
       defaultValue: 'user'
     },
     status: { type: DataTypes.BOOLEAN, defaultValue: true },
+    // Aprovação do cadastro de primeiro acesso (login Microsoft auto-provisionado):
+    // 'pending' = concluiu (ou está concluindo) o formulário e aguarda liberação
+    // pelo admin; 'approved' = liberado (default: todos os fluxos existentes).
+    // Pendente só alcança os endpoints de completar cadastro (ver authMiddleware).
+    approval_status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'approved' },
     birth_date: DataTypes.DATEONLY,
     last_login: DataTypes.DATE,
     manager_id: {

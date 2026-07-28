@@ -37,7 +37,7 @@ function isStrongPassword(password) {
   );
 }
 
-function generateSecurePassword() {
+export function generateSecurePassword() {
   const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   const lower = 'abcdefghjkmnpqrstuvwxyz';
   const digits = '23456789';
@@ -120,6 +120,10 @@ export const loginUser = async (req, res) => {
 
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado', 401);
+    }
+
+    if (user.approval_status === 'pending') {
+      return responseHandler.error(res, 'Cadastro aguardando aprovação do gestor responsável. Você receberá um e-mail quando for liberado.', 403);
     }
 
     if (!user.status) {
@@ -520,7 +524,7 @@ export const identifyFace = async (req, res) => {
 export const getUserInfo = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update', 'auth_provider', 'external_kind', 'external_id', 'phone']
+      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'approval_status', 'face_enabled', 'face_last_update', 'auth_provider', 'external_kind', 'external_id', 'phone']
     });
     if (!user) {
       return responseHandler.error(res, 'Usuário não encontrado');
@@ -666,7 +670,7 @@ export const updateUser = async (req, res) => {
 export const getAllUsers = async (req, res) => {
   try {
     const users = await User.findAll({
-      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'face_enabled', 'face_last_update', 'microsoft_id', 'sienge_email', 'show_in_organogram', 'auth_provider', 'phone', 'daily_alert_limit'],
+      attributes: ['id', 'username', 'email', 'position', 'role', 'manager_id', 'city', 'birth_date', 'created_at', 'status', 'approval_status', 'face_enabled', 'face_last_update', 'microsoft_id', 'sienge_email', 'show_in_organogram', 'auth_provider', 'phone', 'daily_alert_limit'],
       include: [
         {
           model: User,
