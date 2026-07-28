@@ -3,7 +3,8 @@ import jwt from 'jsonwebtoken';
 import jwtConfig from '../config/jwtConfig.js';
 import db from '../models/sequelize/index.js';
 
-// Endpoints que um usuário PENDENTE de aprovação (primeiro acesso Microsoft)
+// Endpoints que um usuário de primeiro acesso Microsoft ainda não aprovado
+// ('incomplete' = não concluiu o formulário; 'pending' = aguardando o admin)
 // pode alcançar: apenas o necessário para concluir o formulário de cadastro.
 // Qualquer outra chamada devolve 403 USER_PENDING até o admin ativar.
 const PENDING_ALLOWED = [
@@ -30,7 +31,7 @@ const authenticate = async (req, res, next) => {
       return res.status(401).json({ success: false, code: 'USER_INACTIVE', error: 'Usuário inválido/inativo.' });
     }
 
-    if (user.approval_status === 'pending') {
+    if (user.approval_status === 'incomplete' || user.approval_status === 'pending') {
       const path = String(req.originalUrl || '').split('?')[0];
       const allowed = PENDING_ALLOWED.includes(`${req.method} ${path}`);
       if (!allowed) {

@@ -18,7 +18,7 @@ import {
   refreshSession,
   logoutSession,
 } from '../controllers/authController.js';
-import { getSignupOptions, completeSignup, activateUser } from '../controllers/signupController.js';
+import { getSignupOptions, completeSignup, requestSignup, activateUser, rejectUser } from '../controllers/signupController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import { authorizeByRole } from '../middlewares/permissionMiddleware.js';
 import { loginLimiter, passwordResetLimiter } from '../middlewares/rateLimiters.js';
@@ -40,10 +40,14 @@ router.put('/user/password', authenticate, changePassword);
 router.get('/user', authenticate, getUserInfo);
 router.put('/user', authenticate, updateMe);
 
-// ── Cadastro de primeiro acesso (usuário pendente de aprovação) ──────────────
-// Ambas liberadas para pendentes no authMiddleware (PENDING_ALLOWED).
-router.get('/signup-options', authenticate, getSignupOptions);
+// ── Cadastro de primeiro acesso ──────────────────────────────────────────────
+// signup-options é PÚBLICA (o "Solicite acesso" da tela de login usa sem
+// sessão; só devolve nomes de departamentos e cidades ativas).
+router.get('/signup-options', getSignupOptions);
+// complete-signup: usuário Microsoft não-aprovado (liberada no PENDING_ALLOWED).
 router.post('/complete-signup', authenticate, completeSignup);
+// signup-request: pública ("Solicite acesso" sem Microsoft), com rate limit.
+router.post('/signup-request', loginLimiter, requestSignup);
 
 // ── Credenciais Sienge — deve vir ANTES de /user/:id para evitar conflito de rota
 router.get('/user/sienge-credentials', authenticate, getSiengeCredentials);
@@ -54,8 +58,9 @@ router.get('/users', authenticate, authorizeByRole(['admin']), getAllUsers);
 router.put('/users', authenticate, authorizeByRole(['admin']), updateUser);
 router.post('/users/:id/reset-password', authenticate, authorizeByRole(['admin']), adminResetUserPassword);
 // Ativação de cadastro pendente: aplica alçadas padrão do departamento, gera
-// senha provisória e envia o e-mail de liberação.
+// senha provisória e envia o e-mail de liberação. Reprovação avisa por e-mail.
 router.post('/users/:id/activate', authenticate, authorizeByRole(['admin']), activateUser);
+router.post('/users/:id/reject', authenticate, authorizeByRole(['admin']), rejectUser);
 router.post('/face/enroll', authenticate, enrollFace);
 router.post('/face/identify', loginLimiter, identifyFace);
 

@@ -21,10 +21,18 @@ export default (sequelize, DataTypes) => {
     },
     status: { type: DataTypes.BOOLEAN, defaultValue: true },
     // Aprovação do cadastro de primeiro acesso (login Microsoft auto-provisionado):
-    // 'pending' = concluiu (ou está concluindo) o formulário e aguarda liberação
-    // pelo admin; 'approved' = liberado (default: todos os fluxos existentes).
-    // Pendente só alcança os endpoints de completar cadastro (ver authMiddleware).
+    // 'incomplete' = criado, ainda NÃO concluiu o formulário (fora da fila);
+    // 'pending'    = formulário enviado, aguardando o admin ativar;
+    // 'approved'   = liberado (default: todos os fluxos existentes).
+    // Não-aprovado só alcança os endpoints de completar cadastro (authMiddleware).
     approval_status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'approved' },
+    // Departamento escolhido no formulário de primeiro acesso. O cargo em si é
+    // definido pelo ADMIN na ativação (o usuário não escolhe o próprio cargo).
+    signup_department_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: 'departments', key: 'id' },
+    },
     birth_date: DataTypes.DATEONLY,
     last_login: DataTypes.DATE,
     manager_id: {
