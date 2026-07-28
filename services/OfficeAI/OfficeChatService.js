@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { assembleSystemPrompt } from './promptAssembler.js';
-import { MAX_PROMPT_ENTERPRISES } from './systemPrompt.js';
+import { MAX_PROMPT_ENTERPRISES, PLURAL_COMPONENT_RULES } from './systemPrompt.js';
 import { getActiveBrain } from './ConfigService.js';
 import { buildAcademyTutorPrompt } from './academyTutorPrompt.js';
 import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
@@ -54,6 +54,48 @@ async function executeTool(name, args, user) {
   if (!tool) return { error: `Ferramenta desconhecida: ${name}` };
   return tool.executor(name, args, user);
 }
+
+// Rótulos amigáveis das tools — exibidos no front durante a execução
+// (eventos tool_start/tool_result; mesmo padrão do ReportChatService).
+const TOOL_LABELS = {
+  query_leads: 'Leads de marketing',
+  query_events: 'Eventos',
+  query_enterprises: 'Empreendimentos',
+  get_enterprise_detail: 'Detalhe do empreendimento',
+  query_mcmv: 'Faixas MCMV',
+  query_precadastros: 'Pré-cadastros',
+  query_reservas: 'Reservas',
+  query_condition_sheets: 'Fichas Comerciais',
+  get_condition_sheet: 'Ficha Comercial',
+  search_condition_campaigns: 'Campanhas das fichas',
+  compare_condition_sheets: 'Comparação de fichas',
+  query_custos: 'Custos',
+  query_boletos: 'Boletos Caixa',
+  query_people: 'Pessoas e organograma',
+  query_repasses_contratos: 'Validador de contratos',
+  query_projections: 'Projeção de vendas',
+  query_reports: 'Relatórios',
+  create_report: 'Criação de relatório',
+  query_checklists: 'Checklists',
+  my_checklist_tasks: 'Tarefas de checklist',
+  update_checklist_task: 'Atualização de tarefa',
+  manage_notifications: 'Preferências de notificação',
+  navigate_to_page: 'Navegação',
+};
+function toolLabel(name) {
+  if (TOOL_LABELS[name]) return TOOL_LABELS[name];
+  const words = String(name || '')
+    .replace(/^(query|get|search|list|manage|create|update|delete|my)_/, '')
+    .replace(/_/g, ' ')
+    .trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(name || 'consulta');
+}
+
+// Tipos de action que representam UM item específico (card de detalhe). Quando a
+// cadeia consultou 2+ itens desses (resposta plural), anexar só o último card
+// seria enganoso (ex.: varredura de fichas exibindo um card solto de outro
+// empreendimento) — nesses casos o card é suprimido e o texto responde sozinho.
+const SINGLE_ENTITY_ACTION_TYPES = new Set(['condition_sheet', 'detail', 'condition_compare']);
 
 // Overlay do Cérebro sobre as tools builtin: liga/desliga, sobrescreve a descrição
 // (o que o Gemini lê — controla QUANDO a tool é chamada) e injeta regras de uso por
@@ -503,6 +545,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     activeDeclarations = toolOverlay.declarations;
     if (toolOverlay.promptRules) systemPrompt += toolOverlay.promptRules;
 
+    // Regras de pluralidade/componentes/formatação — SEMPRE anexadas (fora do
+    // Cérebro, como o bloco de voz), para valerem também com brain publicado.
+    systemPrompt += PLURAL_COMPONENT_RULES;
+
     // Eme do Office é o assistente ÚNICO — também responde sobre PROCESSOS do
     // Academy. Anexa as tools do registry elegíveis p/ OFFICE (academy_*),
     // executadas via SecureRunner (ver roteamento no loop do stream).
@@ -517,6 +563,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   let actionResult = null;
   let lastFinishReason = null; // finishReason do último candidate (main + follow-up)
   const toolCalls = [];
+  const actionTypesSeen = []; // tipos das actions bem-sucedidas da cadeia (p/ supressão de card órfão)
   const startedAt = Date.now();
   const bridgeFilter = makeBridgeFilter();
 
@@ -653,6 +700,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           pendingCall = null;
           const toolStart = Date.now();
 
+          // Progresso visível: o front mostra "Consultando <label>…" em vez do
+          // "..." mudo (que ficava até 1 min sem sinal em cadeias longas).
+          sendSSE(res, { type: 'tool_start', name, label: toolLabel(name), step: toolStep });
+
           // Roteamento da tool:
           //  - ACADEMY + tool do registry (academy_*) → SecureRunner (permissão + audit).
           //  - ACADEMY + tool do Office (interno pediu dado operacional) → executeTool
@@ -690,7 +741,16 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
             ms: Date.now() - toolStart,
           });
 
+          sendSSE(res, {
+            type: 'tool_result',
+            name,
+            label: toolLabel(name),
+            ok: !toolResult?.error,
+            ms: Date.now() - toolStart,
+          });
+
           actionResult = toolResult;
+          if (toolResult && !toolResult.error && toolResult.type) actionTypesSeen.push(toolResult.type);
           sendSSE(res, { type: 'action', action: toolResult });
 
           // Envia o resultado de volta para o Gemini (sem arrays volumosos — evita JSON no texto).
@@ -843,6 +903,18 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     });
   }
 
+  // ── Supressão de card órfão (consultas plurais) ───────────────────────────
+  // Se a cadeia executou 2+ tools que retornam card de item ÚNICO do mesmo tipo
+  // (ex.: get_condition_sheet para vários empreendimentos), o card anexado seria
+  // só o do último item consultado — arbitrário e enganoso. Nesses casos nenhum
+  // card é anexado: o texto plural responde sozinho. O evento `done` leva
+  // action:null para o front descartar o pendingAction que recebeu no meio.
+  const finalActionType = actionResult?.type || null;
+  const suppressAction = !!(finalActionType
+    && SINGLE_ENTITY_ACTION_TYPES.has(finalActionType)
+    && actionTypesSeen.filter(t => t === finalActionType).length >= 2);
+  if (suppressAction) actionResult = null;
+
   // Salva resposta final do assistente.
   // Quando há actionResult, SEMPRE salva como JSON {text, action} e usa um
   // response_type ≠ 'text' (assim parseMessage no front desserializa o JSON).
@@ -860,7 +932,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     latency_ms: Date.now() - startedAt,
   });
 
-  sendSSE(res, { type: 'done', sessionId: session.id, msgId: savedMsg.id });
+  // `action: null` explícito quando o card foi suprimido — o front usa isso para
+  // descartar o pendingAction recebido via SSE no meio da cadeia. Quando o campo
+  // não vem, o front mantém o comportamento histórico (usa o último `action`).
+  sendSSE(res, { type: 'done', sessionId: session.id, msgId: savedMsg.id, ...(suppressAction ? { action: null } : {}) });
 }
 
 function sendSSE(res, data) {

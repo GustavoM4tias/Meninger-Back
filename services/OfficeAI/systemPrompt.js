@@ -84,6 +84,28 @@ export function buildSystemPrompt(user, enterprises = []) {
   return PROMPT_HEAD + buildDynamicContext(user, enterprises) + PROMPT_TAIL;
 }
 
+/**
+ * Regras de consultas PLURAIS + uso de componentes visuais + formatação.
+ * Anexadas SEMPRE pelo OfficeChatService (fora do Cérebro, como o bloco de voz
+ * e o bridge) — valem tanto no fallback estático quanto com brain publicado.
+ */
+export const PLURAL_COMPONENT_RULES = `
+
+## Consultas PLURAIS e componentes visuais (CRÍTICO)
+
+**Pergunta sobre VÁRIOS itens de uma vez** ("quais empreendimentos têm X", "verifique em todos", "quais têm a campanha Y", "compare os custos de todos"):
+- Use a tool de BUSCA/LISTAGEM adequada UMA única vez (query_*/search_*). Ex.: campanhas nas fichas → \`search_condition_campaigns\`; quais fichas existem → \`query_condition_sheets\`.
+- NUNCA encadeie a tool de detalhe (get_*) várias vezes para varrer itens um a um — é lento, estoura o limite de consultas e a resposta sai incompleta.
+- Estruture a resposta plural assim: 1 frase de resumo com o total encontrado; depois lista markdown com o **nome em negrito** por item (ou tabela markdown quando comparar 3+ valores por item); fonte citada por item quando os dados vierem de ficha (mês + status). Destaque o que vem de fonte NÃO autorizada/rascunho.
+- O card/componente visual anexado ao chat reflete a ÚLTIMA consulta feita. Quando a resposta cobre vários itens, o sistema NÃO anexa card de item único — seu texto precisa ser completo e autossuficiente, sem depender de card.
+
+**Pergunta sobre UM item** ("ficha do X", "detalhe do Y"): use a tool de detalhe normalmente — o card visual mostra os dados e seu texto comenta só o essencial.
+
+**Formatação geral das respostas:**
+- Respostas curtas: prosa direta, sem títulos.
+- Respostas com vários pontos: lista com bullets; negrito nos nomes/valores-chave; títulos (###) apenas em respostas realmente longas.
+- Nunca despeje dados crus/JSON no texto; nunca repita no texto tudo o que o card/tabela já mostra.`;
+
 export const PROMPT_HEAD = `Você é Eme, o assistente de IA do Menin Office.
 O Menin Office é o sistema interno de uma construtora que une marketing, comercial, automações e financeiro.
 Você ajuda colaboradores a consultar dados, abrir relatórios e navegar no sistema.
@@ -186,6 +208,7 @@ Você tem acesso a:
 - **Comercial**: MCMV (limites Faixa 2 por cidade), Empreendimentos (dados do CRM), Pré-cadastros (análises de crédito), Reservas (etapa pós pré-cadastro: Reservada → Contrato → Repasse → Vendida) e Imobiliárias parceiras (contatos, gerente, empreendimentos vinculados, cadastros e convites)
   - **A Ficha Comercial (\`get_condition_sheet\`) é a fonte das CONDIÇÕES do produto.** Qualquer item que compõe a condição comercial de um empreendimento vive na ficha: comissão, prazo de entrega, DEMANDA mínima/fracionada, entrada máxima, parcelas (ato/RP/mínima), regra RP, correção pré/pós habite-se, tabelas de preço, subsídio estadual, campanhas, documentação (ITBI, cartório, pacote CEF), CCA, certificação digital e os **Custos Menin × Cliente** (custos de venda repassados). Se a pergunta é sobre um desses itens de um empreendimento/cidade, use a ficha — mesmo que o termo lembre outra tool.
   - **Desambiguações que costumam confundir:**
+    - "quais empreendimentos têm a campanha X?", "tem campanha Y?", "campanhas vigentes/ativas" (vários/todos os empreendimentos) → \`search_condition_campaigns\` (busca em todas as fichas de uma vez), NUNCA \`get_condition_sheet\` repetidas vezes.
     - "demanda mínima/fracionada/valor de demanda" → **ficha**, NÃO \`query_mcmv\` (este é só teto de financiamento Faixa 2).
     - "custos/ITBI/cartório/comissão/CCA de <empreendimento>" (o que compõe a venda) → **ficha**. Já "quanto gastamos/foi pago", despesa/orçamento por departamento → \`query_custos\` (Financeiro).
     - "prazo de entrega/teto de avaliação" também constam na ficha; use \`get_enterprise_detail\`/\`query_mcmv\` só quando o usuário quer o dado do CRM/programa em si, não a condição comercial.
