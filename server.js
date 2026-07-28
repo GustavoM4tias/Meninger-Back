@@ -279,6 +279,16 @@ function withTimeout(promise, ms, label) {
     return; // não escuta; Railway reinicia.
   }
 
+  // 1b) Colunas críticas do model User ANTES do listen (custa milissegundos).
+  // O model User participa de TODA request autenticada e do login: se a coluna
+  // nova (users.approval_status) só chegasse na fase de schema em background,
+  // login/callback Microsoft ficariam 500 até o sync global terminar.
+  try {
+    await ensureSignupApprovalColumns();
+  } catch (err) {
+    console.error('⚠️  ensureSignupApprovalColumns no boot falhou (a fase de schema tenta de novo):', err?.message || err);
+  }
+
   // 2) SOBE A PORTA JÁ — o site responde antes da fase de schema.
   app.listen(PORT, () => console.log(`Servidor rodando na porta: ${PORT}`));
 
