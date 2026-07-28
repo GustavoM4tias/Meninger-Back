@@ -68,6 +68,7 @@ import leadCvScheduler from './scheduler/leadCvScheduler.js';
 import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
 import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
 import reservaCvSweepScheduler from './scheduler/reservaCvSweepScheduler.js';
+import reservaCvGapScheduler from './scheduler/reservaCvGapScheduler.js';
 import landScheduler from './scheduler/landScheduler.js';
 import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js';
 import precadastroCvScheduler from './scheduler/precadastroCvScheduler.js';
@@ -495,6 +496,13 @@ async function startBackgroundServices() {
   if (process.env.ENABLE_CV_REPASSE_SCHEDULE === 'true') repasseCvScheduler.start();
   if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') reservaCvScheduler.start();
   if (process.env.ENABLE_CV_RESERVA_SWEEP_SCHEDULE === 'true') reservaCvSweepScheduler.start();
+  // Gap-fill de reservas: acompanha o delta. A listagem do CV não devolve tudo,
+  // e sem isto o banco fica com furos permanentes na sequência de idreserva
+  // (reservas que existem no CV e nunca chegam à projeção). Roda junto do delta
+  // porque é o complemento dele; desligue com ENABLE_CV_RESERVA_GAP=false.
+  if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true' && process.env.ENABLE_CV_RESERVA_GAP !== 'false') {
+    reservaCvGapScheduler.start();
+  }
   if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') landScheduler.start();
   if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') enterpriseCvScheduler.start();
   if (process.env.ENABLE_CV_PRECADASTRO_SCHEDULE === 'true') precadastroCvScheduler.start();
