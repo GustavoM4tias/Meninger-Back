@@ -359,7 +359,10 @@ async function conferirEmpreendimento(contrato, unidade) {
             const emp = await db.CvEnterprise.findByPk(idempCv);
             push(ccs, emp?.idempreendimento_int, 'código interno do empreendimento no cadastro do CV');
             push(empresas, emp?.idempreendimento_int, 'código interno do empreendimento no cadastro do CV');
-            push(empresas, emp?.raw?.idempresa_int ?? emp?.idempresa, 'empresa do cadastro do CV');
+            // Só o código da empresa NO SIENGE (idempresa_int). O `idempresa` do
+            // CV é id interno do CRM, outro namespace - compará-lo com o
+            // companyId do Sienge daria falso positivo.
+            push(empresas, emp?.raw?.idempresa_int, 'empresa do cadastro do CV');
         }
     } catch (err) {
         console.warn(`[RESERVA-CANCEL] Cadastro de empreendimentos indisponível: ${err.message}`);
