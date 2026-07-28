@@ -340,6 +340,34 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
 
         const { titular, condicoes, unidade } = reservaData;
 
+        // ── 1.5. Reserva cancelada/distratada? Pula tudo ──────────────────────
+        // O CV às vezes redispara o webhook pra reservas já canceladas (visto na
+        // reserva 7907 em 2026-07-28: 3 disparos APÓS o cancelamento). Emitir
+        // boleto, postar mensagem ou mexer na situação de uma reserva morta só
+        // gera ruído — e o registro entrava nos KPIs como erro. Critério de
+        // cancelamento igual ao ReservaCancelService: data_cancelamento ou
+        // data_distrato preenchida. Skip SILENCIOSO: sem mensagem no CV e sem
+        // agendarSituacaoCv (não move etapa de reserva cancelada).
+        const dataCancelamento = reservaData.data_cancelamento || reservaData.data_distrato || null;
+        if (dataCancelamento) {
+            const situacaoNome = reservaData.situacao?.situacao || '?';
+            console.log(`[BOLETO] Reserva ${idreserva} cancelada/distratada no CV (situação "${situacaoNome}", data ${dataCancelamento}) — fluxo ignorado.`);
+            await history.update({
+                status: 'skipped',
+                error_message: `Reserva cancelada/distratada no CV (situação "${situacaoNome}", data ${dataCancelamento}) — fluxo de boleto ignorado.`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+            });
+            await EventLogger.log({
+                historyId: history.id, idreserva,
+                type: 'payment_check_skipped', severity: 'info',
+                message: `Webhook ignorado — reserva cancelada/distratada no CV (situação "${situacaoNome}").`,
+                data: { data_cancelamento: reservaData.data_cancelamento || null, data_distrato: reservaData.data_distrato || null },
+            });
+            return;
+        }
+
         // ── 2. Localiza séries de entrada configuradas ────────────────────────
         // Flatten defensivo: tolera dados legados aninhados (ex.: [[[21,9]]]) que
         // possam ter ficado em produção antes do fix do setter.
