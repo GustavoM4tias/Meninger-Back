@@ -450,10 +450,12 @@ export const NOTIFICATION_CATALOG = {
         userOptional: false,
     },
 
-    // ── Marketing — Aprovações (tickets p/ diretoria) ──────────────────────────
+    // ── Aprovações (tickets p/ diretoria; ferramenta geral, ex-Marketing) ──────
+    // As chaves marketing.approval.* são MANTIDAS: prefs de usuário e notificações
+    // antigas já persistidas referenciam esses códigos.
     [NotificationType.MARKETING_APPROVAL_REQUESTED]: {
-        label: 'Solicitação de marketing aguardando sua aprovação',
-        group: 'Marketing',
+        label: 'Solicitação aguardando sua aprovação',
+        group: 'Aprovações',
         description: 'Quando uma solicitação entra em um perfil de autorização seu.',
         emailType: 'generic.notification',
         // WhatsApp deste tipo é enviado pelo marketingApprovalWhatsApp.js (template
@@ -463,8 +465,8 @@ export const NOTIFICATION_CATALOG = {
         userOptional: true,
     },
     [NotificationType.MARKETING_APPROVAL_DECIDED]: {
-        label: 'Resultado da sua solicitação de marketing',
-        group: 'Marketing',
+        label: 'Resultado da sua solicitação de aprovação',
+        group: 'Aprovações',
         description: 'Quando sua solicitação é aprovada, aprovada com ressalva ou reprovada.',
         emailType: 'generic.notification',
         whatsapp: {

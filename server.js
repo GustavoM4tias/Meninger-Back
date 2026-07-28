@@ -106,6 +106,7 @@ import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
 import { ensureFaturamentoRulesSchema } from './lib/ensureFaturamentoRulesSchema.js';
 import { ensureProjectionLinkSchema } from './lib/ensureProjectionLinkSchema.js';
 import { ensureEmeAuditSchema } from './lib/ensureEmeAuditSchema.js';
+import { ensurePermissionRouteRenames } from './lib/ensurePermissionRouteRenames.js';
 import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
@@ -439,6 +440,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['ComercialConditions', ensureComercialConditionsSchema],
     ['Organogram', ensureOrganogramSchema],
     ['EmeAudit', ensureEmeAuditSchema],
+    ['PermissionRouteRenames', ensurePermissionRouteRenames],
     ['InitialTypes', seedInitialTypes],
     ['SalesStandModels', seedSalesStandModels],
     ['Checklist', ensureChecklistSchema],

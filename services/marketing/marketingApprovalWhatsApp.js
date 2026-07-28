@@ -25,7 +25,7 @@ const TEMPLATE_NAME = 'marketing_approval_v1';
 const TEMPLATE_LANG = 'pt_BR';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://office.menin.com.br';
 
-const requestLink = (id) => `${FRONTEND_URL}/marketing/aprovacoes/${id}`;
+const requestLink = (id) => `${FRONTEND_URL}/aprovacoes/${id}`;
 const brl = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 function hasActiveConsent(u) {
@@ -114,7 +114,7 @@ export async function sendApprovalRequests(request) {
     const variables = [
         request.protocol,
         request.type_label,
-        requester?.username || 'Marketing',
+        requester?.username || 'Solicitante',
         brl(request.amount),
         detail,
     ];

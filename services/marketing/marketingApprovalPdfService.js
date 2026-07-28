@@ -133,7 +133,7 @@ function buildHtml(request) {
   <div class="head">
     <div class="brand">${LOGO_DATA_URI
         ? `<img class="logo" src="${LOGO_DATA_URI}" alt="Menin" />`
-        : 'Menin'}<small>Marketing · Autorização de Solicitação</small></div>
+        : 'Menin'}<small>Autorização de Solicitação</small></div>
     <div class="doc-title">
       <div class="kicker">Protocolo</div>
       <div class="proto">${escapeHtml(request.protocol)}</div>
