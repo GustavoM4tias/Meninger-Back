@@ -18,6 +18,7 @@ import {
   refreshSession,
   logoutSession,
 } from '../controllers/authController.js';
+import { getSignupOptions, completeSignup, activateUser } from '../controllers/signupController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import { authorizeByRole } from '../middlewares/permissionMiddleware.js';
 import { loginLimiter, passwordResetLimiter } from '../middlewares/rateLimiters.js';
@@ -39,6 +40,11 @@ router.put('/user/password', authenticate, changePassword);
 router.get('/user', authenticate, getUserInfo);
 router.put('/user', authenticate, updateMe);
 
+// ── Cadastro de primeiro acesso (usuário pendente de aprovação) ──────────────
+// Ambas liberadas para pendentes no authMiddleware (PENDING_ALLOWED).
+router.get('/signup-options', authenticate, getSignupOptions);
+router.post('/complete-signup', authenticate, completeSignup);
+
 // ── Credenciais Sienge — deve vir ANTES de /user/:id para evitar conflito de rota
 router.get('/user/sienge-credentials', authenticate, getSiengeCredentials);
 router.put('/user/sienge-credentials', authenticate, saveSiengeCredentials);
@@ -47,6 +53,9 @@ router.get('/user/:id', authenticate, authorizeByRole(['admin']), getUserById);
 router.get('/users', authenticate, authorizeByRole(['admin']), getAllUsers);
 router.put('/users', authenticate, authorizeByRole(['admin']), updateUser);
 router.post('/users/:id/reset-password', authenticate, authorizeByRole(['admin']), adminResetUserPassword);
+// Ativação de cadastro pendente: aplica alçadas padrão do departamento, gera
+// senha provisória e envia o e-mail de liberação.
+router.post('/users/:id/activate', authenticate, authorizeByRole(['admin']), activateUser);
 router.post('/face/enroll', authenticate, enrollFace);
 router.post('/face/identify', loginLimiter, identifyFace);
 

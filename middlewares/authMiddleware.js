@@ -3,6 +3,15 @@ import jwt from 'jsonwebtoken';
 import jwtConfig from '../config/jwtConfig.js';
 import db from '../models/sequelize/index.js';
 
+// Endpoints que um usuário PENDENTE de aprovação (primeiro acesso Microsoft)
+// pode alcançar: apenas o necessário para concluir o formulário de cadastro.
+// Qualquer outra chamada devolve 403 USER_PENDING até o admin ativar.
+const PENDING_ALLOWED = [
+  'GET /api/auth/user',
+  'GET /api/auth/signup-options',
+  'POST /api/auth/complete-signup',
+];
+
 const authenticate = async (req, res, next) => {
   const token = req.header('Authorization')?.split(' ')[1];
   if (!token) {
@@ -14,10 +23,24 @@ const authenticate = async (req, res, next) => {
 
     // ✅ carrega usuário do banco
     const user = await db.User.findByPk(decoded.id, {
-      attributes: ['id', 'role', 'position', 'city', 'auth_provider', 'status', 'username', 'email', 'microsoft_id'],
+      attributes: ['id', 'role', 'position', 'city', 'auth_provider', 'status', 'username', 'email', 'microsoft_id', 'approval_status'],
     });
 
-    if (!user || user.status === false) {
+    if (!user) {
+      return res.status(401).json({ success: false, code: 'USER_INACTIVE', error: 'Usuário inválido/inativo.' });
+    }
+
+    if (user.approval_status === 'pending') {
+      const path = String(req.originalUrl || '').split('?')[0];
+      const allowed = PENDING_ALLOWED.includes(`${req.method} ${path}`);
+      if (!allowed) {
+        return res.status(403).json({
+          success: false,
+          code: 'USER_PENDING',
+          error: 'Cadastro aguardando aprovação do gestor responsável.',
+        });
+      }
+    } else if (user.status === false) {
       return res.status(401).json({ success: false, code: 'USER_INACTIVE', error: 'Usuário inválido/inativo.' });
     }
 

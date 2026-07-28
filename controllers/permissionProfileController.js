@@ -1,5 +1,16 @@
 // /controllers/permissionProfileController.js
+import { Op } from 'sequelize';
 import db from '../models/sequelize/index.js';
+
+// Garante no máximo UM perfil padrão por departamento: ao vincular um perfil a
+// um departamento, desvincula qualquer outro que apontasse para ele.
+async function claimDepartment(departmentId, profileId) {
+  if (!departmentId) return;
+  await db.PermissionProfile.update(
+    { department_id: null },
+    { where: { department_id: departmentId, id: { [Op.ne]: profileId } } },
+  );
+}
 
 export async function getProfiles(req, res) {
   try {
@@ -16,7 +27,7 @@ export async function getProfiles(req, res) {
 
 export async function createProfile(req, res) {
   try {
-    const { name, description, routes } = req.body;
+    const { name, description, routes, department_id } = req.body;
     if (!name?.trim() || !Array.isArray(routes)) {
       return res.status(400).json({ message: 'Nome e rotas são obrigatórios.' });
     }
@@ -25,7 +36,9 @@ export async function createProfile(req, res) {
       name: name.trim(),
       description: description?.trim() || null,
       routes,
+      department_id: Number(department_id) || null,
     });
+    await claimDepartment(profile.department_id, profile.id);
 
     return res.status(201).json(profile);
   } catch (err) {
@@ -40,7 +53,7 @@ export async function createProfile(req, res) {
 export async function updateProfile(req, res) {
   try {
     const { id } = req.params;
-    const { name, description, routes } = req.body;
+    const { name, description, routes, department_id } = req.body;
 
     const profile = await db.PermissionProfile.findByPk(id);
     if (!profile) return res.status(404).json({ message: 'Perfil não encontrado.' });
@@ -48,8 +61,10 @@ export async function updateProfile(req, res) {
     if (name !== undefined) profile.name = name.trim();
     if (description !== undefined) profile.description = description?.trim() || null;
     if (Array.isArray(routes)) profile.routes = routes;
+    if (department_id !== undefined) profile.department_id = Number(department_id) || null;
 
     await profile.save();
+    await claimDepartment(profile.department_id, profile.id);
     return res.json(profile);
   } catch (err) {
     if (err.name === 'SequelizeUniqueConstraintError') {

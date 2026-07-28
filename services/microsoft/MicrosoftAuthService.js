@@ -260,6 +260,9 @@ class MicrosoftAuthService {
         // mas o campo é NOT NULL no modelo.
         const randomPassword = crypto.randomBytes(32).toString('hex');
 
+        // Nasce PENDENTE: sem acesso ao sistema (status false) até o admin ativar
+        // no painel de Usuários. O authMiddleware libera apenas os endpoints de
+        // completar cadastro enquanto approval_status === 'pending'.
         user = await db.User.create({
             username,
             password: randomPassword,   // hook bcrypt executa automaticamente
@@ -267,7 +270,8 @@ class MicrosoftAuthService {
             position: msProfile.jobTitle || '',
             city: '',
             role: 'user',
-            status: true,
+            status: false,
+            approval_status: 'pending',
             auth_provider: 'MICROSOFT',
             ...microsoftFields,
         });

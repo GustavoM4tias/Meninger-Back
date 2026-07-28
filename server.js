@@ -107,6 +107,7 @@ import { ensureFaturamentoRulesSchema } from './lib/ensureFaturamentoRulesSchema
 import { ensureProjectionLinkSchema } from './lib/ensureProjectionLinkSchema.js';
 import { ensureEmeAuditSchema } from './lib/ensureEmeAuditSchema.js';
 import { ensurePermissionRouteRenames } from './lib/ensurePermissionRouteRenames.js';
+import { ensureSignupApprovalColumns, seedDepartmentDefaultProfiles } from './lib/ensureSignupApprovalSchema.js';
 import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
@@ -357,6 +358,7 @@ async function syncModelsAndPatches(fingerprint) {
 
   await runPatch('ProjectionLink', ensureProjectionLinkSchema);     // cv_workflow_groups.stale_days
   await runPatch('FaturamentoRules', ensureFaturamentoRulesSchema); // stage_commission_rules.stage_id nullable
+  await runPatch('SignupApprovalColumns', ensureSignupApprovalColumns); // users.approval_status + permission_profiles.department_id
 
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
@@ -441,6 +443,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['Organogram', ensureOrganogramSchema],
     ['EmeAudit', ensureEmeAuditSchema],
     ['PermissionRouteRenames', ensurePermissionRouteRenames],
+    ['DepartmentDefaultProfiles', seedDepartmentDefaultProfiles],
     ['InitialTypes', seedInitialTypes],
     ['SalesStandModels', seedSalesStandModels],
     ['Checklist', ensureChecklistSchema],

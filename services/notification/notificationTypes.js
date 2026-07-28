@@ -71,6 +71,9 @@ export const NotificationType = {
     // Relatórios da Eme (relatórios customizados gerados por IA)
     REPORT_SHARED:          'report.shared',
     REPORT_PUBLIC_EXPIRING: 'report.public.expiring',
+
+    // Administração — cadastro de usuários (primeiro acesso)
+    USER_SIGNUP_PENDING:    'user.signup.pending',
 };
 
 export const NOTIFICATION_CATALOG = {
@@ -478,6 +481,17 @@ export const NOTIFICATION_CATALOG = {
         // Resultado direcionado ao solicitante: sempre chega.
         defaults: { inapp: true, email: true, whatsapp: true },
         userOptional: false,
+    },
+
+    // ── Administração — cadastro de usuários ───────────────────────────────────
+    [NotificationType.USER_SIGNUP_PENDING]: {
+        label: 'Novo cadastro aguardando aprovação',
+        group: 'Administração',
+        description: 'Quando um usuário novo conclui o cadastro do primeiro acesso e aguarda liberação (somente administradores recebem).',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
     },
 };
 

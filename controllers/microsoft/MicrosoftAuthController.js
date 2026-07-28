@@ -98,14 +98,26 @@ export default class MicrosoftAuthController {
             loginCodeStore.delete(code); // uso único
 
             const user = await db.User.findByPk(entry.userId);
-            if (!user || user.status === false) {
+            // Pendente de aprovação pode trocar o code: precisa do token para
+            // concluir o formulário de cadastro (authMiddleware restringe o resto).
+            const pending = user?.approval_status === 'pending';
+            if (!user || (user.status === false && !pending)) {
                 return res.status(401).json({ success: false, error: 'Usuário inválido/inativo.' });
             }
 
             const token = microsoftAuthService.generatePlatformToken(user);
             const refreshToken = await issueRefreshToken(user.id, req);
 
-            return res.json({ success: true, data: { token, refreshToken, isNew: entry.isNew } });
+            return res.json({
+                success: true,
+                data: {
+                    token,
+                    refreshToken,
+                    isNew: entry.isNew,
+                    pending,
+                    profileComplete: Boolean(user.city && user.birth_date),
+                },
+            });
         } catch (err) {
             console.error('❌ [Microsoft] exchange error:', err.message);
             return res.status(500).json({ success: false, error: 'Erro ao concluir login Microsoft.' });

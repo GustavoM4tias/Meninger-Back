@@ -20,6 +20,15 @@ export default (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: true,
     },
+    // Vínculo opcional com um departamento: marca este perfil como o conjunto
+    // PADRÃO de alçadas de visualização aplicado automaticamente ao ativar um
+    // usuário novo daquele departamento. No máximo um perfil por departamento
+    // (o controller desvincula os demais ao setar).
+    department_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: 'departments', key: 'id' },
+    },
   }, {
     tableName: 'permission_profiles',
     underscored: true,
