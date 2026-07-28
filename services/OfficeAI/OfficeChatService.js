@@ -26,7 +26,7 @@ import './ProfileTools.js';
 import './ProjectionTools.js';
 import './ReportsTools.js';
 import './ChecklistTools.js';
-import { getToolsFor, toGeminiDeclarations, findTool } from './ToolRegistry.js';
+import { getToolsFor, toGeminiDeclarations, findTool, userHasPermissions } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
 
 // Registry: nome → { declaration, executor }
@@ -40,6 +40,55 @@ registerTools(ALERT_DECLARATIONS,     alertExecuteTool);
 registerTools(CONDITION_DECLARATIONS, conditionExecuteTool);
 
 const TOOL_DECLARATIONS = [...TOOLS.values()].map(t => t.declaration);
+
+// ── Alçada das tools legadas (caminho fora do ToolRegistry/SecureRunner) ─────
+// Cada tool espelha a rota da tela equivalente nas Alçadas: quem não enxerga a
+// tela também não consulta o dado pela Eme. `null` = liberada para qualquer
+// autenticado (navegação de UI e alertas, que já têm trava de propriedade).
+// Tool legada FORA deste mapa é negada por padrão (fail-closed) — toda tool
+// nova deve nascer no ToolRegistry, não aqui.
+const LEGACY_TOOL_ROUTES = {
+  // MarketingTools
+  navigate_to_page: null,
+  query_leads: '/marketing/leads',
+  query_events: '/marketing/events',
+  // ComercialTools
+  query_mcmv: '/comercial/mcmv',
+  query_enterprises: '/comercial/buildings',
+  get_enterprise_detail: '/comercial/buildings',
+  query_precadastros: '/comercial/precadastros',
+  query_reservas: '/comercial/reservas-report',
+  // ConditionTools
+  query_condition_sheets: '/comercial/conditions',
+  get_condition_sheet: '/comercial/conditions',
+  search_condition_campaigns: '/comercial/conditions',
+  compare_condition_sheets: '/comercial/conditions',
+  // AlertTools — tela /settings/alerts é permissionManaged:false; handlers têm
+  // trava de propriedade (cada user só mexe nos próprios alertas).
+  preview_alert: null,
+  create_alert: null,
+  list_alerts: null,
+  get_alert_limit: null,
+  delete_alert: null,
+  open_alert_editor: null,
+};
+
+async function legacyToolAllowed(user, name) {
+  if (!(name in LEGACY_TOOL_ROUTES)) return false; // fail-closed p/ tool não mapeada
+  const route = LEGACY_TOOL_ROUTES[name];
+  if (route === null) return true;
+  return userHasPermissions(user, [route], false);
+}
+
+// Declarações legadas visíveis para o user (o Gemini nem fica sabendo das
+// tools que o usuário não pode chamar — menos convite à tentativa e erro).
+async function legacyDeclarationsFor(user) {
+  const out = [];
+  for (const d of TOOL_DECLARATIONS) {
+    if (await legacyToolAllowed(user, d.name)) out.push(d);
+  }
+  return out;
+}
 
 // Quantas tools a Eme pode encadear em UMA resposta antes de ser obrigada a
 // responder em texto. Cobre o caso comum de "não achei pelo nome exato, vou
@@ -133,7 +182,7 @@ function overlayOfficeTools(declarations, reports) {
 
 // E4: audit log das tool calls do Office. NÃO altera a execução — só registra
 // no EmeAuditLog (compliance/LGPD). Falha silenciosa: audit nunca quebra o chat.
-function auditOfficeTool({ user, sessionId, toolName, args, result, ms, ip, userAgent, context = 'OFFICE' }) {
+function auditOfficeTool({ user, sessionId, toolName, args, result, ms, ip, userAgent, context = 'OFFICE', permissionGranted = true }) {
   try {
     const argsSnap = {};
     for (const [k, v] of Object.entries(args || {})) {
@@ -154,7 +203,7 @@ function auditOfficeTool({ user, sessionId, toolName, args, result, ms, ip, user
       context: String(context || 'OFFICE').toUpperCase(),
       toolName: String(toolName).slice(0, 80),
       argsJson: argsSnap,
-      permissionGranted: true, // Office: city/role filtrado dentro da própria tool
+      permissionGranted, // alçada checada no roteamento (legacyToolAllowed) + city/role dentro da tool
       resultCount,
       ms: ms != null ? Math.round(ms) : null,
       error: result?.error ? String(result.error).slice(0, 1000) : null,
@@ -509,7 +558,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     const academyTools = await getToolsFor(fullUser, 'ACADEMY');
     activeDeclarations = toGeminiDeclarations(academyTools);
     if (isInternalUser) {
-      activeDeclarations = activeDeclarations.concat(TOOL_DECLARATIONS);
+      activeDeclarations = activeDeclarations.concat(await legacyDeclarationsFor(fullUser));
     }
   } else {
     // OFFICE: comportamento idêntico ao histórico — zero regressão.
@@ -540,8 +589,9 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         `- Evite frases longas com subordinadas — fluxo natural de voz.`;
     }
     // Overlay do cérebro sobre as tools (liga/desliga, descrição, regras de uso).
-    // Sem brain/reports → declarações idênticas ao código (zero regressão).
-    const toolOverlay = overlayOfficeTools(TOOL_DECLARATIONS, brain?.reports);
+    // Antes do overlay, filtra as tools legadas pela alçada do usuário — quem
+    // não tem a tela liberada não recebe (nem executa) a tool equivalente.
+    const toolOverlay = overlayOfficeTools(await legacyDeclarationsFor(fullUser), brain?.reports);
     activeDeclarations = toolOverlay.declarations;
     if (toolOverlay.promptRules) systemPrompt += toolOverlay.promptRules;
 
@@ -724,11 +774,20 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
               userAgent: req?.headers?.['user-agent'] || null,
             });
           } else {
-            toolResult = await executeTool(name, args, fullUser);
+            // Enforcement de alçada TAMBÉM na execução: mesmo que o modelo
+            // alucine uma tool que não recebeu na declaração, a chamada é
+            // negada aqui (fonte da verdade = user_permissions, nunca o Gemini).
+            const allowed = await legacyToolAllowed(fullUser, name);
+            if (!allowed) {
+              toolResult = { error: 'Sem alçada: o usuário não tem permissão para consultar estes dados.' };
+            } else {
+              toolResult = await executeTool(name, args, fullUser);
+            }
             auditOfficeTool({
               user: fullUser, sessionId: session.id, toolName: name,
               args: args || {}, result: toolResult, ms: Date.now() - toolStart,
               context: isAcademy ? 'ACADEMY' : 'OFFICE',
+              permissionGranted: allowed,
               ip: req?.ip || null, userAgent: req?.headers?.['user-agent'] || null,
             });
           }

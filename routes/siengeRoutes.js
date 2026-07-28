@@ -55,9 +55,11 @@ router.get('/contracts/companies', authenticate, listCompanies);
 // Limpar cache de empreendimentos: operação de manutenção, só admin.
 router.post('/contracts/cache/clear', authenticate, requireAdmin, clearCache);
 
-router.post('/contracts/sync/full', bulk.fullSync.bind(bulk));
-router.post('/contracts/sync/delta', bulk.deltaSync.bind(bulk));
-router.get('/contracts/sync/status', bulk.syncStatus.bind(bulk));
+// Sync manual de contratos — o cron roda em processo (contractSiengeScheduler);
+// estas rotas são gatilho/consulta manual e exigem admin.
+router.post('/contracts/sync/full', authenticate, requireAdmin, bulk.fullSync.bind(bulk));
+router.post('/contracts/sync/delta', authenticate, requireAdmin, bulk.deltaSync.bind(bulk));
+router.get('/contracts/sync/status', authenticate, bulk.syncStatus.bind(bulk));
 
 // Títulos (contas a pagar) — leitura AO VIVO do backup do Sienge
 router.get('/bills', authenticate, ctrl.list);
@@ -95,10 +97,11 @@ router.post('/launch-types', authenticate, createLaunchType);
 router.patch('/launch-types/:id', authenticate, updateLaunchType);
 
 // ── Backup do banco Sienge (cron + log + pg_restore no Postgres Railway) ──────
-router.get('/backups', authenticate, listBackups);
-router.get('/backups/:id', authenticate, getBackup);
-router.post('/backups/trigger', authenticate, triggerBackup);
-router.post('/backups/:id/cancel', authenticate, cancelBackup);
+// Tela /settings/backup-sienge é admin-only; as rotas acompanham.
+router.get('/backups', authenticate, requireAdmin, listBackups);
+router.get('/backups/:id', authenticate, requireAdmin, getBackup);
+router.post('/backups/trigger', authenticate, requireAdmin, triggerBackup);
+router.post('/backups/:id/cancel', authenticate, requireAdmin, cancelBackup);
 
 // ── Empreendimentos (enterprise_cities) ───────────────────────────────────────
 router.get('/payment-flow/enterprises', authenticate, listFlowEnterprises);   // ?q=termo

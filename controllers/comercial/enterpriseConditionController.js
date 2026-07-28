@@ -1528,6 +1528,10 @@ export const listOfficeUsers = async (req, res) => {
 
 export const getSettings = async (req, res) => {
     try {
+        // Expõe as listas de editores/autorizadores — leitura restrita a admin,
+        // igual ao PUT. Usuários comuns consultam /conditions/permissions.
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores podem ver as configurações.' });
+
         const settings = await getComercialSettings();
 
         // Resolve nomes dos usuários referenciados nas listas (para exibição no frontend)
