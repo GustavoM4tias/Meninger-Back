@@ -1,6 +1,7 @@
 // src/routes/validator/history.js
 import express from 'express';
 import db from '../../../models/sequelize/index.js';
+import { visibleCvIds } from '../../../services/permissions/accessScopeService.js';
 
 const router = express.Router();
 
@@ -9,11 +10,9 @@ const router = express.Router();
  * - ?summary=true  -> oculta 'mensagens'
  *
  * Retorno: APENAS o array de registros (sem count/offset), preservando o formato do frontend.
- * Regra de cidade (não-admin):
- *   EXISTS enterprise_cities ec
- *     WHERE ec.source='crm'
- *       AND COALESCE(ec.city_override, ec.default_city) = :userCity
- *       AND ec.enterprise_name ILIKE '%' || vh.empreendimento || '%'
+ * Escopo (não-admin): o histórico guarda o empreendimento por NOME; o registro
+ * só aparece se o nome casar com um empreendimento CV do escopo do usuário
+ * (accessScopeService). Fail-closed: escopo vazio → lista vazia.
  */
 router.get('/', async (req, res, next) => {
   try {
@@ -21,9 +20,7 @@ router.get('/', async (req, res, next) => {
       return res.status(401).json({ error: 'Usuário não autenticado.' });
     }
 
-    const isAdmin = req.user.role === 'admin';
-    const userCity = req.user.city || null;
-
+    const scopeCvIds = await visibleCvIds(req.user); // null = admin (sem filtro)
     const summary = String(req.query?.summary || '').toLowerCase() === 'true';
 
     const cols = [
@@ -41,11 +38,9 @@ router.get('/', async (req, res, next) => {
     const where = [];
     const repl = {};
 
-    if (!isAdmin) {
-      if (!userCity) {
-        return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-      }
-      repl.userCity = userCity;
+    if (scopeCvIds !== null) {
+      if (!scopeCvIds.length) return res.json([]); // fail-closed
+      repl.scopeCvIds = scopeCvIds;
 
       where.push(`
         EXISTS (
@@ -53,7 +48,7 @@ router.get('/', async (req, res, next) => {
           FROM enterprise_cities ec
           WHERE
             ec.source = 'crm'
-            AND COALESCE(ec.city_override, ec.default_city) = :userCity
+            AND ec.crm_id IN (:scopeCvIds)
             AND ec.enterprise_name ILIKE '%' || vh.empreendimento || '%'
         )
       `);

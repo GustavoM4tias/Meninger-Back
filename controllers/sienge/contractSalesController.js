@@ -1,6 +1,7 @@
 // src/controllers/sienge/contractSalesController.js
 import dayjs from 'dayjs'
 import db from '../../models/sequelize/index.js'
+import { visibleErpIds } from '../../services/permissions/accessScopeService.js'
 
 // caches globais (somente para admin em listEnterprises)
 let _enterprisesCache = null
@@ -86,8 +87,14 @@ export async function getContracts(req, res) {
     const whereCompanyIdClause = companyIdSafe ? ` AND sc.company_id = :companyId` : ''
     const whereCompanyIdsClause = hasCompanyIds ? ` AND sc.company_id IN (:companyIds)` : ''
 
-    const isAdmin = req.user?.role === 'admin'
-    const userCityRaw = isAdmin ? null : (req.user?.city || null)
+    // Escopo de acesso: null = admin (sem filtro), [] = nada visível
+    const scopeErpIds = await visibleErpIds(req.user)
+    const isAdmin = scopeErpIds === null
+    if (scopeErpIds && !scopeErpIds.length) {
+      // fail-closed: escopo vazio → resultado vazio
+      return res.json({ count: 0, results: [] })
+    }
+    const whereScopeClause = isAdmin ? '' : ` AND sc.enterprise_id IN (:scopeErpIds)`
 
     // ── Co-titulares (associates) ─────────────────────────────────────────────
     // Bloco caro: normaliza nome (unaccent + regex) de cada cliente do contrato
@@ -199,6 +206,7 @@ WITH base AS (
       SELECT 1 FROM hidden_dashboard_enterprises h
       WHERE h.active = true AND h.enterprise_id = sc.enterprise_id
     )
+    ${whereScopeClause}
     ${whereNameClause}
     ${whereEnterpriseIdClause}
     ${whereEnterpriseIdsClause}
@@ -425,24 +433,18 @@ LEFT JOIN rp_final rf
 LEFT JOIN reservas res
   ON res.idreserva = rf.idreserva
 
-WHERE
-  (
-    :isAdmin = TRUE
-    OR (
-      ec.city_resolved IS NOT NULL
-      AND unaccent(upper(regexp_replace(ec.city_resolved, '[^A-Z0-9]+',' ','g'))) =
-          unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g')))
-    )
-  )
-
 ORDER BY p.financial_institution_date, p.contract_id;
 `
+    // A visibilidade por escopo já foi aplicada na CTE base (whereScopeClause);
+    // ec_resolved segue existindo apenas para expor erp_city no payload.
     const replacements = {
       start: start.format('YYYY-MM-DD'),
       end: end.format('YYYY-MM-DD'),
-      situation: sit,
-      isAdmin,
-      userCity: userCityRaw
+      situation: sit
+    }
+
+    if (!isAdmin) {
+      replacements.scopeErpIds = scopeErpIds
     }
 
     if (Number.isFinite(enterpriseIdNum)) {
@@ -479,7 +481,9 @@ ORDER BY p.financial_institution_date, p.contract_id;
 
 export async function listEnterprises(req, res) {
   try {
-    const isAdmin = req.user?.role === 'admin'
+    // Escopo de acesso: null = admin (sem filtro), [] = nada visível
+    const erpIds = await visibleErpIds(req.user)
+    const isAdmin = erpIds === null
 
     // 🔁 Cache só para admin
     if (isAdmin && _enterprisesCache && Date.now() - _enterprisesCacheTs < CACHE_TTL) {
@@ -511,10 +515,10 @@ export async function listEnterprises(req, res) {
       return res.json({ count: results.length, results })
     }
 
-    // 🔒 Não-admin: mesma lógica, mas com filtro por cidade
-    const userCity = req.user?.city || ''
-    if (!userCity.trim()) {
-      return res.status(403).json({ error: 'Cidade do usuário não configurada.' })
+    // 🔒 Não-admin: mesma lógica, mas com filtro por escopo de acesso
+    // fail-closed: escopo vazio → lista vazia
+    if (!erpIds.length) {
+      return res.json({ count: 0, results: [] })
     }
 
     const sqlNonAdmin = `
@@ -524,18 +528,7 @@ export async function listEnterprises(req, res) {
         sc.company_id,
         sc.company_name
       FROM contracts sc
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved
-        FROM enterprise_cities ec
-        WHERE ec.erp_id IS NOT NULL
-          AND ec.erp_id = sc.enterprise_id::text
-        ORDER BY ec.updated_at DESC
-        LIMIT 1
-      ) ec_erp ON TRUE
-      WHERE
-        ec_erp.city_resolved IS NOT NULL
-        AND unaccent(upper(regexp_replace(ec_erp.city_resolved, '[^A-Z0-9]+',' ','g'))) =
-            unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
+      WHERE sc.enterprise_id IN (:erpIds)
       ORDER BY
         sc.enterprise_id,
         sc.financial_institution_date DESC NULLS LAST,
@@ -543,7 +536,7 @@ export async function listEnterprises(req, res) {
     `
 
     const filtered = await db.sequelize.query(sqlNonAdmin, {
-      replacements: { userCity },
+      replacements: { erpIds },
       type: db.Sequelize.QueryTypes.SELECT
     })
 
@@ -563,15 +556,17 @@ export async function clearCache(req, res) {
 /**
  * GET /api/sienge/contracts/companies
  * Lista empresas (company_id + company_name) distintas dos contratos.
- * Admin vê todas; não-admin vê apenas as da sua cidade.
+ * Admin vê todas; não-admin vê apenas as do seu escopo de acesso.
  */
 export async function listCompanies(req, res) {
   try {
-    const isAdmin = req.user?.role === 'admin'
-    const userCity = isAdmin ? null : (req.user?.city || '')
+    // Escopo de acesso: null = admin (sem filtro), [] = nada visível
+    const erpIds = await visibleErpIds(req.user)
+    const isAdmin = erpIds === null
 
-    if (!isAdmin && !userCity.trim()) {
-      return res.status(403).json({ error: 'Cidade do usuário não configurada.' })
+    // fail-closed: escopo vazio → lista vazia
+    if (!isAdmin && !erpIds.length) {
+      return res.json({ count: 0, results: [] })
     }
 
     const sqlAdmin = `
@@ -589,26 +584,16 @@ export async function listCompanies(req, res) {
         sc.company_id  AS id,
         sc.company_name AS name
       FROM contracts sc
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved
-        FROM enterprise_cities ec
-        WHERE ec.erp_id IS NOT NULL
-          AND ec.erp_id = sc.enterprise_id::text
-        ORDER BY ec.updated_at DESC
-        LIMIT 1
-      ) ec_erp ON TRUE
       WHERE sc.company_id IS NOT NULL
         AND sc.company_name IS NOT NULL
-        AND ec_erp.city_resolved IS NOT NULL
-        AND unaccent(upper(regexp_replace(ec_erp.city_resolved, '[^A-Z0-9]+',' ','g'))) =
-            unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g')))
+        AND sc.enterprise_id IN (:erpIds)
       ORDER BY sc.company_name;
     `
 
     const rows = await db.sequelize.query(
       isAdmin ? sqlAdmin : sqlNonAdmin,
       {
-        replacements: isAdmin ? {} : { userCity },
+        replacements: isAdmin ? {} : { erpIds },
         type: db.Sequelize.QueryTypes.SELECT,
       }
     )

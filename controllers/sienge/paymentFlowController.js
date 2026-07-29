@@ -19,6 +19,7 @@ import {
 } from '../../services/sienge/PaymentFlowPipelineService.js';
 import { sendEmail } from '../../email/email.service.js';
 import { generateRidDocx } from '../../services/sienge/RidDocumentService.js';
+import { visibleErpIds } from '../../services/permissions/accessScopeService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RID_TEMPLATE_PATH = path.resolve(__dirname, '../../assets/RID_Modelo.docx');
@@ -156,32 +157,16 @@ export async function listLaunches(req, res, next) {
 
         const where = {};
 
-        // ── Controle de acesso por usuário e cidade ───────────────────────────
+        // ── Controle de acesso por usuário e escopo (accessScopeService) ──────
         if (!isAdmin) {
-            // Busca a cidade do usuário
-            const user = await db.User.findByPk(userId, { attributes: ['city'] });
-            const userCity = user?.city;
-
-            // Empreendimentos na mesma cidade
-            let cityEnterpriseIds = [];
-            if (userCity) {
-                const cityEnts = await db.EnterpriseCity.findAll({
-                    where: db.Sequelize.where(
-                        db.Sequelize.fn('COALESCE',
-                            db.Sequelize.col('city_override'),
-                            db.Sequelize.col('default_city')
-                        ),
-                        { [Op.iLike]: `%${userCity}%` }
-                    ),
-                    attributes: ['erp_id'],
-                    raw: true,
-                });
-                cityEnterpriseIds = cityEnts.map(e => e.erp_id).filter(Boolean).map(String);
-            }
+            // Empreendimentos do escopo do usuário (fail-closed: lista vazia
+            // deixa visíveis apenas os lançamentos criados pelo próprio user)
+            const erpIds = (await visibleErpIds(req.user)) || [];
+            const scopeEnterpriseIds = erpIds.map(String);
 
             where[Op.or] = [
                 { createdBy: userId },
-                ...(cityEnterpriseIds.length ? [{ enterpriseId: { [Op.in]: cityEnterpriseIds } }] : []),
+                ...(scopeEnterpriseIds.length ? [{ enterpriseId: { [Op.in]: scopeEnterpriseIds } }] : []),
             ];
         } else if (createdBy) {
             where.createdBy = Number(createdBy);
@@ -221,7 +206,7 @@ export async function listLaunches(req, res, next) {
                 { siengeCreditorName: { [Op.iLike]: `%${search}%` } },
                 ...(isAdmin ? [{ createdByName: { [Op.iLike]: `%${search}%` } }] : []),
             ];
-            // Não-admin: combina filtro de acesso (cidade/usuário) com busca via Op.and
+            // Não-admin: combina filtro de acesso (escopo/usuário) com busca via Op.and
             // para não sobrescrever o controle de acesso já definido em where[Op.or]
             if (!isAdmin && where[Op.or]) {
                 where[Op.and] = [
@@ -317,26 +302,13 @@ export async function getSummary(req, res, next) {
         const where = {};
 
         if (!isAdmin) {
-            const user = await db.User.findByPk(userId, { attributes: ['city'] });
-            const userCity = user?.city;
-            let cityEnterpriseIds = [];
-            if (userCity) {
-                const cityEnts = await db.EnterpriseCity.findAll({
-                    where: db.Sequelize.where(
-                        db.Sequelize.fn('COALESCE',
-                            db.Sequelize.col('city_override'),
-                            db.Sequelize.col('default_city')
-                        ),
-                        { [Op.iLike]: `%${userCity}%` }
-                    ),
-                    attributes: ['erp_id'],
-                    raw: true,
-                });
-                cityEnterpriseIds = cityEnts.map(e => e.erp_id).filter(Boolean).map(String);
-            }
+            // Empreendimentos do escopo do usuário (fail-closed: lista vazia
+            // deixa visíveis apenas os lançamentos criados pelo próprio user)
+            const erpIds = (await visibleErpIds(req.user)) || [];
+            const scopeEnterpriseIds = erpIds.map(String);
             where[Op.or] = [
                 { createdBy: userId },
-                ...(cityEnterpriseIds.length ? [{ enterpriseId: { [Op.in]: cityEnterpriseIds } }] : []),
+                ...(scopeEnterpriseIds.length ? [{ enterpriseId: { [Op.in]: scopeEnterpriseIds } }] : []),
             ];
         }
 

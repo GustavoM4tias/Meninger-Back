@@ -13,18 +13,22 @@ import {
 } from '../controllers/deptSpendingAdminController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 
 const router = express.Router();
 
+// Alçada da tela Viabilidade (admin bypassa no middleware).
+const requireViability = requireRoutePermission(['/marketing/viabilidade']);
+
 // Análise de 1 empreendimento (por ERP/CC).
-router.get('/enterprise/:erpId', authenticate, getEnterpriseSpending);
+router.get('/enterprise/:erpId', authenticate, requireViability, getEnterpriseSpending);
 
 // Lista de todos os empreendimentos com projeção no período.
 // Diretoria (não-admin) recebe só os liberados; admin recebe tudo (rascunho + liberado).
-router.get('/enterprises', authenticate, getEnterprisesSpending);
+router.get('/enterprises', authenticate, requireViability, getEnterprisesSpending);
 
 // Relatório Gerencial de Investimento (por empresa Sienge). Não-admin: só configurado+liberado.
-router.get('/report/:companyId', authenticate, getCompanyReport);
+router.get('/report/:companyId', authenticate, requireViability, getCompanyReport);
 
 /* ===== ADMIN — configuração + liberação (admin-only) ===== */
 // Departamentos acompanhados (global)

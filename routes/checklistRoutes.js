@@ -5,10 +5,13 @@ import checklistController from '../controllers/checklist/checklistController.js
 import authenticate from '../middlewares/authMiddleware.js';
 import requireInternal from '../middlewares/requireInternal.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 import uploadExcelSingle from '../middlewares/excelUploadMiddleware.js';
 
 const router = express.Router();
-const internal = [authenticate, requireInternal];
+// Alçada da tela de Checklists (admin bypassa no middleware); gates de
+// admin/ownership existentes continuam valendo por cima.
+const internal = [authenticate, requireInternal, requireRoutePermission(['/checklists'])];
 const admin = [authenticate, requireInternal, requireAdmin];
 
 // ── Coleções específicas (antes de /:id) ──

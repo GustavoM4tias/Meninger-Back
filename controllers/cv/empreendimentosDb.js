@@ -1,6 +1,8 @@
 // /src/controllers/cv/empreendimentosDb.js
+import crypto from 'crypto';
 import db from '../../models/sequelize/index.js';
 import { summarizeUnitsFromDb } from '../../services/cv/enterpriseUnitsSummaryService.js';
+import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 const {
   CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
   CvEnterpriseMaterial, CvEnterprisePlan
@@ -11,10 +13,13 @@ const { Op } = db.Sequelize;
 const cache = new Map();
 const TTL = 30_000;
 
-const norm = (s) => String(s || '')
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase();
+// Chave de cache por escopo: 'all' para admin, hash da lista de ids vis\u00edveis
+// para n\u00e3o-admin (usu\u00e1rios com o mesmo escopo compartilham o cache).
+const scopeCacheKey = (ids) => {
+  if (ids === null) return 'all';
+  const sorted = [...ids].sort((a, b) => a - b).join(',');
+  return crypto.createHash('sha1').update(sorted).digest('hex').slice(0, 16);
+};
 
 export const fetchBuildingsFromDb = async (req, res) => {
   try {
@@ -22,11 +27,12 @@ export const fetchBuildingsFromDb = async (req, res) => {
       return res.status(401).json({ error: 'Usuário não autenticado.' });
     }
 
-    const isAdmin = req.user.role === 'admin';
-    const userCity = req.user.city || '';
+    // Escopo de acesso: null = admin (sem filtro), [] = nada visível
+    const allowedIds = await visibleCvIds(req.user);
+    const isAdmin = allowedIds === null;
 
-    // ----- CACHE (30s) -----
-    const key = `list:${isAdmin ? 'admin' : norm(userCity)}`;
+    // ----- CACHE (30s), chave por escopo -----
+    const key = `list:${scopeCacheKey(allowedIds)}`;
     const now = Date.now();
     const memo = cache.get(key);
     if (memo && now - memo.ts < TTL) {
@@ -48,46 +54,12 @@ export const fetchBuildingsFromDb = async (req, res) => {
       "raw"
     ];
 
-    // ----- FILTRO POR CIDADE (mesma lógica do Faturamento) -----
-    // Resolve a lista de idempreendimentos permitidos para a cidade do usuário
-    // a partir de enterprise_cities (city_override > default_city). Como
-    // cv_enterprises pode ter empreendimentos sem entrada em enterprise_cities,
-    // adicionamos um fallback direto pela coluna cv_enterprises.cidade.
+    // ----- FILTRO POR ESCOPO (accessScopeService) -----
+    // Não-admin: só enxerga os idempreendimentos do seu escopo de acesso.
     const where = {};
     if (!isAdmin) {
-      if (!String(userCity).trim()) {
-        return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-      }
-
-      const allowedRows = await db.sequelize.query(
-        `
-          SELECT DISTINCT idempreendimento
-          FROM (
-            SELECT ec.crm_id AS idempreendimento
-            FROM enterprise_cities ec
-            WHERE ec.crm_id IS NOT NULL
-              AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+',' ','g'))) || ' ')
-                  LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g'))) || ' %')
-
-            UNION
-
-            SELECT ce.idempreendimento
-            FROM cv_enterprises ce
-            WHERE ce.cidade IS NOT NULL
-              AND (' ' || unaccent(upper(regexp_replace(ce.cidade, '[^A-Z0-9]+',' ','g'))) || ' ')
-                  LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+',' ','g'))) || ' %')
-          ) AS allowed
-          WHERE idempreendimento IS NOT NULL
-        `,
-        { replacements: { userCity }, type: db.Sequelize.QueryTypes.SELECT }
-      );
-
-      const allowedIds = allowedRows
-        .map(r => Number(r.idempreendimento))
-        .filter(Number.isFinite);
-
       if (!allowedIds.length) {
-        // Nada permitido para esta cidade: devolve lista vazia (e cacheia).
+        // Nada permitido para este escopo: devolve lista vazia (e cacheia).
         cache.set(key, { ts: now, data: [] });
         res.set('X-Cache', 'MISS');
         return res.json([]);
@@ -166,15 +138,12 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
   const { id } = req.params;
   if (!id) return res.status(400).json({ error: "O parâmetro 'id' é obrigatório." });
 
-  // ── Visibilidade: não-admin só vê empreendimentos da própria cidade ──
-  const isAdmin  = req.user.role === 'admin';
-  const userCity = isAdmin ? null : (req.user.city || '');
-  if (!isAdmin && !String(userCity || '').trim()) {
-    return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-  }
+  // ── Visibilidade: não-admin só vê empreendimentos do seu escopo ──
+  const allowedIds = await visibleCvIds(req.user); // null = admin (sem filtro)
+  const isAdmin = allowedIds === null;
 
-  // cache scoped por usuário/admin para não vazar entre cidades
-  const key = `ent:${id}:${isAdmin ? 'admin' : norm(userCity)}`;
+  // cache scoped por escopo/admin para não vazar entre usuários
+  const key = `ent:${id}:${scopeCacheKey(allowedIds)}`;
   const now = Date.now();
   const memo = cache.get(key);
   if (memo && now - memo.ts < TTL) {
@@ -190,20 +159,10 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
     const ent = await CvEnterprise.findByPk(id);
     if (!ent) return res.status(404).json({ error: 'Empreendimento não encontrado.' });
 
-    // 1.1) Não-admin: confirma que o empreendimento está na sua cidade
-    if (!isAdmin) {
-      const [check] = await db.sequelize.query(`
-        SELECT 1
-        FROM enterprise_cities ec
-        WHERE ec.source = 'crm' AND ec.crm_id = :id
-          AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-              LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
-        LIMIT 1
-      `, {
-        replacements: { id, userCity },
-        type: db.Sequelize.QueryTypes.SELECT,
-      });
-      if (!check) return res.status(403).json({ error: 'Empreendimento fora da sua cidade.' });
+    // 1.1) Não-admin: confirma que o empreendimento está no seu escopo
+    // (fail-closed: escopo vazio → nada visível)
+    if (!isAdmin && !allowedIds.includes(Number(id))) {
+      return res.status(403).json({ error: 'Empreendimento fora do seu escopo.' });
     }
 
     // 2) busca filhos em paralelo (SEM include)

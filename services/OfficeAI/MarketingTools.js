@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { QueryTypes } from 'sequelize';
+import { visibleCvIds, visibleCities } from '../permissions/accessScopeService.js';
 
 /**
  * Monta uma linha resumo (subtitle) com período + cidade + filtros principais.
@@ -75,7 +76,7 @@ export const TOOL_DECLARATIONS = [
         origem:          { type: 'STRING',  description: 'Origem do lead. Ex: Busca Compartilhada, Busca Orgânica. Origens "Painel" são excluídas por padrão.' },
         situacao:        { type: 'STRING',  description: 'Situação do lead. Ex: Ativo, Descartado, Vendido.' },
         incluir_painel:  { type: 'BOOLEAN', description: 'Se true, inclui leads com origem "Painel Corretor/Gestor/Imobiliária". Por padrão são EXCLUÍDOS.' },
-        cidade:          { type: 'STRING',  description: 'Filtro por cidade do empreendimento (apenas admin). Para não-admin, a cidade do perfil é aplicada automaticamente — não é possível ver leads de outras cidades.' },
+        cidade:          { type: 'STRING',  description: 'Filtro adicional por cidade do empreendimento, aplicado DENTRO do escopo de acesso do usuário (nunca amplia o que ele pode ver).' },
         documento:       { type: 'STRING',  description: 'CPF/documento do cliente. Aceita CSV (múltiplos CPFs separados por vírgula). Útil para fazer bridge a partir de pré-cadastros/reservas — pegue os CPFs e passe aqui.' },
         idleads:         { type: 'STRING',  description: 'IDs específicos de leads a buscar. CSV de inteiros. Usado quando se tem os idleads de um contexto anterior (pré-cadastros, reservas, etc.).' },
         idprecadastros:  { type: 'STRING',  description: 'IDs de pré-cadastros (CSV). Filtra leads que estão associados a esses pré-cadastros.' },
@@ -100,7 +101,7 @@ export const TOOL_DECLARATIONS = [
         titulo:         { type: 'STRING', description: 'Filtro por título do evento.' },
         tag:            { type: 'STRING', description: 'Filtro por tag. Ex: Lançamento, Meeting.' },
         empreendimento: { type: 'STRING', description: 'Filtro por empreendimento vinculado ao evento (busca acento-insensível; também encontra eventos antigos que citam o empreendimento apenas no título). Use o nome como o usuário falou (ex: "Residencial Ingá").' },
-        cidade:         { type: 'STRING', description: 'Filtro por cidade do evento (apenas admin pode usar). Para não-admin, a cidade do perfil do usuário é aplicada automaticamente — não é possível ver eventos de outras cidades.' },
+        cidade:         { type: 'STRING', description: 'Filtro adicional por cidade do evento, aplicado DENTRO do escopo de acesso do usuário (nunca amplia o que ele pode ver).' },
         organizador:    { type: 'STRING', description: 'Filtro por nome do organizador responsável.' },
         group_by: {
           type: 'STRING',
@@ -126,17 +127,16 @@ function executeNavigate(args) {
 }
 
 async function executeQueryLeads(args, user) {
-  const isAdmin = user.role === 'admin';
   const limit = Math.min(args.limit || 50, 200);
 
-  // ── Visibilidade trancada (não-admin não pode bypass via args.cidade) ──
-  if (!isAdmin && !user.city?.trim()) {
+  // ── Escopo de acesso (accessScopeService): null = admin (sem filtro) ──
+  const cvIds = await visibleCvIds(user);
+  if (cvIds && !cvIds.length) {
     return {
       type: 'table', title: 'Leads', columns: [], rows: [], total: 0,
-      context: { source: 'leads', error: 'Cidade do usuário ausente — sem visibilidade.' },
+      context: { source: 'leads', error: 'Nenhum empreendimento no escopo de acesso do usuário — sem dados para mostrar.' },
     };
   }
-  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
 
   // Quando há filtro por ID/CPF, a janela de data é dispensada — IDs são exatos
   // e o lead pode ter sido cadastrado antes do período do contexto anterior.
@@ -157,14 +157,14 @@ async function executeQueryLeads(args, user) {
     whereClauses.push(`(l.origem IS NULL OR l.origem NOT ILIKE 'Painel %')`);
   }
 
-  // ── Filtro de empreendimento (com validação) ───────────────────────────────
+  // ── Filtro de empreendimento (com validação dentro do escopo) ──────────────
   if (args.empreendimento) {
-    const checkSql = isAdmin
-      ? `SELECT COUNT(*) AS cnt FROM enterprise_cities WHERE source = 'crm' AND enterprise_name ILIKE :name`
-      : `SELECT COUNT(*) AS cnt FROM enterprise_cities WHERE source = 'crm' AND enterprise_name ILIKE :name AND COALESCE(city_override, default_city) = :city`;
-    const checkRep = isAdmin
-      ? { name: `%${args.empreendimento}%` }
-      : { name: `%${args.empreendimento}%`, city: user.city };
+    const checkSql = cvIds
+      ? `SELECT COUNT(*) AS cnt FROM enterprise_cities WHERE source = 'crm' AND enterprise_name ILIKE :name AND crm_id IN (:scopeCvIds)`
+      : `SELECT COUNT(*) AS cnt FROM enterprise_cities WHERE source = 'crm' AND enterprise_name ILIKE :name`;
+    const checkRep = cvIds
+      ? { name: `%${args.empreendimento}%`, scopeCvIds: cvIds }
+      : { name: `%${args.empreendimento}%` };
     const [check] = await db.sequelize.query(checkSql, { replacements: checkRep, type: QueryTypes.SELECT });
     if (Number(check.cnt) === 0) {
       return {
@@ -247,9 +247,23 @@ async function executeQueryLeads(args, user) {
     }
   }
 
-  // ── Filtro de cidade trancado (effectiveCity já reflete user.city para não-admin) ──
-  if (effectiveCity) {
-    replacements.userCity = effectiveCity;
+  // ── Escopo trancado — o lead precisa citar um empreendimento do escopo ─────
+  if (cvIds) {
+    replacements.scopeCvIds = cvIds;
+    whereClauses.push(`EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(l.empreendimento) AS e_scope
+      WHERE COALESCE(
+              NULLIF(e_scope->>'id','')::int,
+              NULLIF(e_scope->>'idempreendimento','')::int,
+              NULLIF(e_scope->>'id_empreendimento','')::int
+            ) IN (:scopeCvIds)
+    )`);
+  }
+
+  // ── args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia) ─────────
+  if (args.cidade) {
+    replacements.userCity = args.cidade;
     whereClauses.push(`EXISTS (
       SELECT 1
       FROM jsonb_array_elements(l.empreendimento) AS e_city
@@ -277,10 +291,10 @@ async function executeQueryLeads(args, user) {
     corretor:       args.corretor       || null,
     midia:          args.midia          || null,
     situacao:       args.situacao       || null,
-    cidade:         effectiveCity,
+    cidade:         args.cidade         || null,
     group_by:       args.group_by       || null,
     incluir_painel: args.incluir_painel || false,
-    visibility:     isAdmin ? 'admin-full' : 'city-restricted',
+    visibility:     cvIds ? 'scope-restricted' : 'admin-full',
   };
 
   if (args.group_by) {
@@ -417,26 +431,22 @@ async function executeLeadsGrouped(groupBy, where, replacements, context) {
 }
 
 async function executeQueryEvents(args, user) {
-  const isAdmin = user.role === 'admin';
   const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
   const end   = args.data_fim   || dayjs().endOf('month').format('YYYY-MM-DD');
 
-  // ── Visibilidade — espelha eventController.getEvents + padrão Faturamento ──
-  // Não-admin sem cidade no perfil: bloqueia (idêntico ao dashboard).
-  if (!isAdmin && !user.city?.trim()) {
+  // ── Escopo de acesso: eventos filtram por endereço → visibleCities ─────────
+  // null = admin (sem filtro); [] = nenhuma cidade visível (fail-closed).
+  const scopeCities = await visibleCities(user);
+  if (scopeCities && !scopeCities.length) {
     return {
       type: 'table',
       title: 'Eventos',
       columns: [],
       rows: [],
       total: 0,
-      context: { source: 'events', error: 'Cidade do usuário ausente — sem visibilidade.' },
+      context: { source: 'events', error: 'Nenhuma cidade no escopo de acesso do usuário — sem dados para mostrar.' },
     };
   }
-
-  // Cidade efetiva: admin pode filtrar livre; não-admin é trancado na própria cidade
-  // (args.cidade é ignorada para não-admin, prevenindo bypass via prompt).
-  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
 
   const context = {
     source:         'events',
@@ -445,10 +455,10 @@ async function executeQueryEvents(args, user) {
     titulo:         args.titulo         || null,
     tag:            args.tag            || null,
     empreendimento: args.empreendimento || null,
-    cidade:         effectiveCity,
+    cidade:         args.cidade         || null,
     organizador:    args.organizador    || null,
     group_by:       args.group_by       || null,
-    visibility:     isAdmin ? 'admin-full' : 'city-restricted',
+    visibility:     scopeCities ? 'scope-restricted' : 'admin-full',
   };
 
   const whereClauses = [`ev.event_date BETWEEN :start AND :end`];
@@ -474,14 +484,24 @@ async function executeQueryEvents(args, user) {
     )`);
     replacements.emp = `%${args.empreendimento}%`;
   }
-  // Match de cidade normalizado (unaccent + collapse de pontuação/espaços).
-  // Padrão idêntico ao Faturamento — tolera "São Paulo" / "SAO PAULO" / "sao-paulo".
-  if (effectiveCity) {
+  // Escopo trancado — o evento precisa estar em uma das cidades do escopo.
+  // Match de cidade normalizado (unaccent + collapse de pontuação/espaços),
+  // padrão idêntico ao Faturamento — tolera "São Paulo" / "SAO PAULO" / "sao-paulo".
+  if (scopeCities) {
+    const parts = scopeCities.map((_, i) => `
+      (' ' || unaccent(upper(regexp_replace(COALESCE(ev.address->>'city', ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+      LIKE ('% ' || unaccent(upper(regexp_replace(:scopeCity_${i}, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
+    `);
+    whereClauses.push(`(${parts.join(' OR ')})`);
+    scopeCities.forEach((c, i) => { replacements[`scopeCity_${i}`] = c; });
+  }
+  // args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia)
+  if (args.cidade) {
     whereClauses.push(`
       (' ' || unaccent(upper(regexp_replace(COALESCE(ev.address->>'city', ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
       LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
     `);
-    replacements.userCity = effectiveCity;
+    replacements.userCity = args.cidade;
   }
   if (args.organizador) {
     whereClauses.push(`ev.organizers::text ILIKE :org`);

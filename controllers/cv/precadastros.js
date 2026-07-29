@@ -2,6 +2,7 @@
 import dayjs from 'dayjs';
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
+import { getScope, isErpAllowed } from '../../services/permissions/accessScopeService.js';
 
 const { CvPrecadastro, CvEnterprise, CvCorrespondent } = db;
 
@@ -118,16 +119,33 @@ export const listPrecadastros = async (req, res) => {
         // (filtro de empresa-construtora removido — agora "Empresa" no front mapeia
         //  para empresa_correspondente, que já é tratado em addIlikeCsv acima)
 
-        // ── Filtro por cidade do usuário (mesma lógica do Faturamento) ───────
-        // Admin vê tudo; user vê apenas pré-cadastros cujo empreendimento (via
-        // enterprise_cities) está na sua cidade.
-        const isAdmin   = req.user?.role === 'admin';
-        const userCity  = isAdmin ? null : (req.user?.city || '');
-        if (!isAdmin && !String(userCity || '').trim()) {
-            return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+        // ── Filtro por escopo de acesso do usuário (accessScopeService) ──────
+        // Admin vê tudo; user vê apenas pré-cadastros cujo empreendimento está
+        // no seu escopo (id CV, com fallback pelo id ERP do empreendimento).
+        const scope = await getScope(req.user);
+        if (!scope.all) {
+            const scopeCvIds  = scope.cvIds  || [];
+            const scopeErpIds = scope.erpIds || [];
+            if (!scopeCvIds.length && !scopeErpIds.length) {
+                // fail-closed: escopo vazio → resultado vazio
+                return res.json({
+                    count: 0,
+                    periodo: { data_inicio: replacements.start, data_fim: replacements.end },
+                    took_ms: 0,
+                    results: [],
+                });
+            }
+            const scopeParts = [];
+            if (scopeCvIds.length) {
+                scopeParts.push(`p.idempreendimento IN (:scopeCvIds)`);
+                replacements.scopeCvIds = scopeCvIds;
+            }
+            if (scopeErpIds.length) {
+                scopeParts.push(`NULLIF(regexp_replace(COALESCE(p.empreendimento->>'idempreendimento_int',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeErpIds)`);
+                replacements.scopeErpIds = scopeErpIds;
+            }
+            whereClauses.push(`(${scopeParts.join(' OR ')})`);
         }
-        replacements.isAdmin  = isAdmin;
-        replacements.userCity = userCity;
 
         const sql = `
           SELECT
@@ -165,29 +183,7 @@ export const listPrecadastros = async (req, res) => {
                 WHERE l3.origem IS NOT NULL
             ), ARRAY[]::text[]) AS lead_origens
           FROM cv_precadastros p
-          LEFT JOIN LATERAL (
-            SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved
-            FROM enterprise_cities ec
-            WHERE (
-              (ec.source = 'crm' AND ec.crm_id = p.idempreendimento)
-              OR (
-                ec.erp_id IS NOT NULL
-                AND p.empreendimento IS NOT NULL
-                AND ec.erp_id = NULLIF(p.empreendimento->>'idempreendimento_int','')
-              )
-            )
-            ORDER BY (ec.source = 'crm') DESC, ec.updated_at DESC
-            LIMIT 1
-          ) ec_emp ON TRUE
           WHERE ${whereClauses.join(' AND ')}
-            AND (
-              :isAdmin = TRUE
-              OR (
-                ec_emp.city_resolved IS NOT NULL
-                AND (' ' || unaccent(upper(regexp_replace(ec_emp.city_resolved, '[^A-Z0-9]+',' ','g'))) || ' ')
-                    LIKE ('% ' || unaccent(upper(regexp_replace(COALESCE(:userCity,''), '[^A-Z0-9]+',' ','g'))) || ' %')
-              )
-            )
           ORDER BY p.data_cad DESC
         `;
 
@@ -219,32 +215,16 @@ export const getPrecadastro = async (req, res) => {
         if (!row) return res.status(404).json({ error: 'Pré-cadastro não encontrado' });
 
         // ── Visibilidade: não-admin só pode ver se o empreendimento da pasta
-        //    está na sua cidade (mesma regra do listing). Match normalizado.
-        const isAdmin  = req.user?.role === 'admin';
-        const userCity = isAdmin ? null : (req.user?.city || '');
-        if (!isAdmin) {
-            if (!String(userCity || '').trim()) {
-                return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+        //    está no seu escopo (mesma regra do listing). Fail-closed.
+        const scope = await getScope(req.user);
+        if (!scope.all) {
+            const cvOk = row.idempreendimento != null
+                && (scope.cvIds || []).includes(Number(row.idempreendimento));
+            const erpRaw = String(row.empreendimento?.idempreendimento_int ?? '').replace(/[^0-9]/g, '');
+            const erpOk = erpRaw !== '' && isErpAllowed(scope, Number(erpRaw));
+            if (!cvOk && !erpOk) {
+                return res.status(403).json({ error: 'Pré-cadastro fora do seu escopo.' });
             }
-            const [check] = await db.sequelize.query(`
-                SELECT 1
-                FROM enterprise_cities ec
-                WHERE (
-                  (ec.source = 'crm' AND ec.crm_id = :idemp)
-                  OR (ec.erp_id IS NOT NULL AND ec.erp_id = :erpId)
-                )
-                AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-                    LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
-                LIMIT 1
-            `, {
-                replacements: {
-                    idemp: row.idempreendimento,
-                    erpId: row.empreendimento?.idempreendimento_int || null,
-                    userCity,
-                },
-                type: db.Sequelize.QueryTypes.SELECT,
-            });
-            if (!check) return res.status(403).json({ error: 'Pré-cadastro fora da sua cidade.' });
         }
 
         return res.json(row);

@@ -7,6 +7,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import tz from 'dayjs/plugin/timezone.js';
 import { Op } from 'sequelize';
+import { visibleCities } from '../services/permissions/accessScopeService.js';
 dayjs.extend(utc); dayjs.extend(tz);
 
 const TZ = process.env.TIMEZONE || 'America/Sao_Paulo';
@@ -118,13 +119,14 @@ export const updateEvent = async (req, res) => {
 
 export const getEvents = async (req, res) => {
   try {
-    // 🔒 precisa do user para sabermos a cidade
+    // 🔒 precisa do user para sabermos o escopo
     if (!req.user) {
       return res.status(401).json({ error: 'Usuário não autenticado.' });
     }
 
-    const isAdmin = req.user.role === 'admin';
-    const userCity = req.user.city || '';
+    // Escopo por cidades (eventos filtram por endereço, sem id de
+    // empreendimento): null = admin (sem filtro), [] = nada visível
+    const cities = await visibleCities(req.user);
 
     // Base do findAll
     const base = {
@@ -137,22 +139,24 @@ export const getEvents = async (req, res) => {
     };
 
     // Admin -> vê tudo
-    if (isAdmin) {
+    if (cities === null) {
       const events = await Event.findAll(base);
       return responseHandler.success(res, { events });
     }
 
-    // Não-admin -> precisa de cidade no token
-    if (!userCity?.trim()) {
-      return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+    // fail-closed: escopo sem cidades → nada visível
+    if (!cities.length) {
+      return responseHandler.success(res, { events: [] });
     }
 
-    // 🎯 Filtro por address.city ILIKE %userCity%
+    // 🎯 Filtro por address.city ILIKE %cidade% (qualquer cidade do escopo)
     // Sequelize com Postgres permite json path com Sequelize.json('address.city')
-    const whereCity = db.Sequelize.where(
-      db.Sequelize.json('address.city'),
-      { [Op.iLike]: `%${userCity}%` }
-    );
+    const whereCity = {
+      [Op.or]: cities.map((c) => db.Sequelize.where(
+        db.Sequelize.json('address.city'),
+        { [Op.iLike]: `%${c}%` }
+      )),
+    };
 
     const events = await Event.findAll({
       ...base,

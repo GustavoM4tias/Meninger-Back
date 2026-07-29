@@ -9,13 +9,15 @@
 // mensal por empreendimento: year_month, units_target, avg_price_target),
 // sales_projection_enterprises (defaults por empreendimento: nome, erp_id).
 //
-// Escopo: não-admin é trancado na própria cidade (cruza erp_id com enterprise_cities).
-// Regra de ouro: cidade/role vêm do `user`, nunca de `args`.
+// Escopo: não-admin é trancado nos empreendimentos do seu escopo de acesso
+// (accessScopeService → visibleErpIds, cruzando com o erp_id das linhas).
+// Regra de ouro: escopo/role vêm do `user`, nunca de `args`.
 
 import dayjs from 'dayjs';
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
+import { visibleErpIds } from '../permissions/accessScopeService.js';
 
 const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 const fmtMoney = (v) => BRL.format(Number(v || 0));
@@ -55,22 +57,14 @@ registerTool({
             };
         }
 
-        // 2) Escopo de cidade (não-admin trancado na própria cidade)
-        const isAdmin = user.role === 'admin';
-        if (!isAdmin && !String(user.city || '').trim()) {
-            return { result: { message: 'Seu usuário não tem cidade definida no perfil, então não consigo escopar a projeção. Avise que é preciso ajustar o cadastro; não invente dados.' }, resultCount: 0 };
+        // 2) Escopo de acesso (accessScopeService): null = admin (sem filtro)
+        const erpIds = await visibleErpIds(user);
+        if (erpIds && !erpIds.length) {
+            return { result: { message: 'Não há nenhum empreendimento no escopo de acesso do usuário — nenhum dado de projeção para mostrar. Diga isso com clareza; não invente dados.' }, resultCount: 0 };
         }
-        let allowedErp = null; // null = sem restrição (admin)
-        if (!isAdmin) {
-            const rows = await db.sequelize.query(
-                `SELECT DISTINCT ec.erp_id FROM enterprise_cities ec
-                  WHERE ec.erp_id IS NOT NULL
-                    AND unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city),'[^A-Za-z0-9]+',' ','g')))
-                      = unaccent(upper(regexp_replace(:city,'[^A-Za-z0-9]+',' ','g')))`,
-                { replacements: { city: user.city }, type: db.Sequelize.QueryTypes.SELECT }
-            );
-            allowedErp = new Set(rows.map(r => String(r.erp_id)));
-        }
+        // Compara por dígitos (erp_id das linhas pode vir formatado como texto).
+        const normErp = (v) => String(v ?? '').replace(/\D/g, '');
+        const allowedErp = erpIds ? new Set(erpIds.map(normErp)) : null; // null = sem restrição (admin)
 
         // 3) Período (padrão: janela de 12 meses a partir do mês atual)
         const startM = normYM(args?.data_inicio) || dayjs().format('YYYY-MM');
@@ -99,7 +93,7 @@ registerTool({
         const priceOf = (l) => Number(l.avg_price_target) > 0 ? Number(l.avg_price_target) : Number(defByKey.get(`${l.enterprise_key}|${l.alias_id || 'default'}`)?.default_avg_price || 0);
 
         const visible = lines.filter(l => {
-            if (allowedErp && !allowedErp.has(String(erpOf(l)))) return false;
+            if (allowedErp && !allowedErp.has(normErp(erpOf(l)))) return false;
             if (filtro && !normText(nameOf(l)).includes(filtro)) return false;
             return true;
         });

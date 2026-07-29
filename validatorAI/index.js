@@ -4,6 +4,7 @@ import multer from 'multer';
 import cors from 'cors';
 import helmet from 'helmet';
 import authenticate from '../middlewares/authMiddleware.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 import { documentRoutes } from './src/routes/documentRoutes.js';
 import { chatRoutes } from './src/routes/chatRoutes.js';
 import statsRoutes from './src/routes/statsRoutes.js';
@@ -32,10 +33,12 @@ app.use(express.json());
 // 🔒 SEGURANÇA: /chat, /token, /payment-flow e /validator/history exigem authenticate.
 // /validator é chamado server-to-server pelo job de análise automática de contratos
 // (sem usuário no fluxo) — protegido apenas por CORS/rede interna.
+// Alçada da tela do Validador (admin bypassa no middleware).
+const requireValidator = requireRoutePermission(['/validator']);
 app.use('/validator', documentRoutes(upload));
-app.use('/validator/history', authenticate, historyRoutes);
-app.use('/chat', authenticate, chatRoutes);
-app.use('/token', authenticate, statsRoutes);
+app.use('/validator/history', authenticate, requireValidator, historyRoutes);
+app.use('/chat', authenticate, requireValidator, chatRoutes);
+app.use('/token', authenticate, requireValidator, statsRoutes);
 app.use('/payment-flow', authenticate, paymentFlowRoutes(upload));
 
 app.use(errorHandler);

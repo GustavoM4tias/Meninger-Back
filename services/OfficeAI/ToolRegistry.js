@@ -46,8 +46,9 @@ export function findTool(name) {
 
 /**
  * Verifica se um user tem as permissões necessárias para uma tool.
- * Hoje usa: user.role==='admin' como bypass, e tabela user_permissions.
- * Para versão mais granular, integrar com permissionMiddleware/permissionStore.
+ * admin = bypass; demais usam as rotas EFETIVAS do modelo perfil vivo +
+ * exceções (permissionAccessService) — mesma fonte das Alçadas e do
+ * middleware requireRoutePermission.
  */
 async function userHasPermissions(user, requiredPermissions = [], adminOnly = false) {
     if (!user) return false;
@@ -57,17 +58,9 @@ async function userHasPermissions(user, requiredPermissions = [], adminOnly = fa
     if (!requiredPermissions.length) return true;
     if (isAdmin) return true; // admin bypass
 
-    // Lazy load das permissions do user. O model real guarda UMA linha por user
-    // com `routes` = array JSON de rotas liberadas (mesma fonte das Alçadas).
     try {
-        const perm = await db.UserPermission.findOne({
-            where: { userId: user.id },
-            attributes: ['routes'],
-            raw: true,
-        });
-        const routes = Array.isArray(perm?.routes) ? perm.routes : [];
-        const permSet = new Set(routes.map(r => String(r || '').toLowerCase()));
-        return requiredPermissions.every(p => permSet.has(String(p).toLowerCase()));
+        const { userHasRoutes } = await import('../permissions/permissionAccessService.js');
+        return await userHasRoutes(user.id, requiredPermissions);
     } catch (err) {
         console.warn('[ToolRegistry] permission check failed', err?.message);
         return false;

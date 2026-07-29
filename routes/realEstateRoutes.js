@@ -5,6 +5,7 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireInternal from '../middlewares/requireInternal.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 import upload from '../middlewares/uploadMiddleware.js';
 import {
     listRegistrations,
@@ -19,7 +20,7 @@ import {
 
 const router = express.Router();
 
-router.use(authenticate, requireInternal);
+router.use(authenticate, requireInternal, requireRoutePermission(['/comercial/imobiliarias']));
 
 router.get('/registrations', listRegistrations);
 router.post('/registrations', createInternalRegistration);

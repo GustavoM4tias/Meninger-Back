@@ -109,6 +109,9 @@ import { ensureEmeAuditSchema } from './lib/ensureEmeAuditSchema.js';
 import { ensurePermissionRouteRenames } from './lib/ensurePermissionRouteRenames.js';
 import { ensureSignupApprovalColumns, seedDepartmentDefaultProfiles } from './lib/ensureSignupApprovalSchema.js';
 import { ensureLegacyDrops } from './lib/ensureLegacyDrops.js';
+import { ensureAccessModelSchema } from './lib/ensureAccessModelSchema.js';
+import { ensureOrgDefaultsSchema } from './lib/ensureOrgDefaultsSchema.js';
+import { registerApp as registerIntegrityApp, runIntegrityCheck } from './security/integrityCheck.js';
 import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
@@ -250,6 +253,19 @@ app.use('/api/comunicados', comunicadoRoutes);
 app.use('/api/checklists', checklistRoutes);
 app.use('/api/organogram', organogramRoutes);
 app.use('/api/docusign-oauth', docusignOauthRoutes); // callback público do login DocuSign (state assinado)
+
+// Validador de integridade: registra o app para a varredura de rotas e roda
+// uma checagem em background no boot (resumo no log; detalhe na tela admin).
+registerIntegrityApp(app);
+setTimeout(() => {
+  runIntegrityCheck().then(r => {
+    const flag = r.healthy ? '✅' : '🔴';
+    console.log(`${flag} [Integrity] fail=${r.counts.fail || 0} warn=${r.counts.warn || 0} ok=${r.counts.ok || 0} — detalhe em /settings/integrity`);
+    for (const c of r.checks.filter(c => c.status === 'fail')) {
+      console.warn(`🔴 [Integrity] ${c.name}: ${c.summary}`);
+    }
+  }).catch(e => console.warn('⚠️  [Integrity] checagem de boot falhou:', e?.message));
+}, 30_000); // depois do sync/patches típicos; a rota admin roda sob demanda
 
 const PORT = process.env.PORT || 5000;
 
@@ -449,6 +465,8 @@ async function syncModelsAndPatches(fingerprint) {
     ['SalesStandModels', seedSalesStandModels],
     ['Checklist', ensureChecklistSchema],
     ['LegacyDrops', ensureLegacyDrops],
+    ['AccessModel', ensureAccessModelSchema],
+    ['OrgDefaults', ensureOrgDefaultsSchema],
   ];
 
   for (const [name, fn] of patches) {

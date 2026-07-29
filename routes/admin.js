@@ -67,6 +67,16 @@ import {
 } from '../controllers/trSatelliteController.js';
 
 import LandDataController from '../controllers/external/landDataController.js';
+import {
+  listEnterprises as orgListEnterprises,
+  listCompanies as orgListCompanies,
+  syncCrm as orgSyncCrm,
+  syncErp as orgSyncErp,
+  consolidate as orgConsolidate,
+  pair as orgPair,
+  updateEnterprise as orgUpdateEnterprise,
+} from '../controllers/orgRegistryController.js';
+import { runIntegrityCheck } from '../security/integrityCheck.js';
 const landDataController = new LandDataController();
 
 
@@ -94,6 +104,27 @@ router.post('/enterprise-cities/sync/erp', authMiddleware, requireAdmin, syncERP
 router.get('/enterprise-cities', authMiddleware, listCities);
 router.put('/enterprise-cities/:id/override', authMiddleware, requireAdmin, setOverride);
 router.get('/enterprise-cities/resolve', authMiddleware, resolveCityController);
+
+// Validador de integridade de segurança (tela /settings/integrity)
+router.post('/integrity-check', authMiddleware, requireAdmin, async (_req, res) => {
+  try {
+    const report = await runIntegrityCheck();
+    return res.json(report);
+  } catch (e) {
+    console.error('[integrity-check]', e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Registro unificado de empresas/empreendimentos (tela Sincronização de
+// empresas — substitui os Vínculos de cidades). APENAS ADMIN.
+router.get('/org/enterprises', authMiddleware, requireAdmin, orgListEnterprises);
+router.get('/org/companies', authMiddleware, requireAdmin, orgListCompanies);
+router.post('/org/sync/crm', authMiddleware, requireAdmin, orgSyncCrm);
+router.post('/org/sync/erp', authMiddleware, requireAdmin, orgSyncErp);
+router.post('/org/consolidate', authMiddleware, requireAdmin, orgConsolidate);
+router.post('/org/enterprises/:id/pair', authMiddleware, requireAdmin, orgPair);
+router.put('/org/enterprises/:id', authMiddleware, requireAdmin, orgUpdateEnterprise);
 
 // Positions (cargos) – APENAS ADMIN
 router.get('/positions', authMiddleware, requireAdmin, listPositions);

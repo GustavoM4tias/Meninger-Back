@@ -3,6 +3,7 @@ import multer from 'multer';
 import { getContracts, listEnterprises, listCompanies, clearCache } from '../controllers/sienge/contractSalesController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 import bulkDataController from '../controllers/sienge/bulkDataController.js';
 import BillsController from '../controllers/sienge/billsController.js';
 import {
@@ -49,9 +50,11 @@ const upload = multer({
 });
 
 // GET /api/contracts?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&situation=Emitido|Autorizado|Cancelado&enterpriseName=texto
-router.get('/contracts', authenticate, getContracts);
-router.get('/contracts/enterprises', authenticate, listEnterprises);
-router.get('/contracts/companies', authenticate, listCompanies);
+// Alçada: telas que consomem o dashboard de contratos.
+const CONTRACT_SCREENS = ['/comercial/faturamento', '/comercial/sales-projection', '/financeiro/consulta-cef', '/validator'];
+router.get('/contracts', authenticate, requireRoutePermission(CONTRACT_SCREENS), getContracts);
+router.get('/contracts/enterprises', authenticate, requireRoutePermission(CONTRACT_SCREENS), listEnterprises);
+router.get('/contracts/companies', authenticate, requireRoutePermission(CONTRACT_SCREENS), listCompanies);
 // Limpar cache de empreendimentos: operação de manutenção, só admin.
 router.post('/contracts/cache/clear', authenticate, requireAdmin, clearCache);
 
@@ -62,12 +65,12 @@ router.post('/contracts/sync/delta', authenticate, requireAdmin, bulk.deltaSync.
 router.get('/contracts/sync/status', authenticate, bulk.syncStatus.bind(bulk));
 
 // Títulos (contas a pagar) — leitura AO VIVO do backup do Sienge
-router.get('/bills', authenticate, ctrl.list);
+router.get('/bills', authenticate, requireRoutePermission(['/financeiro/titulos']), ctrl.list);
 
 // ── Consulta de nº CEF (Contas a Receber) — contratos sincronizados do Sienge ─
-// Alçada por cidade aplicada dentro do controller (admin vê tudo).
-router.get('/cef/enterprises', authenticate, listCefEnterprises);
-router.get('/cef/search', authenticate, searchCef);
+// Escopo de dados aplicado dentro do controller (admin vê tudo).
+router.get('/cef/enterprises', authenticate, requireRoutePermission(['/financeiro/consulta-cef']), listCefEnterprises);
+router.get('/cef/search', authenticate, requireRoutePermission(['/financeiro/consulta-cef']), searchCef);
 
 // ── Inadimplência (admin-only) — lê do backup diário do Sienge (sie214801) ────
 // Gate de admin é aplicado dentro do controller (req.user.role).
@@ -90,6 +93,12 @@ router.use('/launch-types', (req, res, next) => {
     }
     next();
 });
+
+// Alçada da tela Fluxo de Pagamento aplicada NO NÍVEL DO PREFIXO: cobre todas
+// as sub-rotas de /payment-flow e /launch-types de uma vez (as rotas abaixo
+// ainda chamam authenticate individualmente; a dupla execução é inócua).
+router.use('/payment-flow', authenticate, requireRoutePermission(['/financeiro/paymentflow']));
+router.use('/launch-types', authenticate, requireRoutePermission(['/financeiro/paymentflow']));
 
 // ── Tipos de Lançamento (dinâmicos, tabela launch_type_configs) ───────────────
 router.get('/launch-types', authenticate, listLaunchTypes);

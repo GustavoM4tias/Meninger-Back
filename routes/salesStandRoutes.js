@@ -5,9 +5,11 @@ import express from 'express';
 import ctrl from '../controllers/marketing/salesStandController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireInternal from '../middlewares/requireInternal.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 
 const router = express.Router();
-const internal = [authenticate, requireInternal];
+// Alçada da tela Stand de Vendas (admin bypassa no middleware).
+const internal = [authenticate, requireInternal, requireRoutePermission(['/marketing/stand-vendas'])];
 
 // ── Coleções específicas (antes de /:id) ──
 router.get('/cost-centers', ...internal, ctrl.listCostCenters);

@@ -6,27 +6,15 @@
 // Caixa Econômica Federal - com filtro por empreendimento e busca geral
 // (cliente, nº do contrato, unidade, empreendimento ou o próprio nº CEF).
 //
-// Alçada: admin enxerga tudo; não-admin enxerga apenas empreendimentos cuja
-// cidade resolvida (enterprise_cities: city_override > default_city) bate com a
-// cidade do usuário - mesmo gate usado em contratos/faturamento.
+// Alçada: admin enxerga tudo; não-admin enxerga apenas empreendimentos cujo
+// centro de custo (contracts.enterprise_id) está no seu escopo de acesso
+// (accessScopeService) - mesmo gate usado em contratos/faturamento.
 import db from '../../models/sequelize/index.js'
+import { getScope } from '../../services/permissions/accessScopeService.js'
 
-// Igualdade de cidade normalizada (mesmo padrão do contractSalesController).
-const CITY_EQ = (expr) => `unaccent(upper(regexp_replace(${expr}, '[^A-Za-z0-9]+', ' ', 'g')))`
-
-const CITY_JOIN = `
-  LEFT JOIN LATERAL (
-    SELECT COALESCE(ec.city_override, ec.default_city) AS city_resolved
-    FROM enterprise_cities ec
-    WHERE ec.erp_id IS NOT NULL
-      AND ec.erp_id = sc.enterprise_id::text
-    ORDER BY ec.updated_at DESC
-    LIMIT 1
-  ) ec_erp ON TRUE`
-
-const CITY_WHERE = `
-  AND ec_erp.city_resolved IS NOT NULL
-  AND ${CITY_EQ('ec_erp.city_resolved')} = ${CITY_EQ(':userCity')}`
+// Filtro de escopo por id ERP direto na tabela de contratos.
+const SCOPE_WHERE = `
+  AND sc.enterprise_id IN (:erpIds)`
 
 // Nº CEF "preenchido" = string não vazia após TRIM.
 const HAS_CEF = `NULLIF(TRIM(sc.financial_institution_number), '') IS NOT NULL`
@@ -37,40 +25,38 @@ function parseIds(raw) {
         : []
 }
 
-/** Resolve a alçada do usuário. Responde 403 e retorna null se não-admin sem cidade. */
-function resolveScope(req, res) {
-    const isAdmin = req.user?.role === 'admin'
-    if (isAdmin) return { isAdmin: true, userCity: null }
-    const userCity = (req.user?.city || '').trim()
-    if (!userCity) {
-        res.status(403).json({ error: 'Cidade do usuário não configurada. Fale com um administrador.' })
-        return null
-    }
-    return { isAdmin: false, userCity }
+/** Resolve a alçada do usuário via accessScopeService (fail-closed). */
+async function resolveScope(req) {
+    const scope = await getScope(req.user)
+    if (scope.all) return { isAdmin: true, erpIds: null }
+    return { isAdmin: false, erpIds: scope.erpIds || [] }
 }
 
 /**
  * GET /api/sienge/cef/enterprises
- * Empreendimentos disponíveis para o usuário (admin: todos; não-admin: da sua cidade).
+ * Empreendimentos disponíveis para o usuário (admin: todos; não-admin: do seu escopo).
  */
 export async function listCefEnterprises(req, res) {
     try {
-        const scope = resolveScope(req, res)
-        if (!scope) return
+        const scope = await resolveScope(req)
+
+        // fail-closed: escopo vazio → lista vazia
+        if (!scope.isAdmin && !scope.erpIds.length) {
+            return res.json({ count: 0, results: [], isAdmin: false })
+        }
 
         const sql = `
       SELECT DISTINCT ON (sc.enterprise_id)
         sc.enterprise_id   AS id,
         sc.enterprise_name AS name
       FROM contracts sc
-      ${scope.isAdmin ? '' : CITY_JOIN}
       WHERE sc.enterprise_id IS NOT NULL
-        ${scope.isAdmin ? '' : CITY_WHERE}
+        ${scope.isAdmin ? '' : SCOPE_WHERE}
       ORDER BY sc.enterprise_id, sc.id DESC;
     `
 
         const rows = await db.sequelize.query(sql, {
-            replacements: scope.isAdmin ? {} : { userCity: scope.userCity },
+            replacements: scope.isAdmin ? {} : { erpIds: scope.erpIds },
             type: db.Sequelize.QueryTypes.SELECT,
         })
 
@@ -101,8 +87,7 @@ const SORTABLE = {
  */
 export async function searchCef(req, res) {
     try {
-        const scope = resolveScope(req, res)
-        if (!scope) return
+        const scope = await resolveScope(req)
 
         const enterpriseIds = parseIds(req.query.enterpriseIds)
         const qRaw = String(req.query.q || '').trim()
@@ -127,8 +112,20 @@ export async function searchCef(req, res) {
         const sortCol = SORTABLE[req.query.sort] || SORTABLE.financial_institution_date
         const dir = String(req.query.dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'
 
+        // fail-closed: escopo vazio → resultado vazio
+        if (!scope.isAdmin && !scope.erpIds.length) {
+            return res.json({
+                page,
+                pageSize,
+                total: 0,
+                isAdmin: false,
+                summary: { total: 0, withCef: 0, withoutCef: 0 },
+                rows: [],
+            })
+        }
+
         const replacements = {}
-        if (!scope.isAdmin) replacements.userCity = scope.userCity
+        if (!scope.isAdmin) replacements.erpIds = scope.erpIds
 
         let enterpriseClause = ''
         if (enterpriseIds.length) {
@@ -160,7 +157,7 @@ export async function searchCef(req, res) {
 
         const scopedWhere = `
       WHERE 1=1
-        ${scope.isAdmin ? '' : CITY_WHERE}
+        ${scope.isAdmin ? '' : SCOPE_WHERE}
         ${enterpriseClause}
         ${qClause}`
 
@@ -190,7 +187,6 @@ export async function searchCef(req, res) {
             (SELECT u ->> 'name' FROM jsonb_array_elements(COALESCE(sc.units, '[]'::jsonb)) u LIMIT 1)
           ) AS unit_name
         FROM contracts sc
-        ${scope.isAdmin ? '' : CITY_JOIN}
         ${scopedWhere}
           ${cefClause}
       )
@@ -207,7 +203,6 @@ export async function searchCef(req, res) {
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE ${HAS_CEF})::int AS with_cef
       FROM contracts sc
-      ${scope.isAdmin ? '' : CITY_JOIN}
       ${scopedWhere};
     `
 

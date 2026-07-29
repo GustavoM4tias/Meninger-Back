@@ -2,6 +2,7 @@
 import express from 'express';
 import multer from 'multer';
 import authenticate from '../middlewares/authMiddleware.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 import { previewUpload, confirmUpload, getHistory } from '../controllers/bucketUploadController.js';
 
 const router = express.Router();
@@ -21,8 +22,11 @@ const xlsxUpload = multer({
     },
 });
 
-router.post('/preview', authenticate, xlsxUpload.single('file'), previewUpload);
-router.post('/confirm', authenticate, confirmUpload);
-router.get('/history', authenticate, getHistory);
+// Alçada da tela Bucket Upload (admin bypassa no middleware).
+const requireBucketUpload = requireRoutePermission(['/tools/bucket-upload']);
+
+router.post('/preview', authenticate, requireBucketUpload, xlsxUpload.single('file'), previewUpload);
+router.post('/confirm', authenticate, requireBucketUpload, confirmUpload);
+router.get('/history', authenticate, requireBucketUpload, getHistory);
 
 export default router;

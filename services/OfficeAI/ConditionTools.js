@@ -5,8 +5,9 @@
 // PERMISSÃO = a MESMA da tela de fichas (enterpriseConditionController):
 //   - Admin + editores + autorizadores (ComercialSettings): veem TODOS os status,
 //     inclusive fichas avulsas (sem vínculo CV).
-//   - Usuário comum: só fichas 'approved'/'closed' de empreendimentos da SUA cidade
-//     (enterprise_cities). Avulsas ficam fora (idempreendimento null), igual à tela.
+//   - Usuário comum: só fichas 'approved'/'closed' de empreendimentos do SEU
+//     escopo de acesso (accessScopeService). Avulsas ficam fora
+//     (idempreendimento null), igual à tela.
 //
 // SELEÇÃO quando o usuário não pede um mês específico:
 //   SEMPRE a ficha mais recente. Se ela não estiver autorizada, o resultado leva
@@ -23,6 +24,7 @@ import dayjs from 'dayjs';
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { computeModuleCostSummary, aggregateCostSummaries } from '../comercial/conditionCostSummary.js';
+import { visibleCvIds } from '../permissions/accessScopeService.js';
 
 const {
     EnterpriseCondition,
@@ -140,16 +142,10 @@ async function isPrivilegedViewer(user) {
     return inList(user, s.editor_user_ids) || inList(user, s.authorizer_user_ids);
 }
 
-// null = sem restrição (privilegiado). [] = não vê nada.
+// [] = não vê nada. Só chega aqui usuário NÃO privilegiado (nunca admin),
+// então visibleCvIds nunca devolve null; o `|| []` é só cinto de segurança.
 async function getVisibleEnterpriseIds(user) {
-    const userCity = user?.city;
-    if (!userCity) return [];
-    const rows = await db.sequelize.query(
-        `SELECT crm_id FROM enterprise_cities
-          WHERE source = 'crm' AND COALESCE(city_override, default_city) = :city`,
-        { replacements: { city: userCity }, type: db.Sequelize.QueryTypes.SELECT }
-    );
-    return rows.map(r => Number(r.crm_id)).filter(Boolean);
+    return (await visibleCvIds(user)) || [];
 }
 
 // Escopo de visualização do usuário sobre enterprise_conditions.
@@ -164,7 +160,7 @@ async function buildViewScope(user) {
 const hasAccess = (scope) => scope.privileged || (scope.ids && scope.ids.length);
 
 const NO_ACCESS = {
-    error: 'Você não tem acesso a nenhuma Ficha Comercial (o acesso segue as mesmas regras da tela de Fichas: fichas autorizadas de empreendimentos da sua cidade).',
+    error: 'Você não tem acesso a nenhuma Ficha Comercial (o acesso segue as mesmas regras da tela de Fichas: fichas autorizadas de empreendimentos do seu escopo de acesso).',
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import NotificationService from '../../services/notification/NotificationService
 import { NotificationType } from '../../services/notification/notificationTypes.js';
 import { computeModuleCostSummary, aggregateCostSummaries } from '../../services/comercial/conditionCostSummary.js';
 import Docusign from '../../services/comercial/DocusignService.js';
+import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 
 const {
     EnterpriseCondition,
@@ -305,19 +306,11 @@ async function getPriceDistribution(idempreendimento, idetapa = null) {
 // ─── listagem ─────────────────────────────────────────────────────────────────
 // Admin vê todos os status. Usuário comum vê apenas fichas 'approved'.
 
-// Helper: idempreendimentos visíveis ao usuário comum (filtro por cidade via enterprise_cities).
-// Admin vê tudo. Comum vê apenas onde COALESCE(city_override, default_city) === req.user.city
+// Helper: idempreendimentos visíveis ao usuário comum (escopo de acesso via accessScopeService).
+// Admin vê tudo (null = sem restrição). Comum vê apenas os ids CV do seu escopo
+// (fail-closed: escopo vazio → não vê nada).
 async function getVisibleEnterpriseIdsForUser(req) {
-    if (isAdmin(req)) return null; // null = sem restrição
-    const userCity = req.user?.city;
-    if (!userCity) return []; // sem cidade definida → não vê nada
-
-    const rows = await db.sequelize.query(
-        `SELECT crm_id FROM enterprise_cities
-          WHERE source = 'crm' AND COALESCE(city_override, default_city) = :city`,
-        { replacements: { city: userCity }, type: db.Sequelize.QueryTypes.SELECT }
-    );
-    return rows.map(r => Number(r.crm_id)).filter(Boolean);
+    return visibleCvIds(req.user);
 }
 
 export const listConditions = async (req, res) => {
@@ -329,7 +322,7 @@ export const listConditions = async (req, res) => {
         if (idempreendimento) where.idempreendimento = Number(idempreendimento);
 
         if (!(await isPrivilegedViewer(req))) {
-            // Usuário comum: apenas approved + closed, e somente empreendimentos da sua cidade
+            // Usuário comum: apenas approved + closed, e somente empreendimentos do seu escopo
             where.status = { [Op.in]: ['approved', 'closed'] };
             const visibleIds = await getVisibleEnterpriseIdsForUser(req);
             if (!visibleIds || !visibleIds.length) return res.json([]);
@@ -387,7 +380,7 @@ export const getCondition = async (req, res) => {
             if (!['approved', 'closed'].includes(condition.status)) {
                 return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
             }
-            // E só de empreendimentos da sua cidade
+            // E só de empreendimentos do seu escopo
             const visibleIds = await getVisibleEnterpriseIdsForUser(req);
             if (!visibleIds || !visibleIds.includes(Number(condition.idempreendimento))) {
                 return res.status(403).json({ error: 'Você não tem acesso a este empreendimento.' });
@@ -1661,7 +1654,7 @@ export const getConditionCostSummary = async (req, res) => {
         });
         if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
 
-        // Mesmo controle de acesso do getCondition: comum só vê approved/closed da sua cidade.
+        // Mesmo controle de acesso do getCondition: comum só vê approved/closed do seu escopo.
         if (!(await isPrivilegedViewer(req))) {
             if (!['approved', 'closed'].includes(condition.status)) {
                 return res.status(403).json({ error: 'Acesso restrito a fichas autorizadas.' });
