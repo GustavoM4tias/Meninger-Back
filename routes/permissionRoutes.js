@@ -4,8 +4,11 @@ import authenticate from '../middlewares/authMiddleware.js';
 import {
     getMyPermissions, getAllPermissions, setUserPermissions,
     getGrants, setGrants, getEnterpriseOptions,
+    getRoutePolicies, putRoutePolicy,
 } from '../controllers/permissionController.js';
-import { getProfiles, createProfile, updateProfile, deleteProfile } from '../controllers/permissionProfileController.js';
+import {
+    getProfiles, createProfile, updateProfile, deleteProfile, resetProfileToDefault,
+} from '../controllers/permissionProfileController.js';
 import { getMeta, getRules, putRule, deleteRule } from '../controllers/departmentVisibilityController.js';
 
 const router = express.Router();
@@ -24,7 +27,13 @@ router.get('/me', authenticate, getMyPermissions);
 router.get('/profiles', authenticate, adminOnly, getProfiles);
 router.post('/profiles', authenticate, adminOnly, createProfile);
 router.put('/profiles/:id', authenticate, adminOnly, updateProfile);
+router.post('/profiles/:id/reset-default', authenticate, adminOnly, resetProfileToDefault);
 router.delete('/profiles/:id', authenticate, adminOnly, deleteProfile);
+
+// Telas exclusivas de admin definidas pela própria tela de Alçadas — admin only.
+// Declaradas ANTES de /:userId (senão o PUT cairia na rota paramétrica).
+router.get('/route-policies', authenticate, adminOnly, getRoutePolicies);
+router.put('/route-policies', authenticate, adminOnly, putRoutePolicy);
 
 // Visibilidade de departamento em cascata (global/cargo/usuário) — admin only.
 // Declarado ANTES de /:userId (senão o PUT cairia na rota paramétrica).

@@ -20,8 +20,15 @@ Spec completa: `_estudo/acessos/README.md` e `_estudo/acessos/MIGRACAO_ESCOPO.md
    vazio; `null` → admin sem filtro. Nomes/cidades de empreendimento vêm da
    tabela `enterprises` (enterprise_cities foi dropada).
 4. **Alçadas de tela**: rotas efetivas = (perfil vivo ∪ routes_extra) −
-   routes_removed, calculadas por `services/permissions/permissionAccessService.js`.
-   Não ler `user_permissions.routes` direto (coluna legada).
+   routes_removed − telas travadas em `route_policies`, calculadas por
+   `services/permissions/permissionAccessService.js`. Não ler
+   `user_permissions.routes` direto (coluna legada).
+4b. **Tela exclusiva de admin**: o padrão é o admin ligar o cadeado na tela
+   `/settings/permissions` (grava `route_policies`; vale na hora para menu,
+   guard, API e tools da Eme, sem deploy). Só use a trava de CÓDIGO
+   (`adminOnly` no navRegistry + `requiresAdmin` no meta da rota + `requireAdmin`
+   nas rotas de API) para administração do próprio sistema — nesse caso os TRÊS
+   níveis são obrigatórios e o validador cobra.
 5. **Tools novas da Eme**: SEMPRE via `registerTool` (ToolRegistry) com
    `requiredPermissions`/`adminOnly` declarados — nunca no mapa legado do
    OfficeChatService. Filtros de segurança DENTRO do handler com base em
@@ -37,6 +44,11 @@ Spec completa: `_estudo/acessos/README.md` e `_estudo/acessos/MIGRACAO_ESCOPO.md
   /settings/empresas + scheduler diário orgRegistryScheduler às 03:00).
 - `enterprise_grants` — liberação por empreendimento (subject user|profile).
 - `users.permission_profile_id` — perfil VIVO (editar propaga).
+- `permission_profiles` — um perfil PADRÃO por departamento (`seed_code`),
+  semeado por `lib/ensureSignupApprovalSchema.js`. O seed re-sincroniza as telas
+  enquanto `routes_customized = false`; a primeira edição do admin congela o
+  perfil (a tela oferece "Restaurar padrão" para devolvê-lo ao seed).
+- `route_policies` — telas travadas como somente-admin pela tela de Alçadas.
 - Rótulos p/ telas não-admin: GET /api/org/enterprise-labels (escopado).
 
 ## Convenções

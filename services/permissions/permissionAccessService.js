@@ -3,12 +3,19 @@
 // Fonte ÚNICA das rotas efetivas de alçada de um usuário.
 //
 //   efetivas = (rotas do perfil vivo ∪ routes_extra) − routes_removed
+//                                                    − telas travadas como
+//                                                      "somente admin" (route_policies)
 //
 // Consumidores: middleware requireRoutePermission, /api/permissions/me,
 // ToolRegistry (tools da Eme) e a tela de Alçadas. Admin tem bypass nos
 // consumidores (não aqui — aqui é só o cálculo).
+//
+// A subtração das telas travadas mora AQUI de propósito: é o único caminho por
+// onde todo enforcement passa, então marcar uma tela como somente-admin na tela
+// de Alçadas fecha API, menu, guard de rota e tools da Eme na mesma hora.
 
 import db from '../../models/sequelize/index.js';
+import { filterOutAdminOnly } from './routePolicyService.js';
 
 function asArray(v) {
   return Array.isArray(v) ? v.filter(Boolean).map(String) : [];
@@ -42,7 +49,9 @@ export async function getEffectiveRoutes(userId) {
     const key = r.toLowerCase();
     if (!removed.has(key)) set.set(key, r);
   }
-  return [...set.values()];
+  // Telas travadas pelo admin na tela de Alçadas nunca sobram para não-admin,
+  // mesmo que continuem listadas no perfil (destravar devolve tudo como estava).
+  return filterOutAdminOnly([...set.values()]);
 }
 
 /**

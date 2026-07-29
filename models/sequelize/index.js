@@ -104,6 +104,7 @@ import InstantMeetingDefine from './instantMeeting.js';
 import BucketUploadHistoryDefine from './tools/bucketUploadHistory.js';
 import UserPermissionDefine from './userPermission.js';
 import PermissionProfileDefine from './permissionProfile.js';
+import RoutePolicyDefine from './routePolicy.js';
 
 // CV extras
 import CvEnterprisePriceTableDefine from './cv/enterprisePriceTable.js';
@@ -354,6 +355,7 @@ db.InstantMeeting    = InstantMeetingDefine(sequelize, DataTypes);
 db.BucketUploadHistory = BucketUploadHistoryDefine(sequelize, DataTypes);
 db.UserPermission = UserPermissionDefine(sequelize, DataTypes);
 db.PermissionProfile = PermissionProfileDefine(sequelize, DataTypes);
+db.RoutePolicy = RoutePolicyDefine(sequelize, DataTypes);
 
 // CV extras
 db.CvEnterprisePriceTable = CvEnterprisePriceTableDefine(sequelize, DataTypes);

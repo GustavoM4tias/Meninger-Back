@@ -10,6 +10,8 @@
 //   3. Rotas de DADOS têm requireRoutePermission ou requireAdmin (exceto allowlist).
 //   4. Tools da Eme: todas registradas com permissão declarada; tools legadas
 //      todas mapeadas no LEGACY_TOOL_ROUTES (fail-closed cobre o resto).
+//   4b. Telas travadas como "somente admin" na tela de Alçadas (route_policies):
+//      panorama do que está travado + perfis/exceções que ainda citam a tela.
 //   5. Banco: tabelas do modelo de acesso existem; usuários ativos com FKs de
 //      cargo/cidade casadas; grants órfãos; perfis inativos referenciados.
 //   6. Legado: acusa se a tabela enterprise_cities ainda existe (deve sumir
@@ -24,6 +26,7 @@
 
 import db from '../models/sequelize/index.js';
 import { getRegisteredTools } from '../services/OfficeAI/ToolRegistry.js';
+import { listRoutePolicies, normalizeRoute } from '../services/permissions/routePolicyService.js';
 
 let _app = null;
 export function registerApp(app) { _app = app; }
@@ -218,6 +221,57 @@ async function checkEmeTools() {
     }];
 }
 
+// Telas travadas como "somente admin" pela tela de Alçadas (route_policies).
+// A trava vale de verdade porque as rotas efetivas já saem sem elas — este
+// check é o espelho: mostra o que está travado e cobra a limpeza dos perfis e
+// exceções que ainda listam a tela (não dá acesso, mas confunde quem lê).
+async function checkRoutePolicies() {
+    let policies = [];
+    try {
+        policies = await listRoutePolicies();
+    } catch (err) {
+        return [{
+            id: 'route-policies', name: 'Telas travadas como somente admin',
+            status: 'warn', details: [`falha ao ler route_policies: ${err.message}`],
+            summary: 'não foi possível ler as políticas de tela',
+        }];
+    }
+
+    const locked = policies.filter(p => p.adminOnly);
+    const lockedSet = new Set(locked.map(p => normalizeRoute(p.route)));
+    const leftovers = [];
+
+    if (lockedSet.size) {
+        const profiles = await db.PermissionProfile.findAll({
+            where: { active: true }, attributes: ['name', 'routes'], raw: true,
+        });
+        for (const p of profiles) {
+            const hit = (p.routes || []).filter(r => lockedSet.has(normalizeRoute(r)));
+            if (hit.length) leftovers.push(`perfil "${p.name}" ainda lista: ${hit.join(', ')}`);
+        }
+
+        const perms = await db.UserPermission.findAll({
+            attributes: ['userId', 'routes_extra'], raw: true,
+        });
+        for (const perm of perms) {
+            const hit = (perm.routes_extra || []).filter(r => lockedSet.has(normalizeRoute(r)));
+            if (hit.length) leftovers.push(`exceção do usuário ${perm.userId} ainda lista: ${hit.join(', ')}`);
+        }
+    }
+
+    return [{
+        id: 'route-policies', name: 'Telas travadas como somente admin (tela de Alçadas)',
+        status: leftovers.length ? 'warn' : 'info',
+        details: [
+            ...locked.map(p => `${p.route} — travada por ${p.updatedBy || 'admin'}${p.note ? ` (${p.note})` : ''}`),
+            ...leftovers,
+        ],
+        summary: locked.length
+            ? `${locked.length} tela(s) exclusiva(s) de admin por configuração${leftovers.length ? ` · ${leftovers.length} referência(s) residual(is) em perfis/exceções` : ''}`
+            : 'nenhuma tela travada pela tela de Alçadas',
+    }];
+}
+
 async function checkDatabase() {
     const checks = [];
     const q = async (sql, repl = {}) => {
@@ -322,6 +376,7 @@ export async function runIntegrityCheck({ app = _app } = {}) {
     else checks.push({ id: 'routes', name: 'Varredura de rotas', status: 'warn', details: [], summary: 'app não registrado (registerApp)' });
 
     checks.push(...await checkEmeTools());
+    checks.push(...await checkRoutePolicies());
     checks.push(...await checkDatabase());
 
     const counts = { ok: 0, warn: 0, fail: 0, info: 0 };
