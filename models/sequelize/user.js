@@ -6,6 +6,10 @@ export default (sequelize, DataTypes) => {
     username: { type: DataTypes.STRING(50), allowNull: false, unique: true },
     password: { type: DataTypes.STRING(255), allowNull: false },
     email: { type: DataTypes.STRING(100), allowNull: false, unique: true },
+    // LEGADO: cargo/cidade por NOME (string). Mantidos por compatibilidade;
+    // as FKs abaixo (position_id/city_id) são a fonte estruturada — o backfill
+    // roda em lib/ensureOrgDefaultsSchema.js e o login valida pela FK quando
+    // presente. Renomear cargo/cidade não quebra mais o vínculo.
     position: {
       type: DataTypes.STRING(100),
       allowNull: false,
@@ -13,6 +17,16 @@ export default (sequelize, DataTypes) => {
     city: {
       type: DataTypes.STRING(100),
       allowNull: false,
+    },
+    position_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: 'positions', key: 'id' },
+    },
+    city_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: 'user_cities', key: 'id' },
     },
     role: {
       type: DataTypes.ENUM('admin', 'user'),
@@ -32,6 +46,14 @@ export default (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       allowNull: true,
       references: { model: 'departments', key: 'id' },
+    },
+    // Perfil de alçada VIVO: as rotas do perfil valem em tempo real para todos
+    // os usuários vinculados (editar o perfil propaga na hora). Exceções
+    // individuais ficam em user_permissions.routes_extra/routes_removed.
+    permission_profile_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: 'permission_profiles', key: 'id' },
     },
     birth_date: DataTypes.DATEONLY,
     last_login: DataTypes.DATE,

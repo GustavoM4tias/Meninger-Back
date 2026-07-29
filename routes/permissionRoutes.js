@@ -1,7 +1,10 @@
 // /routes/permissionRoutes.js
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
-import { getMyPermissions, getAllPermissions, setUserPermissions } from '../controllers/permissionController.js';
+import {
+    getMyPermissions, getAllPermissions, setUserPermissions,
+    getGrants, setGrants, getEnterpriseOptions,
+} from '../controllers/permissionController.js';
 import { getProfiles, createProfile, updateProfile, deleteProfile } from '../controllers/permissionProfileController.js';
 import { getMeta, getRules, putRule, deleteRule } from '../controllers/departmentVisibilityController.js';
 
@@ -29,6 +32,11 @@ router.get('/department-visibility/meta', authenticate, adminOnly, getMeta);
 router.get('/department-visibility', authenticate, adminOnly, getRules);
 router.put('/department-visibility', authenticate, adminOnly, putRule);
 router.delete('/department-visibility', authenticate, adminOnly, deleteRule);
+
+// Grants de empreendimento (dados) — admin only. Declarados ANTES de /:userId.
+router.get('/enterprise-options', authenticate, adminOnly, getEnterpriseOptions);
+router.get('/grants/:subjectType/:subjectId', authenticate, adminOnly, getGrants);
+router.put('/grants/:subjectType/:subjectId', authenticate, adminOnly, setGrants);
 
 // Usuários (admin only)
 router.get('/', authenticate, adminOnly, getAllPermissions);
