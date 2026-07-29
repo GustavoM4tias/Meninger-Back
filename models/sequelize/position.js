@@ -8,10 +8,16 @@ export default (sequelize, DataTypes) => {
         is_partner: { type: DataTypes.BOOLEAN, defaultValue: false },
         active: { type: DataTypes.BOOLEAN, defaultValue: true },
 
-        // 👇 NOVO: vínculo com departamento
+        // Nível hierárquico para ordenação (organograma/telas):
+        // 0 Sócio Fundador · 1 Diretor · 2 Gerente · 3 Coordenador ·
+        // 4 Supervisor · 5 Analista/Especialista · 6 Assistente · 7 Auxiliar · 8 Estagiário
+        level: { type: DataTypes.INTEGER, allowNull: true },
+
+        // 👇 vínculo com departamento
         department_id: {
             type: DataTypes.INTEGER,
-            allowNull: false, // se quiser forçar a ser obrigatório
+            allowNull: false,
+            references: { model: 'departments', key: 'id' },
         },
     }, {
         tableName: 'positions',

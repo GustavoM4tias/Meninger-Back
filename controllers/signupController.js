@@ -116,6 +116,7 @@ export const completeSignup = async (req, res) => {
       birth_date,
       phone: phone || null,
       city: cityRecord.name,
+      city_id: cityRecord.id,
       signup_department_id: department.id,
       approval_status: 'pending',
     });
@@ -168,6 +169,7 @@ export const requestSignup = async (req, res) => {
       email: cleanEmail,
       position: '',
       city: cityRecord.name,
+      city_id: cityRecord.id,
       birth_date,
       phone: phone || null,
       role: 'user',
@@ -277,25 +279,20 @@ export const activateUser = async (req, res) => {
       return responseHandler.error(res, 'Este usuário ainda não concluiu o formulário de primeiro acesso.');
     }
 
-    // Alçadas padrão do departamento (perfil vinculado via department_id).
-    // Não-admin: aplica em união com o que o usuário eventualmente já tenha.
+    // Alçadas padrão do departamento — modelo PERFIL VIVO: em vez de copiar as
+    // rotas (foto congelada), o usuário passa a APONTAR para o perfil do
+    // departamento. Editar o perfil depois propaga para todos os vinculados.
     let appliedProfile = null;
-    let appliedRoutes = [];
     if (user.role !== 'admin') {
       const positionRecord = await Position.findOne({ where: { name: user.position } });
+      if (positionRecord && !user.position_id) user.position_id = positionRecord.id;
       if (positionRecord?.department_id) {
         appliedProfile = await PermissionProfile.findOne({
           where: { department_id: positionRecord.department_id, active: true },
         });
       }
-      if (appliedProfile) {
-        const existing = await UserPermission.findOne({ where: { userId: user.id } });
-        const merged = new Set([
-          ...(Array.isArray(existing?.routes) ? existing.routes : []),
-          ...(Array.isArray(appliedProfile.routes) ? appliedProfile.routes : []),
-        ]);
-        appliedRoutes = [...merged];
-        await UserPermission.upsert({ userId: user.id, routes: appliedRoutes });
+      if (appliedProfile && !user.permission_profile_id) {
+        user.permission_profile_id = appliedProfile.id;
       }
     }
 
@@ -329,7 +326,7 @@ export const activateUser = async (req, res) => {
         : 'Usuário ativado, mas o e-mail de liberação FALHOU. Use "Resetar senha" no modal e repasse manualmente.',
       emailSent,
       profileApplied: appliedProfile ? appliedProfile.name : null,
-      routesApplied: appliedRoutes,
+      routesApplied: appliedProfile && Array.isArray(appliedProfile.routes) ? appliedProfile.routes : [],
     });
   } catch (error) {
     console.error('[Signup] activateUser erro:', error);

@@ -17,6 +17,9 @@ import ValidationHistoryDefine from './validationHistory.js';
 import SalesContractDefine from './sienge/salesContract.js';
 import ExpensePersonalizationDefine from './sienge/expensePersonalization.js';
 
+import OrgCompanyDefine from './org/company.js';
+import OrgEnterpriseDefine from './org/enterprise.js';
+import EnterpriseGrantDefine from './org/enterpriseGrant.js';
 import CostCenterOverrideDefine from './costCenterOverride.js';
 import ExpenseDepartmentVisibilityDefine from './expenseDepartmentVisibility.js';
 import DepartmentVisibilityOverrideDefine from './departmentVisibilityOverride.js';
@@ -279,6 +282,11 @@ db.SupportTicket = SupportTicketDefine(sequelize, DataTypes);
 db.SupportMessage = SupportMessageDefine(sequelize, DataTypes);
 
 db.EnterpriseCity = EnterpriseCityDefine(sequelize, DataTypes);
+
+// Registro unificado de empresas/empreendimentos (CV + Sienge) + grants de acesso
+db.OrgCompany = OrgCompanyDefine(sequelize, DataTypes);
+db.OrgEnterprise = OrgEnterpriseDefine(sequelize, DataTypes);
+db.EnterpriseGrant = EnterpriseGrantDefine(sequelize, DataTypes);
 
 db.SalesProjection = SalesProjectionDefine(sequelize, DataTypes);
 db.SalesProjectionLine = SalesProjectionLineDefine(sequelize, DataTypes);

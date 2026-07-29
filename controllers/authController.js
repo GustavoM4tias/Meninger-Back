@@ -91,6 +91,8 @@ export const registerUser = async (req, res) => {
       email,
       position: positionRecord.name,
       city: cityRecord.name,
+      position_id: positionRecord.id,
+      city_id: cityRecord.id,
       birth_date,
       phone: phone || null,
       manager_id: manager_id || null,
@@ -567,6 +569,7 @@ export const updateMe = async (req, res) => {
       const positionRecord = await Position.findOne({ where: { name: position, active: true } });
       if (!positionRecord) return responseHandler.error(res, 'Cargo inválido ou inativo');
       updatePayload.position = positionRecord.name;
+      updatePayload.position_id = positionRecord.id;
     }
 
     const [affectedRows] = await User.update(updatePayload, { where: { id: req.user.id } });
@@ -623,6 +626,7 @@ export const updateUser = async (req, res) => {
     if (position !== undefined) {
       if (!position) {
         payload.position = '';
+        payload.position_id = null;
       } else {
         const positionRecord = await Position.findOne({
           where: { name: position, active: true }
@@ -633,12 +637,14 @@ export const updateUser = async (req, res) => {
         }
 
         payload.position = positionRecord.name;
+        payload.position_id = positionRecord.id;
       }
     }
 
     if (city !== undefined) {
       if (!city) {
         payload.city = '';
+        payload.city_id = null;
       } else {
         const cityRecord = await UserCity.findOne({
           where: { name: city, active: true }
@@ -649,6 +655,7 @@ export const updateUser = async (req, res) => {
         }
 
         payload.city = cityRecord.name;
+        payload.city_id = cityRecord.id;
       }
     }
 
