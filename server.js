@@ -112,6 +112,7 @@ import { ensurePermissionRouteRenames } from './lib/ensurePermissionRouteRenames
 import { ensureSignupApprovalColumns, seedDepartmentDefaultProfiles } from './lib/ensureSignupApprovalSchema.js';
 import { ensureLegacyDrops } from './lib/ensureLegacyDrops.js';
 import { ensureAccessModelSchema } from './lib/ensureAccessModelSchema.js';
+import { ensureAccessModelColumns } from './lib/ensureAccessModelColumns.js';
 import { ensureOrgDefaultsSchema } from './lib/ensureOrgDefaultsSchema.js';
 import { registerApp as registerIntegrityApp, runIntegrityCheck } from './security/integrityCheck.js';
 import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
@@ -257,18 +258,10 @@ app.use('/api/checklists', checklistRoutes);
 app.use('/api/organogram', organogramRoutes);
 app.use('/api/docusign-oauth', docusignOauthRoutes); // callback público do login DocuSign (state assinado)
 
-// Validador de integridade: registra o app para a varredura de rotas e roda
-// uma checagem em background no boot (resumo no log; detalhe na tela admin).
+// Validador de integridade: registra o app para a varredura de rotas. A
+// checagem de boot roda ao FINAL da fase de schema (ver initBackground) —
+// rodar antes acusava falso "column does not exist" durante os ALTERs.
 registerIntegrityApp(app);
-setTimeout(() => {
-  runIntegrityCheck().then(r => {
-    const flag = r.healthy ? '✅' : '🔴';
-    console.log(`${flag} [Integrity] fail=${r.counts.fail || 0} warn=${r.counts.warn || 0} ok=${r.counts.ok || 0} — detalhe em /settings/integrity`);
-    for (const c of r.checks.filter(c => c.status === 'fail')) {
-      console.warn(`🔴 [Integrity] ${c.name}: ${c.summary}`);
-    }
-  }).catch(e => console.warn('⚠️  [Integrity] checagem de boot falhou:', e?.message));
-}, 30_000); // depois do sync/patches típicos; a rota admin roda sob demanda
 
 const PORT = process.env.PORT || 5000;
 
@@ -315,6 +308,19 @@ async function initBackground() {
   }
   // Schedulers + templates rodam de qualquer forma (operam em tabelas já existentes).
   await startBackgroundServices();
+
+  // Checagem de integridade DEPOIS do schema estar em dia (resumo no log;
+  // detalhe na tela /settings/integrity). Nunca derruba o boot.
+  try {
+    const r = await runIntegrityCheck();
+    const flag = r.healthy ? '✅' : '🔴';
+    console.log(`${flag} [Integrity] fail=${r.counts.fail || 0} warn=${r.counts.warn || 0} ok=${r.counts.ok || 0} — detalhe em /settings/integrity`);
+    for (const c of r.checks.filter(c => c.status === 'fail')) {
+      console.warn(`🔴 [Integrity] ${c.name}: ${c.summary}`);
+    }
+  } catch (e) {
+    console.warn('⚠️  [Integrity] checagem de boot falhou:', e?.message);
+  }
 }
 
 // Gate de schema: só roda a fase de sync/patches se algo que define schema
@@ -379,6 +385,7 @@ async function syncModelsAndPatches(fingerprint) {
   await runPatch('ProjectionLink', ensureProjectionLinkSchema);     // cv_workflow_groups.stale_days
   await runPatch('FaturamentoRules', ensureFaturamentoRulesSchema); // stage_commission_rules.stage_id nullable
   await runPatch('SignupApprovalColumns', ensureSignupApprovalColumns); // users.approval_status + permission_profiles.department_id
+  await runPatch('AccessModelColumns', ensureAccessModelColumns);   // users.position_id/city_id/permission_profile_id + user_permissions.routes_* + positions.level
 
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
