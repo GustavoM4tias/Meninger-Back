@@ -1,6 +1,7 @@
 // controllers/projectionsController.js
 import db from '../models/sequelize/index.js';
 import { resolveUnitsForErp } from '../services/cv/enterpriseUnitsSummaryService.js';
+import { visibleErpIds } from '../services/permissions/accessScopeService.js';
 
 const {
   SalesProjection,
@@ -143,13 +144,15 @@ async function enrichDefaultsWithUnits(defaults) {
  * =============================================================================
  * SQL: Allowed (USER)
  * =============================================================================
+ * Lista de CCs visíveis ao usuário (accessScopeService) injetada via
+ * :allowedErpIds. erp_id nas tabelas de projeção é texto → casa por texto.
+ * Fail-closed: os callers NUNCA executam este SQL com lista vazia (retornam
+ * resultado vazio antes).
  */
 const SQL_ALLOWED = `
 WITH allowed AS (
-  SELECT DISTINCT ec.erp_id
-  FROM enterprise_cities ec
-  WHERE ec.erp_id IS NOT NULL
-    AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
+  SELECT DISTINCT t.erp_id::text AS erp_id
+  FROM unnest(ARRAY[:allowedErpIds]::bigint[]) AS t(erp_id)
 )
 `;
 
@@ -385,8 +388,9 @@ export async function listProjections(req, res) {
     if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
     const { only_active } = req.query;
-    const isAdmin = req.user.role === 'admin';
-    const userCity = (req.user.city || '').trim();
+    // Escopo de acesso: null = admin (sem filtro), [] = nada visível
+    const allowedErpIds = await visibleErpIds(req.user);
+    const isAdmin = allowedErpIds === null;
 
     if (isAdmin) {
       const where = {};
@@ -400,7 +404,8 @@ export async function listProjections(req, res) {
       return res.json(rows);
     }
 
-    if (!userCity) return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+    // fail-closed: escopo vazio → nada visível
+    if (!allowedErpIds.length) return res.json([]);
 
     const sql = `
       ${SQL_ALLOWED}
@@ -425,7 +430,7 @@ export async function listProjections(req, res) {
     `;
 
     const rows = await db.sequelize.query(sql, {
-      replacements: { userCity },
+      replacements: { allowedErpIds },
       type: db.Sequelize.QueryTypes.SELECT,
     });
 
@@ -729,18 +734,21 @@ export async function getProjectionDetail(req, res) {
     // =========================
     // USER
     // =========================
-    const userCity = (req.user.city || '').trim();
-    if (!userCity) return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+    // Escopo de acesso (fail-closed: escopo vazio → nada visível)
+    const allowedErpIds = (await visibleErpIds(req.user)) || [];
+    if (!allowedErpIds.length) {
+      return res.json({ projection: proj, lines: [], enterprise_defaults: [] });
+    }
 
     if (includeZero) {
       const defaults = await db.sequelize.query(SQL_USER_PAIRS_ANY_ALLOWED, {
-        replacements: { pid: id, userCity },
+        replacements: { pid: id, allowedErpIds },
         type: db.Sequelize.QueryTypes.SELECT,
       });
 
       const lines = hasRange
         ? await db.sequelize.query(SQL_USER_LINES_RANGE, {
-          replacements: { pid: id, userCity, start, end },
+          replacements: { pid: id, allowedErpIds, start, end },
           type: db.Sequelize.QueryTypes.SELECT,
         })
         : await db.sequelize.query(
@@ -755,7 +763,7 @@ export async function getProjectionDetail(req, res) {
              WHERE l.projection_id = :pid
                AND l.erp_id IS NOT NULL
              ORDER BY l.enterprise_key ASC, COALESCE(l.alias_id,'default') ASC, l.year_month ASC;`,
-          { replacements: { pid: id, userCity }, type: db.Sequelize.QueryTypes.SELECT }
+          { replacements: { pid: id, allowedErpIds }, type: db.Sequelize.QueryTypes.SELECT }
         );
 
       const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
@@ -777,7 +785,7 @@ export async function getProjectionDetail(req, res) {
          WHERE l.projection_id = :pid
            AND l.erp_id IS NOT NULL
          ORDER BY l.enterprise_key ASC, COALESCE(l.alias_id,'default') ASC, l.year_month ASC;`,
-        { replacements: { pid: id, userCity }, type: db.Sequelize.QueryTypes.SELECT }
+        { replacements: { pid: id, allowedErpIds }, type: db.Sequelize.QueryTypes.SELECT }
       );
 
       const defaults = await db.sequelize.query(
@@ -793,7 +801,7 @@ export async function getProjectionDetail(req, res) {
          WHERE d.projection_id = :pid
            AND d.erp_id IS NOT NULL
          ORDER BY d.enterprise_key ASC, COALESCE(d.alias_id,'default') ASC;`,
-        { replacements: { pid: id, userCity }, type: db.Sequelize.QueryTypes.SELECT }
+        { replacements: { pid: id, allowedErpIds }, type: db.Sequelize.QueryTypes.SELECT }
       );
 
       const defaultsEnriched = await enrichDefaultsWithUnits(defaults);
@@ -802,12 +810,12 @@ export async function getProjectionDetail(req, res) {
     }
 
     const defaults = await db.sequelize.query(SQL_USER_PAIRS_RANGE_REAL, {
-      replacements: { pid: id, userCity, start, end },
+      replacements: { pid: id, allowedErpIds, start, end },
       type: db.Sequelize.QueryTypes.SELECT,
     });
 
     const lines = await db.sequelize.query(SQL_USER_LINES_RANGE, {
-      replacements: { pid: id, userCity, start, end },
+      replacements: { pid: id, allowedErpIds, start, end },
       type: db.Sequelize.QueryTypes.SELECT,
     });
 
@@ -1396,11 +1404,9 @@ export async function getProjectionReport(req, res) {
   try {
     if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
-    const isAdmin  = req.user.role === 'admin';
-    const userCity = (req.user.city || '').trim();
-    if (!isAdmin && !userCity) {
-      return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-    }
+    // Escopo de acesso: null = admin (sem filtro), [] = nada visível
+    const allowedErpIds = await visibleErpIds(req.user);
+    const isAdmin = allowedErpIds === null;
 
     // ── Parâmetros — idênticos ao getContracts (Faturamento) ─────────────────
     const today = new Date();
@@ -1467,7 +1473,10 @@ export async function getProjectionReport(req, res) {
 
     const pid = projection.id;
 
-    // ── Busca defaults (empreendimentos) filtrados por cidade ─────────────────
+    // ── Busca defaults (empreendimentos) filtrados por escopo ─────────────────
+    // Não-admin: filtro por ids de CC (accessScopeService) via replacements —
+    // sem interpolação manual de valores no SQL. enterprise_cities segue no
+    // JOIN apenas para resolver a cidade de exibição.
     const defaultsSql = isAdmin
       ? `SELECT DISTINCT ON (d.enterprise_key, COALESCE(d.alias_id,'default'))
            d.enterprise_key, COALESCE(d.alias_id,'default') AS alias_id,
@@ -1486,15 +1495,18 @@ export async function getProjectionReport(req, res) {
            d.manual_city,
            ec.default_city, ec.city_override
          FROM sales_projection_enterprises d
-         JOIN enterprise_cities ec ON ec.erp_id = d.erp_id
+         LEFT JOIN enterprise_cities ec ON ec.erp_id = d.erp_id
          WHERE d.projection_id = :pid
-           AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`'${userCity.replace(/'/g, "''")}'`)}
+           AND NULLIF(regexp_replace(COALESCE(d.erp_id,''), '[^0-9]', '', 'g'), '')::bigint IN (:allowedErpIds)
          ORDER BY d.enterprise_key, COALESCE(d.alias_id,'default'), d.updated_at DESC`;
 
-    let defaults = await db.sequelize.query(defaultsSql, {
-      replacements: { pid },
-      type: db.Sequelize.QueryTypes.SELECT,
-    });
+    // fail-closed: escopo vazio → nem consulta (resultado vazio)
+    let defaults = (!isAdmin && !allowedErpIds.length)
+      ? []
+      : await db.sequelize.query(defaultsSql, {
+          replacements: isAdmin ? { pid } : { pid, allowedErpIds },
+          type: db.Sequelize.QueryTypes.SELECT,
+        });
 
     // Aplica filtro por nome (igual ao Faturamento)
     if (nameList.length > 0) {
@@ -1707,21 +1719,23 @@ export async function getProjectionReport(req, res) {
  */
 export async function listEnterprisesForPicker(req, res) {
   try {
-    const isAdmin = req.user?.role === 'admin';
-    const userCity = (req.user?.city || '').trim();
+    // Escopo de acesso: null = admin (sem filtro), [] = nada visível
+    const allowedErpIds = await visibleErpIds(req.user);
+    const isAdmin = allowedErpIds === null;
 
-    // Admin pode filtrar por cidade via query ?city=...
-    const requestedCity = (req.query.city || '').trim();
-    const effectiveCity = isAdmin ? requestedCity : userCity;
+    // Admin pode filtrar por cidade via query ?city=... (hint de filtro).
+    // Não-admin: sempre trancado no escopo (fail-closed: vazio → lista vazia).
+    const requestedCity = isAdmin ? (req.query.city || '').trim() : '';
 
-    if (!isAdmin && !effectiveCity) {
-      return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+    if (!isAdmin && !allowedErpIds.length) {
+      return res.json({ count: 0, results: [] });
     }
 
-    const whereCity =
-      !effectiveCity
-        ? ''
-        : `AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:effectiveCity`)}`;
+    const whereScope = isAdmin
+      ? (requestedCity
+          ? `AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:effectiveCity`)}`
+          : '')
+      : `AND NULLIF(regexp_replace(ec.erp_id, '[^0-9]', '', 'g'), '')::bigint IN (:allowedErpIds)`;
 
     // ✅ name volta "como antes" (com ERP embutido)
     // ✅ city volta junto pro front poder usar se quiser
@@ -1732,12 +1746,14 @@ export async function listEnterprisesForPicker(req, res) {
         TRIM(COALESCE(ec.city_override, ec.default_city)) AS city
       FROM enterprise_cities ec
       WHERE ec.erp_id IS NOT NULL
-        ${whereCity}
+        ${whereScope}
       ORDER BY ec.erp_id, ec.updated_at DESC, TRIM(COALESCE(ec.enterprise_name, ec.erp_id));
     `;
 
     const rows = await db.sequelize.query(sql, {
-      replacements: effectiveCity ? { effectiveCity } : {},
+      replacements: isAdmin
+        ? (requestedCity ? { effectiveCity: requestedCity } : {})
+        : { allowedErpIds },
       type: db.Sequelize.QueryTypes.SELECT,
     });
 

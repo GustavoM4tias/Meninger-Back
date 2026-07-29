@@ -1,6 +1,7 @@
 // routes/conditionsRoutes.js
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 import * as ctrl from '../controllers/comercial/enterpriseConditionController.js';
 import * as ds from '../controllers/comercial/docusignController.js';
 
@@ -13,6 +14,11 @@ router.put('/settings', ctrl.updateSettings);
 
 // ── Permissões do usuário atual (editar/autorizar) ────────────────────────────
 router.get('/permissions', ctrl.getMyPermissions);
+
+// ── Alçada: todas as rotas de DADOS abaixo exigem a tela de Fichas ────────────
+// (admin bypassa; /settings e /permissions acima ficam fora do gate — settings
+//  já é admin-only no controller e /permissions devolve só o próprio usuário)
+router.use(requireRoutePermission(['/comercial/conditions']));
 
 // ── Listagem e criação ────────────────────────────────────────────────────────
 router.get('/', ctrl.listConditions);

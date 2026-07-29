@@ -49,13 +49,13 @@ router.delete('/comission-rules/:id', authenticate, requireAdmin, deleteComissio
 router.get('/whatsapp-template', authenticate, requireAdmin, getWhatsappTemplateStatus);
 router.post('/whatsapp-template/sync', authenticate, requireAdmin, createBoletoWhatsappTemplate);
 
-// ── Histórico — usuário autenticado ───────────────────────────────────────────
-router.get('/history', authenticate, listHistory);
-router.get('/history-stats', authenticate, getHistoryStats);
-router.get('/history-facets', authenticate, getHistoryFacets);
-router.get('/history/:id', authenticate, getHistoryItem);
-router.get('/history/:id/events', authenticate, listHistoryEvents);
-router.get('/history/:id/reserva-timeline', authenticate, listReservaTimeline);
+// ── Histórico — tela /financeiro/boleto-caixa é admin-only ───────────────────
+router.get('/history', authenticate, requireAdmin, listHistory);
+router.get('/history-stats', authenticate, requireAdmin, getHistoryStats);
+router.get('/history-facets', authenticate, requireAdmin, getHistoryFacets);
+router.get('/history/:id', authenticate, requireAdmin, getHistoryItem);
+router.get('/history/:id/events', authenticate, requireAdmin, listHistoryEvents);
+router.get('/history/:id/reserva-timeline', authenticate, requireAdmin, listReservaTimeline);
 router.post('/history/:id/retry', authenticate, requireAdmin, retryHistoryItem);
 router.post('/history/:id/regenerate', authenticate, requireAdmin, regenerateHistoryItem);
 router.post('/history/:id/mark-cancelled', authenticate, requireAdmin, markHistoryCancelled);

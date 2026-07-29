@@ -1,14 +1,9 @@
 // src/controllers/sienge/billsController.js
 //
 // Tela "Títulos" — agora lê AO VIVO do backup do Sienge (payableLiveService),
-// não mais da API/Auto-Sync. Mantém a regra de permissão por cidade para não-admin.
+// não mais da API/Auto-Sync. Mantém a regra de permissão por escopo para não-admin.
 import { listBills } from '../../services/sienge/payableLiveService.js';
-import db from '../../models/sequelize/index.js';
-
-// helper de normalização de cidade igual aos outros controllers
-const CITY_EQ = (col) => `
-  unaccent(upper(regexp_replace(${col}, '[^A-Z0-9]+',' ','g')))
-`;
+import { getScope, isErpAllowed } from '../../services/permissions/accessScopeService.js';
 
 export default class BillsController {
     /**
@@ -17,7 +12,8 @@ export default class BillsController {
      * Regras:
      * - 🔒 Requer usuário autenticado (middleware authenticate na rota)
      * - admin  → pode consultar qualquer costCenterId
-     * - não-admin → só pode consultar costCenterId mapeado para sua cidade em enterprise_cities
+     * - não-admin → só pode consultar costCenterId dentro do seu escopo de
+     *   acesso (accessScopeService/isErpAllowed, cobre sub-CC 80104 → 80001)
      */
     list = async (req, res) => {
         try {
@@ -41,35 +37,20 @@ export default class BillsController {
                 return res.status(400).json({ error: 'costCenterId inválido.' });
             }
 
-            const isAdmin = req.user.role === 'admin';
+            const scope = await getScope(req.user);
 
-            if (!isAdmin) {
-                const userCity = (req.user.city || '').trim();
-
-                if (!userCity) {
-                    return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
+            if (!scope.all) {
+                // fail-closed: escopo vazio → resultado vazio (sem erro)
+                if (!scope.erpIds.length) {
+                    return res.json([]);
                 }
 
-                // valida **cada** centro de custo para a cidade do user
-                const sql = `
-        SELECT DISTINCT ec.erp_id::int AS id
-        FROM enterprise_cities ec
-        WHERE ec.erp_id IS NOT NULL
-          AND ec.erp_id::int = ANY(:ids)
-          AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:userCity`)}
-      `;
-
-                const rows = await db.sequelize.query(sql, {
-                    replacements: { ids, userCity },
-                    type: db.Sequelize.QueryTypes.SELECT,
-                });
-
-                const allowed = new Set(rows.map(r => r.id));
-                const denied = ids.filter(id => !allowed.has(id));
+                // valida **cada** centro de custo pedido contra o escopo
+                const denied = ids.filter(id => !isErpAllowed(scope, id));
 
                 if (denied.length) {
                     return res.status(403).json({
-                        error: `Centro(s) de custo não permitido(s) para sua cidade: ${denied.join(', ')}`,
+                        error: `Centro(s) de custo fora do seu escopo: ${denied.join(', ')}`,
                     });
                 }
             }

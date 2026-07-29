@@ -1,6 +1,7 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 import db from '../models/sequelize/index.js';
 
 import { fetchRepasses, fetchRepasseWorkflow } from '../controllers/cv/repasses.js'
@@ -34,61 +35,66 @@ const cvReservas = new ReservasSyncController();
 const cvEnterprises = new EnterprisesSyncController();
 const cvPrecadastros = new PrecadastrosSyncController();
 
-router.get('/repasses', authenticate, fetchRepasses);
-router.get('/repasse-workflow', authenticate, fetchRepasseWorkflow);
+// ── Alçadas por tela (requireRoutePermission) ─────────────────────────────────
+// Cada endpoint exige que o usuário tenha AO MENOS UMA das telas que o
+// consomem. Admin tem bypass. Endpoints de sync manual são admin-only (o cron
+// roda em processo pelos schedulers).
+const WORKFLOW_SCREENS = ['/comercial/workflow/groups', '/comercial/sales-projection', '/comercial/faturamento', '/validator'];
+const ENTERPRISE_SCREENS = ['/comercial/buildings', '/comercial/conditions', '/comercial/projections', '/comercial/sales-projection', '/comercial/faturamento', '/comercial/reservas-report', '/comercial/precadastros'];
 
-router.get('/reservas', authenticate, fetchReservas);
+router.get('/repasses', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasses);
+router.get('/repasse-workflow', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasseWorkflow);
+
+router.get('/reservas', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchReservas);
 // ⬇️ NOVO: workflow de reservas + grupos paralelos
-router.get('/reserva-workflow', authenticate, fetchReservaWorkflow)
-router.get('/reserva-pagamentos', authenticate, fetchReservaPagamentos);
+router.get('/reserva-workflow', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchReservaWorkflow)
+router.get('/reserva-pagamentos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchReservaPagamentos);
 
-router.get('/listagem-empreendimentos', authenticate, fetchEmpreendimentos);
-// router.get('/empreendimentos', authenticate, fetchBuildings);
-// router.get('/empreendimento/:id', authenticate, fetchBuildingById);
-router.get('/filas', authenticate, fetchFilas);
-router.get('/banners', fetchBanners);
+router.get('/listagem-empreendimentos', authenticate, requireRoutePermission([...ENTERPRISE_SCREENS, '/marketing/leads']), fetchEmpreendimentos);
+router.get('/filas', authenticate, requireRoutePermission(['/marketing/leads']), fetchFilas);
+router.get('/banners', authenticate, fetchBanners);
 
-router.post('/leads/sync/full', authenticate, cvLeads.fullSync.bind(cvLeads));
-router.post('/leads/sync/delta', authenticate, cvLeads.deltaSync.bind(cvLeads));
-router.post('/leads/sync/cancel-reasons', authenticate, cvLeads.cancelReasonSync.bind(cvLeads));
+router.post('/leads/sync/full', authenticate, requireAdmin, cvLeads.fullSync.bind(cvLeads));
+router.post('/leads/sync/delta', authenticate, requireAdmin, cvLeads.deltaSync.bind(cvLeads));
+router.post('/leads/sync/cancel-reasons', authenticate, requireAdmin, cvLeads.cancelReasonSync.bind(cvLeads));
 
-router.get('/leads', authenticate, getLeads);
+router.get('/leads', authenticate, requireRoutePermission(['/marketing/leads']), getLeads);
 
 // NOVO: Repasses (backup + histórico)
-router.post('/repasses/sync/full', authenticate, cvRepasses.fullSync.bind(cvRepasses));
-router.post('/repasses/sync/delta', authenticate, cvRepasses.deltaSync.bind(cvRepasses));
+router.post('/repasses/sync/full', authenticate, requireAdmin, cvRepasses.fullSync.bind(cvRepasses));
+router.post('/repasses/sync/delta', authenticate, requireAdmin, cvRepasses.deltaSync.bind(cvRepasses));
 
 // NOVO: Reservas (backup + histórico por status de repasse)
-router.post('/reservas/sync/full', authenticate, cvReservas.fullSync.bind(cvReservas));
-router.post('/reservas/sync/delta', authenticate, cvReservas.deltaSync.bind(cvReservas));
+router.post('/reservas/sync/full', authenticate, requireAdmin, cvReservas.fullSync.bind(cvReservas));
+router.post('/reservas/sync/delta', authenticate, requireAdmin, cvReservas.deltaSync.bind(cvReservas));
 // VARREDURA ID-A-ID (manual): pega reservas que a listagem global oculta
 // (Cancelada/Vencida/Distrato). Aceita body { fromId, toId, skipDead }.
-router.post('/reservas/sync/full-sweep', authenticate, cvReservas.fullSweep.bind(cvReservas));
+router.post('/reservas/sync/full-sweep', authenticate, requireAdmin, cvReservas.fullSweep.bind(cvReservas));
 
-router.post('/empreendimentos/sync/full', authenticate, cvEnterprises.fullSync.bind(cvEnterprises));
-router.post('/empreendimentos/sync/delta', authenticate, cvEnterprises.deltaSync.bind(cvEnterprises));
+router.post('/empreendimentos/sync/full', authenticate, requireAdmin, cvEnterprises.fullSync.bind(cvEnterprises));
+router.post('/empreendimentos/sync/delta', authenticate, requireAdmin, cvEnterprises.deltaSync.bind(cvEnterprises));
 
 // NOVO: Pré-cadastros (backup completo: listar + documentos + mensagens)
-router.post('/precadastros/sync/full', authenticate, cvPrecadastros.fullSync.bind(cvPrecadastros));
-router.post('/precadastros/sync/delta', authenticate, cvPrecadastros.deltaSync.bind(cvPrecadastros));
-router.get('/precadastros', authenticate, listPrecadastros);
-router.get('/precadastros/:id', authenticate, getPrecadastro);
+router.post('/precadastros/sync/full', authenticate, requireAdmin, cvPrecadastros.fullSync.bind(cvPrecadastros));
+router.post('/precadastros/sync/delta', authenticate, requireAdmin, cvPrecadastros.deltaSync.bind(cvPrecadastros));
+router.get('/precadastros', authenticate, requireRoutePermission(['/comercial/precadastros']), listPrecadastros);
+router.get('/precadastros/:id', authenticate, requireRoutePermission(['/comercial/precadastros']), getPrecadastro);
 
 // Reservas — relatório (lê do banco, não confundir com `GET /reservas` que é read-through na API CV)
-router.get('/reservas/report', authenticate, listReservasReport);
-router.get('/reservas/report/:id', authenticate, getReservaReport);
+router.get('/reservas/report', authenticate, requireRoutePermission(['/comercial/reservas-report']), listReservasReport);
+router.get('/reservas/report/:id', authenticate, requireRoutePermission(['/comercial/reservas-report']), getReservaReport);
 
-router.get('/empreendimentos', authenticate, fetchBuildingsFromDb);
-router.get('/empreendimento/:id', authenticate, fetchBuildingByIdFromDb);
-router.get('/empreendimento/:id/unidades', authenticate, fetchBuildingUnitsSummaryFromDb);
+router.get('/empreendimentos', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingsFromDb);
+router.get('/empreendimento/:id', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingByIdFromDb);
+router.get('/empreendimento/:id/unidades', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingUnitsSummaryFromDb);
 
-router.get('/workflow-grupos', authenticate, fetchWorkflowGroups);
+router.get('/workflow-grupos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchWorkflowGroups);
 // ?tipo=repasses
-router.post('/workflow-grupos', authenticate, createOrUpdateWorkflowGroup);
-router.delete('/workflow-grupos/:id', authenticate, removeWorkflowGroup);
-router.get('/workflow-grupos/segments', fetchListSegments);
+router.post('/workflow-grupos', authenticate, requireRoutePermission(['/comercial/workflow/groups']), createOrUpdateWorkflowGroup);
+router.delete('/workflow-grupos/:id', authenticate, requireRoutePermission(['/comercial/workflow/groups']), removeWorkflowGroup);
+router.get('/workflow-grupos/segments', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchListSegments);
 // ...
-router.get('/workflow-grupos/:id/projecoes', authenticate, fetchGroupProjections);
+router.get('/workflow-grupos/:id/projecoes', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchGroupProjections);
 
 // ─── Sync extras ──────────────────────────────────────────────────────────────
 router.post('/price-tables/sync', authenticate, requireAdmin, async (req, res) => {
@@ -112,7 +118,7 @@ router.post('/price-tables/sync/:idempreendimento', authenticate, requireAdmin, 
 });
 
 // Debug: inspeciona resposta bruta do CV + o que está no banco
-router.get('/price-tables/debug/:idempreendimento', authenticate, async (req, res) => {
+router.get('/price-tables/debug/:idempreendimento', authenticate, requireAdmin, async (req, res) => {
     const eid = Number(req.params.idempreendimento);
     try {
         const apiCv = (await import('../lib/apiCv.js')).default;
@@ -176,7 +182,7 @@ router.get('/price-tables/debug/:idempreendimento', authenticate, async (req, re
     }
 });
 
-router.post('/correspondents/sync', authenticate, async (req, res) => {
+router.post('/correspondents/sync', authenticate, requireAdmin, async (req, res) => {
     try {
         const svc = new CorrespondentSyncService();
         const n = await svc.syncAll();

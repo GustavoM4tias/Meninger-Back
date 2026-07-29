@@ -3,10 +3,12 @@
 // Monta o relatório de imobiliárias (backup cv_imobiliarias + vínculos por
 // reservas e por cadastros do Office). Extraído do realEstateController para
 // ser REUSADO pela Eme (RealEstateTools) com exatamente o mesmo comportamento
-// e escopo de acesso da tela /comercial/imobiliarias — inclusive a regra de
-// cidade p/ não-admin e a herança de cidade dos empreendimentos vinculados.
+// e escopo de acesso da tela /comercial/imobiliarias — não-admin só vê
+// imobiliárias das cidades dos empreendimentos do seu escopo
+// (accessScopeService), com herança de cidade dos empreendimentos vinculados.
 
 import db from '../../models/sequelize/index.js';
+import { visibleCities } from '../permissions/accessScopeService.js';
 import { onlyDigits } from './realEstateRegistrationService.js';
 
 // Normalização compatível com a lógica de cidade usada no resto do sistema:
@@ -95,8 +97,9 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
     const qFilter = String(q || '').trim();
     const cidadeFilter = String(cidade || '').trim();
     const entFilter = String(empreendimento || '').trim();
-    const isUserAdmin = user?.role === 'admin';
-    const userCity = user?.city || '';
+    // Escopo de acesso (accessScopeService): null = admin (sem filtro);
+    // lista de cidades dos empreendimentos liberados. Fail-closed: vazio → nada.
+    const scopeCities = await visibleCities(user);
 
     const rows = [];
     for (const i of imobs) {
@@ -107,10 +110,10 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
             ? [i.cidade]
             : [...new Set(vinculos.map(v => v.cidade).filter(Boolean))];
 
-        // Escopo de acesso: não-admin só vê imobiliárias das suas cidades.
-        if (!isUserAdmin) {
-            if (!cidades.length) continue;
-            if (!cidades.some(c => cityMatches(c, userCity))) continue;
+        // Escopo de acesso: não-admin só vê imobiliárias das cidades do escopo.
+        if (scopeCities !== null) {
+            if (!cidades.length || !scopeCities.length) continue;
+            if (!cidades.some(c => scopeCities.some(sc => cityMatches(c, sc)))) continue;
         }
 
         if (cidadeFilter && !cidades.some(c => cityMatches(c, cidadeFilter))) continue;

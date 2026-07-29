@@ -215,8 +215,9 @@ function auditOfficeTool({ user, sessionId, toolName, args, result, ms, ip, user
   }
 }
 
-// Exports para reuso fora do chat (ex: AlertReportService re-executa as mesmas tools)
-export { executeTool, TOOLS, TOOL_DECLARATIONS };
+// Exports para reuso fora do chat (ex: AlertReportService re-executa as mesmas
+// tools; o validador de integridade confere o mapa de alçada das legadas)
+export { executeTool, TOOLS, TOOL_DECLARATIONS, LEGACY_TOOL_ROUTES };
 
 dotenv.config();
 
@@ -1533,26 +1534,28 @@ function summarizeForGemini(result) {
 
 export async function loadAccessibleEnterprises(user) {
   const { QueryTypes } = await import('sequelize');
-  const isAdmin = user.role === 'admin';
-  const sql = isAdmin
+  const { visibleCvIds } = await import('../permissions/accessScopeService.js');
+  const cvIds = await visibleCvIds(user); // null = admin (sem filtro); [] = sem acesso
+  if (cvIds && !cvIds.length) return [];
+  const sql = cvIds
     ? `SELECT ce.nome AS enterprise_name, COALESCE(ec.city_override, ec.default_city, ce.cidade) AS cidade
        FROM cv_enterprises ce
        LEFT JOIN enterprise_cities ec ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
        WHERE ce.nome IS NOT NULL
+         AND ce.idempreendimento IN (:cvIds)
        ORDER BY ce.nome
        LIMIT :cap`
     : `SELECT ce.nome AS enterprise_name, COALESCE(ec.city_override, ec.default_city, ce.cidade) AS cidade
        FROM cv_enterprises ce
        LEFT JOIN enterprise_cities ec ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
        WHERE ce.nome IS NOT NULL
-         AND COALESCE(ec.city_override, ec.default_city, ce.cidade) ILIKE :city
        ORDER BY ce.nome
        LIMIT :cap`;
   // cap+1: o excedente sinaliza ao buildEnterpriseBlock que a lista foi truncada.
   const rows = await db.sequelize.query(sql, {
-    replacements: isAdmin
-      ? { cap: MAX_PROMPT_ENTERPRISES + 1 }
-      : { city: `%${user.city}%`, cap: MAX_PROMPT_ENTERPRISES + 1 },
+    replacements: cvIds
+      ? { cvIds, cap: MAX_PROMPT_ENTERPRISES + 1 }
+      : { cap: MAX_PROMPT_ENTERPRISES + 1 },
     type: QueryTypes.SELECT,
   });
   return rows.map(r => ({ name: r.enterprise_name, cidade: r.cidade || 'N/A' }));

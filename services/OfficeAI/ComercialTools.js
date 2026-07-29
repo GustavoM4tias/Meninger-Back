@@ -3,6 +3,7 @@ import db from '../../models/sequelize/index.js';
 import { QueryTypes, Op, where, fn, col } from 'sequelize';
 import fetch from 'node-fetch';
 import { buildSubtitle } from './MarketingTools.js';
+import { visibleCvIds } from '../permissions/accessScopeService.js';
 
 const MCMV_FAIXA3 = 400000;
 const MCMV_FAIXA4 = 600000;
@@ -60,7 +61,7 @@ export const TOOL_DECLARATIONS = [
       type: 'OBJECT',
       properties: {
         nome:               { type: 'STRING', description: 'Filtro por nome do empreendimento.' },
-        cidade:             { type: 'STRING', description: 'Filtro por cidade do empreendimento (apenas admin). Não-admin é trancado na própria cidade automaticamente.' },
+        cidade:             { type: 'STRING', description: 'Filtro adicional por cidade do empreendimento, aplicado DENTRO do escopo de acesso do usuário (nunca amplia o que ele pode ver).' },
         uf:                 { type: 'STRING', description: 'Filtro por estado (sigla UF). Ex: "PR", "SP".' },
         situacao_comercial: { type: 'STRING', description: 'Situação comercial. Ex: "Em Vendas", "Lançamento", "Encerrado".' },
         situacao_obra:      { type: 'STRING', description: 'Situação de obra. Ex: "Em Obras", "Entregue", "Em Projeto".' },
@@ -102,7 +103,7 @@ export const TOOL_DECLARATIONS = [
         idprecadastros:{ type: 'STRING',  description: 'IDs específicos de pré-cadastros (CSV de inteiros). Use quando vier de outro módulo que já tem os IDs em contexto.' },
         idreservas:    { type: 'STRING',  description: 'IDs específicos de reservas (CSV). Filtra pré-cadastros que originaram essas reservas (via campo idprecadastro da reserva).' },
         nome:          { type: 'STRING',  description: 'Nome do cliente (busca parcial).' },
-        cidade:        { type: 'STRING',  description: 'Cidade do empreendimento (apenas admin). Não-admin é trancado na própria cidade automaticamente — não é possível ver pré-cadastros de outras cidades.' },
+        cidade:        { type: 'STRING',  description: 'Filtro adicional por cidade do empreendimento, aplicado DENTRO do escopo de acesso do usuário (nunca amplia o que ele pode ver).' },
         intencao_compra:{type: 'STRING',  description: 'Intenção de compra (texto literal do CV).' },
         group_by: {
           type: 'STRING',
@@ -148,7 +149,7 @@ export const TOOL_DECLARATIONS = [
         empresa_correspondente: { type: 'STRING', description: 'Nome da CCA/empresa correspondente associada à reserva. CSV aceito.' },
         documento:      { type: 'STRING', description: 'CPF/CNPJ do titular. CSV aceito (busca exata por dígitos normalizados ou parcial).' },
         nome:           { type: 'STRING', description: 'Nome do titular (busca parcial).' },
-        cidade:         { type: 'STRING', description: 'Cidade do empreendimento (apenas admin). Não-admin é trancado na própria cidade automaticamente — não é possível ver reservas de outras cidades.' },
+        cidade:         { type: 'STRING', description: 'Filtro adicional por cidade do empreendimento, aplicado DENTRO do escopo de acesso do usuário (nunca amplia o que ele pode ver).' },
         only_active:    { type: 'BOOLEAN', description: 'Apenas reservas em curso (não vendidas e não distratadas/canceladas).' },
         only_vendida:   { type: 'BOOLEAN', description: 'Apenas reservas com flag vendida="S" (ETAPA CRM, não venda concretizada).' },
         with_lead:      { type: 'BOOLEAN', description: 'Apenas reservas com pelo menos 1 lead associado.' },
@@ -270,19 +271,23 @@ async function executeQueryMcmv(args) {
 // ── Empreendimentos ────────────────────────────────────────────────────────────
 
 async function executeQueryEnterprises(args, user) {
-  const isAdmin = user.role === 'admin';
-
-  // ── Visibilidade trancada (não-admin não pode bypass via args.cidade) ──
-  if (!isAdmin && !user.city?.trim()) {
+  // ── Escopo de acesso (accessScopeService): null = admin (sem filtro) ──
+  const cvIds = await visibleCvIds(user);
+  if (cvIds && !cvIds.length) {
     return {
       type: 'table', title: 'Empreendimentos', columns: [], rows: [], total: 0,
-      context: { source: 'enterprises', error: 'Cidade do usuário ausente — sem visibilidade.' },
+      context: { source: 'enterprises', error: 'Nenhum empreendimento no escopo de acesso do usuário — sem dados para mostrar.' },
     };
   }
-  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
 
   const whereClauses = ['1=1'];
   const replacements = {};
+
+  // Escopo trancado — args nunca ampliam, só refinam dentro do escopo
+  if (cvIds) {
+    whereClauses.push(`ce.idempreendimento IN (:scopeCvIds)`);
+    replacements.scopeCvIds = cvIds;
+  }
 
   if (args.nome) {
     whereClauses.push(`ce.nome ILIKE :nome`);
@@ -309,19 +314,19 @@ async function executeQueryEnterprises(args, user) {
     replacements.uf = `%${args.uf}%`;
   }
 
-  // Cidade trancada — não-admin nunca pode usar args.cidade pra outra cidade
-  if (effectiveCity) {
+  // args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia)
+  if (args.cidade) {
     whereClauses.push(`
       (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ce.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
       LIKE ('% ' || unaccent(upper(regexp_replace(:city, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
     `);
-    replacements.city = effectiveCity;
+    replacements.city = args.cidade;
   }
 
   const context = {
     source:             'enterprises',
-    cidade:             effectiveCity,
-    visibility:         isAdmin ? 'admin-full' : 'city-restricted',
+    cidade:             args.cidade || null,
+    visibility:         cvIds ? 'scope-restricted' : 'admin-full',
     uf:                 args.uf || null,
     situacao_comercial: args.situacao_comercial || null,
     situacao_obra:      args.situacao_obra || null,
@@ -431,7 +436,8 @@ async function executeEnterprisesGrouped(groupBy, whereClauses, replacements, co
 // ── Detalhe de empreendimento ──────────────────────────────────────────────────
 
 async function executeGetEnterpriseDetail(args, user) {
-  const isAdmin = user.role === 'admin';
+  // ── Escopo de acesso (accessScopeService): null = admin (sem filtro) ──
+  const cvIds = await visibleCvIds(user);
 
   // Busca o empreendimento
   let ent = null;
@@ -448,15 +454,9 @@ async function executeGetEnterpriseDetail(args, user) {
 
   if (!ent) return { error: `Empreendimento "${args.nome || args.id}" não encontrado.` };
 
-  // Restrição de cidade para não-admin
-  if (!isAdmin && user.city) {
-    const [check] = await db.sequelize.query(
-      `SELECT COUNT(*) AS cnt FROM enterprise_cities
-       WHERE source = 'crm' AND crm_id = :id
-         AND COALESCE(city_override, default_city) ILIKE :city`,
-      { replacements: { id: ent.idempreendimento, city: `%${user.city}%` }, type: QueryTypes.SELECT }
-    );
-    if (Number(check.cnt) === 0) return { error: 'Empreendimento não acessível para seu perfil.' };
+  // Restrição de escopo — fora do escopo responde igual pra não vazar dados
+  if (cvIds && !cvIds.includes(Number(ent.idempreendimento))) {
+    return { error: 'Empreendimento não está no escopo de acesso do usuário.' };
   }
 
   const raw = typeof ent.raw === 'string' ? JSON.parse(ent.raw) : (ent.raw || {});
@@ -568,17 +568,15 @@ function addIlikeCsv(whereClauses, replacements, paramName, column, rawVal) {
 }
 
 async function executeQueryPrecadastros(args, user) {
-  const isAdmin = user.role === 'admin';
-
-  // ── Visibilidade trancada (não-admin não pode bypass via args.cidade) ──
-  if (!isAdmin && !user.city?.trim()) {
+  // ── Escopo de acesso (accessScopeService): null = admin (sem filtro) ──
+  const cvIds = await visibleCvIds(user);
+  if (cvIds && !cvIds.length) {
     return {
       type: 'precadastros_summary', source: 'precadastros',
       title: 'Pré-cadastros', total: 0,
-      context: { source: 'precadastros', error: 'Cidade do usuário ausente — sem visibilidade.' },
+      context: { source: 'precadastros', error: 'Nenhum empreendimento no escopo de acesso do usuário — sem dados para mostrar.' },
     };
   }
-  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
 
   // Filtros por ID/CPF dispensam janela de data — o registro pode estar fora do período padrão
   const hasIdFilter = !!(args.idleads || args.idprecadastros || args.idreservas || args.documento);
@@ -690,9 +688,15 @@ async function executeQueryPrecadastros(args, user) {
     }
   }
 
-  // Cidade trancada — effectiveCity já reflete a regra (não-admin = user.city, ignora args.cidade)
-  if (effectiveCity) {
-    replacements.targetCity = effectiveCity;
+  // Escopo trancado — args nunca ampliam, só refinam dentro do escopo
+  if (cvIds) {
+    whereClauses.push(`p.idempreendimento IN (:scopeCvIds)`);
+    replacements.scopeCvIds = cvIds;
+  }
+
+  // args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia)
+  if (args.cidade) {
+    replacements.targetCity = args.cidade;
     whereClauses.push(`
       EXISTS (
         SELECT 1 FROM enterprise_cities ec
@@ -721,11 +725,11 @@ async function executeQueryPrecadastros(args, user) {
     excluir_painel:         !!args.excluir_painel,
     only_active:            !!args.only_active,
     with_lead:              !!args.with_lead,
-    cidade:                 effectiveCity,
+    cidade:                 args.cidade                 || null,
     group_by:               args.group_by               || null,
     metric:                 args.metric                 || (args.group_by ? 'count' : null),
     format:                 args.format                 || (args.group_by ? 'chart' : 'summary'),
-    visibility:             isAdmin ? 'admin-full' : 'city-restricted',
+    visibility:             cvIds ? 'scope-restricted' : 'admin-full',
   };
 
   // Listagem individual (nome, CPF, etc.) tem prioridade — pedido explícito de dados
@@ -1020,18 +1024,52 @@ async function executePrecadList(args, whereSql, replacements, context, start, e
 
 // ── Reservas ───────────────────────────────────────────────────────────────────
 
-async function executeQueryReservas(args, user) {
-  const isAdmin = user.role === 'admin';
+// EXISTS(enterprise_cities) ligando a reserva ao empreendimento pelas 4
+// estratégias (padrão idêntico ao dashboard reservasReport.js): Sienge ERP id →
+// CRM id direto → idempreendimento_cv → fallback por nome normalizado. O
+// `extraCond` é a condição aplicada sobre a linha ec_r que casou (escopo/cidade).
+function reservaEnterpriseExists(extraCond) {
+  return `
+      EXISTS (
+        SELECT 1
+        FROM enterprise_cities ec_r
+        WHERE (
+          -- 1) Sienge ERP id direto
+          (NULLIF(r.unidade_json->>'idempreendimento_int','') IS NOT NULL
+            AND ec_r.erp_id = r.unidade_json->>'idempreendimento_int')
+          -- 2) idempreendimento_int como crm_id (integração direta)
+          OR (NULLIF(r.unidade_json->>'idempreendimento_int','')::int IS NOT NULL
+            AND ec_r.source = 'crm'
+            AND ec_r.crm_id = NULLIF(r.unidade_json->>'idempreendimento_int','')::int)
+          -- 3) idempreendimento_cv explícito
+          OR (NULLIF(r.unidade_json->>'idempreendimento_cv','')::int IS NOT NULL
+            AND ec_r.source = 'crm'
+            AND ec_r.crm_id = NULLIF(r.unidade_json->>'idempreendimento_cv','')::int)
+          -- 4) fallback por nome normalizado
+          OR (
+            COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''))
+              IS NOT NULL
+            AND unaccent(upper(regexp_replace(COALESCE(ec_r.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
+                unaccent(upper(regexp_replace(
+                  COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
+                  '[^A-Z0-9]+',' ','g')))
+          )
+        )
+        AND ${extraCond}
+      )
+    `;
+}
 
-  // ── Visibilidade trancada (não-admin não pode bypass via args.cidade) ──
-  if (!isAdmin && !user.city?.trim()) {
+async function executeQueryReservas(args, user) {
+  // ── Escopo de acesso (accessScopeService): null = admin (sem filtro) ──
+  const cvIds = await visibleCvIds(user);
+  if (cvIds && !cvIds.length) {
     return {
       type: 'reservas_summary', source: 'reservas',
       title: 'Reservas', total: 0,
-      context: { source: 'reservas', error: 'Cidade do usuário ausente — sem visibilidade.' },
+      context: { source: 'reservas', error: 'Nenhum empreendimento no escopo de acesso do usuário — sem dados para mostrar.' },
     };
   }
-  const effectiveCity = isAdmin ? (args.cidade || null) : user.city;
 
   // Filtros por ID/CPF dispensam janela de data — registro pode estar fora do período padrão
   const hasIdFilter = !!(args.idreservas || args.idprecadastros || args.idleads || args.documento);
@@ -1146,42 +1184,20 @@ async function executeQueryReservas(args, user) {
     }
   }
 
-  // Cidade trancada — match robusto (padrão idêntico ao dashboard reservasReport.js).
-  // 4 estratégias: Sienge ERP id → CRM id direto → idempreendimento_cv → fallback por nome.
-  // Crítico: o match por nome simples (ce.nome ILIKE r.empreendimento) é frágil porque
-  // r.empreendimento pode ter sufixos/variações — então preferimos IDs primeiro.
-  if (effectiveCity) {
-    replacements.targetCity = effectiveCity;
-    whereClauses.push(`
-      EXISTS (
-        SELECT 1
-        FROM enterprise_cities ec_r
-        WHERE (
-          -- 1) Sienge ERP id direto
-          (NULLIF(r.unidade_json->>'idempreendimento_int','') IS NOT NULL
-            AND ec_r.erp_id = r.unidade_json->>'idempreendimento_int')
-          -- 2) idempreendimento_int como crm_id (integração direta)
-          OR (NULLIF(r.unidade_json->>'idempreendimento_int','')::int IS NOT NULL
-            AND ec_r.source = 'crm'
-            AND ec_r.crm_id = NULLIF(r.unidade_json->>'idempreendimento_int','')::int)
-          -- 3) idempreendimento_cv explícito
-          OR (NULLIF(r.unidade_json->>'idempreendimento_cv','')::int IS NOT NULL
-            AND ec_r.source = 'crm'
-            AND ec_r.crm_id = NULLIF(r.unidade_json->>'idempreendimento_cv','')::int)
-          -- 4) fallback por nome normalizado
-          OR (
-            COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''))
-              IS NOT NULL
-            AND unaccent(upper(regexp_replace(COALESCE(ec_r.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
-                unaccent(upper(regexp_replace(
-                  COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
-                  '[^A-Z0-9]+',' ','g')))
-          )
-        )
-        AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec_r.city_override, ec_r.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-            LIKE ('% ' || unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
-      )
-    `);
+  // Escopo trancado — a reserva precisa casar com um empreendimento do escopo
+  // (crm_id ∈ cvIds), usando o match robusto por 4 estratégias.
+  if (cvIds) {
+    replacements.scopeCvIds = cvIds;
+    whereClauses.push(reservaEnterpriseExists(`ec_r.crm_id IN (:scopeCvIds)`));
+  }
+
+  // args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia)
+  if (args.cidade) {
+    replacements.targetCity = args.cidade;
+    whereClauses.push(reservaEnterpriseExists(
+      `(' ' || unaccent(upper(regexp_replace(COALESCE(ec_r.city_override, ec_r.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+            LIKE ('% ' || unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')`
+    ));
   }
 
   const where = whereClauses.length ? whereClauses.join(' AND ') : '1=1';
@@ -1206,8 +1222,8 @@ async function executeQueryReservas(args, user) {
     with_lead:              !!args.with_lead,
     excluir_painel:         !!args.excluir_painel,
     lead_origem:            args.lead_origem            || null,
-    cidade:                 effectiveCity,
-    visibility:             isAdmin ? 'admin-full' : 'city-restricted',
+    cidade:                 args.cidade                 || null,
+    visibility:             cvIds ? 'scope-restricted' : 'admin-full',
     group_by:               args.group_by               || null,
     metric:                 args.metric                 || (args.group_by ? 'count' : null),
     format:                 args.format                 || (args.group_by ? 'chart' : 'summary'),

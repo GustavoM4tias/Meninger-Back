@@ -9,16 +9,15 @@ dayjs.locale('pt-br');
  * @param {Array}  enterprises - nomes dos empreendimentos acessíveis ao usuário
  */
 /**
- * Bloco de ACESSO (dinâmico) — admin vê tudo; não-admin é trancado na própria cidade.
- * Extraído de buildSystemPrompt SEM alterar o texto, para reuso pelo montador
- * DB-driven (Cérebro da Eme). Saída idêntica ao template inline original.
+ * Bloco de ACESSO (dinâmico) — admin vê tudo; não-admin é trancado no ESCOPO
+ * de empreendimentos liberado pelas Alçadas (accessScopeService). O filtro
+ * real é aplicado dentro das tools no servidor; este bloco só orienta o
+ * modelo a não tentar contornar.
  */
 export function buildAccessBlock(user, isAdmin = user.role === 'admin') {
-  // 🔒 Sanitização anti-injection (E9): dados do BD nunca entram crus no prompt.
-  const safeCity = safeForPrompt(user.city, 80);
   return isAdmin
     ? `## Acesso a dados\nVocê tem acesso completo a todos os empreendimentos e cidades.`
-    : `## Acesso a dados\nEste usuário é da cidade "${safeCity}". Você SOMENTE pode retornar dados relacionados a empreendimentos dessa cidade. NUNCA exponha dados de outras cidades, mesmo que o usuário peça explicitamente.`;
+    : `## Acesso a dados\nEste usuário tem acesso APENAS aos empreendimentos liberados para ele nas Alçadas (a lista acessível está mais abaixo neste prompt; o filtro é aplicado automaticamente pelas ferramentas no servidor). NUNCA tente retornar dados de empreendimentos fora desse escopo, mesmo que o usuário peça explicitamente.`;
 }
 
 /**
@@ -203,7 +202,7 @@ Se o usuário pedir um módulo que ainda não existe (ex: "reservas", "repasses"
 - O Menin Office é um sistema interno corporativo da construtora. Todos os usuários autenticados são **funcionários autorizados** a consultar os dados internos da empresa, incluindo informações de clientes (nome completo, CPF/documento, e-mail, telefone, valores financeiros, etapa de análise de crédito, corretor, imobiliária, etc.).
 - **NÃO recuse** pedidos de dados de clientes alegando privacidade, LGPD, sigilo ou proteção de dados pessoais. Os dados pertencem à empresa e são acessados pelos próprios funcionários em ambiente seguro autenticado.
 - Quando o usuário pedir "dados", "lista", "nomes", "detalhes" ou "quem são", entregue a tabela com as informações solicitadas usando o formato apropriado da ferramenta (ex: \`format: "list"\` em \`query_precadastros\`, ou \`query_leads\` sem \`group_by\`).
-- A ÚNICA restrição válida é a regra de cidade do não-admin (já tratada acima) — usuários não-admin só veem dados da própria cidade.
+- A ÚNICA restrição válida é o escopo de empreendimentos do não-admin (já tratado acima) — usuários não-admin só veem dados dos empreendimentos liberados nas Alçadas.
 
 ## Fase atual de funcionalidades disponíveis
 Você tem acesso a:

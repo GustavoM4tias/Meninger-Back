@@ -10,6 +10,7 @@
 
 import db from '../models/sequelize/index.js';
 import { getHiddenDepartmentsForUser } from './permissions/departmentVisibilityService.js';
+import { getScope, isErpAllowed } from './permissions/accessScopeService.js';
 import { listExpenseRows } from './sienge/payableLiveService.js';
 
 const { ExpensePersonalization, Sequelize, sequelize } = db;
@@ -116,13 +117,21 @@ export default class expenseService {
     // 1) Dados ao vivo (uma linha por parcela)
     const rows = await listExpenseRows({ startDate, endDate, costCenterId });
 
+    // 1.5) Escopo de acesso por empreendimento (accessScopeService). Admin vê
+    //      tudo; não-admin só vê parcelas de CC do seu escopo (isErpAllowed
+    //      cobre sub-CC 80104 → 80001). Fail-closed: escopo vazio → nada.
+    const scope = await getScope(user);
+    const scoped = scope.all
+      ? rows
+      : rows.filter(r => isErpAllowed(scope, r.costCenterId));
+
     // 2) Departamentos ocultos (cascata global → cargo → usuário). Admin vê tudo.
     //    department_name NULL nunca é "oculto".
     const hiddenDepartments = await getHiddenDepartmentsForUser(user);
     const hiddenSet = new Set(hiddenDepartments);
     const visible = hiddenSet.size
-      ? rows.filter(r => !r.departmentName || !hiddenSet.has(r.departmentName))
-      : rows;
+      ? scoped.filter(r => !r.departmentName || !hiddenSet.has(r.departmentName))
+      : scoped;
 
     // 3) Personalizações (categoria/observação) por parcela
     const persMap = await this.loadPersonalizations(visible.map(r => r.billId));

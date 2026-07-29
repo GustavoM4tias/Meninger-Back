@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
 import makeLogger from '../../lib/makeLogger.js';
+import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 
 // Mantém fetchFilas (sem alterações relevantes, mas com log se quiser)
 export const fetchFilas = async (req, res) => {
@@ -130,16 +131,39 @@ export async function getLeads(req, res) {
     }
 
     // ── Visibilidade trancada (não-admin não pode bypass via ?cidade) ──
-    // Mesma lógica de Faturamento: admin pode filtrar livre; não-admin é
-    // sempre trancado na própria cidade do perfil.
-    const isAdmin = req.user.role === 'admin';
-    if (!isAdmin && !req.user.city?.trim()) {
-      return res.status(400).json({ error: 'Cidade do usuário ausente no token.' });
-    }
-    const effectiveCity = isAdmin ? (cidade || null) : req.user.city;
+    // Admin pode filtrar livre (inclusive por ?cidade); não-admin é sempre
+    // trancado no seu escopo de acesso (accessScopeService).
+    const scopeCvIds = await visibleCvIds(req.user); // null = admin (sem filtro)
+    const isAdmin = scopeCvIds === null;
 
-    if (effectiveCity) {
-      replacements.userCity = effectiveCity;
+    if (!isAdmin) {
+      // fail-closed: escopo vazio → resultado vazio
+      if (!scopeCvIds.length) {
+        const emptyPayload = {
+          count: 0,
+          periodo: { data_inicio: replacements.start, data_fim: replacements.end },
+          results: [],
+        };
+        if (verbose) {
+          logger.log('LEADS 🔒 Escopo vazio → resultado vazio');
+          return res.json({ ok: true, ...emptyPayload, logs: logger.getLogs() });
+        }
+        return res.json(emptyPayload);
+      }
+      replacements.scopeCvIds = scopeCvIds;
+      whereClauses.push(`
+        EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(l.empreendimento) AS e_scope
+          WHERE COALESCE(
+                NULLIF(e_scope->>'id','')::int,
+                NULLIF(e_scope->>'idempreendimento','')::int,
+                NULLIF(e_scope->>'id_empreendimento','')::int
+              ) IN (:scopeCvIds)
+        )`);
+    } else if (cidade) {
+      // Admin: filtro OPCIONAL por cidade (hint de filtro, não visibilidade)
+      replacements.userCity = cidade;
       whereClauses.push(`
         EXISTS (
           SELECT 1
@@ -155,7 +179,7 @@ export async function getLeads(req, res) {
                 LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
         )`);
     }
-    const userCity = effectiveCity; // mantém a variável usada no log abaixo
+    const userCity = isAdmin ? (cidade || null) : null; // mantém a variável usada no log abaixo
 
     // LATERAL para (1) nomes agregados e (2) cidades resolvidas SOMENTE via CRM (sem ERP/fallback)
     const sql = `
@@ -191,7 +215,7 @@ export async function getLeads(req, res) {
     `;
 
     logger.log(`LEADS ▶️ SQL (CRM-only) montada`);
-    logger.log(`LEADS 🧭 período: ${replacements.start} .. ${replacements.end} | admin=${isAdmin} userCity=${userCity || '—'}`);
+    logger.log(`LEADS 🧭 período: ${replacements.start} .. ${replacements.end} | admin=${isAdmin} cidadeFiltro=${userCity || '-'} escopo=${isAdmin ? 'all' : scopeCvIds.length}`);
 
     const t0 = Date.now();
     const rows = await db.sequelize.query(sql, {

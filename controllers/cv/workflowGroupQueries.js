@@ -1,5 +1,6 @@
 // controllers/cv/workflowGroupQueries.js
 import { getGroupProjections } from '../../services/cv/workflowGroupQueriesService.js';
+import { visibleErpIds } from '../../services/permissions/accessScopeService.js';
 
 function parseIdCsv(value) {
   if (Array.isArray(value)) {
@@ -23,11 +24,11 @@ export async function fetchGroupProjections(req, res) {
       return res.status(400).json({ error: 'id inválido' });
     }
 
-    const isAdmin = req.user?.role === 'admin';
-    const userCityRaw = isAdmin ? null : (req.user?.city || '').trim();
-
-    if (!isAdmin && !userCityRaw) {
-      return res.status(403).json({ error: 'Cidade do usuário não configurada.' });
+    // Escopo de acesso (accessScopeService): null = admin (sem filtro);
+    // fail-closed: escopo vazio → resposta vazia.
+    const scopeErpIds = await visibleErpIds(req.user);
+    if (scopeErpIds !== null && !scopeErpIds.length) {
+      return res.json({ count: 0, results: [], meta: { scoped: true } });
     }
 
     const companyIds = parseIdCsv(req.query.companyIds ?? req.query.companyId);
@@ -35,8 +36,7 @@ export async function fetchGroupProjections(req, res) {
 
     const data = await getGroupProjections({
       idgroup,
-      isAdmin,
-      userCity: userCityRaw,
+      scopeErpIds,
       companyIds,
       enterpriseIds
     });

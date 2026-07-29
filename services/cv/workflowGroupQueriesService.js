@@ -1,13 +1,17 @@
 // services/cv/workflowGroupQueriesService.js
 import db from '../../models/sequelize/index.js'
 
+// scopeErpIds: escopo de acesso do usuário (accessScopeService.visibleErpIds)
+//   null  → admin, sem filtro
+//   [ids] → só reservas cujo CC resolvido pertence ao escopo (sub-CC casa pelo
+//           CC base: 80104 → 80001)
 export async function getGroupProjections({
   idgroup,
-  isAdmin,
-  userCity,
+  scopeErpIds = null,
   companyIds = [],
   enterpriseIds = []
 }) {
+  const isAdmin = scopeErpIds === null
   const group = await db.CvWorkflowGroup.findByPk(idgroup)
   if (!group) throw new Error('Grupo não encontrado')
 
@@ -46,7 +50,7 @@ export async function getGroupProjections({
         tipo,
         segmentos,
         situacoes,
-        city: isAdmin ? null : userCity,
+        scoped: !isAdmin,
         companyIds: companyIdsSafe,
         enterpriseIds: enterpriseIdsSafe
       }
@@ -230,9 +234,11 @@ reservas_segmentadas AS (
   ${isAdmin
       ? ``
       : `
-        AND rcc.city_resolved IS NOT NULL
-        AND unaccent(upper(regexp_replace(rcc.city_resolved, '[^A-Z0-9]+',' ','g'))) =
-            unaccent(upper(regexp_replace(:userCity,      '[^A-Z0-9]+',' ','g')))
+        AND COALESCE(rcc.idemp_erp_resolvido, rcc.idemp_int_from_reserva) IS NOT NULL
+        AND (
+          COALESCE(rcc.idemp_erp_resolvido, rcc.idemp_int_from_reserva) IN (:scopeErpIds)
+          OR (FLOOR(COALESCE(rcc.idemp_erp_resolvido, rcc.idemp_int_from_reserva) / 100) * 100 + 1) IN (:scopeErpIds)
+        )
       `
     }
   ${hasEnterpriseIds
@@ -351,7 +357,7 @@ ORDER BY
   }
 
   if (segmentos.length) replacements.segments = segmentos
-  if (!isAdmin) replacements.userCity = userCity
+  if (!isAdmin) replacements.scopeErpIds = scopeErpIds.length ? scopeErpIds : [-1]
   if (hasCompanyIds) replacements.companyIds = companyIdsSafe
   if (hasEnterpriseIds) replacements.enterpriseIds = enterpriseIdsSafe
   if (hasStaleCut) replacements.staleDays = staleDays
@@ -368,7 +374,7 @@ ORDER BY
       tipo,
       segmentos,
       situacoes,
-      city: isAdmin ? null : userCity,
+      scoped: !isAdmin,
       companyIds: companyIdsSafe,
       enterpriseIds: enterpriseIdsSafe,
       staleDays: hasStaleCut ? staleDays : null

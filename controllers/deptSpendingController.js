@@ -6,6 +6,7 @@
 
 import DeptSpendingService from '../services/deptSpending/deptSpendingService.js';
 import { getReportInsights } from '../services/deptSpending/deptSpendingInsightService.js';
+import { getScope, isErpAllowed } from '../services/permissions/accessScopeService.js';
 
 const service = new DeptSpendingService();
 
@@ -15,12 +16,29 @@ function normYM(v) {
     return ym;
 }
 
+/* Empresa (Sienge) visível no escopo? Direto por companyIds ou pela heurística
+   de prefixo (os CCs do Sienge começam com o id da empresa: 10601 → 106). */
+function companyAllowedByScope(scope, companyId) {
+    if (!scope || scope.all) return true;
+    const cid = Number(companyId);
+    if (!Number.isFinite(cid)) return false;
+    if ((scope.companyIds || []).includes(cid)) return true;
+    const prefix = String(cid);
+    return (scope.erpIds || []).some((cc) => String(cc).startsWith(prefix));
+}
+
 export async function getEnterpriseSpending(req, res) {
     try {
         if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
         const { erpId } = req.params;
         const { year, aliasId = 'default', month } = req.query;
+
+        // Escopo de acesso: não-admin só consulta CC do seu escopo (fail-closed)
+        const scope = await getScope(req.user);
+        if (!scope.all && !isErpAllowed(scope, erpId)) {
+            return res.status(403).json({ error: 'Centro de custo fora do seu escopo.' });
+        }
 
         const start_month = req.query.start_month ? normYM(req.query.start_month) : null;
         const end_month = req.query.end_month ? normYM(req.query.end_month) : null;
@@ -59,6 +77,13 @@ export async function getCompanyReport(req, res) {
 
         const month = normYM(req.query.month || new Date().toISOString().slice(0, 7));
         const isAdmin = req.user?.role === 'admin';
+
+        // Escopo de acesso: não-admin só consulta empresa do seu escopo
+        // (fail-closed; mesma resposta da governança para não vazar existência)
+        const scope = await getScope(req.user);
+        if (!scope.all && !companyAllowedByScope(scope, companyId)) {
+            return res.status(404).json({ error: 'Relatório não disponível.' });
+        }
 
         const report = await service.computeCompanyReport({
             companyId,
@@ -112,6 +137,20 @@ export const getEnterprisesSpending = async (req, res) => {
             onlyReleased: !isAdmin,
             companyIds: companyIds.length ? companyIds : null,
         });
+
+        // Escopo de acesso: não-admin só vê empreendimentos/empresas do seu
+        // escopo (fail-closed: escopo vazio → lista vazia)
+        const scope = await getScope(req.user);
+        if (!scope.all) {
+            const results = (out.results || []).filter((r) => {
+                if (r.companyId != null && companyAllowedByScope(scope, r.companyId)) return true;
+                const ccs = Array.isArray(r.costCenterIds) ? r.costCenterIds : [];
+                if (ccs.some((cc) => isErpAllowed(scope, cc))) return true;
+                if (r.erpId != null && isErpAllowed(scope, r.erpId)) return true;
+                return false;
+            });
+            return res.json({ ...out, count: results.length, results, isAdmin });
+        }
 
         return res.json({ ...out, isAdmin });
     } catch (e) {
