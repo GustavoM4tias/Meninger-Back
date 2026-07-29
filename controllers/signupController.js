@@ -87,9 +87,9 @@ export const getSignupOptions = async (req, res) => {
 
 // ── POST /api/auth/complete-signup ───────────────────────────────────────────
 export const completeSignup = async (req, res) => {
-  const { username, birth_date, phone, department_id, city } = req.body || {};
+  const { username, birth_date, phone, department_id, city, city_id } = req.body || {};
 
-  if (!username?.trim() || !birth_date || !department_id || !city) {
+  if (!username?.trim() || !birth_date || !department_id || (!city && !city_id)) {
     return responseHandler.error(res, 'Preencha nome, nascimento, departamento e cidade.');
   }
 
@@ -103,9 +103,13 @@ export const completeSignup = async (req, res) => {
     // dados enquanto aguarda) sem notificar os admins de novo.
     const firstSubmit = user.approval_status === 'incomplete';
 
+    // city_id resolve municípios homônimos (Bom Jesus/PI × Bom Jesus/RS);
+    // `city` por nome segue aceito por compatibilidade.
     const [department, cityRecord] = await Promise.all([
       Department.findOne({ where: { id: Number(department_id), active: true }, attributes: ['id', 'name'] }),
-      UserCity.findOne({ where: { name: city, active: true } }),
+      city_id
+        ? UserCity.findOne({ where: { id: Number(city_id), active: true } })
+        : UserCity.findOne({ where: { name: city, active: true } }),
     ]);
 
     if (!department) return responseHandler.error(res, 'Departamento inválido ou inativo');
@@ -139,10 +143,10 @@ export const completeSignup = async (req, res) => {
 // "Solicite acesso" da tela de login: cria a conta SEM Microsoft, já direto na
 // fila de aprovação ('pending'). A senha chega por e-mail na ativação.
 export const requestSignup = async (req, res) => {
-  const { username, email, birth_date, phone, department_id, city } = req.body || {};
+  const { username, email, birth_date, phone, department_id, city, city_id } = req.body || {};
 
   const cleanEmail = String(email || '').trim().toLowerCase();
-  if (!username?.trim() || !cleanEmail || !birth_date || !department_id || !city) {
+  if (!username?.trim() || !cleanEmail || !birth_date || !department_id || (!city && !city_id)) {
     return responseHandler.error(res, 'Preencha nome, e-mail, nascimento, departamento e cidade.');
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
@@ -157,7 +161,9 @@ export const requestSignup = async (req, res) => {
 
     const [department, cityRecord] = await Promise.all([
       Department.findOne({ where: { id: Number(department_id), active: true }, attributes: ['id', 'name'] }),
-      UserCity.findOne({ where: { name: city, active: true } }),
+      city_id
+        ? UserCity.findOne({ where: { id: Number(city_id), active: true } })
+        : UserCity.findOne({ where: { name: city, active: true } }),
     ]);
     if (!department) return responseHandler.error(res, 'Departamento inválido ou inativo');
     if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
