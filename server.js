@@ -113,7 +113,9 @@ import { ensureSignupApprovalColumns, seedDepartmentDefaultProfiles } from './li
 import { ensureLegacyDrops } from './lib/ensureLegacyDrops.js';
 import { ensureAccessModelSchema } from './lib/ensureAccessModelSchema.js';
 import { ensureAccessModelColumns } from './lib/ensureAccessModelColumns.js';
+import { ensureRoutePolicySchema } from './lib/ensureRoutePolicySchema.js';
 import { ensureOrgDefaultsSchema } from './lib/ensureOrgDefaultsSchema.js';
+import { ensureBrazilCitiesSeed } from './lib/ensureBrazilCitiesSeed.js';
 import { registerApp as registerIntegrityApp, runIntegrityCheck } from './security/integrityCheck.js';
 import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
@@ -386,6 +388,7 @@ async function syncModelsAndPatches(fingerprint) {
   await runPatch('FaturamentoRules', ensureFaturamentoRulesSchema); // stage_commission_rules.stage_id nullable
   await runPatch('SignupApprovalColumns', ensureSignupApprovalColumns); // users.approval_status + permission_profiles.department_id
   await runPatch('AccessModelColumns', ensureAccessModelColumns);   // users.position_id/city_id/permission_profile_id + user_permissions.routes_* + positions.level
+  await runPatch('RoutePolicy', ensureRoutePolicySchema);           // route_policies + permission_profiles.seed_code/routes_customized
 
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
@@ -470,13 +473,19 @@ async function syncModelsAndPatches(fingerprint) {
     ['Organogram', ensureOrganogramSchema],
     ['EmeAudit', ensureEmeAuditSchema],
     ['PermissionRouteRenames', ensurePermissionRouteRenames],
-    ['DepartmentDefaultProfiles', seedDepartmentDefaultProfiles],
     ['InitialTypes', seedInitialTypes],
     ['SalesStandModels', seedSalesStandModels],
     ['Checklist', ensureChecklistSchema],
     ['LegacyDrops', ensureLegacyDrops],
     ['AccessModel', ensureAccessModelSchema],
+    // Catálogo de cidades (IBGE) ANTES do OrgDefaults: o backfill de
+    // users.city_id casa por nome e precisa das cidades já no lugar.
+    ['BrazilCities', ensureBrazilCitiesSeed],
     ['OrgDefaults', ensureOrgDefaultsSchema],
+    // Perfis padrão DEPOIS do OrgDefaults: o seed cria um perfil por
+    // departamento e precisa dos departamentos padrão já no banco (antes,
+    // departamento novo só ganhava perfil no boot seguinte).
+    ['DepartmentDefaultProfiles', seedDepartmentDefaultProfiles],
   ];
 
   for (const [name, fn] of patches) {

@@ -12,6 +12,9 @@
 import { Op } from 'sequelize';
 import db from '../models/sequelize/index.js';
 import { getEffectiveRoutes } from '../services/permissions/permissionAccessService.js';
+import {
+    getAdminOnlyRoutes, listRoutePolicies, setRoutePolicy, normalizeRoute,
+} from '../services/permissions/routePolicyService.js';
 
 // Apenas usuários do Office (não Academy/CVCRM)
 const OFFICE_PROVIDERS = ['INTERNAL', 'MICROSOFT'];
@@ -21,11 +24,15 @@ const OFFICE_PROVIDERS = ['INTERNAL', 'MICROSOFT'];
 // o front usa {isAdmin, routes}).
 export async function getMyPermissions(req, res) {
     try {
+        // adminOnlyRoutes: telas travadas como somente-admin na tela de Alçadas.
+        // Vai para todo mundo porque o front precisa esconder no menu e barrar no
+        // guard de rota — as rotas efetivas abaixo já vêm sem elas.
+        const adminOnlyRoutes = [...await getAdminOnlyRoutes()];
         if (req.user.role === 'admin') {
-            return res.json({ isAdmin: true, routes: null });
+            return res.json({ isAdmin: true, routes: null, adminOnlyRoutes });
         }
         const routes = await getEffectiveRoutes(req.user.id);
-        return res.json({ isAdmin: false, routes });
+        return res.json({ isAdmin: false, routes, adminOnlyRoutes });
     } catch (err) {
         console.error('[Permissions] getMyPermissions error:', err);
         return res.status(500).json({ message: err.message });
@@ -114,6 +121,44 @@ export async function setUserPermissions(req, res) {
         return res.json({ success: true, message: `Permissões de ${user.username} atualizadas.` });
     } catch (err) {
         console.error('[Permissions] setUserPermissions error:', err);
+        return res.status(500).json({ message: err.message });
+    }
+}
+
+// ─── Políticas de tela (somente admin, sem deploy) ───────────────────────────
+//
+// GET  /api/permissions/route-policies        → lista das telas travadas
+// PUT  /api/permissions/route-policies        { route, adminOnly, note? }
+//
+// Travar aqui remove a tela das alçadas efetivas de TODO não-admin na hora
+// (permissionAccessService), o que fecha API, menu, guard e tools da Eme.
+// Só telas delegáveis chegam aqui: as exclusivas por código já são barradas
+// pelo requireAdmin das próprias rotas de API.
+
+const ROUTE_RE = /^\/[a-z0-9][a-z0-9\-_/]{0,198}$/i;
+
+export async function getRoutePolicies(req, res) {
+    try {
+        return res.json({ policies: await listRoutePolicies() });
+    } catch (err) {
+        console.error('[Permissions] getRoutePolicies error:', err);
+        return res.status(500).json({ message: err.message });
+    }
+}
+
+export async function putRoutePolicy(req, res) {
+    try {
+        const route = normalizeRoute(req.body?.route);
+        const adminOnly = req.body?.adminOnly === true || req.body?.adminOnly === 'true';
+        const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) || null : null;
+
+        if (!ROUTE_RE.test(route)) {
+            return res.status(400).json({ message: 'Rota inválida.' });
+        }
+        const result = await setRoutePolicy({ route, adminOnly, note, userId: req.user?.id || null });
+        return res.json({ success: true, ...result });
+    } catch (err) {
+        console.error('[Permissions] putRoutePolicy error:', err);
         return res.status(500).json({ message: err.message });
     }
 }
