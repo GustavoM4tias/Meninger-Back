@@ -220,12 +220,42 @@ export async function syncFromSienge({ limit = 200, maxCount } = {}) {
   return { source: 'sienge', pages, totalReported: total, seen, matched, created, skipped, companies: companiesSeen.size };
 }
 
+// ── Catálogo de cidades (user_cities) alimentado pelo registro ───────────────
+// O cadastro manual de cidades foi aposentado (2026-07-29): toda cidade/UF
+// vista nos empreendimentos sincronizados vira opção automaticamente (usada no
+// formulário de primeiro acesso e nas audiências de Mural/Academy). Nunca
+// remove nem sobrescreve cidades existentes — só completa o que falta.
+export async function syncUserCitiesFromRegistry() {
+  const rows = await sequelize.query(
+    `SELECT DISTINCT TRIM(city) AS city, MAX(uf) AS uf
+       FROM enterprises
+      WHERE active = true AND NULLIF(TRIM(city), '') IS NOT NULL
+      GROUP BY TRIM(city)`, Q
+  );
+  const existing = await db.UserCity.findAll({ attributes: ['id', 'name', 'uf'], raw: true });
+  const normName = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+  const byName = new Map(existing.map(c => [normName(c.name), c]));
+
+  let created = 0;
+  for (const r of rows) {
+    const found = byName.get(normName(r.city));
+    if (found) {
+      if (!found.uf && r.uf) await db.UserCity.update({ uf: r.uf }, { where: { id: found.id } });
+      continue;
+    }
+    await db.UserCity.create({ name: r.city, uf: r.uf || null, active: true });
+    created++;
+  }
+  return { created };
+}
+
 /** Sync completo (usado pelo scheduler diário e pelo botão Consolidar). */
 export async function syncAll({ log = console.log } = {}) {
   const erp = await syncFromSienge();
   const cv = await syncFromCv();
-  log(`[orgRegistry] sync diário: Sienge ${erp.matched} CC(s) (${erp.companies} empresa(s)), CV ${cv.seen} empreendimento(s).`);
-  return { erp, cv };
+  const cities = await syncUserCitiesFromRegistry();
+  log(`[orgRegistry] sync diário: Sienge ${erp.matched} CC(s) (${erp.companies} empresa(s)), CV ${cv.seen} empreendimento(s), ${cities.created} cidade(s) nova(s) no catálogo.`);
+  return { erp, cv, cities };
 }
 
 // ── Semente legada (enterprise_cities) — roda só enquanto a tabela existir ───
@@ -288,6 +318,7 @@ export async function consolidateRegistry({ log = console.log } = {}) {
     if (res.created) created++;
   }
 
+  await syncUserCitiesFromRegistry();
   log(`[orgRegistry] semente legada: ${ecRows.length} linha(s) de enterprise_cities processadas (${created} novas).`);
   return { seeded: ecRows.length, created };
 }

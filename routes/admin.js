@@ -11,12 +11,7 @@ import {
   deletePosition,
 } from '../controllers/positionController.js';
 
-import {
-  listUserCities,
-  createUserCity,
-  updateUserCity,
-  deleteUserCity,
-} from '../controllers/userCityController.js';
+import { listUserCities } from '../controllers/userCityController.js';
 
 import {
   listDepartments,
@@ -123,11 +118,10 @@ router.post('/positions', authMiddleware, requireAdmin, createPosition);
 router.put('/positions/:id', authMiddleware, requireAdmin, updatePosition);
 router.delete('/positions/:id', authMiddleware, requireAdmin, deletePosition);
 
-// UserCities (cidades) – APENAS ADMIN
+// UserCities (cidades) — SOMENTE LEITURA (2026-07-29): o cadastro manual foi
+// aposentado; o catálogo é alimentado automaticamente pelas cidades dos
+// empreendimentos sincronizados (enterpriseRegistryService.syncUserCitiesFromRegistry).
 router.get('/user-cities', authMiddleware, requireAdmin, listUserCities);
-router.post('/user-cities', authMiddleware, requireAdmin, createUserCity);
-router.put('/user-cities/:id', authMiddleware, requireAdmin, updateUserCity);
-router.delete('/user-cities/:id', authMiddleware, requireAdmin, deleteUserCity);
 
 // Departments – APENAS ADMIN
 router.get('/departments', authMiddleware, requireAdmin, listDepartments);
