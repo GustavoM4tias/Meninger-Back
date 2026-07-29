@@ -233,9 +233,11 @@ class ContractAnalysisService {
                 formData.append('confissao_divida', fs.createReadStream(docs['CONFISSÃO DE DÍVIDA'].path));
             }
 
+            const { INTERNAL_JOB_TOKEN, INTERNAL_JOB_HEADER } = await import('../security/internalJobToken.js');
             const response = await apiValidator.post('/validator', formData, {
                 headers: {
-                    ...formData.getHeaders() // já inclui o boundary correto do multipart
+                    ...formData.getHeaders(), // já inclui o boundary correto do multipart
+                    [INTERNAL_JOB_HEADER]: INTERNAL_JOB_TOKEN,
                 }
             });
 

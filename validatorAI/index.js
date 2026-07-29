@@ -5,6 +5,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireRoutePermission from '../middlewares/requireRoutePermission.js';
+import { requireInternalJobToken } from '../security/internalJobToken.js';
 import { documentRoutes } from './src/routes/documentRoutes.js';
 import { chatRoutes } from './src/routes/chatRoutes.js';
 import statsRoutes from './src/routes/statsRoutes.js';
@@ -31,12 +32,15 @@ app.use(helmet());
 app.use(express.json());
 
 // 🔒 SEGURANÇA: /chat, /token, /payment-flow e /validator/history exigem authenticate.
-// /validator é chamado server-to-server pelo job de análise automática de contratos
-// (sem usuário no fluxo) — protegido apenas por CORS/rede interna.
+// /validator é chamado server-to-server pelo job de análise automática de
+// contratos (sem usuário no fluxo) — exige o token interno de job
+// (security/internalJobToken; o chamador contractAnalysisService envia).
 // Alçada da tela do Validador (admin bypassa no middleware).
+// ORDEM IMPORTA: /validator/history ANTES do prefixo /validator, senão o
+// token interno barraria o histórico da tela.
 const requireValidator = requireRoutePermission(['/validator']);
-app.use('/validator', documentRoutes(upload));
 app.use('/validator/history', authenticate, requireValidator, historyRoutes);
+app.use('/validator', requireInternalJobToken, documentRoutes(upload));
 app.use('/chat', authenticate, requireValidator, chatRoutes);
 app.use('/token', authenticate, requireValidator, statsRoutes);
 app.use('/payment-flow', authenticate, paymentFlowRoutes(upload));

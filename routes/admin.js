@@ -3,9 +3,6 @@ import express from 'express';
 import db from '../models/sequelize/index.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
-import {
-  syncCRM, syncERP, listCities, setOverride, resolveCityController
-} from '../controllers/enterpriseCities.js';
 
 import {
   listPositions,
@@ -96,14 +93,8 @@ router.post('/admin/drop-legacy-sienge', authMiddleware, requireAdmin, async (re
   }
 });
 
-// enterprise-cities — GET: telas de Títulos/Custos consomem a listagem para
-// qualquer autenticado; syncs e override alteram a fonte do filtro de cidade
-// do sistema inteiro, portanto são estritamente admin.
-router.post('/enterprise-cities/sync/crm', authMiddleware, requireAdmin, syncCRM);
-router.post('/enterprise-cities/sync/erp', authMiddleware, requireAdmin, syncERP);
-router.get('/enterprise-cities', authMiddleware, listCities);
-router.put('/enterprise-cities/:id/override', authMiddleware, requireAdmin, setOverride);
-router.get('/enterprise-cities/resolve', authMiddleware, resolveCityController);
+// enterprise-cities foi APOSENTADA (2026-07-29): substituída pelo registro
+// unificado (/admin/org/*) e pelos rótulos escopados em /api/org.
 
 // Validador de integridade de segurança (tela /settings/integrity)
 router.post('/integrity-check', authMiddleware, requireAdmin, async (_req, res) => {

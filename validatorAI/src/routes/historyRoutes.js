@@ -45,11 +45,11 @@ router.get('/', async (req, res, next) => {
       where.push(`
         EXISTS (
           SELECT 1
-          FROM enterprise_cities ec
+          FROM enterprises ec
           WHERE
-            ec.source = 'crm'
-            AND ec.crm_id IN (:scopeCvIds)
-            AND ec.enterprise_name ILIKE '%' || vh.empreendimento || '%'
+            ec.active = true
+            AND ec.cv_id IN (:scopeCvIds)
+            AND ec.name ILIKE '%' || vh.empreendimento || '%'
         )
       `);
     }

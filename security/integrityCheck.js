@@ -12,7 +12,8 @@
 //      todas mapeadas no LEGACY_TOOL_ROUTES (fail-closed cobre o resto).
 //   5. Banco: tabelas do modelo de acesso existem; usuários ativos com FKs de
 //      cargo/cidade casadas; grants órfãos; perfis inativos referenciados.
-//   6. Config: ACCESS_MODEL efetivo reportado.
+//   6. Legado: acusa se a tabela enterprise_cities ainda existe (deve sumir
+//      no boot seguinte à semente do registro unificado).
 //
 // Como rodar: tela admin /settings/integrity (botão "Rodar validação") ou
 // POST /api/admin/integrity-check. Um resumo também sai no log de boot.
@@ -23,7 +24,6 @@
 
 import db from '../models/sequelize/index.js';
 import { getRegisteredTools } from '../services/OfficeAI/ToolRegistry.js';
-import { accessModel } from '../services/permissions/accessScopeService.js';
 
 let _app = null;
 export function registerApp(app) { _app = app; }
@@ -45,7 +45,8 @@ const PUBLIC_PREFIXES = [
     '/api/boleto-caixa/webhook', // webhook do CV (Boleto Caixa)
     '/api/cancelamento-reservas/webhook', // webhook do CV (cancelamento de reservas)
     '/api/meta-app-oauth',       // callback OAuth Meta (state assinado no controller)
-    '/api/ai/validator',         // POST do job server-to-server de análise de contratos (sem usuário no fluxo)
+    '/api/ai/validator',         // job server-to-server (protegido por token interno — security/internalJobToken)
+    '/api/cv/banners',           // banners exibidos na TELA DE LOGIN (pré-autenticação; sem dado de negócio)
 ];
 
 // Rotas de dados que por decisão NÃO têm alçada de tela (motivo ao lado):
@@ -60,7 +61,7 @@ const DATA_PREFIXES = [
     '/api/expenses', '/api/sienge', '/api/cv', '/api/conditions',
     '/api/projections', '/api/dept-spending', '/api/events',
     '/api/checklists', '/api/sales-stands', '/api/bucket-upload',
-    '/api/realestate', '/api/ai',
+    '/api/realestate', '/api/ai', '/api/org',
 ];
 
 // ── Introspecção do router ───────────────────────────────────────────────────
@@ -149,9 +150,8 @@ async function checkRoutes(app) {
         if (!hasAuth(r)) { noAuth.push(key); continue; }
 
         if (r.path.startsWith('/api/admin')) {
-            // exceções documentadas: leituras de enterprise-cities (telas não-admin)
-            const adminReadAllow = ['/api/admin/enterprise-cities', '/api/admin/enterprise-cities/resolve',
-                '/api/admin/hidden-enterprises', '/api/admin/stage-commission-rules',
+            // exceções documentadas: leituras consumidas por telas não-admin
+            const adminReadAllow = ['/api/admin/hidden-enterprises', '/api/admin/stage-commission-rules',
                 '/api/admin/enterprise-value-rules', '/api/admin/enterprise-erp-links',
                 '/api/admin/enterprise-erp-links/pendentes', '/api/admin/tr-satellite-enterprises'];
             const isReadAllowed = r.methods.every(m => m === 'GET') && adminReadAllow.includes(r.path);
@@ -224,6 +224,15 @@ async function checkDatabase() {
         const [rows] = await db.sequelize.query(sql, { replacements: repl });
         return rows;
     };
+
+    // Legado: enterprise_cities deve ser dropada após a semente do registro
+    const [legacyTbl] = await q(`SELECT 1 AS ok FROM pg_tables WHERE schemaname='public' AND tablename='enterprise_cities'`);
+    checks.push({
+        id: 'db-legacy-enterprise-cities', name: 'Tabela legada enterprise_cities removida',
+        status: legacyTbl ? 'warn' : 'ok',
+        details: legacyTbl ? ['enterprise_cities ainda existe — será dropada automaticamente no próximo boot (após a semente do registro unificado)'] : [],
+        summary: legacyTbl ? 'ainda presente (aguardando drop automático)' : 'removida',
+    });
 
     // Tabelas do modelo de acesso
     const tables = await q(`SELECT tablename FROM pg_tables WHERE schemaname='public'
@@ -306,7 +315,7 @@ export async function runIntegrityCheck({ app = _app } = {}) {
     checks.push({
         id: 'config-access-model', name: 'Modelo de acesso ativo',
         status: 'info', details: [],
-        summary: `ACCESS_MODEL=${accessModel()} (${accessModel() === 'enterprise' ? 'grants por empreendimento' : 'LEGADO por cidade'})`,
+        summary: 'Grants por empreendimento (modo por cidade removido em 2026-07-29)',
     });
 
     if (app) checks.push(...await checkRoutes(app));

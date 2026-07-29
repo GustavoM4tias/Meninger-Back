@@ -24,6 +24,8 @@ import academyRoutes from './routes/academyRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
 import bucketUploadRoutes from './routes/bucketUploadRoutes.js';
 import permissionRoutes from './routes/permissionRoutes.js';
+import orgRoutes from './routes/orgRoutes.js';
+import orgRegistryScheduler from './scheduler/orgRegistryScheduler.js';
 import reportExportLogRoutes from './routes/reportExportLogRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
 import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
@@ -226,6 +228,7 @@ app.use('/api/academy', academyRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/bucket-upload', bucketUploadRoutes);
 app.use('/api/permissions', permissionRoutes);
+app.use('/api/org', orgRoutes); // rótulos do registro unificado (escopados por usuário)
 app.use('/api/report-exports', reportExportLogRoutes);   // trilha de exportações (GET = admin)
 app.use('/api/realestate', realEstateRoutes); // cadastro de imobiliárias (CV)
 app.use('/api/conditions', conditionsRoutes);
@@ -530,6 +533,9 @@ async function startBackgroundServices() {
   }
   if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') landScheduler.start();
   if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') enterpriseCvScheduler.start();
+  // Registro unificado de empresas/empreendimentos: sync diário de madrugada
+  // (sempre ligado — dispensa o sync manual; ORG_REGISTRY_CRON_EXPRESSION p/ ajustar).
+  orgRegistryScheduler.start();
   if (process.env.ENABLE_CV_PRECADASTRO_SCHEDULE === 'true') precadastroCvScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();

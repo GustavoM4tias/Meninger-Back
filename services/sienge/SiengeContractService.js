@@ -247,7 +247,7 @@ export class SiengeContractService {
 
     /**
      * Valida se o contrato tem saldo suficiente para o lançamento.
-     * buildingId = enterprise_cities.erp_id (centro de custo, ex: 35067)
+     * buildingId = enterprises.erp_cost_center_id (centro de custo, ex: 35067)
      */
     static async validateItems(documentId, contractNumber, buildingId, buildingUnitId = 1, requiredValue = 0) {
         if (!documentId || !contractNumber || !buildingId) {

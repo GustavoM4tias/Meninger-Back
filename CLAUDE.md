@@ -15,8 +15,10 @@ Spec completa: `_estudo/acessos/README.md` e `_estudo/acessos/MIGRACAO_ESCOPO.md
    (middleware que valida a alçada real no servidor; admin tem bypass).
 3. **Escopo de dados SEMPRE via `services/permissions/accessScopeService.js`**
    (`getScope`/`visibleCvIds`/`visibleErpIds`/`visibleCities`/`isErpAllowed`).
-   NUNCA filtrar por `user.city` ou `COALESCE(city_override, default_city)` na
-   mão. Fail-closed: lista vazia → resultado vazio; `null` → admin sem filtro.
+   NUNCA filtrar por `user.city` na mão — o modo por cidade foi REMOVIDO
+   (2026-07-29); acesso é só por grants. Fail-closed: lista vazia → resultado
+   vazio; `null` → admin sem filtro. Nomes/cidades de empreendimento vêm da
+   tabela `enterprises` (enterprise_cities foi dropada).
 4. **Alçadas de tela**: rotas efetivas = (perfil vivo ∪ routes_extra) −
    routes_removed, calculadas por `services/permissions/permissionAccessService.js`.
    Não ler `user_permissions.routes` direto (coluna legada).
@@ -31,11 +33,11 @@ Spec completa: `_estudo/acessos/README.md` e `_estudo/acessos/MIGRACAO_ESCOPO.md
 ## Entidades do modelo de acesso
 
 - `companies` / `enterprises` (registro unificado CV×Sienge) — populados por
-  `services/org/enterpriseRegistryService.js` (tela /settings/empresas).
+  `services/org/enterpriseRegistryService.js` (sync direto das APIs; tela
+  /settings/empresas + scheduler diário orgRegistryScheduler às 03:00).
 - `enterprise_grants` — liberação por empreendimento (subject user|profile).
 - `users.permission_profile_id` — perfil VIVO (editar propaga).
-- Flag `ACCESS_MODEL` (env): `enterprise` (default, grants) | `city` (rollback
-  legado por cidade).
+- Rótulos p/ telas não-admin: GET /api/org/enterprise-labels (escopado).
 
 ## Convenções
 

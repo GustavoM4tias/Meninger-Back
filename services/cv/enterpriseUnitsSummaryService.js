@@ -118,7 +118,7 @@ export async function summarizeUnitsFromStageInt(idetapa_int) {
 }
 
 /**
- * CC MESTRE — resumo de unidades do CC que possui registro em enterprise_cities.
+ * CC MESTRE — resumo de unidades do CC que possui registro em enterprises.
  *
  * Problema: a etapa do mestre no CV (ex: idetapa=43 / CC 99901) agrega TODAS as
  * unidades do empreendimento (727), inclusive as dos módulos filhos (99903, 99905).
@@ -224,11 +224,13 @@ export async function resolveUnitsForErp(erpId) {
     if (stage) return stage; // já traz cvEnterpriseId
 
     // 2) CC mestre (total − módulos) / 3) empreendimento completo
-    const row = await db.EnterpriseCity.findOne({
-        where: { source: 'crm', erp_id: String(erpId) },
-        attributes: ['crm_id'],
+    const erpIdNum = Number(erpId);
+    if (!Number.isFinite(erpIdNum)) return null;
+    const row = await db.OrgEnterprise.findOne({
+        where: { erp_cost_center_id: erpIdNum, active: true },
+        attributes: ['cv_id'],
     });
-    const crm = row?.crm_id != null ? Number(row.crm_id) : null;
+    const crm = row?.cv_id != null ? Number(row.cv_id) : null;
     if (crm == null) return null;
 
     const master = await summarizeMasterCcFromDb(crm, String(erpId));

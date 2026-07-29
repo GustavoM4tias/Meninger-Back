@@ -168,14 +168,14 @@ export async function getLeads(req, res) {
         EXISTS (
           SELECT 1
           FROM jsonb_array_elements(l.empreendimento) AS e_city
-          LEFT JOIN enterprise_cities ec
-            ON ec.source = 'crm'
-           AND ec.crm_id = COALESCE(
+          LEFT JOIN enterprises ec
+            ON ec.active = true
+           AND ec.cv_id = COALESCE(
                 NULLIF(e_city->>'id','')::int,
                 NULLIF(e_city->>'idempreendimento','')::int,
                 NULLIF(e_city->>'id_empreendimento','')::int
               )
-          WHERE (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+          WHERE (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
                 LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
         )`);
     }
@@ -197,13 +197,13 @@ export async function getLeads(req, res) {
       /* cidades resolvidas por CRM em lote (sem chamadas JS) */
       LEFT JOIN LATERAL (
         SELECT ARRAY_REMOVE(
-                 ARRAY_AGG(DISTINCT COALESCE(ec.city_override, ec.default_city)),
+                 ARRAY_AGG(DISTINCT ec.city),
                  NULL
                ) AS cidades_resolvidas
         FROM jsonb_array_elements(l.empreendimento) AS e2
-        LEFT JOIN enterprise_cities ec
-          ON ec.source = 'crm'
-         AND ec.crm_id = COALESCE(
+        LEFT JOIN enterprises ec
+          ON ec.active = true
+         AND ec.cv_id = COALESCE(
                NULLIF(e2->>'id','')::int,
                NULLIF(e2->>'idempreendimento','')::int,
                NULLIF(e2->>'id_empreendimento','')::int

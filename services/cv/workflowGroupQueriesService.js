@@ -167,7 +167,7 @@ reservas_com_cidade AS (
         2. idetapa_int da reserva      → CC da fase, direto do CV
         3. idetapa_int do cadastro     → mesma informação, quando a reserva não traz
         4. idempreendimento_int        → só serve quando é CC de verdade
-        5. enterprise_cities           → último recurso; não conhece fase, então
+        5. enterprises                 → último recurso; não conhece fase, então
            aponta o empreendimento inteiro para um único CC
     */
     COALESCE(
@@ -181,9 +181,9 @@ reservas_com_cidade AS (
 
   LEFT JOIN LATERAL (
     SELECT
-      COALESCE(ec.city_override, ec.default_city) AS city_resolved,
-      NULLIF(ec.erp_id, '')::int                  AS erp_id_int
-    FROM enterprise_cities ec
+      ec.city                AS city_resolved,
+      ec.erp_cost_center_id  AS erp_id_int
+    FROM enterprises ec
     /* Look up block ERP code for highest-priority matching */
     LEFT JOIN LATERAL (
       SELECT ceb.idbloco_int
@@ -191,27 +191,29 @@ reservas_com_cidade AS (
       WHERE ceb.idbloco = re.idbloco_cv_from_reserva
       LIMIT 1
     ) blk ON TRUE
-    WHERE
+    WHERE ec.active = true
+    AND (
       /* 0) CC da ETAPA — o código mais preciso que o CV tem */
-      (re.idetapa_int_from_reserva IS NOT NULL AND ec.erp_id = re.idetapa_int_from_reserva::text)
-      OR (re.idetapa_int_cadastro IS NOT NULL AND ec.erp_id = re.idetapa_int_cadastro::text)
+      (re.idetapa_int_from_reserva IS NOT NULL AND ec.erp_cost_center_id = re.idetapa_int_from_reserva)
+      OR (re.idetapa_int_cadastro IS NOT NULL AND ec.erp_cost_center_id = re.idetapa_int_cadastro)
       /* 1) CC do bloco */
-      OR (blk.idbloco_int IS NOT NULL AND ec.erp_id = regexp_replace(blk.idbloco_int, '[^0-9].*', ''))
+      OR (blk.idbloco_int IS NOT NULL AND ec.erp_cost_center_id::text = regexp_replace(blk.idbloco_int, '[^0-9].*', ''))
       /* 2) idempreendimento_int é o próprio Sienge ERP ID */
-      OR (re.idemp_int_from_reserva IS NOT NULL AND ec.erp_id = re.idemp_int_from_reserva::text)
+      OR (re.idemp_int_from_reserva IS NOT NULL AND ec.erp_cost_center_id = re.idemp_int_from_reserva)
       /* 3) idempreendimento_int é o CRM ID do CV */
-      OR (re.idemp_int_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_int_from_reserva)
+      OR (re.idemp_int_from_reserva IS NOT NULL AND ec.cv_id = re.idemp_int_from_reserva)
       /* 4) campo idempreendimento_cv é o CRM ID do CV */
-      OR (re.idemp_cv_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_cv_from_reserva)
+      OR (re.idemp_cv_from_reserva IS NOT NULL AND ec.cv_id = re.idemp_cv_from_reserva)
       /* Sem fallback por nome: casar texto mandava valor para o CC errado. */
+    )
     ORDER BY
       CASE
-        WHEN re.idetapa_int_from_reserva IS NOT NULL AND ec.erp_id = re.idetapa_int_from_reserva::text THEN 1
-        WHEN re.idetapa_int_cadastro     IS NOT NULL AND ec.erp_id = re.idetapa_int_cadastro::text     THEN 2
-        WHEN blk.idbloco_int IS NOT NULL AND ec.erp_id = regexp_replace(blk.idbloco_int, '[^0-9].*', '') THEN 3
-        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.erp_id = re.idemp_int_from_reserva::text THEN 4
-        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.crm_id = re.idemp_int_from_reserva       THEN 5
-        WHEN re.idemp_cv_from_reserva  IS NOT NULL AND ec.crm_id = re.idemp_cv_from_reserva        THEN 6
+        WHEN re.idetapa_int_from_reserva IS NOT NULL AND ec.erp_cost_center_id = re.idetapa_int_from_reserva THEN 1
+        WHEN re.idetapa_int_cadastro     IS NOT NULL AND ec.erp_cost_center_id = re.idetapa_int_cadastro     THEN 2
+        WHEN blk.idbloco_int IS NOT NULL AND ec.erp_cost_center_id::text = regexp_replace(blk.idbloco_int, '[^0-9].*', '') THEN 3
+        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.erp_cost_center_id = re.idemp_int_from_reserva THEN 4
+        WHEN re.idemp_int_from_reserva IS NOT NULL AND ec.cv_id = re.idemp_int_from_reserva              THEN 5
+        WHEN re.idemp_cv_from_reserva  IS NOT NULL AND ec.cv_id = re.idemp_cv_from_reserva               THEN 6
         ELSE 7
       END,
       ec.updated_at DESC

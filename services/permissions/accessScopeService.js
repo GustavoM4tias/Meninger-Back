@@ -1,14 +1,10 @@
 // services/permissions/accessScopeService.js
 //
 // Fonte ÚNICA do escopo de DADOS de um usuário: quais empreendimentos ele
-// enxerga. Substitui o antigo filtro por cidade (users.city × enterprise_cities)
-// espalhado em SQL cru pelo sistema.
-//
-// Flag de transição (F3→F4):
-//   ACCESS_MODEL=city        → comportamento legado (cidade do usuário)
-//   ACCESS_MODEL=enterprise  → grants por empreendimento (enterprise_grants,
-//                              usuário + perfil vivo). CUTOVER: usuários sem
-//                              grant não veem dado nenhum até liberação manual.
+// enxerga. O acesso é EXCLUSIVAMENTE por grants de empreendimento
+// (enterprise_grants: usuário + perfil vivo) sobre o registro unificado
+// (tabela enterprises). O antigo modo por cidade foi REMOVIDO em 2026-07-29 —
+// não existe fallback: sem grant, sem dado.
 //
 // Regras:
 //   - admin → all:true (vê tudo)
@@ -21,13 +17,6 @@ import db from '../../models/sequelize/index.js';
 const { sequelize, Sequelize } = db;
 const Q = { type: Sequelize.QueryTypes.SELECT };
 
-export function accessModel() {
-  const v = String(process.env.ACCESS_MODEL || 'enterprise').toLowerCase();
-  return v === 'city' ? 'city' : 'enterprise';
-}
-
-const NORM = (expr) => `unaccent(upper(regexp_replace(${expr}, '[^A-Za-z0-9]+', ' ', 'g')))`;
-
 // ── Escopo bruto ─────────────────────────────────────────────────────────────
 
 /**
@@ -38,26 +27,6 @@ export async function getScope(user) {
   if (!user) return { all: false, enterpriseIds: [], cvIds: [], erpIds: [], companyIds: [], cities: [] };
   if (user.role === 'admin') return { all: true, enterpriseIds: [], cvIds: [], erpIds: [], companyIds: [], cities: [] };
 
-  if (accessModel() === 'city') return cityScope(user);
-  return enterpriseScope(user);
-}
-
-async function cityScope(user) {
-  const city = String(user.city || '').trim();
-  if (!city) return { all: false, enterpriseIds: [], cvIds: [], erpIds: [], companyIds: [], cities: [] };
-  const rows = await sequelize.query(
-    `SELECT crm_id,
-            NULLIF(regexp_replace(COALESCE(erp_id, ''), '[^0-9]', '', 'g'), '')::bigint AS erp_num
-       FROM enterprise_cities
-      WHERE ${NORM(`COALESCE(city_override, default_city)`)} = ${NORM(':city')}`,
-    { replacements: { city }, ...Q }
-  );
-  const cvIds = [...new Set(rows.map(r => Number(r.crm_id)).filter(n => Number.isFinite(n) && n > 0))];
-  const erpIds = [...new Set(rows.map(r => Number(r.erp_num)).filter(n => Number.isFinite(n) && n > 0))];
-  return { all: false, enterpriseIds: [], cvIds, erpIds, companyIds: [], cities: [city] };
-}
-
-async function enterpriseScope(user) {
   const rows = await sequelize.query(
     `SELECT e.id, e.cv_id, e.erp_cost_center_id, e.company_id, e.city
        FROM enterprise_grants g
@@ -105,12 +74,12 @@ export function isErpAllowed(scope, costCenterId) {
 
 /**
  * Cidades "visíveis" (para consumidores que só sabem filtrar por cidade, ex.
- * eventos por endereço). null = todas. No modo enterprise são as cidades dos
- * empreendimentos liberados.
+ * eventos por endereço): as cidades dos empreendimentos liberados.
+ * null = todas (admin).
  */
 export async function visibleCities(user) {
   const s = await getScope(user);
   return s.all ? null : s.cities;
 }
 
-export default { accessModel, getScope, visibleCvIds, visibleErpIds, visibleCities, isErpAllowed };
+export default { getScope, visibleCvIds, visibleErpIds, visibleCities, isErpAllowed };

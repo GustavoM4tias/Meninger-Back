@@ -1538,16 +1538,16 @@ export async function loadAccessibleEnterprises(user) {
   const cvIds = await visibleCvIds(user); // null = admin (sem filtro); [] = sem acesso
   if (cvIds && !cvIds.length) return [];
   const sql = cvIds
-    ? `SELECT ce.nome AS enterprise_name, COALESCE(ec.city_override, ec.default_city, ce.cidade) AS cidade
+    ? `SELECT ce.nome AS enterprise_name, COALESCE(e.city, ce.cidade) AS cidade
        FROM cv_enterprises ce
-       LEFT JOIN enterprise_cities ec ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
+       LEFT JOIN enterprises e ON e.cv_id = ce.idempreendimento AND e.active = true
        WHERE ce.nome IS NOT NULL
          AND ce.idempreendimento IN (:cvIds)
        ORDER BY ce.nome
        LIMIT :cap`
-    : `SELECT ce.nome AS enterprise_name, COALESCE(ec.city_override, ec.default_city, ce.cidade) AS cidade
+    : `SELECT ce.nome AS enterprise_name, COALESCE(e.city, ce.cidade) AS cidade
        FROM cv_enterprises ce
-       LEFT JOIN enterprise_cities ec ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
+       LEFT JOIN enterprises e ON e.cv_id = ce.idempreendimento AND e.active = true
        WHERE ce.nome IS NOT NULL
        ORDER BY ce.nome
        LIMIT :cap`;
