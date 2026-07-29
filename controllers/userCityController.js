@@ -4,11 +4,51 @@ import responseHandler from '../utils/responseHandler.js';
 
 const { UserCity } = db;
 
-// GET /api/admin/user-cities
+// GET /api/admin/user-cities[?inUse=true][&q=texto][&limit=n]
+//
+// O catálogo é o conjunto de municípios do IBGE (~5.570) — completo de
+// propósito, para o cadastro de pessoas aceitar qualquer cidade.
+//
+//   inUse=true → só as cidades EM USO (alguém mora nela ou temos
+//                empreendimento lá). É o que faz sentido em seletor de
+//                AUDIÊNCIA (Mural/Academy) e em filtros: a lista inteira
+//                do Brasil ali seria inútil.
+//   q          → busca por nome (para autocomplete sem baixar tudo).
 export const listUserCities = async (req, res) => {
     try {
+        const inUse = String(req.query.inUse || '') === 'true';
+        const q = String(req.query.q || '').trim();
+        const limit = Math.min(Number(req.query.limit) || 0, 6000) || undefined;
+
+        if (inUse) {
+            const rows = await db.sequelize.query(
+                `SELECT c.id, c.name, c.uf, c.active
+                   FROM user_cities c
+                  WHERE c.active = true
+                    AND (
+                      EXISTS (SELECT 1 FROM users u WHERE u.city_id = c.id)
+                      OR EXISTS (
+                        SELECT 1 FROM users u
+                         WHERE u.city_id IS NULL
+                           AND unaccent(upper(TRIM(u.city))) = unaccent(upper(TRIM(c.name))))
+                      OR EXISTS (
+                        SELECT 1 FROM enterprises e
+                         WHERE e.active = true
+                           AND unaccent(upper(TRIM(e.city))) = unaccent(upper(TRIM(c.name))))
+                    )
+                  ORDER BY c.name ASC`,
+                { type: db.Sequelize.QueryTypes.SELECT }
+            );
+            return responseHandler.success(res, rows);
+        }
+
+        const where = {};
+        if (q) where.name = { [db.Sequelize.Op.iLike]: `%${q}%` };
+
         const cities = await UserCity.findAll({
+            where,
             order: [['name', 'ASC']],
+            ...(limit ? { limit } : {}),
         });
         return responseHandler.success(res, cities);
     } catch (error) {

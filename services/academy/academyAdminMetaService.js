@@ -16,12 +16,27 @@ const academyAdminMetaService = {
                 order: [['name', 'ASC']],
                 raw: true,
             }),
-            db.UserCity.findAll({
-                attributes: ['id', 'name', 'uf', 'active'],
-                where: { active: true },
-                order: [['name', 'ASC']],
-                raw: true,
-            }),
+            // Só cidades EM USO (alguém mora nela ou temos empreendimento lá).
+            // O catálogo completo são os ~5.570 municípios do IBGE — usado no
+            // cadastro de pessoas; num seletor de AUDIÊNCIA seria inútil.
+            db.sequelize.query(
+                `SELECT c.id, c.name, c.uf, c.active
+                   FROM user_cities c
+                  WHERE c.active = true
+                    AND (
+                      EXISTS (SELECT 1 FROM users u WHERE u.city_id = c.id)
+                      OR EXISTS (
+                        SELECT 1 FROM users u
+                         WHERE u.city_id IS NULL
+                           AND unaccent(upper(TRIM(u.city))) = unaccent(upper(TRIM(c.name))))
+                      OR EXISTS (
+                        SELECT 1 FROM enterprises e
+                         WHERE e.active = true
+                           AND unaccent(upper(TRIM(e.city))) = unaccent(upper(TRIM(c.name))))
+                    )
+                  ORDER BY c.name ASC`,
+                { type: db.Sequelize.QueryTypes.SELECT }
+            ),
         ]);
 
         return { positions, departments, cities };

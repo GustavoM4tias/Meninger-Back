@@ -61,8 +61,8 @@ export function generateSecurePassword() {
 }
 
 export const registerUser = async (req, res) => {
-  const { username, password, email, position, city, birth_date, phone, manager_id, status } = req.body;
-  if (!username || !password || !email || !position || !city || !birth_date) {
+  const { username, password, email, position, city, city_id, birth_date, phone, manager_id, status } = req.body;
+  if (!username || !password || !email || !position || (!city && !city_id) || !birth_date) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
 
@@ -72,10 +72,13 @@ export const registerUser = async (req, res) => {
       return responseHandler.error(res, 'Nome já existente');
     }
 
-    // 🔹 valida se cargo e cidade existem e estão ativos
+    // 🔹 valida se cargo e cidade existem e estão ativos. city_id é a forma
+    // preferida (resolve municípios homônimos em UFs diferentes).
     const [positionRecord, cityRecord] = await Promise.all([
       Position.findOne({ where: { name: position, active: true } }),
-      UserCity.findOne({ where: { name: city, active: true } }),
+      city_id
+        ? UserCity.findOne({ where: { id: Number(city_id), active: true } })
+        : UserCity.findOne({ where: { name: city, active: true } }),
     ]);
 
     if (!positionRecord) {
@@ -592,6 +595,7 @@ export const updateUser = async (req, res) => {
     role,
     manager_id,
     city,
+    city_id,
     status,
     birth_date,
     show_in_organogram,
@@ -641,7 +645,14 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    if (city !== undefined) {
+    // city_id é a forma PREFERIDA (resolve municípios homônimos em UFs
+    // diferentes); `city` por nome segue aceito por compatibilidade.
+    if (city_id !== undefined && city_id !== null && city_id !== '') {
+      const cityRecord = await UserCity.findOne({ where: { id: Number(city_id), active: true } });
+      if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
+      payload.city = cityRecord.name;
+      payload.city_id = cityRecord.id;
+    } else if (city !== undefined) {
       if (!city) {
         payload.city = '';
         payload.city_id = null;
