@@ -352,20 +352,41 @@ export async function pairEnterprises({ surviveId, absorbId }) {
   });
 }
 
-export async function listRegistry({ q = '', status = '', companyId = null, page = 1, pageSize = 50 } = {}) {
+// Colunas ordenáveis pela tela (whitelist — nunca interpolar entrada do usuário).
+const SORTABLE = {
+  name: 'name',
+  city: 'city',
+  cv_id: 'cv_id',
+  erp_cost_center_id: 'erp_cost_center_id',
+  pair_status: 'pair_status',
+  active: 'active',
+};
+
+export async function listRegistry({
+  q = '', status = '', companyId = null, active = '',
+  sortBy = 'name', sortDir = 'asc', page = 1, pageSize = 50,
+} = {}) {
   const where = {};
   if (status) where.pair_status = status;
   if (companyId) where.company_id = Number(companyId);
+  if (active === 'true' || active === true) where.active = true;
+  if (active === 'false' || active === false) where.active = false;
   if (q) {
     where[Sequelize.Op.or] = [
       { name: { [Sequelize.Op.iLike]: `%${q}%` } },
       { city: { [Sequelize.Op.iLike]: `%${q}%` } },
     ];
   }
+
+  const col = SORTABLE[sortBy] || 'name';
+  const dir = String(sortDir).toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+  // NULLS LAST nos dois sentidos: linha sem CV/CC não polui o topo da lista.
+  const order = [[db.Sequelize.literal(`"OrgEnterprise"."${col}" ${dir} NULLS LAST`)]];
+
   const { rows, count } = await db.OrgEnterprise.findAndCountAll({
     where,
     include: [{ model: db.OrgCompany, as: 'company', attributes: ['id', 'name'] }],
-    order: [['name', 'ASC']],
+    order,
     limit: Math.min(Number(pageSize) || 50, 3000),
     offset: (Math.max(Number(page) || 1, 1) - 1) * (Number(pageSize) || 50),
   });
