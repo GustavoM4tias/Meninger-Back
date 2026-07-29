@@ -124,7 +124,7 @@ async function resolveEnterpriseIds(launch) {
         return { erpId: launch.enterpriseId, companyId: launch.companyId };
     }
 
-    // Tenta buscar via enterprise_cities pelo enterpriseId salvo
+    // Tenta buscar via enterprises pelo enterpriseId salvo
     if (launch.enterpriseId) {
         const ec = await EnterpriseResolverService.getByErpId(launch.enterpriseId);
         if (ec) return { erpId: ec.erpId, companyId: ec.companyId };

@@ -112,7 +112,7 @@ router.get('/backups/:id', authenticate, requireAdmin, getBackup);
 router.post('/backups/trigger', authenticate, requireAdmin, triggerBackup);
 router.post('/backups/:id/cancel', authenticate, requireAdmin, cancelBackup);
 
-// ── Empreendimentos (enterprise_cities) ───────────────────────────────────────
+// ── Empreendimentos (registro unificado — enterprises) ────────────────────────
 router.get('/payment-flow/enterprises', authenticate, listFlowEnterprises);   // ?q=termo
 router.get('/payment-flow/enterprises/resolve', authenticate, resolveEnterprise); // ?name=MARILIA/SP...
 

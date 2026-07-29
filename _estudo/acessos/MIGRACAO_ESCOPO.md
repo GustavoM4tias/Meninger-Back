@@ -1,5 +1,10 @@
 # Padrão de migração: filtro por cidade → accessScopeService
 
+> ATUALIZAÇÃO 2026-07-29: a migração foi CONCLUÍDA e o modo por cidade foi
+> REMOVIDO por completo (sem flag ACCESS_MODEL, sem fallback). A tabela
+> enterprise_cities foi aposentada — nomes/cidades vêm de `enterprises`.
+> O restante deste documento fica como registro do padrão.
+
 Este documento define O ÚNICO padrão aceito para filtrar dados por usuário.
 Toda funcionalidade nova nasce assim; todo código legado com filtro por cidade
 migra para cá. O validador de integridade cobra este padrão.

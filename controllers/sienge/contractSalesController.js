@@ -287,16 +287,12 @@ pivots AS (
 ec_resolved AS (
   SELECT
     p.enterprise_id,
-    COALESCE(ec.city_override, ec.default_city) AS city_resolved
+    ec.city AS city_resolved
   FROM (SELECT DISTINCT enterprise_id FROM pivots) p
-  LEFT JOIN LATERAL (
-    SELECT ec.*
-    FROM enterprise_cities ec
-    WHERE ec.erp_id IS NOT NULL
-      AND ec.erp_id = p.enterprise_id::text
-    ORDER BY ec.updated_at DESC
-    LIMIT 1
-  ) ec ON TRUE
+  LEFT JOIN enterprises ec
+    ON ec.active = true
+   AND ec.erp_cost_center_id IS NOT NULL
+   AND ec.erp_cost_center_id::text = p.enterprise_id::text
 ),
 
 rp_by_unit AS (

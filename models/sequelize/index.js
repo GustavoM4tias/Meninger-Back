@@ -35,7 +35,6 @@ import ReservaDefine from './cv/reserva.js';
 import SupportMessageDefine from './supportMessage.js';
 import SupportTicketDefine from './supportTicket.js';
 
-import EnterpriseCityDefine from './enterpriseCity.js';
 
 import SalesProjectionDefine from './projection/salesProjection.js';
 import SalesProjectionLineDefine from './projection/salesProjectionLine.js';
@@ -281,7 +280,6 @@ db.Reserva = ReservaDefine(sequelize, DataTypes);
 db.SupportTicket = SupportTicketDefine(sequelize, DataTypes);
 db.SupportMessage = SupportMessageDefine(sequelize, DataTypes);
 
-db.EnterpriseCity = EnterpriseCityDefine(sequelize, DataTypes);
 
 // Registro unificado de empresas/empreendimentos (CV + Sienge) + grants de acesso
 db.OrgCompany = OrgCompanyDefine(sequelize, DataTypes);

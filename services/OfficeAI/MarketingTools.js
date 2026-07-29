@@ -160,8 +160,8 @@ async function executeQueryLeads(args, user) {
   // ── Filtro de empreendimento (com validação dentro do escopo) ──────────────
   if (args.empreendimento) {
     const checkSql = cvIds
-      ? `SELECT COUNT(*) AS cnt FROM enterprise_cities WHERE source = 'crm' AND enterprise_name ILIKE :name AND crm_id IN (:scopeCvIds)`
-      : `SELECT COUNT(*) AS cnt FROM enterprise_cities WHERE source = 'crm' AND enterprise_name ILIKE :name`;
+      ? `SELECT COUNT(*) AS cnt FROM enterprises WHERE cv_id IS NOT NULL AND active = true AND name ILIKE :name AND cv_id IN (:scopeCvIds)`
+      : `SELECT COUNT(*) AS cnt FROM enterprises WHERE cv_id IS NOT NULL AND active = true AND name ILIKE :name`;
     const checkRep = cvIds
       ? { name: `%${args.empreendimento}%`, scopeCvIds: cvIds }
       : { name: `%${args.empreendimento}%` };
@@ -267,14 +267,14 @@ async function executeQueryLeads(args, user) {
     whereClauses.push(`EXISTS (
       SELECT 1
       FROM jsonb_array_elements(l.empreendimento) AS e_city
-      LEFT JOIN enterprise_cities ec
-        ON ec.source = 'crm'
-       AND ec.crm_id = COALESCE(
+      LEFT JOIN enterprises ec
+        ON ec.active = true
+       AND ec.cv_id = COALESCE(
              NULLIF(e_city->>'id','')::int,
              NULLIF(e_city->>'idempreendimento','')::int,
              NULLIF(e_city->>'id_empreendimento','')::int
            )
-      WHERE (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+      WHERE (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
          LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
     )`);
   }

@@ -8,7 +8,6 @@ const {
   SalesProjectionLine,
   SalesProjectionLog,
   SalesProjectionEnterprise,
-  EnterpriseCity,
   CvEnterprise,
   CvEnterpriseStage,
   Sequelize,
@@ -1475,7 +1474,7 @@ export async function getProjectionReport(req, res) {
 
     // ── Busca defaults (empreendimentos) filtrados por escopo ─────────────────
     // Não-admin: filtro por ids de CC (accessScopeService) via replacements —
-    // sem interpolação manual de valores no SQL. enterprise_cities segue no
+    // sem interpolação manual de valores no SQL. enterprises segue no
     // JOIN apenas para resolver a cidade de exibição.
     const defaultsSql = isAdmin
       ? `SELECT DISTINCT ON (d.enterprise_key, COALESCE(d.alias_id,'default'))
@@ -1483,9 +1482,11 @@ export async function getProjectionReport(req, res) {
            d.erp_id, d.enterprise_name_cache,
            COALESCE(d.default_avg_price,0) AS default_avg_price,
            d.manual_city,
-           ec.default_city, ec.city_override
+           ec.city AS registry_city
          FROM sales_projection_enterprises d
-         LEFT JOIN enterprise_cities ec ON ec.erp_id = d.erp_id
+         LEFT JOIN enterprises ec
+           ON ec.active = true
+          AND ec.erp_cost_center_id = NULLIF(regexp_replace(COALESCE(d.erp_id,''), '[^0-9]', '', 'g'), '')::bigint
          WHERE d.projection_id = :pid
          ORDER BY d.enterprise_key, COALESCE(d.alias_id,'default'), d.updated_at DESC`
       : `SELECT DISTINCT ON (d.enterprise_key, COALESCE(d.alias_id,'default'))
@@ -1493,9 +1494,11 @@ export async function getProjectionReport(req, res) {
            d.erp_id, d.enterprise_name_cache,
            COALESCE(d.default_avg_price,0) AS default_avg_price,
            d.manual_city,
-           ec.default_city, ec.city_override
+           ec.city AS registry_city
          FROM sales_projection_enterprises d
-         LEFT JOIN enterprise_cities ec ON ec.erp_id = d.erp_id
+         LEFT JOIN enterprises ec
+           ON ec.active = true
+          AND ec.erp_cost_center_id = NULLIF(regexp_replace(COALESCE(d.erp_id,''), '[^0-9]', '', 'g'), '')::bigint
          WHERE d.projection_id = :pid
            AND NULLIF(regexp_replace(COALESCE(d.erp_id,''), '[^0-9]', '', 'g'), '')::bigint IN (:allowedErpIds)
          ORDER BY d.enterprise_key, COALESCE(d.alias_id,'default'), d.updated_at DESC`;
@@ -1602,8 +1605,8 @@ export async function getProjectionReport(req, res) {
       const name = (d.enterprise_name_cache || '').trim() ||
                    (erp ? `ERP ${erp}` : ek);
 
-      // Cidade resolvida
-      const city = (d.manual_city || d.city_override || d.default_city || '').trim() || null;
+      // Cidade resolvida (manual da projeção > cidade do registro enterprises)
+      const city = (d.manual_city || d.registry_city || '').trim() || null;
 
       // Meses deste empreendimento
       const monthsData = allMonths.map(ym => {
@@ -1639,19 +1642,20 @@ export async function getProjectionReport(req, res) {
       (b.summary.projected_vgv) - (a.summary.projected_vgv)
     );
 
-    // ── Enriquece cada empreendimento com company_id via enterprise_cities ────
+    // ── Enriquece cada empreendimento com company_id via enterprises ──────────
     // Uma única query para os erp_ids desta projeção — sem scan full-table.
     {
       const erpIds = enterprises.map(e => e.erp_id).filter(id => id != null && id !== '')
       if (erpIds.length > 0) {
         const rows = await db.sequelize.query(
-          `SELECT erp_id,
-                  (raw_payload->>'idCompany')::int AS company_id,
+          `SELECT ec.erp_cost_center_id::text AS erp_id,
+                  ec.company_id,
                   (SELECT sc.company_name FROM contracts sc
-                   WHERE sc.company_id = (raw_payload->>'idCompany')::int LIMIT 1) AS company_name
-           FROM enterprise_cities
-           WHERE source = 'erp'
-             AND erp_id IN (:erpIds)`,
+                   WHERE sc.company_id = ec.company_id LIMIT 1) AS company_name
+           FROM enterprises ec
+           WHERE ec.active = true
+             AND ec.erp_cost_center_id IS NOT NULL
+             AND ec.erp_cost_center_id::text IN (:erpIds)`,
           { replacements: { erpIds }, type: db.Sequelize.QueryTypes.SELECT }
         )
         const cidMap = new Map(rows.map(r => [String(r.erp_id), { company_id: r.company_id ?? null, company_name: r.company_name ?? null }]))
@@ -1733,21 +1737,22 @@ export async function listEnterprisesForPicker(req, res) {
 
     const whereScope = isAdmin
       ? (requestedCity
-          ? `AND ${CITY_EQ(`COALESCE(ec.city_override, ec.default_city)`)} = ${CITY_EQ(`:effectiveCity`)}`
+          ? `AND ${CITY_EQ(`ec.city`)} = ${CITY_EQ(`:effectiveCity`)}`
           : '')
-      : `AND NULLIF(regexp_replace(ec.erp_id, '[^0-9]', '', 'g'), '')::bigint IN (:allowedErpIds)`;
+      : `AND ec.erp_cost_center_id IN (:allowedErpIds)`;
 
     // ✅ name volta "como antes" (com ERP embutido)
     // ✅ city volta junto pro front poder usar se quiser
     const sql = `
-      SELECT DISTINCT ON (ec.erp_id)
-        ec.erp_id AS id,
-        (TRIM(COALESCE(ec.enterprise_name, ec.erp_id)) || ' (ERP ' || ec.erp_id || ')') AS name,
-        TRIM(COALESCE(ec.city_override, ec.default_city)) AS city
-      FROM enterprise_cities ec
-      WHERE ec.erp_id IS NOT NULL
+      SELECT
+        ec.erp_cost_center_id::text AS id,
+        (TRIM(COALESCE(ec.name, ec.erp_cost_center_id::text)) || ' (ERP ' || ec.erp_cost_center_id || ')') AS name,
+        TRIM(ec.city) AS city
+      FROM enterprises ec
+      WHERE ec.erp_cost_center_id IS NOT NULL
+        AND ec.active = true
         ${whereScope}
-      ORDER BY ec.erp_id, ec.updated_at DESC, TRIM(COALESCE(ec.enterprise_name, ec.erp_id));
+      ORDER BY ec.erp_cost_center_id;
     `;
 
     const rows = await db.sequelize.query(sql, {
@@ -1771,12 +1776,13 @@ export async function listEnterprisesForPicker(req, res) {
     // (Opcional) lista de cidades para o filtro do modal (admin)
     if (isAdmin && String(req.query.with_cities || '') === '1') {
       const citiesSql = `
-        SELECT DISTINCT TRIM(COALESCE(ec.city_override, ec.default_city)) AS city
-        FROM enterprise_cities ec
-        WHERE ec.erp_id IS NOT NULL
-          AND TRIM(COALESCE(ec.city_override, ec.default_city)) IS NOT NULL
-          AND TRIM(COALESCE(ec.city_override, ec.default_city)) <> ''
-        ORDER BY TRIM(COALESCE(ec.city_override, ec.default_city)) ASC;
+        SELECT DISTINCT TRIM(ec.city) AS city
+        FROM enterprises ec
+        WHERE ec.erp_cost_center_id IS NOT NULL
+          AND ec.active = true
+          AND TRIM(ec.city) IS NOT NULL
+          AND TRIM(ec.city) <> ''
+        ORDER BY TRIM(ec.city) ASC;
       `;
       const cityRows = await db.sequelize.query(citiesSql, {
         type: db.Sequelize.QueryTypes.SELECT,

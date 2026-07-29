@@ -11,7 +11,7 @@
 //
 // Unidade de análise = EMPRESA Sienge (= empreendimento). Vários centros de custo
 // (CCs) podem pertencer à mesma empresa. O agrupamento usa
-// enterprise_cities.raw_payload.idCompany (mesma fonte do Custos ao vivo).
+// enterprises.company_id (FK para companies, mesma fonte do Custos ao vivo).
 //
 // Regras remanescentes (inalteradas):
 //  - Custo planejado/unidade = orçamento / totalUnits.
@@ -32,7 +32,7 @@ const {
     SalesProjection,
     SalesProjectionLine,
     SalesProjectionEnterprise,
-    EnterpriseCity,
+    OrgEnterprise,
     Sequelize,
 } = db;
 
@@ -175,21 +175,22 @@ export default class DeptSpendingService {
         return { defaults: defaults.map((d) => d.toJSON()), linesByKey, fullByKey, futureByKey, yearLinesByKey };
     }
 
-    /* erp_id (CC) -> { companyId, companyName } via enterprise_cities (idCompany do Sienge). */
+    /* erp_id (CC) -> { companyId, companyName } via enterprises (company_id FK → companies). */
     async mapErpsToCompany(erpIds) {
         const out = new Map();
         const ids = [...new Set((erpIds || []).map((e) => String(e)).filter(Boolean))];
         if (!ids.length) return out;
 
         const rows = await db.sequelize.query(
-            `SELECT ec.erp_id,
-                    NULLIF(ec.raw_payload->>'idCompany','')::int AS company_id,
+            `SELECT e.erp_cost_center_id::text AS erp_id,
+                    e.company_id AS company_id,
                     COALESCE(
-                        NULLIF(ec.raw_payload->>'companyName',''),
-                        NULLIF(ec.enterprise_name,'')
+                        NULLIF(c.name,''),
+                        NULLIF(e.name,'')
                     ) AS company_name
-               FROM enterprise_cities ec
-              WHERE ec.source = 'erp' AND ec.erp_id IN (:ids)`,
+               FROM enterprises e
+               LEFT JOIN companies c ON c.id = e.company_id
+              WHERE e.active = true AND e.erp_cost_center_id::text IN (:ids)`,
             { replacements: { ids }, type: db.Sequelize.QueryTypes.SELECT }
         );
         for (const r of rows) {
@@ -204,11 +205,13 @@ export default class DeptSpendingService {
     async resolveCvEnterpriseId(erpId) {
         if (!erpId) return undefined;
         try {
-            const row = await EnterpriseCity.findOne({
-                where: { source: 'crm', erp_id: String(erpId) },
-                attributes: ['crm_id'],
+            const erpIdNum = Number(erpId);
+            if (!Number.isFinite(erpIdNum)) return undefined;
+            const row = await OrgEnterprise.findOne({
+                where: { erp_cost_center_id: erpIdNum, active: true },
+                attributes: ['cv_id'],
             });
-            return row?.crm_id != null ? Number(row.crm_id) : undefined;
+            return row?.cv_id != null ? Number(row.cv_id) : undefined;
         } catch (e) {
             console.error('[DeptSpending] resolveCvEnterpriseId erro', e);
             return undefined;

@@ -125,7 +125,7 @@ export const listReservasReport = async (req, res) => {
         // Admin vê tudo; user vê apenas reservas cujo empreendimento está no
         // seu escopo. A reserva pode trazer o identificador como
         // idempreendimento_int (Sienge ERP), idempreendimento_cv (CRM CV) ou
-        // apenas o nome — tentamos os três (nome resolvido via enterprise_cities).
+        // apenas o nome — tentamos os três (nome resolvido via enterprises).
         const scope = await getScope(req.user);
         if (!scope.all) {
             const scopeCvIds  = scope.cvIds  || [];
@@ -144,7 +144,7 @@ export const listReservasReport = async (req, res) => {
             if (scopeErpIds.length) {
                 // 1) idempreendimento_int = Sienge ERP id
                 scopeParts.push(`NULLIF(regexp_replace(COALESCE(r.unidade_json->>'idempreendimento_int',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeErpIds)`);
-                nameConds.push(`NULLIF(regexp_replace(COALESCE(ec.erp_id,''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeErpIds)`);
+                nameConds.push(`ec.erp_cost_center_id IN (:scopeErpIds)`);
                 replacements.scopeErpIds = scopeErpIds;
             }
             if (scopeCvIds.length) {
@@ -152,17 +152,18 @@ export const listReservasReport = async (req, res) => {
                 scopeParts.push(`NULLIF(regexp_replace(COALESCE(r.unidade_json->>'idempreendimento_int',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeCvIds)`);
                 // 3) idempreendimento_cv = CRM id explícito
                 scopeParts.push(`NULLIF(regexp_replace(COALESCE(r.unidade_json->>'idempreendimento_cv',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeCvIds)`);
-                nameConds.push(`ec.crm_id IN (:scopeCvIds)`);
+                nameConds.push(`ec.cv_id IN (:scopeCvIds)`);
                 replacements.scopeCvIds = scopeCvIds;
             }
-            // 4) fallback por nome do empreendimento (enterprise_cities segue
+            // 4) fallback por nome do empreendimento (enterprises segue
             //    como resolvedor de nomes; o escopo continua sendo por id)
             scopeParts.push(`
                 EXISTS (
-                    SELECT 1 FROM enterprise_cities ec
-                    WHERE (${nameConds.join(' OR ')})
+                    SELECT 1 FROM enterprises ec
+                    WHERE ec.active = true
+                      AND (${nameConds.join(' OR ')})
                       AND COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),'')) IS NOT NULL
-                      AND unaccent(upper(regexp_replace(COALESCE(ec.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
+                      AND unaccent(upper(regexp_replace(COALESCE(ec.name,''), '[^A-Z0-9]+',' ','g'))) =
                           unaccent(upper(regexp_replace(
                             COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
                             '[^A-Z0-9]+',' ','g')))
@@ -233,7 +234,7 @@ export const getReservaReport = async (req, res) => {
         if (!row) return res.status(404).json({ error: 'Reserva não encontrada' });
 
         // ── Visibilidade: não-admin só vê se o empreendimento da reserva
-        //    está no seu escopo. Ids direto; nome resolvido via enterprise_cities.
+        //    está no seu escopo. Ids direto; nome resolvido via enterprises.
         const scope = await getScope(req.user);
         if (!scope.all) {
             const scopeCvIds  = scope.cvIds  || [];
@@ -249,25 +250,26 @@ export const getReservaReport = async (req, res) => {
                   || (cvNum  != null && scopeCvIds.includes(cvNum));
 
                 if (!ok) {
-                    // fallback por nome do empreendimento (enterprise_cities
+                    // fallback por nome do empreendimento (enterprises
                     // segue como resolvedor de nomes; escopo continua por id)
                     const nomeEmp = (row.unidade_json?.empreendimento || row.empreendimento || '').trim();
                     if (nomeEmp) {
                         const nameConds = [];
                         const repl = { nomeEmp };
                         if (scopeCvIds.length) {
-                            nameConds.push(`ec.crm_id IN (:scopeCvIds)`);
+                            nameConds.push(`ec.cv_id IN (:scopeCvIds)`);
                             repl.scopeCvIds = scopeCvIds;
                         }
                         if (scopeErpIds.length) {
-                            nameConds.push(`NULLIF(regexp_replace(COALESCE(ec.erp_id,''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeErpIds)`);
+                            nameConds.push(`ec.erp_cost_center_id IN (:scopeErpIds)`);
                             repl.scopeErpIds = scopeErpIds;
                         }
                         const [check] = await db.sequelize.query(`
                             SELECT 1
-                            FROM enterprise_cities ec
-                            WHERE (${nameConds.join(' OR ')})
-                              AND unaccent(upper(regexp_replace(COALESCE(ec.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
+                            FROM enterprises ec
+                            WHERE ec.active = true
+                              AND (${nameConds.join(' OR ')})
+                              AND unaccent(upper(regexp_replace(COALESCE(ec.name,''), '[^A-Z0-9]+',' ','g'))) =
                                   unaccent(upper(regexp_replace(:nomeEmp, '[^A-Z0-9]+',' ','g')))
                             LIMIT 1
                         `, { replacements: repl, type: db.Sequelize.QueryTypes.SELECT });

@@ -90,20 +90,40 @@ qualquer autenticado. Agora:
    authenticate + requireRoutePermission + accessScopeService + tool via
    ToolRegistry). O validador acusa o que nascer fora do padrão.
 
-## Rollback de emergência
+## Rodada final (2026-07-29): remoção total do legado por cidade
 
-- Dados por cidade (comportamento antigo): setar env `ACCESS_MODEL=city` e
-  reiniciar o backend. As alçadas de tela novas continuam valendo.
+- **Modo por cidade REMOVIDO por completo** - sem flag ACCESS_MODEL, sem
+  fallback. Acesso a dados é exclusivamente por grants de empreendimento.
+- **enterprise_cities aposentada**: todos os leitores (projeção, leads,
+  reservas, contratos, custos, viabilidade, payment flow, workflow groups,
+  resolvedores, tools da Eme, validador) migraram para a tabela
+  `enterprises`. Semente automática no 1º boot (importa o que existia) e
+  DROP automático da tabela no boot seguinte. Model, controller,
+  cityMappingService e cityResolver deletados.
+- **Sync direto das APIs**: a tela Sincronização de empresas (e o novo
+  scheduler diário `orgRegistryScheduler`, 03:00 America/Sao_Paulo,
+  ajustável por ORG_REGISTRY_CRON_EXPRESSION) leem CV e Sienge direto para
+  companies/enterprises - sem depender de sync manual.
+- **Rótulos p/ telas não-admin**: novo `GET /api/org/enterprise-labels`
+  (escopado ao usuário) substitui o antigo GET /admin/enterprise-cities
+  usado por Títulos/Custos.
+- **Job do validador protegido**: `POST /api/ai/validator` agora exige o
+  token interno de job (security/internalJobToken; aleatório por boot ou
+  env INTERNAL_JOB_TOKEN) - deixou de ser aberto.
+- **Banner do login corrigido**: `GET /api/cv/banners` voltou a ser público
+  (é exibido na tela de login, pré-autenticação) - documentado na allowlist
+  do validador.
+- **LPs, relatórios públicos (/r/token), bolão e webhooks**: verificados -
+  nenhuma rota pública foi alterada em toda a refatoração.
+- **Falha "autenticar com a Microsoft"**: causa mais provável foi a janela
+  do deploy (ALTER TABLE em users trava a tabela durante o boot; o callback
+  grava em users). Sem mudança de código no fluxo Microsoft. Se voltar a
+  ocorrer fora de deploy, checar o log `[Microsoft] Erro no callback`.
 
 ## Pendências conhecidas (não bloqueantes)
 
-- `POST /api/ai/validator` é chamado server-to-server sem usuário (job de
-  análise de contratos) - está na allowlist; ideal futuro: shared secret.
-- `GET /api/admin/enterprise-cities` segue leitura autenticada (Títulos/
-  Custos usam para rótulos); migrar esses consumidores para /api/admin/org e
-  então restringir.
 - Alertas da Eme re-executam tools com o escopo do dono do alerta (se o dono
   perder grants, o alerta passa a vir vazio - comportamento correto, mas
   vale comunicar).
-- `enterprise_cities` permanece como fonte do modo city e de resolução de
-  nomes; aposentadoria total fica para quando o modo city for removido.
+- `EnterpriseResolverService` devolve `source = pair_status` (antes
+  'crm'|'erp'); nenhum consumidor atual usa o literal, mas fica o registro.

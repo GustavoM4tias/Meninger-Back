@@ -52,7 +52,10 @@ router.get('/reserva-pagamentos', authenticate, requireRoutePermission(WORKFLOW_
 
 router.get('/listagem-empreendimentos', authenticate, requireRoutePermission([...ENTERPRISE_SCREENS, '/marketing/leads']), fetchEmpreendimentos);
 router.get('/filas', authenticate, requireRoutePermission(['/marketing/leads']), fetchFilas);
-router.get('/banners', authenticate, fetchBanners);
+// PÚBLICO de propósito: os banners aparecem na TELA DE LOGIN (usuário ainda
+// não autenticado). Só imagens/links de campanha — sem dado de negócio.
+// Registrado na allowlist do validador de integridade.
+router.get('/banners', fetchBanners);
 
 router.post('/leads/sync/full', authenticate, requireAdmin, cvLeads.fullSync.bind(cvLeads));
 router.post('/leads/sync/delta', authenticate, requireAdmin, cvLeads.deltaSync.bind(cvLeads));

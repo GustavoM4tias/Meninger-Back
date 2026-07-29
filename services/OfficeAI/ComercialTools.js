@@ -317,7 +317,7 @@ async function executeQueryEnterprises(args, user) {
   // args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia)
   if (args.cidade) {
     whereClauses.push(`
-      (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ce.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+      (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city, ce.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
       LIKE ('% ' || unaccent(upper(regexp_replace(:city, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
     `);
     replacements.city = args.cidade;
@@ -343,7 +343,7 @@ async function executeQueryEnterprises(args, user) {
     SELECT
       ce.idempreendimento,
       ce.nome,
-      COALESCE(ec.city_override, ec.default_city, ce.cidade) AS cidade,
+      COALESCE(ec.city, ce.cidade) AS cidade,
       ce.estado,
       ce.situacao_comercial_nome,
       ce.situacao_obra_nome,
@@ -353,8 +353,8 @@ async function executeQueryEnterprises(args, user) {
       ce.data_entrega,
       ce.logo
     FROM cv_enterprises ce
-    LEFT JOIN enterprise_cities ec
-      ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
+    LEFT JOIN enterprises ec
+      ON ec.cv_id = ce.idempreendimento AND ec.active = true
     WHERE ${whereClauses.join(' AND ')}
     ORDER BY ce.nome ASC
     LIMIT 50
@@ -382,7 +382,7 @@ async function executeQueryEnterprises(args, user) {
 
 async function executeEnterprisesGrouped(groupBy, whereClauses, replacements, context) {
   const groupMap = {
-    cidade:             { expr: `COALESCE(ec.city_override, ec.default_city, ce.cidade)` },
+    cidade:             { expr: `COALESCE(ec.city, ce.cidade)` },
     situacao_comercial: { expr: `COALESCE(ce.situacao_comercial_nome, 'Não informado')` },
     situacao_obra:      { expr: `COALESCE(ce.situacao_obra_nome, 'Não informado')` },
     tipo:               { expr: `COALESCE(ce.tipo_empreendimento_nome, 'Não informado')` },
@@ -394,8 +394,8 @@ async function executeEnterprisesGrouped(groupBy, whereClauses, replacements, co
   const sql = `
     SELECT ${expr} AS label, COUNT(*) AS total
     FROM cv_enterprises ce
-    LEFT JOIN enterprise_cities ec
-      ON ec.source = 'crm' AND ec.crm_id = ce.idempreendimento
+    LEFT JOIN enterprises ec
+      ON ec.cv_id = ce.idempreendimento AND ec.active = true
     WHERE ${whereClauses.join(' AND ')}
     GROUP BY ${expr}
     ORDER BY total DESC
@@ -699,9 +699,9 @@ async function executeQueryPrecadastros(args, user) {
     replacements.targetCity = args.cidade;
     whereClauses.push(`
       EXISTS (
-        SELECT 1 FROM enterprise_cities ec
-        WHERE ec.source = 'crm' AND ec.crm_id = p.idempreendimento
-          AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city_override, ec.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+        SELECT 1 FROM enterprises ec
+        WHERE ec.cv_id = p.idempreendimento AND ec.active = true
+          AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
               LIKE ('% ' || unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
       )
     `);
@@ -1024,7 +1024,7 @@ async function executePrecadList(args, whereSql, replacements, context, start, e
 
 // ── Reservas ───────────────────────────────────────────────────────────────────
 
-// EXISTS(enterprise_cities) ligando a reserva ao empreendimento pelas 4
+// EXISTS(enterprises) ligando a reserva ao empreendimento pelas 4
 // estratégias (padrão idêntico ao dashboard reservasReport.js): Sienge ERP id →
 // CRM id direto → idempreendimento_cv → fallback por nome normalizado. O
 // `extraCond` é a condição aplicada sobre a linha ec_r que casou (escopo/cidade).
@@ -1032,24 +1032,23 @@ function reservaEnterpriseExists(extraCond) {
   return `
       EXISTS (
         SELECT 1
-        FROM enterprise_cities ec_r
-        WHERE (
+        FROM enterprises ec_r
+        WHERE ec_r.active = true
+        AND (
           -- 1) Sienge ERP id direto
           (NULLIF(r.unidade_json->>'idempreendimento_int','') IS NOT NULL
-            AND ec_r.erp_id = r.unidade_json->>'idempreendimento_int')
-          -- 2) idempreendimento_int como crm_id (integração direta)
+            AND ec_r.erp_cost_center_id::text = r.unidade_json->>'idempreendimento_int')
+          -- 2) idempreendimento_int como cv_id (integração direta)
           OR (NULLIF(r.unidade_json->>'idempreendimento_int','')::int IS NOT NULL
-            AND ec_r.source = 'crm'
-            AND ec_r.crm_id = NULLIF(r.unidade_json->>'idempreendimento_int','')::int)
+            AND ec_r.cv_id = NULLIF(r.unidade_json->>'idempreendimento_int','')::int)
           -- 3) idempreendimento_cv explícito
           OR (NULLIF(r.unidade_json->>'idempreendimento_cv','')::int IS NOT NULL
-            AND ec_r.source = 'crm'
-            AND ec_r.crm_id = NULLIF(r.unidade_json->>'idempreendimento_cv','')::int)
+            AND ec_r.cv_id = NULLIF(r.unidade_json->>'idempreendimento_cv','')::int)
           -- 4) fallback por nome normalizado
           OR (
             COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''))
               IS NOT NULL
-            AND unaccent(upper(regexp_replace(COALESCE(ec_r.enterprise_name,''), '[^A-Z0-9]+',' ','g'))) =
+            AND unaccent(upper(regexp_replace(COALESCE(ec_r.name,''), '[^A-Z0-9]+',' ','g'))) =
                 unaccent(upper(regexp_replace(
                   COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
                   '[^A-Z0-9]+',' ','g')))
@@ -1188,14 +1187,14 @@ async function executeQueryReservas(args, user) {
   // (crm_id ∈ cvIds), usando o match robusto por 4 estratégias.
   if (cvIds) {
     replacements.scopeCvIds = cvIds;
-    whereClauses.push(reservaEnterpriseExists(`ec_r.crm_id IN (:scopeCvIds)`));
+    whereClauses.push(reservaEnterpriseExists(`ec_r.cv_id IN (:scopeCvIds)`));
   }
 
   // args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia)
   if (args.cidade) {
     replacements.targetCity = args.cidade;
     whereClauses.push(reservaEnterpriseExists(
-      `(' ' || unaccent(upper(regexp_replace(COALESCE(ec_r.city_override, ec_r.default_city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
+      `(' ' || unaccent(upper(regexp_replace(COALESCE(ec_r.city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
             LIKE ('% ' || unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')`
     ));
   }

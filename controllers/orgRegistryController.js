@@ -1,10 +1,12 @@
 // controllers/orgRegistryController.js
 //
 // API da tela "Sincronização de empresas" (/settings/empresas — ex "Vínculos
-// de cidades"). Todas as rotas são admin (ver routes/admin.js).
+// de cidades"). Todas as rotas são admin (ver routes/admin.js). Os syncs leem
+// DIRETO das APIs CV/Sienge para o registro unificado (companies/enterprises);
+// enterprise_cities foi aposentada. Além do manual, o orgRegistryScheduler
+// roda o sync completo 1x por dia de madrugada.
 
-import { syncFromCRM, syncFromSiengeCostCenters } from '../services/cityMappingService.js';
-import { consolidateRegistry, pairEnterprises, listRegistry } from '../services/org/enterpriseRegistryService.js';
+import { syncFromCv, syncFromSienge, syncAll, pairEnterprises, listRegistry } from '../services/org/enterpriseRegistryService.js';
 import db from '../models/sequelize/index.js';
 
 export const listEnterprises = async (req, res) => {
@@ -28,36 +30,37 @@ export const listCompanies = async (_req, res) => {
   }
 };
 
-// Sync CV → enterprise_cities → consolidação
+// Sync CV → enterprises (direto da API)
 export const syncCrm = async (_req, res) => {
   try {
-    const sync = await syncFromCRM();
-    const cons = await consolidateRegistry();
-    return res.json({ ok: true, sync, consolidated: cons });
+    const sync = await syncFromCv();
+    return res.json({ ok: true, sync, consolidated: { enterprises: sync.seen } });
   } catch (e) {
     console.error('[orgRegistry] syncCrm:', e);
     return res.status(500).json({ error: e.message });
   }
 };
 
-// Sync centros de custo Sienge → enterprise_cities → consolidação
+// Sync centros de custo Sienge → companies + enterprises (direto da API)
 export const syncErp = async (req, res) => {
   try {
     const { limit, maxCount } = req.query;
-    const sync = await syncFromSiengeCostCenters({ limit, maxCount });
-    const cons = await consolidateRegistry();
-    return res.json({ ok: true, sync, consolidated: cons });
+    const sync = await syncFromSienge({
+      limit: Number(limit) || 200,
+      maxCount: maxCount ? Number(maxCount) : undefined,
+    });
+    return res.json({ ok: true, sync, consolidated: { enterprises: sync.matched, companies: sync.companies } });
   } catch (e) {
     console.error('[orgRegistry] syncErp:', e);
     return res.status(500).json({ error: e.message });
   }
 };
 
-// Reconsolida sem re-sincronizar as fontes (barato; útil após ajustes)
+// Sync completo (Sienge + CV), mesmo job do scheduler diário
 export const consolidate = async (_req, res) => {
   try {
-    const cons = await consolidateRegistry();
-    return res.json({ ok: true, ...cons });
+    const r = await syncAll();
+    return res.json({ ok: true, enterprises: (r.cv?.seen || 0), companies: (r.erp?.companies || 0), detail: r });
   } catch (e) {
     console.error('[orgRegistry] consolidate:', e);
     return res.status(500).json({ error: e.message });
@@ -91,6 +94,41 @@ export const updateEnterprise = async (req, res) => {
     return res.json({ ok: true, enterprise: row });
   } catch (e) {
     console.error('[orgRegistry] update:', e);
+    return res.status(500).json({ error: e.message });
+  }
+};
+
+// ── Rótulos de empreendimento p/ telas de dados (NÃO-admin) ──────────────────
+// GET /api/org/enterprise-labels — nome/cidade por CC e por CV id, LIMITADO ao
+// escopo do usuário (admin vê todos). Substitui o antigo
+// GET /api/admin/enterprise-cities consumido por Títulos/Custos.
+export const listEnterpriseLabels = async (req, res) => {
+  try {
+    const { visibleErpIds } = await import('../services/permissions/accessScopeService.js');
+    const allowed = await visibleErpIds(req.user); // null = admin
+    const where = { active: true };
+    if (allowed !== null) {
+      if (!allowed.length) return res.json({ items: [] });
+      where.erp_cost_center_id = allowed;
+    }
+    const rows = await db.OrgEnterprise.findAll({
+      where,
+      attributes: ['id', 'cv_id', 'erp_cost_center_id', 'name', 'city', 'uf'],
+      order: [['name', 'ASC']],
+      raw: true,
+    });
+    return res.json({
+      items: rows.map(r => ({
+        id: r.id,
+        cv_id: r.cv_id,
+        erp_id: r.erp_cost_center_id != null ? String(r.erp_cost_center_id) : null,
+        name: r.name,
+        city: r.city,
+        uf: r.uf,
+      })),
+    });
+  } catch (e) {
+    console.error('[orgRegistry] labels:', e);
     return res.status(500).json({ error: e.message });
   }
 };

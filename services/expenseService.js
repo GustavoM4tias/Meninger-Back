@@ -30,8 +30,8 @@ export default class expenseService {
    * Resolve o nome de exibição dos empreendimentos (cost_center_id = cdempreendview).
    * Ordem de prioridade (idêntica ao comportamento anterior):
    *   0) cost_center_overrides.display_name (admin sobrepôs) — MÁXIMA
-   *   1) enterprise_cities, match direto (preferência source='crm')
-   *   2) enterprise_cities, match pelo "CC base" (sub-CC herda do pai)
+   *   1) enterprises, match direto por erp_cost_center_id
+   *   2) enterprises, match pelo "CC base" (sub-CC herda do pai)
    * @returns {Promise<Map<number,string>>}
    */
   async resolveCostCenterNames(costCenterIds) {
@@ -48,11 +48,10 @@ export default class expenseService {
 
     // Passo 1 — match direto
     const directRows = await sequelize.query(
-      `SELECT DISTINCT ON (ec.erp_id::int) ec.erp_id::int AS erp_id, ec.enterprise_name
-         FROM enterprise_cities ec
-        WHERE ec.erp_id IS NOT NULL AND ec.erp_id ~ '^[0-9]+$' AND ec.erp_id::int IN (:ids)
-          AND COALESCE(NULLIF(TRIM(ec.enterprise_name), ''), NULL) IS NOT NULL
-        ORDER BY ec.erp_id::int, CASE ec.source WHEN 'crm' THEN 1 ELSE 2 END, ec.id`,
+      `SELECT ec.erp_cost_center_id AS erp_id, ec.name AS enterprise_name
+         FROM enterprises ec
+        WHERE ec.active = true AND ec.erp_cost_center_id IN (:ids)
+          AND COALESCE(NULLIF(TRIM(ec.name), ''), NULL) IS NOT NULL`,
       { replacements: { ids }, type: Sequelize.QueryTypes.SELECT }
     );
     for (const r of directRows) {
@@ -72,11 +71,10 @@ export default class expenseService {
       const baseIds = [...baseToOriginals.keys()];
       if (baseIds.length) {
         const baseRows = await sequelize.query(
-          `SELECT DISTINCT ON (ec.erp_id::int) ec.erp_id::int AS erp_id, ec.enterprise_name
-             FROM enterprise_cities ec
-            WHERE ec.erp_id IS NOT NULL AND ec.erp_id ~ '^[0-9]+$' AND ec.erp_id::int IN (:ids)
-              AND COALESCE(NULLIF(TRIM(ec.enterprise_name), ''), NULL) IS NOT NULL
-            ORDER BY ec.erp_id::int, CASE ec.source WHEN 'crm' THEN 1 ELSE 2 END, ec.id`,
+          `SELECT ec.erp_cost_center_id AS erp_id, ec.name AS enterprise_name
+             FROM enterprises ec
+            WHERE ec.active = true AND ec.erp_cost_center_id IN (:ids)
+              AND COALESCE(NULLIF(TRIM(ec.name), ''), NULL) IS NOT NULL`,
           { replacements: { ids: baseIds }, type: Sequelize.QueryTypes.SELECT }
         );
         for (const r of baseRows) {

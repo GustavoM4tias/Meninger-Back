@@ -142,11 +142,11 @@ export async function removeErpLink(req, res) {
  *   manual         → vínculo criado à mão nesta tela
  *   projecao       → cadastro da projeção ativa, por nome exato
  *   projecao_fase  → cadastro da projeção ativa, por nome + nº da fase
- *   cadastro_cv    → enterprise_cities (a ponte automática do CV)
+ *   cadastro_cv    → enterprises (a ponte automática do CV)
  *   (nenhum)       → não resolve: cai como linha solta no dashboard
  *
  * `alerta` sinaliza o caso traiçoeiro: resolveu pelo cadastro_cv num
- * empreendimento que tem VÁRIAS fases em aberto. Como enterprise_cities não
+ * empreendimento que tem VÁRIAS fases em aberto. Como enterprises não
  * conhece fase, todas as fases vão para o mesmo centro de custo — o número
  * aparece, mas no módulo errado.
  */
@@ -191,11 +191,13 @@ resolvido AS (
     (SELECT NULLIF(s.idetapa_int,'')::int FROM cv_enterprise_stages s
       WHERE s.idetapa = o.cv_stage_id LIMIT 1)           AS erp_etapa_cadastro,
 
-    (SELECT NULLIF(ec.erp_id,'')::int FROM enterprise_cities ec
-      WHERE (o.cv_enterprise_int_id IS NOT NULL AND ec.erp_id = o.cv_enterprise_int_id::text)
-         OR (o.cv_enterprise_int_id IS NOT NULL AND ec.crm_id = o.cv_enterprise_int_id AND ec.erp_id IS NOT NULL)
-         OR (o.cv_enterprise_id IS NOT NULL AND ec.crm_id = o.cv_enterprise_id AND ec.erp_id IS NOT NULL)
-      ORDER BY (ec.erp_id = o.cv_enterprise_int_id::text) DESC, ec.updated_at DESC
+    (SELECT ec.erp_cost_center_id FROM enterprises ec
+      WHERE ec.active = true
+        AND ec.erp_cost_center_id IS NOT NULL
+        AND ((o.cv_enterprise_int_id IS NOT NULL AND ec.erp_cost_center_id = o.cv_enterprise_int_id)
+         OR (o.cv_enterprise_int_id IS NOT NULL AND ec.cv_id = o.cv_enterprise_int_id)
+         OR (o.cv_enterprise_id IS NOT NULL AND ec.cv_id = o.cv_enterprise_id))
+      ORDER BY (ec.erp_cost_center_id = o.cv_enterprise_int_id) DESC, ec.updated_at DESC
       LIMIT 1)                                           AS erp_cadastro_cv
   FROM origem o
 ),
