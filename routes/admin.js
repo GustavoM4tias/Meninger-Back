@@ -67,6 +67,7 @@ import {
   consolidate as orgConsolidate,
   pair as orgPair,
   updateEnterprise as orgUpdateEnterprise,
+  bulkUpdateEnterprises as orgBulkUpdateEnterprises,
 } from '../controllers/orgRegistryController.js';
 import { runIntegrityCheck } from '../security/integrityCheck.js';
 const landDataController = new LandDataController();
@@ -110,6 +111,8 @@ router.post('/org/sync/crm', authMiddleware, requireAdmin, orgSyncCrm);
 router.post('/org/sync/erp', authMiddleware, requireAdmin, orgSyncErp);
 router.post('/org/consolidate', authMiddleware, requireAdmin, orgConsolidate);
 router.post('/org/enterprises/:id/pair', authMiddleware, requireAdmin, orgPair);
+// /bulk ANTES da paramétrica /:id — senão "bulk" cairia como id.
+router.put('/org/enterprises/bulk', authMiddleware, requireAdmin, orgBulkUpdateEnterprises);
 router.put('/org/enterprises/:id', authMiddleware, requireAdmin, orgUpdateEnterprise);
 
 // Positions (cargos) – APENAS ADMIN

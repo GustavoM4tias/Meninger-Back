@@ -11,8 +11,8 @@ import db from '../models/sequelize/index.js';
 
 export const listEnterprises = async (req, res) => {
   try {
-    const { q, status, companyId, page, pageSize } = req.query;
-    const data = await listRegistry({ q, status, companyId, page, pageSize });
+    const { q, status, companyId, active, sortBy, sortDir, page, pageSize } = req.query;
+    const data = await listRegistry({ q, status, companyId, active, sortBy, sortDir, page, pageSize });
     return res.json(data);
   } catch (e) {
     console.error('[orgRegistry] list:', e);
@@ -94,6 +94,27 @@ export const updateEnterprise = async (req, res) => {
     return res.json({ ok: true, enterprise: row });
   } catch (e) {
     console.error('[orgRegistry] update:', e);
+    return res.status(500).json({ error: e.message });
+  }
+};
+
+// Mesmos ajustes do update individual, aplicados a VÁRIOS empreendimentos de
+// uma vez (ações em lote da tela). Body: { ids: [], companyId?, active? }.
+// companyId = null desvincula a empresa; ausente = não mexe no campo.
+export const bulkUpdateEnterprises = async (req, res) => {
+  try {
+    const ids = [...new Set((req.body?.ids || []).map(Number).filter(n => Number.isFinite(n) && n > 0))];
+    if (!ids.length) return res.status(400).json({ error: 'Informe ao menos um empreendimento.' });
+
+    const patch = {};
+    if (req.body?.companyId !== undefined) patch.company_id = req.body.companyId ? Number(req.body.companyId) : null;
+    if (req.body?.active !== undefined) patch.active = !!req.body.active;
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nada a alterar.' });
+
+    const [count] = await db.OrgEnterprise.update(patch, { where: { id: ids } });
+    return res.json({ ok: true, updated: count });
+  } catch (e) {
+    console.error('[orgRegistry] bulkUpdate:', e);
     return res.status(500).json({ error: e.message });
   }
 };
