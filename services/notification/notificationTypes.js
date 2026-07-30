@@ -49,6 +49,9 @@ export const NotificationType = {
     MARKETING_APPROVAL_REQUESTED: 'marketing.approval.requested',
     MARKETING_APPROVAL_DECIDED:   'marketing.approval.decided',
 
+    // Comercial — Fechamento de vendas
+    SALES_CLOSING_DIVERGENCE: 'sales.closing.divergence',
+
     // Bolão da Copa
     BOLAO_LOCKED:    'bolao.locked',
     BOLAO_PREMATCH:  'bolao.prematch',
@@ -166,6 +169,15 @@ export const NOTIFICATION_CATALOG = {
     },
 
     // ── Marketing — Captação de Leads ──────────────────────────────────────────
+    [NotificationType.SALES_CLOSING_DIVERGENCE]: {
+        label: 'Divergência em vendas consolidadas',
+        group: 'Comercial',
+        description: 'Quando os dados de um mês de vendas já consolidado mudam no Sienge/regras depois do fechamento (o consolidado não é alterado; a mudança fica registrada para revisão).',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
     [NotificationType.LEAD_DISPATCH_FAILED]: {
         label: 'Falha ao enviar lead ao CRM',
         group: 'Marketing',

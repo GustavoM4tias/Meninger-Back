@@ -20,6 +20,7 @@ import './RealEstateTools.js';
 import './FinanceTools.js';
 import './PeopleTools.js';
 import './ContractTools.js';
+import './SalesClosingTools.js';
 import './ProfileTools.js';
 // Projeção de vendas (só ativa), Relatórios da Eme e Checklist (leitura + escrita
 // com trava de propriedade/gestão e confirmação).
