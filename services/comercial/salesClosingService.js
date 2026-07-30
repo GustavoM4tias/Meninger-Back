@@ -275,6 +275,23 @@ export async function checkDivergences({ notify = true } = {}) {
             }
         }
 
+        // Divergência que se resolveu sozinha: o dado voltou a ser igual ao do
+        // fechamento (ex.: terreno zerado por engano e depois restaurado).
+        // Manter aberta viraria ruído e escondia as pendências de verdade.
+        const aindaDivergem = new Set(
+            divergences.map(d => `${d.kind}|${d.contract_id ?? ''}|${d.field ?? ''}`)
+        );
+        const abertas = await SalesClosingDivergence.findAll({
+            where: { closing_id: closing.id, status: 'open' }
+        });
+        for (const row of abertas) {
+            const chave = `${row.kind}|${row.contract_id ?? ''}|${row.field ?? ''}`;
+            if (aindaDivergem.has(chave)) continue;
+            row.status = 'self_resolved';
+            row.reviewed_at = new Date();
+            await row.save();
+        }
+
         // Persiste só o que ainda não está aberto com a mesma assinatura
         for (const d of divergences) {
             const [row, isNew] = await SalesClosingDivergence.findOrCreate({
