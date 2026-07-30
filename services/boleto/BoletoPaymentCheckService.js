@@ -17,6 +17,7 @@ import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
 import { runEcoBatch } from '../../playwright/services/ecoCheckService.js';
 import EventLogger from './BoletoEventLogger.js';
+import EcoLock from './BoletoEcoLockService.js';
 import { podeConsultarHoje } from '../../lib/businessCalendar.js';
 import { Op } from 'sequelize';
 
@@ -413,4 +414,177 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
     await history.update(baseUpdate);
 }
 
-export default { runDailyCheck };
+/**
+ * Baixa IMEDIATA do boleto pendente de uma reserva CANCELADA — chamada pelo
+ * fluxo de cancelamento (ReservaCancelService.validarAto) pra impedir que o
+ * cliente pague um boleto de reserva morta.
+ *
+ * Diferenças pro fluxo diário (runDailyCheck):
+ *   - Ignora a janela de vencimento — baixa AGORA, independente do venc.
+ *   - NÃO altera a situação do CV (o fluxo de cancelamento é dono do workflow).
+ *   - Mensagem no CV explica que a baixa foi pelo cancelamento da reserva.
+ *   - Cascateia o `cancelled` pras tentativas "ignoradas" da reserva (linhas
+ *     espelho do mesmo boleto — sem isso a listagem agrupada segue "Pendente").
+ *
+ * @returns {Promise<{
+ *   ok: boolean,
+ *   outcome: 'baixado'|'ja_baixado'|'pago'|'nao_encontrado'|'sem_boleto'|'falha',
+ *   detalhe: string,
+ * }>}
+ */
+export async function baixarBoletoPorCancelamento(idreserva, { motivo = 'cancelamento da reserva' } = {}) {
+    const boleto = await BoletoHistory.findOne({
+        where: {
+            idreserva,
+            status: 'success',
+            payment_status: 'pending',
+            ignorado: false,
+            nosso_numero: { [Op.ne]: null },
+        },
+        order: [['id', 'DESC']],
+    });
+    if (!boleto) {
+        return { ok: true, outcome: 'sem_boleto', detalhe: 'nenhum boleto pendente com nosso número registrado.' };
+    }
+
+    const settings = await BoletoSettings.findByPk(1);
+    if (!settings?.eco_usuario || !settings?.eco_senha) {
+        return { ok: false, outcome: 'falha', detalhe: 'credenciais do Ecobrança não configuradas no módulo Boleto Caixa.' };
+    }
+
+    // CNPJ da empresa: histórico primeiro, CV como fallback.
+    let cnpj = String(boleto.cnpj_empresa || '').replace(/\D/g, '') || null;
+    if (!cnpj) {
+        const idemp = await fetchReservaIdEmpreendimento(idreserva);
+        cnpj = await fetchCnpjEmpresaCache(new Map(), idemp);
+    }
+    if (!cnpj) {
+        return { ok: false, outcome: 'falha', detalhe: 'CNPJ da empresa não encontrado (nem no histórico nem no CV).' };
+    }
+
+    // Lock do Ecobrança com espera curta — colisão com emissão/scheduler é rara,
+    // mas se seguir ocupado o cancelamento bloqueia com mensagem clara e pode
+    // ser reprocessado pela tela.
+    const owner = `baixa:cancel:res=${idreserva}:hist=${boleto.id}:${new Date().toISOString()}`;
+    let locked = false;
+    for (let i = 0; i < 12 && !locked; i++) {
+        locked = await EcoLock.acquire(owner, 10);
+        if (!locked) await new Promise(r => setTimeout(r, 5000));
+    }
+    if (!locked) {
+        return { ok: false, outcome: 'falha', detalhe: 'Ecobrança ocupado (lock) — reprocesse o cancelamento em alguns minutos.' };
+    }
+
+    let r = null;
+    try {
+        const out = await runEcoBatch({
+            credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
+            empresas: [{
+                cnpj_empresa: cnpj,
+                boletos: [{ historyId: boleto.id, idreserva, nossoNumero: boleto.nosso_numero, acao: 'baixar' }],
+            }],
+        });
+        r = out.results?.[0] || null;
+    } catch (err) {
+        r = { ok: false, error: err?.message || String(err) };
+    } finally {
+        await EcoLock.release(owner).catch(() => {});
+    }
+
+    const baseUpdate = {
+        last_checked_at: new Date(),
+        last_check_situation: r?.situacao || (r?.found === false ? 'NAO_ENCONTRADO' : null),
+    };
+    const cascadeIgnorados = () => BoletoHistory.update(
+        { payment_status: 'cancelled', cancelled_at: new Date() },
+        { where: { idreserva, ignorado: true, payment_status: 'pending' } }
+    );
+
+    // ── Falha técnica ────────────────────────────────────────────────────────
+    if (!r || !r.ok) {
+        const detalhe = r?.error || 'erro desconhecido na automação Ecobrança.';
+        await EventLogger.log({
+            historyId: boleto.id, idreserva, type: 'payment_check_error',
+            severity: 'error', message: `Baixa por ${motivo} falhou: ${detalhe}`,
+            data: { motivo, error: detalhe },
+        });
+        await boleto.update(baseUpdate);
+        return { ok: false, outcome: 'falha', detalhe };
+    }
+
+    // ── Título não encontrado ────────────────────────────────────────────────
+    if (r.found === false) {
+        await EventLogger.log({
+            historyId: boleto.id, idreserva, type: 'payment_check_not_found',
+            severity: 'error',
+            message: `Baixa por ${motivo}: Nosso Número ${boleto.nosso_numero} não encontrado no Ecobrança.`,
+            data: { motivo },
+        });
+        await boleto.update(baseUpdate);
+        return { ok: false, outcome: 'nao_encontrado', detalhe: `título ${boleto.nosso_numero} não encontrado no Ecobrança.` };
+    }
+
+    const sit = String(r.situacao || '').toUpperCase();
+
+    // ── PAGO — não tem o que baixar; o cancelamento precisa tratar devolução ─
+    if (/LIQUIDAD/i.test(sit)) {
+        await EventLogger.log({
+            historyId: boleto.id, idreserva, type: 'paid',
+            severity: 'warning',
+            message: `Baixa por ${motivo} abortada: boleto LIQUIDADO no Ecobrança (Nosso Nº ${boleto.nosso_numero}).`,
+            data: { motivo, situacao: sit },
+        });
+        await boleto.update({ ...baseUpdate, payment_status: 'paid', paid_at: boleto.paid_at || new Date() });
+        return { ok: false, outcome: 'pago', detalhe: `boleto LIQUIDADO no Ecobrança — pagamento precisa de devolução/estorno manual.` };
+    }
+
+    // ── Já estava baixado externamente ───────────────────────────────────────
+    if (/BAIXAD[OA]|CANCELAD[OA]|DEVOLVID[OA]/i.test(sit)) {
+        await EventLogger.log({
+            historyId: boleto.id, idreserva, type: 'baixa_confirmed',
+            severity: 'warning',
+            message: `Baixa por ${motivo}: boleto já constava "${sit}" no Ecobrança (baixa externa). Marcado como cancelado.`,
+            data: { motivo, situacao: sit, externalBaixa: true },
+        });
+        await boleto.update({ ...baseUpdate, payment_status: 'cancelled', cancelled_at: new Date(), last_check_situation: sit });
+        await cascadeIgnorados();
+        return { ok: true, outcome: 'ja_baixado', detalhe: `boleto já estava "${sit}" no Ecobrança.` };
+    }
+
+    // ── Baixa confirmada agora ───────────────────────────────────────────────
+    if (r.baixaConfirmada) {
+        await EventLogger.log({
+            historyId: boleto.id, idreserva, type: 'baixa_confirmed',
+            severity: 'success',
+            message: `Baixa por devolução confirmada (${motivo}) — Nosso Nº ${boleto.nosso_numero}.`,
+            data: { motivo, mensagemBaixa: r.mensagemBaixa },
+        });
+        await boleto.update({ ...baseUpdate, payment_status: 'cancelled', cancelled_at: new Date(), last_check_situation: 'BAIXADO' });
+        await cascadeIgnorados();
+        const msg = [
+            '❌ Boleto do ato baixado por devolução',
+            '',
+            `🔢 Nosso Número: ${boleto.nosso_numero}`,
+            `💰 Valor: R$ ${Number(boleto.valor || 0).toFixed(2).replace('.', ',')}`,
+            boleto.vencimento ? `📅 Vencimento: ${formatDateBr(boleto.vencimento)}` : null,
+            '',
+            `Baixa automática solicitada pelo ${motivo} — o boleto não pode mais ser pago.`,
+        ].filter(Boolean).join('\n');
+        await sendCvMessageSafe(idreserva, msg, boleto.id, `baixado por ${motivo}`);
+        return { ok: true, outcome: 'baixado', detalhe: `baixa por devolução confirmada no Ecobrança (Nosso Nº ${boleto.nosso_numero}).` };
+    }
+
+    // ── Baixa abortada pelo safety (situação inesperada) ─────────────────────
+    const detalhe = r.abortReason
+        ? `baixa abortada (safety): situação no Ecobrança era "${sit || '?'}" (${r.abortReason}).`
+        : `Ecobrança não confirmou a baixa (situação "${sit || '?'}").`;
+    await EventLogger.log({
+        historyId: boleto.id, idreserva, type: 'baixa_aborted',
+        severity: 'warning', message: `Baixa por ${motivo} não confirmada: ${detalhe}`,
+        data: { motivo, abortReason: r.abortReason || null, situacao: sit },
+    });
+    await boleto.update(baseUpdate);
+    return { ok: false, outcome: 'falha', detalhe };
+}
+
+export default { runDailyCheck, baixarBoletoPorCancelamento };

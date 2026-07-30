@@ -43,6 +43,7 @@ import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
 import apiSienge from '../../lib/apiSienge.js';
 import EventLogger from './ReservaCancelEventLogger.js';
+import { baixarBoletoPorCancelamento } from '../boleto/BoletoPaymentCheckService.js';
 
 const SITUACAO_DELETAVEL = 'Autorizado'; // "Aguardando emissão" no Sienge
 const OFFICE_TELA = 'Comercial > Cancelamentos CV × Sienge';
@@ -275,8 +276,20 @@ async function validarAto(idreserva) {
             return { ok: true, detalhe: `Ato vencido sem pagamento - boleto #${boleto.id} baixado por devolução.` };
         case 'paid':
             return { ok: false, detalhe: `Ato PAGO (boleto #${boleto.id}, liquidado em ${boleto.paid_at ? new Date(boleto.paid_at).toLocaleDateString('pt-BR') : '-'}).` };
-        case 'pending':
-            return { ok: false, detalhe: `Boleto do ato emitido e pendente (boleto #${boleto.id}, venc. ${formatDateBr(boleto.vencimento)}). Aguarde pagamento ou baixa por vencimento.` };
+        case 'pending': {
+            // Reserva cancelada não pode manter boleto vivo — o cliente poderia
+            // pagar o ato de uma reserva morta. Solicita a baixa por devolução
+            // AGORA (mesma automação do scheduler, ignorando a janela de
+            // vencimento). Só bloqueia se a baixa não puder ser confirmada.
+            const baixa = await baixarBoletoPorCancelamento(idreserva);
+            if (baixa.ok) {
+                return { ok: true, detalhe: `Boleto #${boleto.id} estava pendente — baixa automática solicitada pelo cancelamento: ${baixa.detalhe}` };
+            }
+            if (baixa.outcome === 'pago') {
+                return { ok: false, detalhe: `Ato PAGO (descoberto ao solicitar a baixa do boleto #${boleto.id}): ${baixa.detalhe}` };
+            }
+            return { ok: false, detalhe: `Boleto do ato pendente (boleto #${boleto.id}, venc. ${formatDateBr(boleto.vencimento)}) e a baixa automática falhou: ${baixa.detalhe} Reprocesse o cancelamento pela tela.` };
+        }
         default:
             return { ok: false, detalhe: `Estado do ato incerto (boleto #${boleto.id}, payment_status=${boleto.payment_status}) - bloqueado por segurança.` };
     }
