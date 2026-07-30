@@ -1,10 +1,17 @@
-// src/services/external/syncLandService.js
+// services/bulkData/external/syncLandService.js
+//
+// Preenche contracts.land_value (TERRENO) a partir da observação do título a
+// receber, lida AO VIVO na API do Sienge (ver landService.js).
+//
+// Trabalha POR CENTRO DE CUSTO (empreendimento), e não por lista solta de
+// números, por dois motivos:
+//   • é o único filtro que a API respeita — corta 30.742 títulos para ~2.489;
+//   • permite a proteção que importa: se a consulta de um empreendimento
+//     falhar, os contratos DELE ficam intocados. Zerar land_value por causa de
+//     uma falha de rede seria apagar dinheiro do VGV em silêncio.
 import db from '../../../models/sequelize/index.js';
-import { Op } from 'sequelize';
-import { fetchObstitByNumbers } from './landService.js';
+import { fetchObstitByCostCenter } from './landService.js';
 import { chooseLandValue } from './obstitParse.js';
-
-const BATCH = 500;
 
 async function getLandSyncEnterpriseIds() {
     const rows = await db.LandSyncEnterprise.findAll({
@@ -14,106 +21,106 @@ async function getLandSyncEnterpriseIds() {
     return rows.map(r => r.enterprise_id).filter(Number.isInteger);
 }
 
-
-async function getDistinctContractNumbers() {
-
-    const idsInt = await getLandSyncEnterpriseIds();
-    console.log(idsInt)
-
-    // 👉 Sem config => não mexe em ninguém
-    if (!idsInt.length) {
-        return [];
-    }
-
-    const idsArrayLiteral = `{${idsInt.join(',')}}`;
-
-    // Se a semântica de "sem filtro" for "não retorna nada", descomente:
-    // if (idsInt.length === 0) return [];
-
+async function getContractNumbersOf(enterpriseId) {
     const rows = await db.sequelize.query(
         `SELECT DISTINCT number
-       FROM contracts
-      WHERE number IS NOT NULL
-        AND enterprise_id = ANY(:ids::int[])`,
-        {
-            replacements: { ids: idsArrayLiteral },
-            type: db.Sequelize.QueryTypes.SELECT
-        }
+           FROM contracts
+          WHERE number IS NOT NULL
+            AND enterprise_id = :id`,
+        { replacements: { id: enterpriseId }, type: db.Sequelize.QueryTypes.SELECT }
     );
-
     return rows.map(r => String(r.number));
 }
 
-async function updateBatch(slice, parsedMap, tx, now, counters) {
-    await Promise.all(slice.map(async (num) => {
-        const parsed = parsedMap.get(num) || { value: null };
+/**
+ * Grava os valores de um empreendimento.
+ *
+ * Emitir um UPDATE por contrato custava ~2.240 round-trips ao Postgres e fazia
+ * a rodada levar 6 minutos — inviável para um job de 5 em 5 minutos, e 99% dos
+ * writes não mudavam nada. Aqui lemos o estado atual numa query, comparamos em
+ * memória e escrevemos só a diferença, num único UPDATE ... FROM (VALUES ...).
+ */
+async function applyForCostCenter(enterpriseId, parsedMap, counters) {
+    const atuais = await db.sequelize.query(
+        `SELECT number, land_value
+           FROM contracts
+          WHERE enterprise_id = :id AND number IS NOT NULL`,
+        { replacements: { id: enterpriseId }, type: db.Sequelize.QueryTypes.SELECT }
+    );
 
-        if (parsed.value == null) {
-            // Zera quando não há TR agora (mas evita write inútil)
-            const [count] = await db.SalesContract.update(
-                { land_value: null, land_updated_at: now },
-                { where: { number: num, land_value: { [Op.ne]: null } }, transaction: tx }
-            );
-            count > 0 ? counters.updated += count : counters.skipped++;
-            counters.nulls++;
-            return;
-        }
+    // Um mesmo número pode aparecer em mais de um contrato: basta um estar
+    // divergente para o número entrar no update.
+    const desatualizados = new Map();
+    for (const row of atuais) {
+        const num = String(row.number);
+        const alvo = parsedMap.get(num)?.value ?? null;
+        const atual = row.land_value == null ? null : Number(row.land_value);
 
-        const [count] = await db.SalesContract.update(
-            { land_value: parsed.value, land_updated_at: now },
-            {
-                where: {
-                    number: num,
-                    [Op.or]: [
-                        { land_value: { [Op.is]: null } },
-                        { land_value: { [Op.ne]: parsed.value } },
-                    ],
-                },
-                transaction: tx
-            }
-        );
-        count > 0 ? counters.updated += count : counters.skipped++;
-    }));
+        const igual = (alvo == null && atual == null) ||
+            (alvo != null && atual != null && Math.abs(alvo - atual) < 0.005);
+
+        if (alvo == null) counters.nulls++;
+        if (igual) { counters.skipped++; continue; }
+        desatualizados.set(num, alvo);
+    }
+
+    if (!desatualizados.size) return;
+
+    const pares = [...desatualizados.entries()];
+    const values = pares.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2}::numeric)`).join(',');
+    const binds = pares.flatMap(([num, val]) => [num, val]);
+
+    const [, meta] = await db.sequelize.query(
+        `UPDATE contracts c
+            SET land_value = v.val, land_updated_at = NOW()
+           FROM (VALUES ${values}) AS v(num, val)
+          WHERE c.number = v.num
+            AND c.enterprise_id = ${Number(enterpriseId)}
+            AND c.land_value IS DISTINCT FROM v.val`,
+        { bind: binds }
+    );
+    counters.updated += meta?.rowCount ?? 0;
 }
 
 export async function syncObstitToLandValue({ log = console.log } = {}) {
-    log('[OBSTIT] Iniciando sincronização...');
-    const numbers = await getDistinctContractNumbers();
-    log(`[OBSTIT] Contracts com number: ${numbers.length}`);
+    const ids = await getLandSyncEnterpriseIds();
+    const counters = { updated: 0, skipped: 0, nulls: 0, total: 0, failed: [] };
 
-    if (!numbers.length) {
-        return { updated: 0, skipped: 0, nulls: 0, total: 0 };
+    if (!ids.length) {
+        log('[OBSTIT] Nenhum empreendimento configurado; nada a fazer.');
+        return counters;
     }
 
-    // Busca externa + parsing por fatias para não estourar memória/conexões
-    const parsedMap = new Map();
-
-    for (let i = 0; i < numbers.length; i += 200) {
-        const slice = numbers.slice(i, i + 200);
-        const fetched = await fetchObstitByNumbers(slice);
-
-        for (const [num, texts] of fetched.entries()) {
-            const chosen = chooseLandValue(texts, { strictTR: true });
-            parsedMap.set(num, chosen);
-        }
-    }
-
-    const now = new Date();
-    const counters = { updated: 0, skipped: 0, nulls: 0, total: numbers.length };
-
-    for (let i = 0; i < numbers.length; i += BATCH) {
-        const slice = numbers.slice(i, i + BATCH);
-        const tx = await db.sequelize.transaction();
+    for (const enterpriseId of ids) {
+        let notesByDoc;
         try {
-            await updateBatch(slice, parsedMap, tx, now, counters);
-            await tx.commit();
-            log(`[OBSTIT] Batch ${i / BATCH + 1} ok (upd=${counters.updated}, skip=${counters.skipped}, nulls=${counters.nulls})`);
+            notesByDoc = await fetchObstitByCostCenter(enterpriseId);
         } catch (e) {
-            await tx.rollback();
-            log('[OBSTIT] Erro no batch', e);
+            // Falhou a leitura deste empreendimento: NÃO tocamos nos contratos
+            // dele. Melhor manter o terreno de ontem do que zerar por engano.
+            counters.failed.push(enterpriseId);
+            log(`[OBSTIT] CC ${enterpriseId}: consulta falhou (${e.response?.status ?? ''} ${e.message}). Contratos preservados.`);
+            continue;
+        }
+
+        const numbers = await getContractNumbersOf(enterpriseId);
+        if (!numbers.length) continue;
+        counters.total += numbers.length;
+
+        const parsedMap = new Map();
+        for (const num of numbers) {
+            parsedMap.set(num, chooseLandValue(notesByDoc.get(num) || [], { strictTR: true }));
+        }
+
+        try {
+            await applyForCostCenter(enterpriseId, parsedMap, counters);
+        } catch (e) {
+            counters.failed.push(enterpriseId);
+            log(`[OBSTIT] CC ${enterpriseId}: erro ao gravar (${e.message}).`);
         }
     }
 
-    log(`[OBSTIT] Concluído. Atualizados=${counters.updated}, Sem mudança=${counters.skipped}, Sem valor=${counters.nulls}.`);
+    log(`[OBSTIT] Concluído. Atualizados=${counters.updated}, Sem mudança=${counters.skipped}, Sem valor=${counters.nulls}` +
+        (counters.failed.length ? `, FALHARAM=${counters.failed.join(',')}` : ''));
     return counters;
 }
