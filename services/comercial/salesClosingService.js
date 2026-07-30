@@ -18,9 +18,9 @@ import { NotificationType } from '../notification/notificationTypes.js';
 
 const { SalesClosing, SalesClosingDivergence, User } = db;
 
-const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+export const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-function periodBounds(period) {
+export function periodBounds(period) {
     const [y, m] = period.split('-').map(Number);
     const start = `${period}-01`;
     const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); // último dia do mês
