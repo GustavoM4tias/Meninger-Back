@@ -1,8 +1,14 @@
 // src/services/external/obstitParse.js  (TR-only, dígitos apenas, sem multiplicadores)
 // AJUSTADO p/ ser mais tolerante entre TR e número e ampliar faixas
 
-// aceita TR colado e TR seguido de qualquer coisa não-numérica até encontrar dígitos
-const TR_TOKENS = /(?:\bTR\b|TR(?=[^0-9]*\d))/i;
+// Aceita TR (padrão) e TX. O "TX" aparece quando o título é lançado no Sienge
+// com a sigla trocada — é o mesmo terreno: conferido em 2026-07-30 contra os
+// vizinhos de quadra (mesmo valor, mesmo loteamento) e medido no universo
+// inteiro dos empreendimentos configurados, onde existiam 1.943 "TR" e apenas
+// 2 "TX", com valor médio equivalente. Nenhuma outra sigla ocorre nessas
+// observações, então ampliar para T[RX] não abre porta para taxa/juros.
+// Regra vale para a sigla colada ou seguida de lixo não-numérico antes do valor.
+const TR_TOKENS = /(?:\bT[RX]\b|T[RX](?=[^0-9]*\d))/i;
 
 function normalizeUnicode(text = '') {
   return String(text)
@@ -88,7 +94,7 @@ function extractAfterTR(line = '', nextLine = '', lookaheadChars = 64) {
   const out = [];
   if (!line || !TR_TOKENS.test(line)) return out;
 
-  const mTR = /TR/i.exec(line);
+  const mTR = /T[RX]/i.exec(line);
   const start = mTR ? (mTR.index + mTR[0].length) : -1;
   if (start < 0) return out;
 

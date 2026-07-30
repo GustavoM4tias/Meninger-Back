@@ -1,15 +1,16 @@
 // scheduler/landScheduler.js
 //
 // Sincroniza o TERRENO (observação do título) a partir da API do Sienge.
-// Roda de 5 em 5 minutos: a leitura por centro de custo custa ~19 requisições
-// (~4s) para os 14 empreendimentos configurados, contra um teto de 200 req/min
-// da API — cerca de 2% do orçamento, deixando folga para os demais syncs.
-// Ajuste por LAND_CRON_EXPRESSION.
+// Roda de 30 em 30 minutos: cada rodada custa ~19 requisições (~11s) para os
+// 14 empreendimentos configurados, contra um teto de 200 req/min da API. Nessa
+// cadência o terreno consome uma fração mínima do orçamento e sobra folga para
+// os demais syncs. Dá para apertar para */5 sem risco (~2% do limite) quando
+// quisermos atraso menor. Ajuste por LAND_CRON_EXPRESSION.
 import cron from 'node-cron';
 import LandDataController from '../controllers/external/landDataController.js';
 
 const ctl = new LandDataController();
-const CRON_EXPR = process.env.LAND_CRON_EXPRESSION || '*/5 * * * *';
+const CRON_EXPR = process.env.LAND_CRON_EXPRESSION || '*/30 * * * *';
 
 let running = false;
 
