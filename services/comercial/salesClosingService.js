@@ -278,7 +278,7 @@ export async function checkDivergences({ notify = true } = {}) {
                 title: 'Divergência em mês de vendas consolidado',
                 body: `${created.length} mudança(s) detectada(s) nos dados de ${byPeriod.join(', ')} após o fechamento. O consolidado NÃO foi alterado — revise e reconsolide se fizer sentido.`,
                 data: { periods: byPeriod, count: created.length },
-                link: '/comercial/fechamento',
+                link: '/comercial/faturamento',
                 importance: 8
             });
         } catch (err) {
