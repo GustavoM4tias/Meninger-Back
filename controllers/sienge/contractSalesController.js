@@ -56,7 +56,19 @@ export async function getContracts(req, res) {
     // época foi venda. A visão padrão (Emitido) inclui também os Cancelado;
     // o BETWEEN da data já garante que só entram os que têm
     // financial_institution_date. O selo visual de distrato fica no front.
+    //
+    // Exceção: compra e distrato no MESMO mês se anulam — não conta como venda
+    // nem como distrato (o mês não chegou a fechar com essa venda). Cancelado
+    // só entra quando o cancelamento foi em mês posterior ao da venda. A
+    // exceção não se aplica ao filtro explícito situation=Cancelado.
     const situations = sit === 'Emitido' ? ['Emitido', 'Cancelado'] : [sit]
+    const whereSameMonthCancelClause = sit === 'Emitido'
+      ? ` AND (
+      sc.situation <> 'Cancelado'
+      OR sc.cancellation_date IS NULL
+      OR date_trunc('month', sc.cancellation_date) > date_trunc('month', sc.financial_institution_date)
+    )`
+      : ''
 
     // filtro por nome de empreendimento (match exato, case-insensitive)
     let nameList = []
@@ -206,6 +218,7 @@ WITH base AS (
   FROM contracts sc
   WHERE sc.financial_institution_date BETWEEN :start AND :end
     AND sc.situation IN (:situations)
+    ${whereSameMonthCancelClause}
     -- Empreendimentos ocultos pelo admin somem para TODO mundo, e já no SQL:
     -- não adianta filtrar no cliente (o não-admin não enxerga a lista) nem
     -- faz sentido trafegar contrato que ninguém vai ver.
@@ -231,6 +244,7 @@ pivots AS (
     b.company_id::text AS company_id_str,
     b.financial_institution_date,
     b.situation,
+    b.cancellation_date,
 
     CASE
       WHEN b.land_value IS NULL THEN NULL
@@ -404,6 +418,7 @@ SELECT
   p.company_name AS company_name,
   p.financial_institution_date,
   p.situation,
+  p.cancellation_date,
   p.unit_name,
   p.unit_id,
   p.land_value,
