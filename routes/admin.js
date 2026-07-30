@@ -29,7 +29,8 @@ import {
 import {
   listHiddenEnterprises,
   addHiddenEnterprise,
-  removeHiddenEnterprise
+  removeHiddenEnterprise,
+  restoreHiddenEnterprises
 } from '../controllers/hiddenDashboardController.js';
 
 import {
@@ -145,6 +146,7 @@ router.post( '/land-sync-obstit/run', authMiddleware, requireAdmin, landDataCont
 router.get('/hidden-enterprises', authMiddleware, listHiddenEnterprises);
 router.post('/hidden-enterprises', authMiddleware, requireAdmin, addHiddenEnterprise);
 router.delete('/hidden-enterprises/:id', authMiddleware, requireAdmin, removeHiddenEnterprise);
+router.post('/hidden-enterprises/restore', authMiddleware, requireAdmin, restoreHiddenEnterprises);
 
 // Stage Commission Rules — GET: todos autenticados; POST/DELETE: admin only
 router.get('/stage-commission-rules', authMiddleware, listStageCommissionRules);
