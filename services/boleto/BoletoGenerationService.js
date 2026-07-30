@@ -368,6 +368,63 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             return;
         }
 
+        // ── 1.6. Ato JÁ PAGO? Pula tudo ───────────────────────────────────────
+        // A decisão de re-trigger (2c) só enxerga boleto `payment_status=pending`.
+        // Quando o ato já foi PAGO, ela não encontrava nada e o fluxo seguia como
+        // se fosse a primeira emissão — o webhook redisparado (lote do Sienge que
+        // volta a reserva pra "Envio Sienge") caía nas validações e virava ERRO
+        // (ex.: reserva 7345, "vencimento no passado" um mês após o pagamento),
+        // ou pior: emitia um SEGUNDO boleto pro mesmo ato já quitado, com risco
+        // de cobrança em duplicidade.
+        //
+        // Boleto pago é estado FINAL do ato: não se reemite, não se substitui.
+        // Skip controlado (`status='skipped'`, fora dos KPIs de erro), mensagem
+        // informativa no CV e SEM mexer na situação — a reserva segue o fluxo
+        // Sienge normalmente, como no ramo "ignorar" da decisão de re-trigger.
+        const atoPago = await db.BoletoHistory.findOne({
+            where: {
+                idreserva,
+                status: 'success',
+                payment_status: 'paid',
+                ignorado: false,
+                id: { [Op.ne]: history.id },
+            },
+            order: [['id', 'DESC']],
+        });
+        if (atoPago) {
+            const pagoEm = atoPago.paid_at ? formatDate(String(atoPago.paid_at).slice(0, 10)) : null;
+            console.log(`[BOLETO] Reserva ${idreserva}: ato JÁ PAGO (boleto #${atoPago.id}, Nosso Nº ${atoPago.nosso_numero}) — nenhum boleto novo será emitido.`);
+            const msg = [
+                'ℹ️ Boleto do ato já foi pago - nenhuma ação tomada.',
+                '',
+                'Recebemos um novo acionamento do fluxo de boleto, mas o ato desta reserva já está quitado:',
+                `  🔢 Nosso Número: ${atoPago.nosso_numero || '(não registrado)'}`,
+                `  💰 Valor: ${formatCurrency(atoPago.valor)}`,
+                pagoEm ? `  ✅ Pago em: ${pagoEm}` : null,
+                '',
+                'Nenhum boleto novo foi emitido, para evitar cobrança em duplicidade.',
+                'A reserva PERMANECE na situação atual - nenhuma mudança de etapa foi feita.',
+            ].filter(Boolean).join('\n');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+            await history.update({
+                status: 'skipped',
+                error_message: `Ato já pago (boleto #${atoPago.id}, Nosso Nº ${atoPago.nosso_numero || '-'}${pagoEm ? `, pago em ${pagoEm}` : ''}) - emissão ignorada pra evitar duplicidade.`,
+                substitui_id: atoPago.id,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                cv_mensagem_enviada: msgOk,
+                warnings: warnings.length ? warnings : null,
+            });
+            await EventLogger.log({
+                historyId: history.id, idreserva,
+                type: 'ignored_duplicate', severity: 'info',
+                message: `Acionamento ignorado - ato já pago pelo boleto #${atoPago.id} (Nosso Nº ${atoPago.nosso_numero || '-'}).`,
+                data: { paidHistoryId: atoPago.id, nossoNumero: atoPago.nosso_numero, paid_at: atoPago.paid_at, manual },
+            });
+            return;
+        }
+
         // ── 2. Localiza séries de entrada configuradas ────────────────────────
         // Flatten defensivo: tolera dados legados aninhados (ex.: [[[21,9]]]) que
         // possam ter ficado em produção antes do fix do setter.
