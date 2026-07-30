@@ -3,14 +3,15 @@
 // Preenche contracts.land_value (TERRENO) a partir da observação do título a
 // receber, lida AO VIVO na API do Sienge (ver landService.js).
 //
-// Trabalha POR CENTRO DE CUSTO (empreendimento), e não por lista solta de
-// números, por dois motivos:
-//   • é o único filtro que a API respeita — corta 30.742 títulos para ~2.489;
-//   • permite a proteção que importa: se a consulta de um empreendimento
-//     falhar, os contratos DELE ficam intocados. Zerar land_value por causa de
-//     uma falha de rede seria apagar dinheiro do VGV em silêncio.
+// Lê TODOS os títulos numa varredura (ver fetchAllObstit: filtrar por centro
+// de custo perdia o terreno rateado entre empreendimentos) e só então grava,
+// empreendimento a empreendimento.
+//
+// Proteção que não pode cair: se a leitura da API falhar, o job termina sem
+// tocar em nada. Zerar land_value por causa de uma falha de rede seria apagar
+// dinheiro do VGV em silêncio.
 import db from '../../../models/sequelize/index.js';
-import { fetchObstitByCostCenter } from './landService.js';
+import { fetchAllObstit } from './landService.js';
 import { chooseLandValue } from './obstitParse.js';
 
 async function getLandSyncEnterpriseIds() {
@@ -91,18 +92,18 @@ export async function syncObstitToLandValue({ log = console.log } = {}) {
         return counters;
     }
 
-    for (const enterpriseId of ids) {
-        let notesByDoc;
-        try {
-            notesByDoc = await fetchObstitByCostCenter(enterpriseId);
-        } catch (e) {
-            // Falhou a leitura deste empreendimento: NÃO tocamos nos contratos
-            // dele. Melhor manter o terreno de ontem do que zerar por engano.
-            counters.failed.push(enterpriseId);
-            log(`[OBSTIT] CC ${enterpriseId}: consulta falhou (${e.response?.status ?? ''} ${e.message}). Contratos preservados.`);
-            continue;
-        }
+    // Uma única leitura da API para todos os empreendimentos. Se falhar, o job
+    // termina aqui sem gravar nada — nunca zerar terreno por falha de leitura.
+    let notesByDoc;
+    try {
+        notesByDoc = await fetchAllObstit({ log });
+    } catch (e) {
+        log(`[OBSTIT] Leitura da API falhou (${e.response?.status ?? ''} ${e.message}). Nada foi alterado.`);
+        counters.failed.push(...ids);
+        return counters;
+    }
 
+    for (const enterpriseId of ids) {
         const numbers = await getContractNumbersOf(enterpriseId);
         if (!numbers.length) continue;
         counters.total += numbers.length;
