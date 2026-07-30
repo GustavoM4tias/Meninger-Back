@@ -52,6 +52,7 @@ import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
 import marketingApprovalRoutes from './routes/marketingApprovalRoutes.js';
 import salesStandRoutes from './routes/salesStandRoutes.js';
+import salesClosingRoutes from './routes/salesClosingRoutes.js';
 import metaAppRoutes from './routes/metaAppRoutes.js';
 import { campaignsOAuthCallback as metaCampaignsOAuthCallback } from './controllers/meta/metaAppConfigController.js';
 import alertRoutes from './routes/alertRoutes.js';
@@ -66,6 +67,7 @@ import { seedSalesStandModels } from './services/marketing/salesStandService.js'
 import seedChecklist from './services/checklist/seedChecklist.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
+import salesClosingScheduler from './scheduler/salesClosingScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
 import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
 import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
@@ -254,6 +256,7 @@ app.use('/api/alerts', alertRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/marketing-approvals', marketingApprovalRoutes);
 app.use('/api/sales-stands', salesStandRoutes);
+app.use('/api/sales-closings', salesClosingRoutes);
 app.use('/api/bolao', bolaoRoutes);
 app.use('/api/comunicados', comunicadoRoutes);
 app.use('/api/checklists', checklistRoutes);
@@ -536,6 +539,9 @@ async function startBackgroundServices() {
   // Crons opt-in (já eram OFF por padrão em qualquer ambiente):
   if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') contractValidatorScheduler.start();
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractSiengeScheduler.start();
+  // Vigilância dos meses consolidados acompanha o sync de contratos: se os
+  // contratos sincronizam, os fechamentos precisam ser conferidos.
+  if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') salesClosingScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCvScheduler.start();
   if (process.env.ENABLE_CV_REPASSE_SCHEDULE === 'true') repasseCvScheduler.start();
   if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') reservaCvScheduler.start();

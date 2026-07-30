@@ -57,6 +57,8 @@ import CvWorkflowGroupDefine from './cv/workflowGroup.js';
 
 import landSyncEnterpriseDefine from './landSyncEnterprise.js';
 import hiddenDashboardEnterpriseDefine from './hiddenDashboardEnterprise.js';
+import salesClosingDefine from './comercial/salesClosing.js';
+import salesClosingDivergenceDefine from './comercial/salesClosingDivergence.js';
 import stageCommissionRuleDefine from './stageCommissionRule.js';
 import enterpriseValueRuleDefine from './enterpriseValueRule.js';
 import enterpriseErpLinkDefine from './enterpriseErpLink.js';
@@ -308,6 +310,8 @@ db.CvWorkflowGroup = CvWorkflowGroupDefine(sequelize, DataTypes);
 
 db.LandSyncEnterprise = landSyncEnterpriseDefine(sequelize, DataTypes);
 db.HiddenDashboardEnterprise = hiddenDashboardEnterpriseDefine(sequelize, DataTypes);
+db.SalesClosing = salesClosingDefine(sequelize, DataTypes);
+db.SalesClosingDivergence = salesClosingDivergenceDefine(sequelize, DataTypes);
 db.StageCommissionRule = stageCommissionRuleDefine(sequelize, DataTypes);
 db.EnterpriseValueRule = enterpriseValueRuleDefine(sequelize, DataTypes);
 db.EnterpriseErpLink = enterpriseErpLinkDefine(sequelize, DataTypes);
