@@ -37,11 +37,25 @@ const TRACKED_FIELDS = [
     'enterprise_name',
     'company_id',
     'land_value',
-    'conditions_hash',
+    'conditions_fingerprint',
     'customer_id',
     'customer_name',
     'unit_name'
 ];
+
+// Fingerprint das condições de pagamento: soma de totalValue POR TIPO.
+// Nada além disso entra no VGV (contractTotals no front usa só total_value e o
+// tipo, para separar o Desconto Construtora). Um md5 do JSONB inteiro — como
+// era antes — mudava a cada parcela paga (amount_paid, outstanding_balance) e
+// gerava divergência com valor idêntico. Falso positivo puro.
+const CONDITIONS_FINGERPRINT_SQL = `
+    (SELECT string_agg(t || '=' || round(v, 2)::text, ';' ORDER BY t)
+     FROM (
+        SELECT UPPER(COALESCE(pc ->> 'conditionTypeId', '?')) AS t,
+               SUM(COALESCE(NULLIF(pc ->> 'totalValue', '')::numeric, 0)) AS v
+        FROM jsonb_array_elements(sc.payment_conditions) pc
+        GROUP BY 1
+     ) agg)`;
 
 // ── Fotografia dos insumos (server-side) ────────────────────────────────────
 export async function buildInputsSnapshot(period) {
@@ -59,7 +73,7 @@ export async function buildInputsSnapshot(period) {
             sc.enterprise_name,
             sc.company_id,
             sc.land_value::text                       AS land_value,
-            md5(COALESCE(sc.payment_conditions::text, '')) AS conditions_hash,
+            ${CONDITIONS_FINGERPRINT_SQL} AS conditions_fingerprint,
             COALESCE(
                 (SELECT NULLIF(c ->> 'id','')::bigint FROM jsonb_array_elements(sc.customers) c
                  WHERE (c ->> 'main')::boolean = true LIMIT 1),
@@ -224,8 +238,12 @@ export async function checkDivergences({ notify = true } = {}) {
                 });
                 continue;
             }
-            // Campo a campo
+            // Campo a campo. Campo ausente no snapshot armazenado = fechamento
+            // feito antes desse campo existir; comparar geraria uma divergência
+            // falsa por contrato. Ele passa a ser conferido na próxima
+            // consolidação, quando o snapshot já o contém.
             for (const f of TRACKED_FIELDS) {
+                if (!(f in (stored[id] || {}))) continue;
                 const oldV = stored[id]?.[f] ?? null;
                 const newV = current.contracts[id]?.[f] ?? null;
                 if (String(oldV ?? '') !== String(newV ?? '')) {
