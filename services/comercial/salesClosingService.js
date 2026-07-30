@@ -147,13 +147,20 @@ export async function consolidate({ period, lines, totals, notes, user }) {
 
     // Reconsolidação: versiona a anterior e resolve as divergências abertas
     // (o novo snapshot já reflete o estado atual).
-    const history = Array.isArray(existing.history) ? existing.history : [];
-    history.push({
-        version: existing.version,
-        consolidated_at: existing.consolidated_at,
-        consolidated_by_name: existing.consolidated_by_name,
-        totals: existing.totals
-    });
+    //
+    // ATENÇÃO: array NOVO, nunca push no `existing.history`. Mutar o array em
+    // memória e devolver a mesma referência faz o Sequelize concluir que o
+    // campo JSONB não mudou e o histórico é descartado em silêncio — foi assim
+    // que a v1 de jan/2026 se perdeu. O changed() é o cinto de segurança.
+    const history = [
+        ...(Array.isArray(existing.history) ? existing.history : []),
+        {
+            version: existing.version,
+            consolidated_at: existing.consolidated_at,
+            consolidated_by_name: existing.consolidated_by_name,
+            totals: existing.totals
+        }
+    ];
     existing.set({
         status: 'consolidado',
         version: existing.version + 1,
@@ -166,10 +173,14 @@ export async function consolidate({ period, lines, totals, notes, user }) {
         history,
         notes: notes || existing.notes
     });
+    existing.changed('history', true);
     await existing.save();
 
+    // 'reconsolidated' e não 'resolved_by_reconsolidation': a coluna é
+    // varchar(20) e o valor longo estourava (erro 22001) DEPOIS do save,
+    // deixando a operação meio-feita.
     await SalesClosingDivergence.update(
-        { status: 'resolved_by_reconsolidation', reviewed_at: new Date(), reviewed_by_id: user?.id ?? null },
+        { status: 'reconsolidated', reviewed_at: new Date(), reviewed_by_id: user?.id ?? null },
         { where: { closing_id: existing.id, status: 'open' } }
     );
 
