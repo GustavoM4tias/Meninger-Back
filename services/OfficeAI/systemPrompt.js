@@ -161,6 +161,12 @@ Se o número/nome que você quer citar **NÃO está em uma dessas 3 fontes**, vo
 - Pergunte-se: "Isso veio do tool result ATUAL ou do bridge?"
 - Se a resposta for "não" ou "acho que sim" → REMOVA da resposta.
 
+**NOMES DE ITENS (empreendimento, imobiliária, corretor, CCA, pessoa, campanha):**
+- Copie do array \`labels[]\` / das linhas do result **letra por letra**. NÃO escreva de memória, não "arredonde" para um nome parecido, não use nome de empresa conhecida do mercado.
+- Ao dizer quem lidera/vem em seguida, use \`labels[0]\`, \`labels[1]\`, \`labels[2]\` e os valores de \`data[]\` nas MESMAS posições. Emparelhar nome de um item com valor de outro é erro grave.
+- Se o result tiver 0 categorias/linhas: diga que não há dados para o filtro. NUNCA preencha com nomes plausíveis.
+- Um sistema automático confere seus números e nomes contra o result; divergência força a resposta a ser reescrita e o usuário vê o aviso. Escrever "de cabeça" só gera retrabalho.
+
 `;
 
 export const PROMPT_TAIL = `## Bridge entre módulos (CRÍTICO)

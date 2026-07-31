@@ -968,34 +968,92 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     sendSSE(res, { type: 'chunk', text: fallback });
   }
 
-  // ── VALIDAÇÃO ANTI-ALUCINAÇÃO ─────────────────────────────────────────────
+  // ── VALIDAÇÃO ANTI-ALUCINAÇÃO + AUTOCORREÇÃO ──────────────────────────────
   // Detecta números/labels no texto que NÃO existem no tool result do turn nem
-  // no bridge. Não bloqueia — emite warning visível ao usuário pra revisar.
-  const hallucinationReport = detectHallucinations(fullAssistantText, actionResult, lastBridge);
-  if (hallucinationReport.suspicious.length > 0) {
+  // no bridge. Quando detecta, tenta REESCREVER a resposta no mesmo turno com
+  // os dados reais em mãos (o usuário vê a correção acontecer, sem reperguntar).
+  // Só se o aviso persistir é que a resposta é marcada como não confiável.
+  let hallucinationReport = detectHallucinations(fullAssistantText, actionResult, lastBridge);
+  let selfCorrected = false;
+
+  if (hallucinationReport.suspicious.length > 0 && actionResult && chat) {
+    const authoritative = buildAuthoritativeBlock(actionResult);
+    if (authoritative) {
+      if (process.env.EME_DEBUG === 'true') {
+        console.warn('[Eme] Alucinação detectada — tentando autocorreção:',
+          hallucinationReport.suspicious.map(s => s.value).join(', '));
+      }
+      sendSSE(res, { type: 'status', stage: 'verifying', message: 'Conferindo os números com os dados consultados…' });
+      try {
+        const flagged = hallucinationReport.suspicious.map(s => s.value).join(', ');
+        const correctivePrompt =
+          `[CORREÇÃO AUTOMÁTICA — não é mensagem do usuário]\n` +
+          `Sua resposta anterior citou valores/nomes que NÃO existem no resultado da consulta: ${flagged}.\n\n` +
+          `DADOS REAIS E COMPLETOS DA CONSULTA (única fonte válida):\n${authoritative}\n\n` +
+          `Reescreva a resposta AGORA, do zero, obedecendo:\n` +
+          `- Use SOMENTE nomes e números que aparecem no bloco acima (nomes copiados LETRA POR LETRA).\n` +
+          `- Se o dado que você citou não existe ali, ele não existe: não o mencione.\n` +
+          `- Se não houver dados suficientes, diga isso claramente.\n` +
+          `- Responda direto, sem pedir desculpas e sem mencionar esta correção.\n` +
+          `- NÃO chame nenhuma ferramenta: escreva só o texto final.`;
+
+        const fixStream = (await chat.sendMessageStream([{ text: correctivePrompt }])).stream;
+        let fixedText = '';
+        for await (const fixChunk of fixStream) {
+          for (const p of fixChunk.candidates?.[0]?.content?.parts || []) {
+            if (p.text) fixedText += p.text;   // functionCall é ignorada de propósito
+          }
+        }
+        fixedText = stripPseudoToolCalls(fixedText).trim();
+
+        if (fixedText) {
+          const recheck = detectHallucinations(fixedText, actionResult, lastBridge);
+          // Só adota a reescrita se ela ficou melhor (menos suspeitas).
+          if (recheck.suspicious.length < hallucinationReport.suspicious.length) {
+            fullAssistantText = fixedText;
+            hallucinationReport = recheck;
+            selfCorrected = true;
+            sendSSE(res, { type: 'replace', text: fixedText });
+          }
+        }
+      } catch (fixErr) {
+        console.warn('[OfficeChatService] Falha na autocorreção:', fixErr?.status || fixErr?.message);
+      }
+    }
+  }
+
+  if (hallucinationReport.suspicious.length > 0 || selfCorrected) {
     const byKind = hallucinationReport.suspicious.reduce((acc, s) => {
       (acc[s.kind || 'number'] = acc[s.kind || 'number'] || []).push(s.value);
       return acc;
     }, {});
-    // Log só com EME_DEBUG=true — em operação normal isso dispara com frequência
-    // (inclusive falsos positivos) e polui o console; o aviso já vai ao usuário
-    // via SSE e fica persistido em metadata.warning / EmeInsights.
     if (process.env.EME_DEBUG === 'true') {
-      console.warn('[Eme] Possíveis alucinações:', byKind,
+      console.warn('[Eme] Resultado da validação:', { selfCorrected, byKind },
         '| message:', fullAssistantText.slice(0, 200));
     }
 
-    // Monta mensagem específica por tipo de problema
-    const parts = [];
-    if (byKind.number)         parts.push(`valores numéricos suspeitos (${byKind.number.join(', ')})`);
-    if (byKind.unknown_label)  parts.push(`nomes não encontrados nos dados (${byKind.unknown_label.join(', ')})`);
-    if (byKind.wrong_ranking)  parts.push(`possível inversão de ranking — ${byKind.wrong_ranking.join(', ')} não está no top 3`);
-    const message = parts.length
-      ? `A resposta mencionou ${parts.join('; ')}. Confira no gráfico/tabela abaixo.`
-      : `Alguns valores na resposta podem não corresponder à consulta. Confira no gráfico/tabela abaixo.`;
+    let kind, message;
+    if (!hallucinationReport.suspicious.length) {
+      // Reescreveu e ficou limpo — informa a correção, sem alarmar.
+      kind = 'corrected';
+      message = 'Refiz esta resposta: a primeira versão citava valores que não batiam com os dados consultados. Esta já usa os dados da consulta.';
+    } else {
+      // Ainda há divergência (corrigida parcialmente ou não corrigível).
+      kind = 'unreliable';
+      const parts = [];
+      if (byKind.number)        parts.push(`números (${byKind.number.join(', ')})`);
+      if (byKind.unknown_label) parts.push(`nomes (${byKind.unknown_label.join(', ')})`);
+      if (byKind.wrong_ranking) parts.push(`ordem de ranking (${byKind.wrong_ranking.join(', ')})`);
+      message =
+        `Esta resposta provavelmente está incorreta: ${parts.length ? parts.join(' e ') : 'alguns valores'} não constam nos dados consultados. ` +
+        `Desconsidere esses valores no texto e use o gráfico/tabela abaixo, que vem direto do banco. ` +
+        `Se preferir, refaça a pergunta de forma mais específica.`;
+    }
 
     sendSSE(res, {
       type: 'warning',
+      kind,
+      corrected: selfCorrected,
       message,
       details: hallucinationReport.suspicious,
     });
@@ -1038,6 +1096,71 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
 
 function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
+ * Monta um bloco textual com os dados AUTORITATIVOS do resultado da tool, para
+ * a reescrita automática quando a validação detecta números/nomes inventados.
+ * Formato de texto simples (pares label=valor) — mais difícil de o modelo
+ * ignorar do que JSON aninhado. Retorna '' quando não há o que citar.
+ */
+function buildAuthoritativeBlock(result) {
+  if (!result || typeof result !== 'object' || result.error) return '';
+  const lines = [];
+
+  if (result.title) lines.push(`Consulta: ${result.title}`);
+  if (result.subtitle) lines.push(`Filtros: ${result.subtitle}`);
+  if (result.total != null) lines.push(`Total: ${result.total}`);
+  if (result.metric_value != null) lines.push(`Métrica geral: ${result.metric_value}`);
+
+  if (Array.isArray(result.labels) && result.labels.length) {
+    const data = Array.isArray(result.data) ? result.data : [];
+    lines.push(`Itens (em ordem, do maior para o menor) — ${result.labels.length} no total:`);
+    result.labels.slice(0, 30).forEach((l, i) => {
+      lines.push(`  ${i + 1}. ${l} = ${data[i] ?? 'sem valor'}`);
+    });
+    if (result.labels.length > 30) lines.push(`  …(+${result.labels.length - 30} itens com valores menores)`);
+  }
+
+  if (Array.isArray(result.rows) && result.rows.length) {
+    lines.push(`Linhas (${result.rows.length}):`);
+    result.rows.slice(0, 25).forEach((r, i) => {
+      const pairs = Object.entries(r || {})
+        .filter(([, v]) => v != null && v !== '')
+        .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`)
+        .join(', ');
+      lines.push(`  ${i + 1}. ${pairs}`);
+    });
+    if (result.rows.length > 25) lines.push(`  …(+${result.rows.length - 25} linhas)`);
+  }
+
+  if (Array.isArray(result.campanhas) && result.campanhas.length) {
+    lines.push(`Campanhas (${result.campanhas.length}):`);
+    result.campanhas.slice(0, 25).forEach((c, i) => {
+      lines.push(`  ${i + 1}. ${c.empreendimento || '?'} — ${c.titulo || '?'}` +
+        `${c.valor != null ? ` | valor=${c.valor}` : ''}${c.periodo ? ` | ${c.periodo}` : ''}` +
+        `${c.descricao ? ` | descrição: ${String(c.descricao).slice(0, 200)}` : ''}`);
+    });
+  }
+
+  // KPIs escalares (precadastros_summary, reservas_summary, etc.)
+  const scalars = Object.entries(result).filter(([k, v]) =>
+    typeof v === 'number' && !['total', 'metric_value'].includes(k));
+  if (scalars.length) {
+    lines.push(`Indicadores: ${scalars.map(([k, v]) => `${k}=${v}`).join(', ')}`);
+  }
+
+  // Objetos aninhados relevantes (ficha, fonte, etc.) — compactados.
+  for (const k of ['fonte', 'ficha', 'selecao', 'mudancas']) {
+    if (result[k] != null && typeof result[k] === 'object') {
+      lines.push(`${k}: ${JSON.stringify(compactForModel(result[k], 0, { maxArray: 8, maxStr: 150, maxDepth: 3 }))}`);
+    } else if (typeof result[k] === 'string') {
+      lines.push(`${k}: ${result[k]}`);
+    }
+  }
+
+  const block = lines.join('\n');
+  return block.length > 6000 ? `${block.slice(0, 6000)}\n…(truncado)` : block;
 }
 
 /**
@@ -1145,13 +1268,21 @@ function detectHallucinations(text, actionResult, bridgeStr) {
     // Ignora: IDs muito longos (provável idlead/idreserva)
     if (num > 1_000_000) continue;
     // Janelas antes/depois para checagens contextuais
-    const after  = text.slice(m.index + raw.length, m.index + raw.length + 15);
-    const before = text.slice(Math.max(0, m.index - 5), m.index);
+    const after  = text.slice(m.index + raw.length, m.index + raw.length + 30);
+    const before = text.slice(Math.max(0, m.index - 30), m.index);
     // Ignora: percentuais (seguidos de %)
     if (/^\s*%/.test(after) && num <= 100) continue;
     // Ignora: dia/mês em data (14/05, 01–14/05, 14/05/2026)
     if (/[\/\-–]\s*$/.test(before)) continue;          // precedido por / - –
     if (/^[\/\-–]/.test(after))     continue;          // seguido por / - –
+    // Ignora: datas POR EXTENSO ("nos dias 30 e 31 de julho", "31 de julho").
+    // O período vem da pergunta do usuário, não do tool result — sem isto o
+    // dia do mês era acusado de valor inventado.
+    if (num >= 1 && num <= 31) {
+      const MESES = 'janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro';
+      if (new RegExp(`^\\s*(?:e\\s+\\d{1,2}\\s*)?(?:de\\s+)?(?:${MESES})\\b`, 'i').test(after)) continue;
+      if (new RegExp(`\\bdias?\\s+(?:\\d{1,2}\\s+(?:e|a|até)\\s+)?$`, 'i').test(before)) continue;
+    }
     // Ignora: "X horas", "X dias", etc.
     if (/^\s*(hor[a]?s?|min(uto)?s?|dias?|meses?|anos?|sem(ana)?s?)\b/i.test(after)) continue;
     // Ignora: "R$ 123" — valores monetários grandes (admin verifica via tabela)
@@ -1176,9 +1307,13 @@ function detectHallucinations(text, actionResult, bridgeStr) {
 
     // Quebra texto em sentenças e procura keywords de ranking dentro de cada
     const sentences = text.split(/(?<=[.!?])\s+|\n+/);
-    const RANK_KEYWORDS = /\b(?:l[íi]der|destaque|primeiro lugar|o maior|maior gerador|top\s*\d*|encabeç\w*|foi o que mais|que mais gerou|mais\s+(?:gerou|teve|registrou|contribuiu|trouxe|recebeu)|primeiro colocado)\b/i;
+    // Gatilhos de sentença "de ranking/atribuição". Além de líder/destaque,
+    // cobre as formas verbais que o modelo realmente usa ao listar itens
+    // ("A X lidera com 143", "seguida pela Y (14)", "aparece em seguida") —
+    // sem elas, nomes inventados passavam batido na checagem.
+    const RANK_KEYWORDS = /\b(?:l[íi]der\w*|lidera\w*|destaque|primeiro lugar|o maior|maior gerador|top\s*\d*|encabeç\w*|foi o que mais|que mais gerou|mais\s+(?:gerou|teve|registrou|contribuiu|trouxe|recebeu)|primeiro colocado|seguid[ao]\s+(?:por|pel[ao])|em seguida|no topo|aparece\s+(?:com|em)|vem\s+(?:depois|em seguida)|concentra|responde por|se destaca)\b/i;
 
-    const GENERIC = /^(leads?|reservas?|pastas?|cliente|cliente|usu[áa]rio|empreendimento|empresa|cidade|m[eê]s|m[eê]ses|per[íi]odo|sarandi|sinop|mar[íi]lia|cuiab[áa]|que|mais|outros?|destaque|l[íi]der|top|maior|menor|primeiro|segundo|terceiro|janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|painel|residencial)$/i;
+    const GENERIC = /^(leads?|reservas?|pastas?|cliente|cliente|usu[áa]rio|empreendimento|empresa|cidade|m[eê]s|m[eê]ses|per[íi]odo|sarandi|sinop|mar[íi]lia|cuiab[áa]|que|mais|outros?|destaque|l[íi]der|top|maior|menor|primeiro|segundo|terceiro|janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|painel|residencial|menin|office|eme|imobili[áa]ria|corretor|correspondente|total|aprovad[ao]s?|reprovad[ao]s?|documenta[çc][ãa]o|an[áa]lise|gr[áa]fico|tabela|claro|segue|desse|desta)$/i;
 
     for (const sentence of sentences) {
       if (!RANK_KEYWORDS.test(sentence)) continue;
@@ -1439,6 +1574,12 @@ function summarizeForGemini(result) {
 
   if (type === 'table') {
     summary.total = total ?? result.rows?.length ?? 0;
+    if (!result.rows?.length) {
+      summary.message =
+        `[POLÍTICA #0] A consulta retornou ZERO registros. Responda que não há dados para esse filtro/período ` +
+        `e ofereça ajustar a busca. PROIBIDO citar qualquer nome ou número — não existe nenhum dado neste resultado.`;
+      return summary;
+    }
     summary.message =
       `[POLÍTICA #0] Tabela com ${summary.total} registros JÁ ESTÁ na UI. ` +
       `Sua resposta = 1 frase curta de introdução. NADA além disso. ` +
@@ -1459,6 +1600,14 @@ function summarizeForGemini(result) {
     const dataArr = Array.isArray(result.data) ? result.data : [];
     const labelsArr = Array.isArray(result.labels) ? result.labels : [];
     const sumOfValues = dataArr.reduce((acc, v) => acc + (Number(v) || 0), 0);
+
+    if (!labelsArr.length) {
+      summary.total = 0;
+      summary.message =
+        `[POLÍTICA #0] A consulta retornou ZERO categorias. Responda que não há dados para esse filtro/período. ` +
+        `PROIBIDO citar qualquer nome ou número — não existe nenhum dado neste resultado.`;
+      return summary;
+    }
 
     // Top 3 com label + valor + posição. Para o modelo NUNCA inverter o ranking
     // (problema observado: AI citou últimas barras do chart como se fossem as maiores).
