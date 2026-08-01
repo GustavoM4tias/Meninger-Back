@@ -244,6 +244,11 @@ import ChecklistTaskApprovalDefine    from './checklist/checklistTaskApproval.js
 import RealEstateRegistrationDefine from './realestate/registration.js';
 import CvImobiliariaDefine from './cv/imobiliaria.js';
 
+// Correspondentes (CV): cadastro local de empresas + log de cadastros
+import CorrespondentCompanyDefine from './correspondent/company.js';
+import CorrespondentRegistrationDefine from './correspondent/registration.js';
+import CorrespondentInviteDefine from './correspondent/invite.js';
+
 const env = process.env.NODE_ENV || 'development';
 
 const cfg = config[env];
@@ -510,6 +515,11 @@ db.ChecklistTaskApproval    = ChecklistTaskApprovalDefine(sequelize, DataTypes);
 // Cadastro de imobiliárias (CV CRM)
 db.RealEstateRegistration = RealEstateRegistrationDefine(sequelize, DataTypes);
 db.CvImobiliaria = CvImobiliariaDefine(sequelize, DataTypes);
+
+// Correspondentes (CV CRM)
+db.CorrespondentCompany = CorrespondentCompanyDefine(sequelize, DataTypes);
+db.CorrespondentRegistration = CorrespondentRegistrationDefine(sequelize, DataTypes);
+db.CorrespondentInvite = CorrespondentInviteDefine(sequelize, DataTypes);
 
 // Se tiver associações, faça-as aqui:
 Object.values(db)

@@ -45,6 +45,7 @@ const PUBLIC_PREFIXES = [
     '/api/eme-atende/public',    // webhook/fluxo público do Eme Atende
     '/api/reports/public',       // relatórios compartilhados /r/<token> (token na URL)
     '/api/realestate/public',    // cadastro público de imobiliária (token na URL)
+    '/api/correspondents/public', // auto-cadastro de equipe correspondente (token na URL)
     '/api/boleto-caixa/webhook', // webhook do CV (Boleto Caixa)
     '/api/cancelamento-reservas/webhook', // webhook do CV (cancelamento de reservas)
     '/api/meta-app-oauth',       // callback OAuth Meta (state assinado no controller)
@@ -65,6 +66,7 @@ const DATA_PREFIXES = [
     '/api/projections', '/api/dept-spending', '/api/events',
     '/api/checklists', '/api/sales-stands', '/api/bucket-upload',
     '/api/realestate', '/api/ai', '/api/org',
+    '/api/correspondents',
 ];
 
 // ── Introspecção do router ───────────────────────────────────────────────────

@@ -46,6 +46,9 @@ import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
 import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
 import realEstateRoutes from './routes/realEstateRoutes.js';
 import realEstatePublicRoutes from './routes/realEstatePublicRoutes.js';
+import correspondentRoutes from './routes/correspondentRoutes.js';
+import correspondentPublicRoutes from './routes/correspondentPublicRoutes.js';
+import correspondentCvScheduler from './scheduler/correspondentCvScheduler.js';
 import emeReportsRoutes from './routes/emeReportsRoutes.js';
 import emeReportsPublicRoutes from './routes/emeReportsPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
@@ -199,6 +202,7 @@ app.use('/api/marketing/public', marketingPublicRoutes);
 // Cadastro de imobiliária via link público — mesmo padrão (CORS aberto +
 // parsers próprios + rate limit; segurança = token de convite de uso único).
 app.use('/api/realestate/public', realEstatePublicRoutes);
+app.use('/api/correspondents/public', correspondentPublicRoutes);
 
 // Link público de Relatórios da Eme — mesmo padrão (CORS aberto + rate limit;
 // segurança = token CSPRNG + vencimento obrigatório, 404 genérico, noindex).
@@ -236,6 +240,7 @@ app.use('/api/permissions', permissionRoutes);
 app.use('/api/org', orgRoutes); // rótulos do registro unificado (escopados por usuário)
 app.use('/api/report-exports', reportExportLogRoutes);   // trilha de exportações (GET = admin)
 app.use('/api/realestate', realEstateRoutes); // cadastro de imobiliárias (CV)
+app.use('/api/correspondents', correspondentRoutes); // correspondentes (CV)
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/api/cancelamento-reservas', reservaCancelRoutes);
@@ -580,6 +585,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_CONTRACT_APPROVAL')) contractApprovalScheduler.start();
   if (schedulerOn('ENABLE_SUPABASE_KEEPALIVE')) supabaseKeepAliveScheduler.start();
   if (schedulerOn('ENABLE_CV_EXTRAS_SCHEDULE')) cvExtrasScheduler.start(); // extras do CV
+  if (schedulerOn('ENABLE_CV_CORRESPONDENT_SCHEDULE')) correspondentCvScheduler.start(); // espelho de correspondentes + empresas
   if (schedulerOn('ENABLE_CONDITION_AUTOGEN')) conditionAutoGenerateScheduler.start(); // auto-geração mensal de fichas (com e sem CV)
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase
   if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
