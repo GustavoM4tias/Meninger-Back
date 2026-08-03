@@ -27,7 +27,14 @@ Tons ("tone"): "neutral" | "accent" | "success" | "warning" | "danger" | "info".
 - comparison — comparativo lado a lado (2 lados).
   props: { title, sides: [{ label, value, format, caption }], verdict: { text, tone } }
 - chart-bar / chart-line — gráfico de barras/linha.
-  props: { title, subtitle, labels: [string], series: [{ name, data: [number] }], format, stacked, horizontal, goal, caption }
+  props: { title, subtitle, labels: [string], series: [{ name, data: [number], tone }], format, stacked, horizontal, goal, caption }
+  COR COM INTENÇÃO: cada série aceita "tone" ("success" verde | "warning" âmbar |
+  "danger" vermelho | "info" azul | "neutral" cinza). Sem tone, a série usa a cor
+  do tema (serve só para distinguir séries entre si). Use tone quando a cor
+  significar algo — bom x ruim, dentro x fora do prazo, meta batida x furada.
+  Para colorir FAIXAS de um mesmo eixo (ex.: antes do vencimento verde, depois
+  vermelho), quebre em uma série por faixa com "stacked": true e zeros fora da
+  faixa: cada categoria aparece com a cor certa e o tooltip omite os zeros.
 - chart-donut — composição/participação.
   props: { title, subtitle, labels, series: [{ name, data }], format, caption }
 - chart-funnel — funil etapa por etapa com taxas de conversão (peça central de relatórios comerciais).

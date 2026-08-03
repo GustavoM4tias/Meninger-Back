@@ -443,12 +443,20 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
             }
             // Guarda os registros brutos para o report_analyze_data cruzar depois
             putRaw(report.id, name, extractRows(result));
-            // Snapshot dos dados usados (auditoria + botão "Atualizar dados")
-            const snapshot = report.dataSnapshot || { calls: [] };
-            snapshot.calls = [
-              ...(snapshot.calls || []).slice(-30),
-              { tool: name, label, args: args || {}, at: new Date().toISOString() },
-            ];
+            // Snapshot dos dados usados (auditoria + base do refresh do modo live).
+            // O objeto precisa ser NOVO: mutar `report.dataSnapshot` no lugar faz
+            // o Sequelize comparar a referência consigo mesma, concluir que nada
+            // mudou e PULAR a coluna silenciosamente. Era o que acontecia — só a
+            // primeira consulta de cada relatório ficava registrada (quando o
+            // campo ainda era null), e todas as seguintes se perdiam.
+            const anteriores = Array.isArray(report.dataSnapshot?.calls) ? report.dataSnapshot.calls : [];
+            const snapshot = {
+              ...(report.dataSnapshot || {}),
+              calls: [
+                ...anteriores.slice(-30),
+                { tool: name, label, args: args || {}, at: new Date().toISOString() },
+              ],
+            };
             await report.update({ dataSnapshot: snapshot, refreshedAt: new Date() });
           } else {
             result = { error: `Ferramenta não permitida no modo relatório: ${name}` };
