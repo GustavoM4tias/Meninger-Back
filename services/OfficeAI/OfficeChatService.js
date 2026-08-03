@@ -668,6 +668,39 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     }
   };
 
+  // Execução de uma tool (roteamento + audit), extraída do loop do stream para
+  // ser reaproveitada pela recuperação de pseudo-tool-call (ver mais abaixo).
+  //  - Tool do registry (academy_*) → SecureRunner (permissão + audit) em
+  //    QUALQUER contexto: no Office a Eme também responde processos do Academy.
+  //  - Demais (Marketing/Comercial/Alert do Map) → executeTool histórico, com
+  //    enforcement de alçada aqui também (fonte da verdade = user_permissions,
+  //    nunca o Gemini: tool alucinada na declaração é negada na execução).
+  const runToolCall = async (name, args, toolStart) => {
+    if (findTool(name)) {
+      return runSecureTool({
+        user: fullUser,
+        toolName: name,
+        args: args || {},
+        context: ctx,
+        sessionId: session.id,
+        ip: req?.ip || null,
+        userAgent: req?.headers?.['user-agent'] || null,
+      });
+    }
+    const allowed = await legacyToolAllowed(fullUser, name);
+    const toolResult = allowed
+      ? await executeTool(name, args, fullUser)
+      : { error: 'Sem alçada: o usuário não tem permissão para consultar estes dados.' };
+    auditOfficeTool({
+      user: fullUser, sessionId: session.id, toolName: name,
+      args: args || {}, result: toolResult, ms: Date.now() - toolStart,
+      context: isAcademy ? 'ACADEMY' : 'OFFICE',
+      permissionGranted: allowed,
+      ip: req?.ip || null, userAgent: req?.headers?.['user-agent'] || null,
+    });
+    return toolResult;
+  };
+
   // Seleciona pool com base na complexidade da pergunta (fast por padrão, smart se necessário).
   // ACADEMY: força 'smart' (Gemini Pro) — segue muito melhor a regra de só
   // responder com dados vindos de ferramenta, evitando o tutor alucinar conteúdo.
@@ -796,43 +829,8 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           // "..." mudo (que ficava até 1 min sem sinal em cadeias longas).
           sendSSE(res, { type: 'tool_start', name, label: toolLabel(name), step: toolStep });
 
-          // Roteamento da tool:
-          //  - ACADEMY + tool do registry (academy_*) → SecureRunner (permissão + audit).
-          //  - ACADEMY + tool do Office (interno pediu dado operacional) → executeTool
-          //    do Office (que se protege por city/role) + audit marcado ACADEMY.
-          //  - OFFICE → caminho histórico — executeTool + audit (E4). Zero regressão.
-          let toolResult;
-          // Tools do registry (academy_*) → SecureRunner em QUALQUER contexto
-          // (no Office a Eme também responde processos do Academy). Demais
-          // (Marketing/Comercial/Alert do Map) → executeTool histórico.
-          if (findTool(name)) {
-            toolResult = await runSecureTool({
-              user: fullUser,
-              toolName: name,
-              args: args || {},
-              context: ctx,
-              sessionId: session.id,
-              ip: req?.ip || null,
-              userAgent: req?.headers?.['user-agent'] || null,
-            });
-          } else {
-            // Enforcement de alçada TAMBÉM na execução: mesmo que o modelo
-            // alucine uma tool que não recebeu na declaração, a chamada é
-            // negada aqui (fonte da verdade = user_permissions, nunca o Gemini).
-            const allowed = await legacyToolAllowed(fullUser, name);
-            if (!allowed) {
-              toolResult = { error: 'Sem alçada: o usuário não tem permissão para consultar estes dados.' };
-            } else {
-              toolResult = await executeTool(name, args, fullUser);
-            }
-            auditOfficeTool({
-              user: fullUser, sessionId: session.id, toolName: name,
-              args: args || {}, result: toolResult, ms: Date.now() - toolStart,
-              context: isAcademy ? 'ACADEMY' : 'OFFICE',
-              permissionGranted: allowed,
-              ip: req?.ip || null, userAgent: req?.headers?.['user-agent'] || null,
-            });
-          }
+          // Roteamento da tool (ACADEMY e OFFICE) — ver runToolCall acima.
+          const toolResult = await runToolCall(name, args, toolStart);
 
           toolCalls.push({
             name,
@@ -935,6 +933,117 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   if (tail) {
     fullAssistantText += tail;
     sendSSE(res, { type: 'chunk', text: tail });
+  }
+
+  // ── BLINDAGEM: pseudo-tool-call escrita em TEXTO ──────────────────────────
+  // O flash às vezes NARRA a consulta ("chamando a função academy_kb_search com
+  // query: ...") em vez de emitir a function call de verdade — às vezes até
+  // trocando de idioma no meio da frase. Como nenhuma functionCall chega, o
+  // `clear` do loop não dispara e a narração vira a resposta inteira: a Eme
+  // dizia que ia consultar e não consultava nada.
+  //
+  // 1) Recuperação: refaz o turno com toolConfig ANY (o modelo fica PROIBIDO de
+  //    responder sem chamar tool), executa a tool e escreve o texto final a
+  //    partir do resultado real — mesmo remédio que o Academy já usa de forma
+  //    preventiva.
+  // 2) Se não der para recuperar, o vazamento nunca é entregue como resposta:
+  //    vira uma mensagem honesta de falha (blindagem final, mais abaixo).
+  const declaredToolNames = new Set((activeDeclarations || []).map(d => d?.name).filter(Boolean));
+  if (!toolCalls.length && findLeakedToolName(fullAssistantText, declaredToolNames)) {
+    const leaked = findLeakedToolName(fullAssistantText, declaredToolNames);
+    console.warn(`[OfficeChatService] Pseudo-tool-call em texto ("${leaked}") no modelo ${geminiModel}; refazendo com toolConfig ANY.`);
+    sendSSE(res, { type: 'status', stage: 'retrying', message: 'Refazendo a consulta…' });
+    try {
+      const forcedChat = getGeminiClient()
+        .getGenerativeModel({
+          model: geminiModel,
+          systemInstruction: systemPrompt,
+          tools: [{ functionDeclarations: activeDeclarations }],
+          toolConfig: { functionCallingConfig: { mode: 'ANY' } },
+        })
+        .startChat({ history: historyWithoutLast });
+      const forced = await forcedChat.sendMessage(userMessage);
+      const forcedCall = (forced?.response?.candidates?.[0]?.content?.parts || [])
+        .find(p => p.functionCall)?.functionCall;
+
+      if (forcedCall && declaredToolNames.has(forcedCall.name)) {
+        const name = forcedCall.name;
+        const args = forcedCall.args || {};
+        // Some a narração da tela — a resposta de verdade vem do dado real.
+        fullAssistantText = '';
+        sendSSE(res, { type: 'clear' });
+
+        const toolStart = Date.now();
+        sendSSE(res, { type: 'tool_start', name, label: toolLabel(name), step: 1 });
+        const toolResult = await runToolCall(name, args, toolStart);
+        toolCalls.push({
+          name,
+          args,
+          result_summary: summarizeForFeedback(toolResult),
+          error: toolResult?.error || null,
+          ms: Date.now() - toolStart,
+          recovered_from_text: true,
+        });
+        sendSSE(res, {
+          type: 'tool_result',
+          name,
+          label: toolLabel(name),
+          ok: !toolResult?.error,
+          ms: Date.now() - toolStart,
+        });
+        actionResult = toolResult;
+        if (toolResult && !toolResult.error && toolResult.type) actionTypesSeen.push(toolResult.type);
+        sendSSE(res, { type: 'action', action: toolResult });
+
+        // Texto final em modo NONE: obrigado a escrever a partir do resultado,
+        // sem chance de narrar outra chamada.
+        const followChat = getGeminiClient()
+          .getGenerativeModel({
+            model: geminiModel,
+            systemInstruction: systemPrompt,
+            tools: [{ functionDeclarations: activeDeclarations }],
+            toolConfig: { functionCallingConfig: { mode: 'NONE' } },
+          })
+          .startChat({
+            history: [
+              ...historyWithoutLast,
+              { role: 'user', parts: [{ text: userMessage }] },
+              { role: 'model', parts: [{ functionCall: { name, args } }] },
+            ],
+          });
+        const followStream = (await followChat.sendMessageStream([
+          { functionResponse: { name, response: summarizeForGemini(toolResult) } },
+        ])).stream;
+        for await (const followChunk of followStream) {
+          const followCandidate = followChunk.candidates?.[0];
+          if (followCandidate?.finishReason) lastFinishReason = followCandidate.finishReason;
+          for (const followPart of followCandidate?.content?.parts || []) {
+            if (followPart.text) emitTextChunk(followPart.text);
+          }
+        }
+        const recoveredTail = bridgeFilter.flush();
+        if (recoveredTail) {
+          fullAssistantText += recoveredTail;
+          sendSSE(res, { type: 'chunk', text: recoveredTail });
+        }
+      } else {
+        console.warn('[OfficeChatService] Retry com ANY não devolveu function call válida.');
+      }
+    } catch (retryErr) {
+      console.warn('[OfficeChatService] Falha ao refazer o turno com ANY:', retryErr?.status || retryErr?.message);
+    }
+  }
+
+  // Blindagem final: sobrou nome de tool cru no texto e nenhuma tool rodou no
+  // turno → é vazamento, não resposta. Entrega uma mensagem honesta em vez de
+  // deixar o usuário achar que a consulta foi feita.
+  if (!toolCalls.length) {
+    const stillLeaked = findLeakedToolName(fullAssistantText, declaredToolNames);
+    if (stillLeaked) {
+      console.warn(`[OfficeChatService] Pseudo-tool-call persistente ("${stillLeaked}") — substituindo por mensagem de falha.`);
+      fullAssistantText = 'Tentei consultar os dados para te responder, mas a consulta não chegou a rodar. Pode repetir a pergunta, de preferência com mais detalhe (o que exatamente você quer saber)?';
+      sendSSE(res, { type: 'replace', text: fullAssistantText });
+    }
   }
 
   // Pós-filtro: remove pseudo-tool-calls (ex: "call:query_X{...}" ou "query_X({...})")
@@ -1397,6 +1506,28 @@ function stripPseudoToolCalls(text) {
   // Limpa múltiplas linhas em branco consecutivas
   out = out.replace(/\n{3,}/g, '\n\n').trim();
   return out;
+}
+
+/**
+ * Detecta "pseudo-tool-call" em prosa: o modelo escreveu o NOME CRU de uma
+ * ferramenta declarada no meio do texto (ex.: "chamando a função
+ * academy_kb_search com query: ..."), em vez de emitir a function call.
+ *
+ * Só nomes com underscore e >= 6 chars entram na varredura — evita casar com
+ * eventual tool de nome genérico que também seria palavra comum em português.
+ * O chamador exige, além disso, que NENHUMA tool tenha rodado no turno: quando
+ * a consulta aconteceu de fato, citar o nome é no máximo deselegante, não erro.
+ *
+ * @returns {string|null} nome da tool vazada, ou null.
+ */
+function findLeakedToolName(text, toolNames) {
+  if (!text || !toolNames || !toolNames.size) return null;
+  for (const name of toolNames) {
+    if (typeof name !== 'string' || name.length < 6 || !name.includes('_')) continue;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(^|[^\\w])${escaped}([^\\w]|$)`).test(text)) return name;
+  }
+  return null;
 }
 
 /**
