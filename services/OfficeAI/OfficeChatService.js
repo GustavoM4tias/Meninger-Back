@@ -718,6 +718,15 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   let chat = null;
   let streamIterator = null;
   let firstChunk = null;
+  // Chat que a autocorreção anti-alucinação deve continuar. No Office o
+  // follow-up roda no PRÓPRIO `chat`, que já tem o resultado da tool — por isso
+  // o default é null (cai em `chat`). Quando o follow-up acontece num chat
+  // SEPARADO (Academy, e a recuperação de pseudo-tool-call), é esse chat que
+  // conhece a tool e o texto final: corrigir no `chat` original seria pedir uma
+  // reescrita a quem nunca viu a consulta. Bônus: esses chats estão em
+  // toolConfig NONE, então a reescrita sai em TEXTO, como o prompt corretivo
+  // exige (no `chat` do Academy, em modo ANY, ela voltaria vazia).
+  let correctionChat = null;
   // Teto opcional de tokens de saída (inclui thinking nos modelos 2.5 — por isso
   // não há default hardcoded; valor baixo truncaria respostas do pool smart).
   const maxOut = Number(process.env.EME_MAX_OUTPUT_TOKENS);
@@ -879,6 +888,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
               followStream = (await followChat.sendMessageStream([
                 { functionResponse: { name, response: summarizeForGemini(toolResult) } },
               ])).stream;
+              correctionChat = followChat; // é este que tem a tool + o texto final
             } else {
               followStream = (await chat.sendMessageStream([
                 { functionResponse: { name, response: summarizeForGemini(toolResult) } },
@@ -1014,6 +1024,9 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         const followStream = (await followChat.sendMessageStream([
           { functionResponse: { name, response: summarizeForGemini(toolResult) } },
         ])).stream;
+        // A validação anti-alucinação corrige a partir DESTE chat: só ele viu a
+        // tool recuperada e o resultado real.
+        correctionChat = followChat;
         for await (const followChunk of followStream) {
           const followCandidate = followChunk.candidates?.[0];
           if (followCandidate?.finishReason) lastFinishReason = followCandidate.finishReason;
@@ -1088,7 +1101,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   let hallucinationReport = detectHallucinations(fullAssistantText, actionResult, lastBridge);
   let selfCorrected = false;
 
-  if (hallucinationReport.suspicious.length > 0 && actionResult && chat) {
+  if (hallucinationReport.suspicious.length > 0 && actionResult && (correctionChat || chat)) {
     const authoritative = buildAuthoritativeBlock(actionResult);
     if (authoritative) {
       if (process.env.EME_DEBUG === 'true') {
@@ -1109,7 +1122,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           `- Responda direto, sem pedir desculpas e sem mencionar esta correção.\n` +
           `- NÃO chame nenhuma ferramenta: escreva só o texto final.`;
 
-        const fixStream = (await chat.sendMessageStream([{ text: correctivePrompt }])).stream;
+        const fixStream = (await (correctionChat || chat).sendMessageStream([{ text: correctivePrompt }])).stream;
         let fixedText = '';
         for await (const fixChunk of fixStream) {
           for (const p of fixChunk.candidates?.[0]?.content?.parts || []) {
