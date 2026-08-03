@@ -10,6 +10,9 @@ import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingEx
 import { TOOL_DECLARATIONS as COMERCIAL_DECLARATIONS, executeTool as comercialExecuteTool } from './ComercialTools.js';
 import { TOOL_DECLARATIONS as ALERT_DECLARATIONS,     executeTool as alertExecuteTool }     from './AlertTools.js';
 import { TOOL_DECLARATIONS as CONDITION_DECLARATIONS, executeTool as conditionExecuteTool } from './ConditionTools.js';
+// Plano de Eventos: tools no padrão novo (registerTool no próprio módulo).
+// O import existe só para o side-effect do registro no ToolRegistry.
+import './EventPlanTools.js';
 // Dual-context (E3): tools do Academy + runner seguro.
 // O import de AcademyTools dispara o auto-registro das tools no ToolRegistry.
 import './AcademyTools.js';
@@ -1595,6 +1598,25 @@ function summarizeForGemini(result) {
         summary.rows_omitidas = `${result.rows.length - cap} linhas omitidas por tamanho (todas visíveis na tabela da UI). ` +
           `Se a resposta depende delas, refaça a consulta com filtro mais específico — NÃO deduza.`;
       }
+    }
+    // Campos AGREGADOS que a tool anexou (resumo, período, análises) também
+    // precisam chegar ao modelo. Antes o summary levava só as linhas visíveis:
+    // uma tool que calculava totais sobre 2000 registros e os punha em `resumo`
+    // via esse campo ser descartado aqui, e o modelo respondia "quantos ao
+    // todo?" contando as ~20 linhas da UI. Só as chaves de RENDERIZAÇÃO são
+    // puladas — o resto passa compactado.
+    const RENDER_KEYS = new Set(['type', 'title', 'subtitle', 'columns', 'rows', 'total', 'message', 'context']);
+    for (const [k, v] of Object.entries(result)) {
+      if (RENDER_KEYS.has(k)) continue;
+      summary[k] = compactForModel(v, 0, { maxArray: 60, maxStr: 600, maxDepth: 5 });
+    }
+    if (JSON.stringify(summary).length > 15000) {
+      for (const [k, v] of Object.entries(result)) {
+        if (RENDER_KEYS.has(k)) continue;
+        summary[k] = compactForModel(v, 0, { maxArray: 15, maxStr: 200, maxDepth: 3 });
+      }
+      summary.aviso_dados = 'Parte dos agregados foi reduzida por tamanho. Se a resposta depende de algo ausente, ' +
+        're-consulte com filtro mais específico — NUNCA deduza.';
     }
   } else if (type === 'chart') {
     const dataArr = Array.isArray(result.data) ? result.data : [];
