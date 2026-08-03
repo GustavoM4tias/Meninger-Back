@@ -17,6 +17,7 @@ import {
   dismissForUser, undismissForUser, listOrphans, transferOwnership,
 } from '../services/emeReports/ReportService.js';
 import { streamReportChat } from '../services/emeReports/ReportChatService.js';
+import { rerunSnapshotCalls, buildRefreshMessage } from '../services/emeReports/ReportRefreshService.js';
 import {
   listMemories, remember, updateMemory, deleteMemory,
 } from '../services/emeReports/ReportMemoryService.js';
@@ -251,6 +252,56 @@ router.post('/:id/chat', requireAdmin, rateLimitChat, async (req, res) => {
   } catch (err) {
     console.error('[emeReports] chat:', err);
     try { res.write(`data: ${JSON.stringify({ type: 'error', message: 'Erro inesperado.' })}\n\n`); } catch { /* conexão fechada */ }
+  } finally {
+    clearInterval(heartbeat);
+    res.end();
+  }
+});
+
+// ── Refresh do modo AO VIVO (SSE) ────────────────────────────────────────────
+// Reexecuta as consultas registradas com a janela reprojetada até hoje e pede
+// à Eme para reescrever os números mantendo a estrutura. Usa o mesmo canal SSE
+// do chat, então o front reaproveita o handler de eventos e o preview reage.
+router.post('/:id/refresh', requireAdmin, rateLimitChat, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  if (report.dataMode !== 'live') {
+    return res.status(400).json({ error: 'Relatório com dados congelados (modo fixo). Mude para "ao vivo" para atualizar.' });
+  }
+
+  // A reexecução roda ANTES do stream: se não houver o que atualizar, a
+  // resposta é um erro HTTP limpo em vez de um SSE que abre e morre.
+  const rerun = await rerunSnapshotCalls(report, req.user);
+  if (!rerun.ok) {
+    return res.status(400).json({
+      error: rerun.motivo || 'Não foi possível reexecutar as consultas deste relatório.',
+      erros: rerun.erros,
+    });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
+  req.on('close', () => clearInterval(heartbeat));
+
+  try {
+    await streamReportChat({
+      req, res,
+      user: req.user,
+      report,
+      userMessage: buildRefreshMessage({
+        calls: rerun.calls,
+        erros: rerun.erros,
+        periodStart: report.periodStart,
+      }),
+    });
+  } catch (err) {
+    console.error('[emeReports] refresh:', err);
+    try { res.write(`data: ${JSON.stringify({ type: 'error', message: 'Erro inesperado ao atualizar.' })}\n\n`); } catch { /* conexão fechada */ }
   } finally {
     clearInterval(heartbeat);
     res.end();
