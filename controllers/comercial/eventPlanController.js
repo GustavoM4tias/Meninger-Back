@@ -732,6 +732,27 @@ export const closePlan = async (req, res) => {
 
 // ── Configuração (admin) ─────────────────────────────────────────────────────
 
+/**
+ * O que a TELA do gestor precisa das settings para montar o formulário:
+ * categorias de item e a janela de prioridade. Nada de etapas, perfis ou
+ * cobrança - isso é configuração e continua admin-only em /settings.
+ *
+ * Existe separado porque /settings é admin: sem isto, o gestor abria o item com
+ * o select de Categoria vazio e sem explicação.
+ */
+export const getFormOptions = async (req, res) => {
+    try {
+        const settings = await svc.getSettings();
+        res.json({
+            item_categories: (settings.item_categories || []).filter(c => c.active !== false),
+            priority_window_days: settings.priority_window_days,
+        });
+    } catch (e) {
+        console.error('[eventPlan] getFormOptions', e?.message);
+        res.status(500).json({ error: 'Falha ao carregar as opções do formulário.' });
+    }
+};
+
 export const getSettings = async (req, res) => {
     try {
         if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores.' });

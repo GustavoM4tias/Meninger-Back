@@ -35,6 +35,10 @@ router.get(
 // dentro do controller, sempre fail-closed.
 router.use(requireRoutePermission(['/comercial/plano-eventos']));
 
+// Opções do formulário (categorias de item, janela de prioridade). Quem tem a
+// tela precisa disso para cadastrar; a configuração em si segue admin-only.
+router.get('/form-options', ctrl.getFormOptions);
+
 // Consolidado do mês (agenda unificada + lista de compras agrupada)
 router.get('/consolidated', ctrl.getConsolidated);
 
