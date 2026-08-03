@@ -17,15 +17,20 @@ import {
   executeTool as officeExecuteTool,
   TOOL_DECLARATIONS as OFFICE_TOOL_DECLARATIONS,
 } from '../OfficeAI/OfficeChatService.js';
+import { findTool, toGeminiDeclarations } from '../OfficeAI/ToolRegistry.js';
+import { runTool as runSecureTool } from '../OfficeAI/SecureRunner.js';
 import { buildReportSystemPrompt } from './reportPrompt.js';
 import { normalizeSpec } from './ReportService.js';
 import { buildMemoryPrompt, remember } from './ReportMemoryService.js';
 
 // Tools de DADOS liberadas no modo relatório (subset das tools do Office chat).
+// Tools de dados liberadas no modo Relatório. O chat do relatório é
+// admin-only (requireAdmin na rota), então tools adminOnly podem entrar aqui.
 const DATA_TOOL_NAMES = [
   'query_leads', 'query_enterprises', 'get_enterprise_detail',
   'query_precadastros', 'query_reservas', 'query_mcmv',
   'query_condition_sheets', 'get_condition_sheet',
+  'query_boletos',
 ];
 const DATA_TOOL_LABELS = {
   query_leads: 'Leads de marketing',
@@ -36,6 +41,7 @@ const DATA_TOOL_LABELS = {
   query_mcmv: 'Teto MCMV',
   query_condition_sheets: 'Fichas comerciais',
   get_condition_sheet: 'Ficha comercial',
+  query_boletos: 'Boletos Caixa (ato)',
 };
 
 // Tool de montagem/edição do relatório.
@@ -293,7 +299,20 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
   const memoryPrompt = await buildMemoryPrompt(user.id).catch(() => '');
   const systemPrompt = buildReportSystemPrompt({ user, report, selectedBlocks }) + memoryPrompt;
 
-  const dataDeclarations = OFFICE_TOOL_DECLARATIONS.filter((d) => DATA_TOOL_NAMES.includes(d.name));
+  // Declarações das tools de dados. Duas fontes, porque o Office tem dois
+  // registros: o mapa LEGADO (Marketing/Comercial/Alert/Condition) e o
+  // ToolRegistry (tools novas, ex.: query_boletos). Antes só o legado entrava
+  // aqui, então nenhuma tool do registry era declarada nem executada no modo
+  // relatório — e se o usuário pedisse uma pelo nome, o modelo chamava mesmo
+  // sem declaração e recebia "Ferramenta desconhecida".
+  const registryTools = DATA_TOOL_NAMES.map((n) => findTool(n)).filter(Boolean);
+  const legacyDeclarations = OFFICE_TOOL_DECLARATIONS.filter((d) => DATA_TOOL_NAMES.includes(d.name));
+  const dataDeclarations = [
+    ...legacyDeclarations,
+    ...toGeminiDeclarations(registryTools).filter(
+      (d) => !legacyDeclarations.some((l) => l.name === d.name),
+    ),
+  ];
   const declarations = [
     ...dataDeclarations,
     REPORT_ANALYZE_DECLARATION,
@@ -413,7 +432,15 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
               result = analyzeRows(rows, args || {});
             }
           } else if (DATA_TOOL_NAMES.includes(name)) {
-            result = await officeExecuteTool(name, args || {}, user);
+            // Tool do ToolRegistry → SecureRunner (valida alçada/adminOnly e
+            // grava auditoria). Tool legada → executor histórico do Office.
+            if (findTool(name)) {
+              result = await runSecureTool({
+                user, toolName: name, args: args || {}, context: 'OFFICE',
+              });
+            } else {
+              result = await officeExecuteTool(name, args || {}, user);
+            }
             // Guarda os registros brutos para o report_analyze_data cruzar depois
             putRaw(report.id, name, extractRows(result));
             // Snapshot dos dados usados (auditoria + botão "Atualizar dados")

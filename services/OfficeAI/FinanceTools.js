@@ -144,9 +144,116 @@ registerTool({
 const BOLETO_STATUS_LABEL = { processing: 'Processando', success: 'Emitido', error: 'Erro', skipped: 'Ignorado' };
 const PAYMENT_LABEL = { pending: 'Aguardando pagamento', paid: 'Pago', cancelled: 'Cancelado', error: 'Erro na consulta' };
 
+// ── Análise de MOMENTO DO PAGAMENTO ──────────────────────────────────────────
+// Mede a diferença, em dias, entre a detecção do pagamento (`paid_at`) e o
+// vencimento do boleto. Sem isso a Eme não conseguia responder "quantos
+// anteciparam / pagaram em dia / pagaram depois" — a tool devolvia só contagens
+// por status, e o prompt do modo Relatório proíbe estimar número.
+//
+// RESSALVA QUE VIAJA JUNTO COM O DADO: `paid_at` é o instante em que a
+// verificação diária (08h) encontrou o título liquidado, NÃO a data real do
+// pagamento no portal. Por isso quem paga no dia do vencimento aparece em D+1 —
+// o bucket `no_vencimento_detectado_d1` existe exatamente pra não contar essa
+// gente como atraso. A ressalva vai no texto devolvido ao modelo pra que ele
+// nunca apresente D+1 como inadimplência.
+const TIMING_BUCKETS = [
+    { key: 'antecipado', label: 'Antecipado (2+ dias antes)', test: (d) => d <= -2 },
+    { key: 'vespera', label: 'Véspera (1 dia antes)', test: (d) => d === -1 },
+    { key: 'no_dia', label: 'No dia do vencimento', test: (d) => d === 0 },
+    { key: 'no_vencimento_detectado_d1', label: 'Pagou no vencimento (detectado no dia seguinte)', test: (d) => d === 1 },
+    { key: 'apos_vencimento', label: 'Após o vencimento (2+ dias)', test: (d) => d >= 2 },
+];
+
+const diffDiasVencimento = (paidAt, vencimento) => {
+    if (!paidAt || !vencimento) return null;
+    const pago = dayjs(paidAt).startOf('day');
+    const venc = dayjs(String(vencimento).slice(0, 10)).startOf('day');
+    if (!pago.isValid() || !venc.isValid()) return null;
+    return pago.diff(venc, 'day');
+};
+
+function analisarMomentoPagamento(rows) {
+    const pagos = rows
+        .filter(r => r.status === 'success' && r.payment_status === 'paid' && r.paid_at && r.vencimento)
+        .map(r => ({ ...r, dias: diffDiasVencimento(r.paid_at, r.vencimento) }))
+        .filter(r => r.dias !== null);
+
+    if (!pagos.length) return null;
+
+    const total = pagos.length;
+    const share = (n) => Number(((n / total) * 100).toFixed(1));
+
+    const buckets = TIMING_BUCKETS.map(b => {
+        const lista = pagos.filter(r => b.test(r.dias));
+        return {
+            chave: b.key, faixa: b.label, quantidade: lista.length, percentual: share(lista.length),
+            valor: lista.reduce((s, r) => s + Number(r.valor || 0), 0),
+        };
+    });
+
+    // Antecipação: só quem pagou ANTES (dias < 0).
+    const antec = pagos.filter(r => r.dias < 0).map(r => Math.abs(r.dias)).sort((a, b) => a - b);
+    const antecipacao = antec.length ? {
+        quantidade: antec.length,
+        percentual: share(antec.length),
+        media_dias: Number((antec.reduce((a, b) => a + b, 0) / antec.length).toFixed(1)),
+        mediana_dias: antec[Math.floor(antec.length / 2)],
+        maior_antecedencia_dias: antec[antec.length - 1],
+        faixas: [
+            { faixa: '1 dia', quantidade: antec.filter(d => d === 1).length },
+            { faixa: '2 a 3 dias', quantidade: antec.filter(d => d >= 2 && d <= 3).length },
+            { faixa: '4 a 7 dias', quantidade: antec.filter(d => d >= 4 && d <= 7).length },
+            { faixa: '8+ dias', quantidade: antec.filter(d => d >= 8).length },
+        ],
+    } : null;
+
+    // Distribuição exata por dia (alimenta gráfico de barras).
+    const porDiaMap = new Map();
+    for (const r of pagos) porDiaMap.set(r.dias, (porDiaMap.get(r.dias) || 0) + 1);
+    const distribuicao_por_dia = [...porDiaMap.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([dias, quantidade]) => ({ dias, quantidade }));
+
+    const agrupar = (keyFn) => {
+        const m = new Map();
+        for (const r of pagos) {
+            const k = keyFn(r) || '(não informado)';
+            if (!m.has(k)) m.set(k, []);
+            m.get(k).push(r);
+        }
+        return [...m.entries()].map(([chave, lista]) => {
+            const linha = { chave, pagos: lista.length };
+            for (const b of TIMING_BUCKETS) linha[b.key] = lista.filter(r => b.test(r.dias)).length;
+            linha.media_dias = Number((lista.reduce((s, r) => s + r.dias, 0) / lista.length).toFixed(1));
+            linha.valor = lista.reduce((s, r) => s + Number(r.valor || 0), 0);
+            return linha;
+        }).sort((a, b) => b.pagos - a.pagos);
+    };
+
+    const todosDias = pagos.map(r => r.dias).sort((a, b) => a - b);
+    const media_geral = Number((todosDias.reduce((a, b) => a + b, 0) / total).toFixed(1));
+
+    const resumoTxt = buckets
+        .map(b => `${b.faixa}: ${b.quantidade} (${b.percentual}%)`)
+        .join('\n');
+
+    return {
+        total_pagos_analisados: total,
+        buckets,
+        antecipacao,
+        distribuicao_por_dia,
+        por_mes_pagamento: agrupar(r => dayjs(r.paid_at).format('YYYY-MM')),
+        por_empreendimento: agrupar(r => r.empreendimento),
+        media_geral_dias: media_geral,
+        mediana_geral_dias: todosDias[Math.floor(total / 2)],
+        resumo: resumoTxt,
+        ressalva: 'IMPORTANTE: a data usada é a da DETECÇÃO automática (verificação diária às 08h), não a data real do pagamento no portal da Caixa. Por isso quem paga no dia do vencimento só é visto na manhã seguinte: o bucket "no_vencimento_detectado_d1" é pagamento EM DIA e NUNCA deve ser apresentado como atraso. Some-o a "no_dia" para falar de pontualidade. Sempre cite esta limitação no relatório.',
+    };
+}
+
 registerTool({
     name: 'query_boletos',
-    description: 'Consulta o histórico de BOLETOS CAIXA (ato) emitidos automaticamente a partir das reservas do CV — mesma fonte da tela /financeiro/boleto-caixa: quantos foram emitidos, com erro, pagos, aguardando pagamento ou cancelados; valores; boletos de uma reserva/titular/empreendimento. Use quando o usuário perguntar sobre boletos ("quantos boletos", "boletos pagos", "boleto da reserva X", "boletos com erro"). Ferramenta restrita a administradores.',
+    description: 'Consulta o histórico de BOLETOS CAIXA (ato) emitidos automaticamente a partir das reservas do CV — mesma fonte da tela /financeiro/boleto-caixa: quantos foram emitidos, com erro, pagos, aguardando pagamento ou cancelados; valores; boletos de uma reserva/titular/empreendimento. Use quando o usuário perguntar sobre boletos ("quantos boletos", "boletos pagos", "boleto da reserva X", "boletos com erro"). Com analise_momento_pagamento=true, devolve também QUANDO os clientes pagam em relação ao vencimento (antecipado, véspera, no dia, após), com distribuição por dia, por mês e por empreendimento — use pra perguntas de pontualidade ("quantos anteciparam", "pagam em dia?", "quantos dias antes"). Ferramenta restrita a administradores.',
     parameters: {
         type: 'object',
         properties: {
@@ -156,6 +263,7 @@ registerTool({
             situacao_pagamento: { type: 'string', enum: ['paid', 'pending', 'cancelled', 'error', 'todos'], description: 'Situação do PAGAMENTO. Padrão: todas.' },
             empreendimento: { type: 'string', description: 'Filtra por nome (ou parte) do empreendimento.' },
             busca: { type: 'string', description: 'Nome do titular ou número da reserva.' },
+            analise_momento_pagamento: { type: 'boolean', description: 'Se true, inclui a análise de QUANDO o cliente pagou em relação ao vencimento (antecipado/véspera/no dia/após), com médias, distribuição por dia, por mês e por empreendimento. Use pra perguntas de pontualidade e antecipação.' },
         },
     },
     adminOnly: true,
@@ -206,11 +314,23 @@ registerTool({
             `[${i + 1}] Reserva ${r.idreserva} — ${r.titular_nome || 'sem titular'} — ${r.empreendimento || '-'} — ${fmtMoney(r.valor)} — emissão: ${BOLETO_STATUS_LABEL[r.status] || r.status}${r.status === 'error' && r.error_message ? ` (${String(r.error_message).slice(0, 120)})` : ''} — pagamento: ${PAYMENT_LABEL[r.payment_status] || r.payment_status || '-'}${r.vencimento ? ` — venc. ${fmtDate(r.vencimento)}` : ''}`
         ).join('\n');
 
+        // Análise de momento do pagamento (opt-in — evita inflar o payload das
+        // consultas comuns, que só querem contagem por status).
+        const momentoPagamento = args?.analise_momento_pagamento === true
+            ? analisarMomentoPagamento(rows)
+            : null;
+
         return {
             result: {
                 periodo: periodoTxt,
                 resumo,
                 recentes,
+                ...(momentoPagamento
+                    ? { momento_pagamento: momentoPagamento }
+                    : {}),
+                ...(args?.analise_momento_pagamento === true && !momentoPagamento
+                    ? { momento_pagamento_indisponivel: 'Nenhum boleto PAGO com data de pagamento e vencimento no filtro — não há como analisar pontualidade. Diga isso; não estime.' }
+                    : {}),
                 type: 'table',
                 title: 'Boletos Caixa',
                 subtitle: `Emissão ${periodoTxt} · ${rows.length} boleto(s)`,
