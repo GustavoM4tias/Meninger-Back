@@ -32,25 +32,28 @@ export async function runEcoBatch({ credentials, empresas = [], onResult = null 
     const results = [];
     let browser;
     try {
-        const loginResult = await ecoLogin(credentials);
-        browser = loginResult.browser;
-        let { page } = loginResult;
-
         for (let i = 0; i < empresas.length; i++) {
             const emp = empresas[i];
             const boletosDaEmpresa = Array.isArray(emp.boletos) ? emp.boletos : [];
             if (!boletosDaEmpresa.length) continue;
 
-            log('ECO_CHECK', `[${i + 1}/${empresas.length}] Selecionando empresa CNPJ ${emp.cnpj_empresa} (${boletosDaEmpresa.length} boleto(s))...`);
+            // UMA SESSÃO POR EMPRESA. O Ecobrança amarra a sessão à empresa
+            // escolhida no login: a lista some depois da 1ª escolha e não há
+            // caminho de volta (novoAcesso() desloga, e a URL da tela devolve
+            // lista vazia). Reaproveitar o login fazia só a PRIMEIRA empresa do
+            // lote ser verificada — todas as demais caíam em "empresa não
+            // encontrada", e os boletos delas nunca eram checados nem baixados.
+            log('ECO_CHECK', `[${i + 1}/${empresas.length}] Abrindo sessão para o CNPJ ${emp.cnpj_empresa} (${boletosDaEmpresa.length} boleto(s))...`);
+            let page;
             try {
-                // selectCompany navega pra /inclusao_titulo no final. Pra check
-                // não precisamos disso — basta que a empresa esteja na sessão.
-                // O próximo `goto(/baixa_titulo)` na consulta vai funcionar.
-                page = await selectCompany(page, emp.cnpj_empresa);
+                if (browser) await browser.close().catch(() => {});
+                const loginResult = await ecoLogin(credentials);
+                browser = loginResult.browser;
+                page = await selectCompany(loginResult.page, emp.cnpj_empresa);
             } catch (err) {
-                error('ECO_CHECK', `Falha selecionando empresa ${emp.cnpj_empresa}: ${err.message}. Pulando ${boletosDaEmpresa.length} boleto(s).`);
+                error('ECO_CHECK', `Falha abrindo sessão da empresa ${emp.cnpj_empresa}: ${err.message}. Pulando ${boletosDaEmpresa.length} boleto(s).`);
                 for (const b of boletosDaEmpresa) {
-                    const r = { ...b, ok: false, error: `selectCompany falhou: ${err.message}` };
+                    const r = { ...b, ok: false, error: `Sessão da empresa falhou: ${err.message}` };
                     results.push(r);
                     if (onResult) await onResult(r).catch(() => {});
                 }

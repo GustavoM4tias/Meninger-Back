@@ -12,6 +12,21 @@ import { log, success } from '../../core/logger.js';
  * @param {string} cnpj - CNPJ da empresa (formato livre, apenas dígitos)
  * @returns {Promise<import('playwright').Page>}
  */
+/**
+ * IMPORTANTE — UMA EMPRESA POR SESSÃO.
+ *
+ * A lista de empresas só existe em `acesso_escolha_empresa`, logo após o login.
+ * Assim que uma empresa é escolhida, a sessão fica AMARRADA a ela: a lista some
+ * e não há caminho de volta. Verificado no portal:
+ *   - `novoAcesso()` (link "Novo Acesso") DESLOGA, indo para /ecobranca/index;
+ *   - abrir /acesso_escolha_empresa direto devolve a página sem nenhuma empresa.
+ *
+ * Por isso trocar de empresa exige NOVO LOGIN. Quem processa várias empresas
+ * (ex.: a verificação diária em lote) precisa abrir uma sessão por empresa —
+ * reaproveitar a página fazia a 1ª empresa funcionar e todas as seguintes
+ * falharem com "empresa não encontrada", mensagem que culpava o cadastro
+ * quando o problema era a sessão.
+ */
 export async function selectCompany(page, cnpj) {
     const cnpjDigits = cnpj.replace(/\D/g, '');
     const cnpjPadded = cnpjDigits.padStart(15, '0');
@@ -19,20 +34,32 @@ export async function selectCompany(page, cnpj) {
     log('ECO_SELECT', `Buscando empresa com CNPJ ${cnpjPadded}...`);
 
     // ── 1. Localiza e seleciona o radio da empresa ────────────────────────────
-    const radioValue = await page.evaluate((targetCnpj) => {
+    const { radioValue, total } = await page.evaluate((targetCnpj) => {
         const rows = document.querySelectorAll('tr');
+        let encontrados = 0;
+        let achado = null;
         for (const row of rows) {
             const cnpjInput = row.querySelector('input[name^="cnpj"]');
-            if (cnpjInput && cnpjInput.value === targetCnpj) {
-                const radio = row.querySelector('input[name="radioEmpresa"]');
-                if (radio) return radio.value;
-            }
+            const radio = row.querySelector('input[name="radioEmpresa"]');
+            if (!cnpjInput || !radio) continue;
+            encontrados++;
+            if (achado === null && cnpjInput.value === targetCnpj) achado = radio.value;
         }
-        return null;
+        return { radioValue: achado, total: encontrados };
     }, cnpjPadded);
 
     if (radioValue === null) {
-        throw new Error(`Empresa com CNPJ ${cnpjPadded} não encontrada na lista do Ecbrança.`);
+        // A contagem separa "sessão sem a tela de escolha" de "empresa
+        // realmente ausente do cadastro". Sem ela, os dois casos davam a mesma
+        // mensagem e mandavam investigar o cadastro da empresa quando o
+        // problema era a sessão já estar amarrada a outra.
+        throw new Error(
+            total === 0
+                ? `Sessão do Ecobrança não está na tela de escolha de empresa (0 empresas em ${page.url()}). `
+                  + 'A sessão já está amarrada a uma empresa: para usar outra é preciso fazer login de novo. '
+                  + 'NÃO é problema de cadastro da empresa.'
+                : `Empresa com CNPJ ${cnpjPadded} não encontrada entre as ${total} empresas do Ecobrança.`,
+        );
     }
 
     log('ECO_SELECT', `Empresa encontrada — radio value: ${radioValue}`);
