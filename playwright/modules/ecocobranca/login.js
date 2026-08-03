@@ -3,6 +3,7 @@ import { createPage } from '../../core/browser.js';
 import { log, success, error } from '../../core/logger.js';
 
 const ECO_URL = 'https://ecobranca.caixa.gov.br/ecobranca/index.jsp';
+const SAIR_URL = 'https://ecobranca.caixa.gov.br/ecobranca/sair';
 
 /**
  * Realiza login no Ecobrança Caixa e retorna { browser, context, page }
@@ -26,6 +27,17 @@ export async function ecoLogin(credentials = {}) {
             try { await dialog.accept(); } catch (_) {}
         });
 
+        // Encerra qualquer sessão anterior ANTES de logar. O Ecobrança mantém a
+        // sessão no servidor e, se a execução anterior parou no meio de um
+        // fluxo (uma baixa interrompida, por exemplo), o login seguinte é
+        // REDIRECIONADO de volta pra lá em vez de mostrar a escolha de empresa.
+        // Quando isso acontecia, a verificação de login até passava — a lista
+        // aparecia por um instante — e o redirect vinha logo depois, então o
+        // erro estourava adiante, no selectCompany, apontando para a URL do
+        // fluxo antigo (ex.: baixa_titulo_escolha) e culpando o cadastro da
+        // empresa. Sair primeiro custa uma requisição e elimina a categoria.
+        await page.goto(SAIR_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+
         await page.goto(ECO_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
         await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
 
@@ -48,7 +60,22 @@ export async function ecoLogin(credentials = {}) {
             if (bodyText.toLowerCase().includes('senha') || bodyText.toLowerCase().includes('inválid')) {
                 throw new Error('Credenciais Ecobrança inválidas. Verifique usuário e senha nas configurações.');
             }
-            throw new Error('Login Ecobrança falhou — página inesperada após autenticação.');
+            throw new Error(
+                `Login Ecobrança falhou — página inesperada após autenticação (URL: ${page.url()}).`,
+            );
+        }
+
+        // Reconfirma depois de a página assentar: o portal às vezes redireciona
+        // LOGO APÓS a checagem acima, e quem descobria isso era o selectCompany,
+        // já fora do login, reportando "empresa não encontrada". Só devolvemos a
+        // sessão quando a lista de empresas sobrevive a esse respiro.
+        await page.waitForTimeout(700);
+        const listaEstavel = await page.$('input[name="radioEmpresa"]').then(el => !!el).catch(() => false);
+        if (!listaEstavel) {
+            throw new Error(
+                `Login Ecobrança instável — a tela de escolha de empresa foi substituída por ${page.url()} logo após o login. `
+                + 'Normalmente é sessão anterior sendo restaurada; tente novamente.',
+            );
         }
 
         success('ECO_LOGIN', 'Login realizado com sucesso.');
