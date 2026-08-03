@@ -18,6 +18,8 @@ const CONTEXTS = {
     CHECKLIST_ATTACHMENT: 'checklist_attachment', // Anexos de tarefa do checklist
     // ── Aprovações de Marketing ─────────────────────────────────────────────────
     MARKETING_APPROVAL_ATTACHMENT: 'marketing_approval_attachment', // Anexos de solicitação
+    // ── Plano de Eventos ────────────────────────────────────────────────────────
+    EVENT_PLAN_QUOTE: 'event_plan_quote',         // Orçamento do item do evento proposto
     // ── To Do (Microsoft) ────────────────────────────────────────────────────────
     TODO_ATTACHMENT: 'todo_attachment',           // Anexos de tarefa do To Do
     // ── Eme Atende ───────────────────────────────────────────────────────────────
@@ -166,6 +168,26 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
                 bucket: STORAGE_BUCKET,
                 // referenceId pode não existir na criação (form novo) → 'draft'
                 path: `office/marketing/approvals/${referenceId || 'draft'}/${timestamp}-${originalName}`,
+                isPublic: true,
+            };
+
+        // ── Plano de Eventos: orçamento que sustenta o item marcado como ORCADO.
+        // É o que separa "R$ 1.200 porque a padaria mandou" de "R$ 1.200 porque
+        // eu acho" na hora de quem decide olhar.
+        case CONTEXTS.EVENT_PLAN_QUOTE:
+            if (!userId) throw new Error('Usuário não autenticado');
+            if (![
+                'application/pdf',
+                'image/png', 'image/jpeg', 'image/webp',
+                'application/vnd.ms-excel',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ].includes(file.mimetype)) {
+                throw new Error('Orçamento aceita PDF, imagem (PNG/JPG/WEBP) ou planilha (XLS/XLSX)');
+            }
+            return {
+                bucket: STORAGE_BUCKET,
+                // referenceId = id do plano; 'draft' enquanto o item não foi salvo.
+                path: `office/comercial/plano-eventos/${referenceId || 'draft'}/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 

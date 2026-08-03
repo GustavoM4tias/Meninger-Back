@@ -58,6 +58,10 @@ const DATA_ALLOWLIST = [
     '/api/sienge/contracts/sync/status', // status de sync, sem dado de negócio
     '/api/cv/banners',                   // banners de campanha exibidos na home
     '/api/mcmv/ai-query',                // consumida pela Eme (function calling), tabela pública MCMV
+    '/api/event-plans/settings',         // admin-only no controller (config do Plano de Eventos)
+    '/api/event-plans/auth-profiles',    // admin-only no controller (perfis de alçada)
+    '/api/event-plans/permissions',      // devolve só o que o PRÓPRIO solicitante pode fazer
+    '/api/event-plans/users',            // admin-only no controller (monta os perfis de alçada)
 ];
 
 // Prefixos que são DADOS de negócio e exigem requireRoutePermission/requireAdmin:
@@ -66,7 +70,7 @@ const DATA_PREFIXES = [
     '/api/projections', '/api/dept-spending', '/api/events',
     '/api/checklists', '/api/sales-stands', '/api/bucket-upload',
     '/api/realestate', '/api/ai', '/api/org',
-    '/api/correspondents',
+    '/api/correspondents', '/api/event-plans',
 ];
 
 // ── Introspecção do router ───────────────────────────────────────────────────

@@ -241,6 +241,15 @@ import ChecklistReminderRuleDefine    from './checklist/checklistReminderRule.js
 import ChecklistAuthProfileDefine     from './checklist/checklistAuthProfile.js';
 import ChecklistTaskApprovalDefine    from './checklist/checklistTaskApproval.js';
 
+// Plano de Eventos (planejamento mensal de eventos comerciais)
+import EventPlanDefine             from './eventPlan/eventPlan.js';
+import PlannedEventDefine          from './eventPlan/plannedEvent.js';
+import PlannedEventItemDefine      from './eventPlan/plannedEventItem.js';
+import EventPlanDecisionDefine     from './eventPlan/eventPlanDecision.js';
+import EventPlanActivityDefine     from './eventPlan/eventPlanActivity.js';
+import EventPlanAuthProfileDefine  from './eventPlan/eventPlanAuthProfile.js';
+import EventPlanSettingsDefine     from './eventPlan/eventPlanSettings.js';
+
 import RealEstateRegistrationDefine from './realestate/registration.js';
 import CvImobiliariaDefine from './cv/imobiliaria.js';
 
@@ -511,6 +520,15 @@ db.ChecklistSettings        = ChecklistSettingsDefine(sequelize, DataTypes);
 db.ChecklistReminderRule    = ChecklistReminderRuleDefine(sequelize, DataTypes);
 db.ChecklistAuthProfile     = ChecklistAuthProfileDefine(sequelize, DataTypes);
 db.ChecklistTaskApproval    = ChecklistTaskApprovalDefine(sequelize, DataTypes);
+
+// Plano de Eventos (planejamento mensal de eventos comerciais)
+db.EventPlan            = EventPlanDefine(sequelize, DataTypes);
+db.PlannedEvent         = PlannedEventDefine(sequelize, DataTypes);
+db.PlannedEventItem     = PlannedEventItemDefine(sequelize, DataTypes);
+db.EventPlanDecision    = EventPlanDecisionDefine(sequelize, DataTypes);
+db.EventPlanActivity    = EventPlanActivityDefine(sequelize, DataTypes);
+db.EventPlanAuthProfile = EventPlanAuthProfileDefine(sequelize, DataTypes);
+db.EventPlanSettings    = EventPlanSettingsDefine(sequelize, DataTypes);
 
 // Cadastro de imobiliárias (CV CRM)
 db.RealEstateRegistration = RealEstateRegistrationDefine(sequelize, DataTypes);

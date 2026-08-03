@@ -28,6 +28,7 @@ import orgRoutes from './routes/orgRoutes.js';
 import orgRegistryScheduler from './scheduler/orgRegistryScheduler.js';
 import reportExportLogRoutes from './routes/reportExportLogRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
+import eventPlanRoutes from './routes/eventPlanRoutes.js';
 import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
 import reservaCancelRoutes from './routes/reservaCancelRoutes.js';
@@ -85,6 +86,7 @@ import leadCancelReasonScheduler from './scheduler/leadCancelReasonScheduler.js'
 import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.js';
 import cvExtrasScheduler from './scheduler/cvExtrasScheduler.js';
 import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateScheduler.js';
+import eventPlanCycleScheduler from './scheduler/eventPlanCycleScheduler.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import boletoPaymentCheckScheduler from './scheduler/boletoPaymentCheckScheduler.js';
 import boletoSituacaoApplyScheduler from './scheduler/boletoSituacaoApplyScheduler.js';
@@ -242,6 +244,7 @@ app.use('/api/report-exports', reportExportLogRoutes);   // trilha de exportaç�
 app.use('/api/realestate', realEstateRoutes); // cadastro de imobiliárias (CV)
 app.use('/api/correspondents', correspondentRoutes); // correspondentes (CV)
 app.use('/api/conditions', conditionsRoutes);
+app.use('/api/event-plans', eventPlanRoutes); // Plano de Eventos (comercial)
 app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/api/cancelamento-reservas', reservaCancelRoutes);
 // Encurtador de URL público — rota fora de /api por elegância.
@@ -587,6 +590,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_CV_EXTRAS_SCHEDULE')) cvExtrasScheduler.start(); // extras do CV
   if (schedulerOn('ENABLE_CV_CORRESPONDENT_SCHEDULE')) correspondentCvScheduler.start(); // espelho de correspondentes + empresas
   if (schedulerOn('ENABLE_CONDITION_AUTOGEN')) conditionAutoGenerateScheduler.start(); // auto-geração mensal de fichas (com e sem CV)
+  if (schedulerOn('ENABLE_EVENT_PLAN_CYCLE')) eventPlanCycleScheduler.start(); // Plano de Eventos: abre o mês seguinte + cobra o prazo
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase
   if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
   if (schedulerOn('ENABLE_BOLETO_SITUACAO_APPLY')) boletoSituacaoApplyScheduler.start(); // 1min: aplica situações CV agendadas (delay lote Sienge)
