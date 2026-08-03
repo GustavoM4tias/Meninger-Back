@@ -1,6 +1,6 @@
 // playwright/services/ecocobrancaService.js
-import { ecoLogin } from '../modules/ecocobranca/login.js';
-import { selectCompany } from '../modules/ecocobranca/selectCompany.js';
+import { ecoLogin, ecoLogout } from '../modules/ecocobranca/login.js';
+import { selectCompany, openInclusaoTitulo } from '../modules/ecocobranca/selectCompany.js';
 import { createBoleto } from '../modules/ecocobranca/createBoleto.js';
 import { baixarTitulo } from '../modules/ecocobranca/consultaBaixaTitulo.js';
 import { log, success, error } from '../core/logger.js';
@@ -40,12 +40,15 @@ export async function runEcoCobrancaBoleto(params = {}) {
     const { credentials, cnpj_empresa, baixaPreviaNossoNumero, ...dadosBoleto } = params;
 
     let browser;
+    let pageAtual = null;
     try {
         const loginResult = await ecoLogin(credentials);
         browser = loginResult.browser;
         let { page } = loginResult;
+        pageAtual = page;
 
         page = await selectCompany(page, cnpj_empresa);
+        pageAtual = page;
 
         // ── Baixa prévia (reemissão por mudança de condições) ────────────────
         let baixaPrevia = null;
@@ -71,10 +74,12 @@ export async function runEcoCobrancaBoleto(params = {}) {
                 success('ECO_SERVICE', `Baixa prévia confirmada do título ${baixaPreviaNossoNumero}.`);
             }
 
-            // Após baixa, voltar pra tela de inclusão de título (selectCompany
-            // já navega pra lá originalmente, mas a baixa pulou pra outra URL).
-            // Reabre o form pelo mesmo fluxo.
-            page = await selectCompany(page, cnpj_empresa);
+            // A baixa navegou pra outra área do portal — reabre o formulário de
+            // emissão NA MESMA SESSÃO. Não dá pra chamar selectCompany aqui: a
+            // empresa já está amarrada à sessão e a lista de empresas não existe
+            // mais, então a chamada estourava "empresa não encontrada" apontando
+            // a URL da baixa. Era o que quebrava TODA reemissão com baixa prévia.
+            page = await openInclusaoTitulo(page);
         }
 
         const { buffer: boletoBuffer, nossoNumero, seuNumero } = await createBoleto(page, dadosBoleto);
@@ -85,6 +90,11 @@ export async function runEcoCobrancaBoleto(params = {}) {
         error('ECO_SERVICE', `Falha na automação: ${err.message}`);
         throw err;
     } finally {
+        // Sair ANTES de fechar. A sessão do Ecobrança é por usuário: fechar o
+        // browser sem sair deixa o portal parado no último fluxo e envenena o
+        // próximo login, de qualquer ambiente. Vale principalmente no caminho
+        // de ERRO, que é justamente quando a sessão fica num estado estranho.
+        await ecoLogout(pageAtual).catch(() => {});
         if (browser) await browser.close().catch(() => {});
     }
 }

@@ -74,26 +74,41 @@ export async function selectCompany(page, cnpj) {
 
     log('ECO_SELECT', `Sessão registrada. URL atual: ${page.url()}`);
 
-    // ── 3. Navega direto ao formulário de Inclusão de Títulos ─────────────────
+    return openInclusaoTitulo(page);
+}
+
+/**
+ * Abre o formulário de Inclusão de Títulos NA SESSÃO ATUAL, sem passar pela
+ * escolha de empresa.
+ *
+ * Serve para voltar ao formulário depois de o fluxo ter navegado para outra
+ * área (a baixa prévia da reemissão, por exemplo). Antes esse retorno era feito
+ * chamando `selectCompany` de novo, o que NÃO funciona: a empresa já está
+ * amarrada à sessão e a lista não existe mais, então a chamada estourava
+ * "empresa não encontrada" apontando a URL da baixa. Era o que derrubava toda
+ * reemissão com baixa prévia — a emissão simples nunca passava por aqui, por
+ * isso o defeito só aparecia na substituição de boleto.
+ */
+export async function openInclusaoTitulo(page) {
     log('ECO_SELECT', 'Abrindo formulário de Inclusão de Títulos...');
     await Promise.all([
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
         page.evaluate(() => enviaLink('InclusaoTituloServlet', '6')),
-    ]);
+    ]).catch(() => {});
 
     log('ECO_SELECT', `URL após enviaLink: ${page.url()}`);
 
-    // ── 4. Se caiu em tipo_inclusao, clica em doSubmit() para avançar ─────────
+    // Se caiu em tipo_inclusao, clica em doSubmit() para avançar
     if (page.url().includes('tipo_inclusao')) {
         log('ECO_SELECT', 'Página tipo_inclusao — executando doSubmit()...');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
             page.evaluate(() => doSubmit()),
-        ]);
+        ]).catch(() => {});
         log('ECO_SELECT', `URL após doSubmit: ${page.url()}`);
     }
 
-    // ── 5. Aguarda o campo seuNumero do formulário ────────────────────────────
+    // Aguarda o campo seuNumero do formulário
     try {
         await page.waitForSelector('input[name="seuNumero"]', { timeout: 15000 });
     } catch {
