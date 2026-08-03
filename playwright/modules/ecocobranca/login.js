@@ -80,6 +80,7 @@ export async function ecoLogin(credentials = {}) {
 
         success('ECO_LOGIN', 'Login realizado com sucesso.');
         return { browser, context, page };
+
     } catch (err) {
         // Fecha o browser antes de propagar pra evitar processos órfãos.
         // `.catch(() => {})` no close porque se o close em si falhar,
@@ -87,5 +88,30 @@ export async function ecoLogin(credentials = {}) {
         error('ECO_LOGIN', `Falha — fechando browser. Motivo: ${err.message}`);
         await browser.close().catch(() => {});
         throw err;
+    }
+}
+
+/**
+ * Encerra a sessão no servidor do Ecobrança.
+ *
+ * OBRIGATÓRIO antes de fechar o browser. A sessão do portal é POR USUÁRIO, não
+ * por cookie: fechar o navegador sem sair deixa o servidor parado no último
+ * fluxo, e o PRÓXIMO login — de qualquer máquina, inclusive de outro ambiente —
+ * é redirecionado pra lá em vez de abrir a escolha de empresa. Foi assim que a
+ * emissão da reserva 8002 falhou sete vezes seguidas: cada falha fechava o
+ * browser sem sair e envenenava a tentativa seguinte.
+ *
+ * Best-effort de propósito: se o logout falhar, o fluxo que já terminou não
+ * deve quebrar por causa disso — o `sair` na entrada do próximo login cobre.
+ */
+export async function ecoLogout(page) {
+    if (!page || page.isClosed?.()) return false;
+    try {
+        await page.goto(SAIR_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        log('ECO_LOGIN', 'Sessão encerrada no portal.');
+        return true;
+    } catch (err) {
+        log('ECO_LOGIN', `Logout best-effort falhou (${err.message}) — o próximo login sai antes de entrar.`);
+        return false;
     }
 }

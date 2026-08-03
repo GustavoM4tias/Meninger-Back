@@ -16,7 +16,7 @@
 //
 // O browser fecha mesmo se algo falhar no meio (try/finally).
 
-import { ecoLogin } from '../modules/ecocobranca/login.js';
+import { ecoLogin, ecoLogout } from '../modules/ecocobranca/login.js';
 import { selectCompany } from '../modules/ecocobranca/selectCompany.js';
 import { consultarTituloDetalhado, baixarTitulo } from '../modules/ecocobranca/consultaBaixaTitulo.js';
 import { log, success, error } from '../core/logger.js';
@@ -31,6 +31,7 @@ export async function runEcoBatch({ credentials, empresas = [], onResult = null 
 
     const results = [];
     let browser;
+    let pageAtual = null;
     try {
         for (let i = 0; i < empresas.length; i++) {
             const emp = empresas[i];
@@ -46,10 +47,15 @@ export async function runEcoBatch({ credentials, empresas = [], onResult = null 
             log('ECO_CHECK', `[${i + 1}/${empresas.length}] Abrindo sessão para o CNPJ ${emp.cnpj_empresa} (${boletosDaEmpresa.length} boleto(s))...`);
             let page;
             try {
+                // Sai da sessão anterior antes de abrir a próxima: sem isso o
+                // portal fica parado no último fluxo e o login seguinte é
+                // redirecionado pra lá em vez da escolha de empresa.
+                await ecoLogout(pageAtual).catch(() => {});
                 if (browser) await browser.close().catch(() => {});
                 const loginResult = await ecoLogin(credentials);
                 browser = loginResult.browser;
                 page = await selectCompany(loginResult.page, emp.cnpj_empresa);
+                pageAtual = page;
             } catch (err) {
                 error('ECO_CHECK', `Falha abrindo sessão da empresa ${emp.cnpj_empresa}: ${err.message}. Pulando ${boletosDaEmpresa.length} boleto(s).`);
                 for (const b of boletosDaEmpresa) {
@@ -118,6 +124,7 @@ export async function runEcoBatch({ credentials, empresas = [], onResult = null 
         error('ECO_CHECK', `Erro fatal no batch: ${err.message}`);
         throw err;
     } finally {
+        await ecoLogout(pageAtual).catch(() => {});
         if (browser) await browser.close().catch(() => {});
     }
 }
