@@ -12,6 +12,7 @@ import {
     previewPaste,
     listCompanies,
     createCompany,
+    resendCompany,
     linkCompany,
     updateCompany,
     createUsers,
@@ -33,6 +34,7 @@ router.get('/companies', listCompanies);
 router.post('/companies', createCompany);
 router.put('/companies/:id', updateCompany);
 router.post('/companies/:id/link', linkCompany);
+router.post('/companies/:id/resend', resendCompany);
 
 router.post('/preview', previewPaste);
 router.post('/users', createUsers);
