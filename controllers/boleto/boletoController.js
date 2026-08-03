@@ -86,9 +86,24 @@ export async function updateSettings(req, res) {
             'idserie_ra', 'cv_idtipo_documento',
             'situacao_sucesso_id', 'situacao_erro_id',
             'situacao_pago_id', 'situacao_baixado_id', 'tolerancia_dias_uteis',
-            'delay_situacao_sucesso_min', 'max_dias_vencimento',
+            'delay_situacao_sucesso_min', 'max_dias_vencimento', 'valor_maximo',
             'active',
         ];
+
+        // Teto de valor: aceita vazio (= sem teto). Preenchido, precisa ser
+        // número positivo — um teto zerado/negativo barraria toda emissão.
+        if (req.body.valor_maximo !== undefined) {
+            const raw = req.body.valor_maximo;
+            if (raw === null || raw === '') {
+                req.body.valor_maximo = null;
+            } else {
+                const n = Number(raw);
+                if (!Number.isFinite(n) || n <= 0) {
+                    return res.status(400).json({ error: 'valor_maximo deve ser um número maior que zero (ou vazio para não ter teto).' });
+                }
+                req.body.valor_maximo = n;
+            }
+        }
         // Normaliza idserie_ra: aceita string "21,9", array, ou aninhamentos legados.
         // O setter do model também faz flatten, mas normalizamos aqui antes para
         // garantir uma única forma canônica chegar até ele.
