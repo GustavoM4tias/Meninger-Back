@@ -98,9 +98,15 @@ export async function listCompanies(req, res) {
 export async function createCompany(req, res) {
     try {
         const b = req.body || {};
+        // A sigla da região não é mais digitada: sai da UF (ver REGIOES no
+        // service). O que vier do corpo só vale se for sigla conhecida.
+        const regiao = correspondentService.REGIOES.some((r) => r.sigla === String(b.regiao || '').toUpperCase())
+            ? String(b.regiao).toUpperCase()
+            : correspondentService.regiaoDaUf(b.estado);
+
         const empresa = await CorrespondentCompany.create({
             nome: b.nome,
-            regiao: b.regiao,
+            regiao,
             estado: b.estado,
             cidade: b.cidade,
             endereco: b.endereco,
@@ -125,6 +131,33 @@ export async function createCompany(req, res) {
     }
 }
 
+/**
+ * Reenvia ao CV uma empresa que ficou pendente.
+ *
+ * Existe porque o CV responde igual quando grava e quando recusa: uma sigla de
+ * região inválida derrubava o cadastro em silêncio e a empresa ficava só aqui,
+ * sem caminho de volta. O reenvio normaliza a região antes de tentar de novo.
+ * Empresa já vinculada não passa - aí o cadastro no CV existe e reenviar só
+ * duplicaria (o CV não tem DELETE por API).
+ */
+export async function resendCompany(req, res) {
+    try {
+        const empresa = await CorrespondentCompany.findByPk(req.params.id);
+        if (!empresa) return responseHandler.error(res, 'Empresa não encontrada.', 404);
+        if (empresa.cv_idempresa) {
+            return responseHandler.error(res, 'Esta empresa já tem código do CV: reenviar criaria uma duplicada.', 400);
+        }
+
+        const regiao = correspondentService.regiaoDaUf(empresa.estado);
+        if (regiao && regiao !== empresa.regiao) await empresa.update({ regiao });
+
+        const envio = await correspondentService.criarEmpresaNoCv(empresa);
+        return res.json({ ok: true, empresa, envio });
+    } catch (err) {
+        return erro(res, err);
+    }
+}
+
 /** Amarra o idempresa conferido no CV. */
 export async function linkCompany(req, res) {
     try {
@@ -141,9 +174,14 @@ export async function updateCompany(req, res) {
         const empresa = await CorrespondentCompany.findByPk(req.params.id);
         if (!empresa) return responseHandler.error(res, 'Empresa não encontrada.', 404);
         const b = req.body || {};
+        const estado = b.estado ?? empresa.estado;
         await empresa.update({
             nome: b.nome ?? empresa.nome,
-            regiao: b.regiao ?? empresa.regiao,
+            // Mesma regra do cadastro: sigla válida ou derivada da UF, nunca
+            // texto livre (foi assim que um "IA" chegou ao CV e o derrubou).
+            regiao: correspondentService.REGIOES.some((r) => r.sigla === String(b.regiao || '').toUpperCase())
+                ? String(b.regiao).toUpperCase()
+                : (correspondentService.regiaoDaUf(estado) ?? empresa.regiao),
             estado: b.estado ?? empresa.estado,
             cidade: b.cidade ?? empresa.cidade,
             endereco: b.endereco ?? empresa.endereco,
@@ -245,6 +283,7 @@ export default {
     previewPaste,
     listCompanies,
     createCompany,
+    resendCompany,
     linkCompany,
     updateCompany,
     createUsers,

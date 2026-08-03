@@ -30,6 +30,38 @@ const { CorrespondentCompany, CorrespondentRegistration, CorrespondentInvite, Cv
 const EMPRESAS_URL = '/v2/cadastros/correspondentes-empresas';
 const USUARIOS_URL = '/v2/cadastros/correspondentes-usuarios';
 
+/**
+ * Regiões aceitas pelo cadastro de empresa do CV.
+ *
+ * O campo `regiao` do POST é a SIGLA, não o nome - as outras APIs do CV
+ * devolvem só o nome ("Sudeste", "Sul", "Centro-Oeste"). Isso era digitado à
+ * mão na tela e derrubou um cadastro em silêncio: a IMPAV foi enviada com
+ * "IA", o CV respondeu HTTP 200 com a mensagem de erro genérica dele e não
+ * gravou nada (conferido na listagem do painel em 03/08/2026 - 32 empresas,
+ * nenhuma IMPAV). Por isso a sigla saiu da mão do operador e virou este mapa,
+ * escolhido pela UF.
+ *
+ * "SD" é a única sigla confirmada por cadastro que gravou (Premium Créditos,
+ * id 36 no CV, aparece como Sudeste na listagem). As demais seguem o mesmo
+ * padrão do CV; se alguma for recusada, a empresa simplesmente não aparece no
+ * painel - o CV não diferencia sucesso de erro na resposta.
+ */
+export const REGIOES = [
+    { sigla: 'N', nome: 'Norte', ufs: ['AC', 'AM', 'AP', 'PA', 'RO', 'RR', 'TO'] },
+    { sigla: 'NE', nome: 'Nordeste', ufs: ['AL', 'BA', 'CE', 'MA', 'PB', 'PE', 'PI', 'RN', 'SE'] },
+    { sigla: 'CO', nome: 'Centro-Oeste', ufs: ['DF', 'GO', 'MS', 'MT'] },
+    { sigla: 'SD', nome: 'Sudeste', ufs: ['ES', 'MG', 'RJ', 'SP'] },
+    { sigla: 'S', nome: 'Sul', ufs: ['PR', 'RS', 'SC'] },
+];
+
+const SIGLAS = new Set(REGIOES.map((r) => r.sigla));
+
+/** Sigla da região a partir da UF. Devolve null para UF desconhecida. */
+export function regiaoDaUf(uf) {
+    const alvo = String(uf || '').trim().toUpperCase();
+    return REGIOES.find((r) => r.ufs.includes(alvo))?.sigla || null;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const soDigitos = (v) => String(v || '').replace(/\D/g, '');
 
@@ -66,14 +98,45 @@ export async function listarUsuariosCv() {
 }
 
 /**
+ * Próximo idempresa provável no CV.
+ *
+ * O CV numera as empresas correspondentes em sequência e nunca reaproveita id
+ * de empresa excluída. O Office conhece o topo dessa sequência porque o espelho
+ * de usuários (único GET que funciona) carrega o `idempresa` de cada pessoa -
+ * e, na conferência de 03/08/2026, o maior id do espelho era exatamente o maior
+ * id da listagem do painel (36, Premium Créditos).
+ *
+ * Então a empresa recém-criada é, quase sempre, `maior conhecido + 1`. É um
+ * palpite, não uma leitura: se alguém tiver criado e excluído uma empresa pelo
+ * painel depois da última pessoa cadastrada, o número real fica adiante. Por
+ * isso a tela oferece o palpite para confirmar, em vez de vincular sozinha.
+ */
+export async function sugerirIdempresa() {
+    const [maiorLocal, maiorEspelho] = await Promise.all([
+        CorrespondentCompany.max('cv_idempresa'),
+        CvCorrespondent.max('idempresa'),
+    ]);
+    const base = Math.max(Number(maiorLocal) || 0, Number(maiorEspelho) || 0);
+    return { base: base || null, sugestao: base ? base + 1 : null };
+}
+
+/**
  * Cria a empresa no CV.
- * Devolve { enviado, confirmado:false, aviso } - NUNCA um idempresa, porque a
- * API não entrega. O vínculo é feito depois, na tela, com `vincularEmpresa`.
+ * Devolve { enviado, resposta, codigo_sugerido } - NUNCA um idempresa lido,
+ * porque a API não entrega. O vínculo é feito depois com `vincularEmpresa`,
+ * confirmando o palpite de `sugerirIdempresa`.
  */
 export async function criarEmpresaNoCv(empresa) {
+    // Região é sigla e o operador não digita mais: vem da UF. Enviar sigla
+    // inexistente faz o CV recusar em silêncio (HTTP 200 com erro genérico),
+    // então preferimos falhar aqui, com mensagem, a fingir que enviou.
+    const regiao = SIGLAS.has(String(empresa.regiao || '').toUpperCase())
+        ? String(empresa.regiao).toUpperCase()
+        : regiaoDaUf(empresa.estado);
+
     const payload = {
         nome: empresa.nome,
-        regiao: empresa.regiao,
+        regiao,
         estado: empresa.estado,
         cidade: empresa.cidade,
         endereco: empresa.endereco,
@@ -82,7 +145,13 @@ export async function criarEmpresaNoCv(empresa) {
         ...(empresa.telefone ? { telefone: empresa.telefone } : {}),
     };
 
-    const faltando = ['nome', 'regiao', 'estado', 'cidade', 'endereco']
+    if (!regiao) {
+        const err = new Error(`Não foi possível definir a região da UF "${empresa.estado || ''}".`);
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const faltando = ['nome', 'estado', 'cidade', 'endereco']
         .filter((k) => !String(payload[k] || '').trim());
     if (faltando.length) {
         const err = new Error(`Campos obrigatórios ausentes: ${faltando.join(', ')}`);
@@ -98,14 +167,10 @@ export async function criarEmpresaNoCv(empresa) {
         resposta = descreveErro(err);
     }
 
-    // Mesmo "erro" pode significar sucesso. Não classificamos como falha aqui:
-    // quem decide é o operador conferindo a lista no CV.
-    return {
-        enviado: true,
-        resposta,
-        aviso: 'O CV não devolve o id da empresa e o GET de empresas está fora do ar. '
-            + 'Confira em Correspondentes > Empresas no CV e informe o código aqui para vincular.',
-    };
+    // Mesmo "erro" pode significar sucesso: o CV grava e responde igual. Não
+    // classificamos como falha aqui - a tela segue para a confirmação do código.
+    const { base, sugestao } = await sugerirIdempresa();
+    return { enviado: true, resposta, regiao, codigo_sugerido: sugestao, codigo_base: base };
 }
 
 /** Amarra a empresa local ao idempresa conferido no CV. */
@@ -127,6 +192,23 @@ export async function vincularEmpresa(companyId, cvIdempresa) {
         const err = new Error(`O código ${id} já está vinculado a "${jaUsado.nome}".`);
         err.statusCode = 409;
         throw err;
+    }
+
+    // Empresa que o Office acabou de criar no CV nasce sem gente. Se o código
+    // escolhido já tem correspondentes no espelho, ele é de outra empresa - e
+    // seguir em frente jogaria as pessoas no cadastro alheio, sem DELETE na API
+    // para desfazer. Empresa "adotada" (external) não passa por aqui: nesse
+    // caso ter gente é justamente o esperado.
+    if (empresa.status === 'pending') {
+        const ocupado = await CvCorrespondent.count({ where: { idempresa: id } });
+        if (ocupado) {
+            const err = new Error(
+                `O código ${id} já é de outra empresa no CV (tem ${ocupado} pessoa(s) cadastrada(s)). `
+                + 'Confira o código na listagem de empresas do CV.',
+            );
+            err.statusCode = 409;
+            throw err;
+        }
     }
     await empresa.update({ cv_idempresa: id, status: 'linked' });
     return empresa;
@@ -484,9 +566,15 @@ export async function montarPanorama(user = null) {
         usuariosVisiveis += lista.length;
     }
 
+    // Palpite do próximo código, para a tela oferecer o vínculo das empresas
+    // pendentes sem mandar ninguém garimpar na listagem do CV.
+    const { base, sugestao } = await sugerirIdempresa();
+
     return {
         empresas: linhas.sort((a, b) => a.nome.localeCompare(b.nome)),
         total_usuarios: scopeCities === null ? usuarios.length : usuariosVisiveis,
+        codigo_sugerido: sugestao,
+        codigo_base: base,
     };
 }
 
@@ -624,6 +712,9 @@ export async function submeterConvite({ token, pessoas, ip }) {
 }
 
 export default {
+    REGIOES,
+    regiaoDaUf,
+    sugerirIdempresa,
     listarUsuariosCv,
     importarEmpresasDoCv,
     criarConvite,
