@@ -22,6 +22,11 @@ router.get('/report', requireRoutePermission(READ_SCREENS), ctrl.getProjectionRe
 // Consumido também por Custos/Títulos para rotular centros de custo.
 router.get('/cost-center-names', requireRoutePermission([...READ_SCREENS, '/financeiro/custos', '/financeiro/titulos']), ctrl.getActiveProjectionCostCenterNames);
 
+// Modo de meta (unidades × VGV): regra GLOBAL. Quem tem a tela lê; só admin
+// grava (assertAdmin dentro do controller).
+router.get('/goal-mode', requireRoutePermission(READ_SCREENS), ctrl.getGoalMode);
+router.put('/goal-mode', requireRoutePermission(READ_SCREENS), ctrl.setGoalMode);
+
 // rotas que usam :id com regex numérica
 router.get('/:id(\\d+)', requireRoutePermission(READ_SCREENS), ctrl.getProjectionDetail);
 router.put('/:id(\\d+)/grid', requireRoutePermission(EDIT_SCREEN), ctrl.upsertProjectionGrid);   // salvamento unificado (tela nova)
