@@ -1,7 +1,7 @@
 // controllers/projectionsController.js
 import db from '../models/sequelize/index.js';
 import { resolveUnitsForErp } from '../services/cv/enterpriseUnitsSummaryService.js';
-import { visibleErpIds } from '../services/permissions/accessScopeService.js';
+import { visibleErpIds, getScope, isErpAllowed } from '../services/permissions/accessScopeService.js';
 
 const {
   SalesProjection,
@@ -1673,10 +1673,13 @@ export async function getProjectionReport(req, res) {
     let filteredEnterprises = enterprises
     if (companyIdsList.length > 0) {
       const companySet = new Set(companyIdsList)
+      // Filtrou por empresa = quer VER só aquela empresa. Linha manual da
+      // projeção (enterprise_key MAN:*, sem erp_id) não tem empresa resolvível,
+      // então ela SAI do recorte — antes ficava e poluía o relatório com
+      // empreendimento de outra empresa.
       filteredEnterprises = filteredEnterprises.filter((e) => {
         const cid = e.company_id != null ? Number(e.company_id) : null
-        // Mesmo comportamento do client antigo: se empresa não foi resolvida, mantém.
-        return cid == null || companySet.has(cid)
+        return cid != null && companySet.has(cid)
       })
     }
     if (enterpriseIdsList.length > 0) {
@@ -1810,13 +1813,22 @@ export async function getActiveProjectionCostCenterNames(req, res) {
   try {
     if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
+    // Escopo de acesso: o mapa é só rótulo, mas rótulo de CC que o usuário não
+    // enxerga vira filtro que não retorna nada (era o caso do Custos). null =
+    // admin (sem filtro); fail-closed: escopo vazio → mapa vazio.
+    const scope = await getScope(req.user);
+    if (!scope.all && !scope.erpIds.length) return res.json({});
+    const podeVer = (ccId) => scope.all || isErpAllowed(scope, ccId);
+
     const map = {};
 
     // fallback legado: overrides existentes (não quebra nomes já cadastrados)
     try {
       const overrides = await db.CostCenterOverride.findAll({ attributes: ['cost_center_id', 'display_name'] });
       for (const o of overrides) {
-        if (o.cost_center_id != null && o.display_name) map[String(o.cost_center_id)] = o.display_name;
+        if (o.cost_center_id != null && o.display_name && podeVer(o.cost_center_id)) {
+          map[String(o.cost_center_id)] = o.display_name;
+        }
       }
     } catch (_e) {
       // tabela pode não existir em algum ambiente — segue só com a projeção
@@ -1834,7 +1846,9 @@ export async function getActiveProjectionCostCenterNames(req, res) {
         attributes: ['erp_id', 'enterprise_name_cache'],
       });
       for (const r of rows) {
-        if (r.erp_id != null && r.enterprise_name_cache) map[String(r.erp_id)] = r.enterprise_name_cache;
+        if (r.erp_id != null && r.enterprise_name_cache && podeVer(r.erp_id)) {
+          map[String(r.erp_id)] = r.enterprise_name_cache;
+        }
       }
     }
 
@@ -1842,6 +1856,83 @@ export async function getActiveProjectionCostCenterNames(req, res) {
   } catch (e) {
     console.error('[projections] getActiveProjectionCostCenterNames erro', e);
     return res.status(500).json({ error: e.message || 'Erro ao carregar nomes de exibição.' });
+  }
+}
+
+/**
+ * =============================================================================
+ * MODO DE META (unidades × VGV) — REGRA GLOBAL
+ * =============================================================================
+ * Como o Vendas X Projeção calcula "% atingida": por unidades vendidas ou por
+ * VGV. Era preferência de navegador (localStorage), então cada pessoa via um
+ * número diferente. Agora é linha única no banco: leitura para quem tem a tela,
+ * escrita só para admin.
+ */
+const GOAL_MODES = ['units', 'vgv'];
+const normGoalMode = (v) => (GOAL_MODES.includes(String(v)) ? String(v) : 'units');
+
+async function getGoalModeRow() {
+  const { ProjectionGoalMode } = db;
+  let row = await ProjectionGoalMode.findOne({ order: [['id', 'ASC']] });
+  if (!row) row = await ProjectionGoalMode.create({ global_mode: 'units', enterprise_overrides: {} });
+  return row;
+}
+
+// GET /api/projections/goal-mode → { globalMode, enterpriseOverrides, updatedAt }
+export async function getGoalMode(req, res) {
+  try {
+    if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+    const row = await getGoalModeRow();
+    return res.json({
+      globalMode: normGoalMode(row.global_mode),
+      enterpriseOverrides: row.enterprise_overrides || {},
+      updatedAt: row.updated_at ?? row.updatedAt ?? null,
+    });
+  } catch (e) {
+    console.error('[projections] getGoalMode erro', e);
+    return res.status(500).json({ error: e.message || 'Erro ao carregar o modo de meta.' });
+  }
+}
+
+// PUT /api/projections/goal-mode (ADMIN) { globalMode?, enterpriseOverrides? }
+export async function setGoalMode(req, res) {
+  const deny = assertAdmin(req, res);
+  if (deny) return;
+
+  try {
+    const row = await getGoalModeRow();
+
+    if (typeof req.body.globalMode !== 'undefined') {
+      row.global_mode = normGoalMode(req.body.globalMode);
+    }
+
+    if (typeof req.body.enterpriseOverrides !== 'undefined') {
+      const raw = req.body.enterpriseOverrides;
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+        return res.status(400).json({ error: 'enterpriseOverrides deve ser um objeto { erpId: modo }.' });
+      }
+      // Só entra chave numérica com modo válido — lixo do front não vira regra.
+      const clean = {};
+      for (const [k, v] of Object.entries(raw)) {
+        const id = String(k).trim();
+        if (!/^\d+$/.test(id)) continue;
+        if (!GOAL_MODES.includes(String(v))) continue;
+        clean[id] = String(v);
+      }
+      row.enterprise_overrides = clean;
+    }
+
+    row.updated_by = req.user.id;
+    await row.save();
+
+    return res.json({
+      globalMode: normGoalMode(row.global_mode),
+      enterpriseOverrides: row.enterprise_overrides || {},
+      updatedAt: row.updated_at ?? row.updatedAt ?? null,
+    });
+  } catch (e) {
+    console.error('[projections] setGoalMode erro', e);
+    return res.status(500).json({ error: e.message || 'Erro ao salvar o modo de meta.' });
   }
 }
 

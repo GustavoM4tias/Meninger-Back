@@ -40,6 +40,7 @@ import SalesProjectionDefine from './projection/salesProjection.js';
 import SalesProjectionLineDefine from './projection/salesProjectionLine.js';
 import SalesProjectionLogDefine from './projection/salesProjectionLog.js';
 import SalesProjectionEnterpriseDefine from './projection/salesProjectionEnterprise.js';
+import ProjectionGoalModeDefine from './projection/projectionGoalMode.js';
 
 // Gastos por Departamento — config admin + liberação (ex-Viabilidade)
 import DeptSpendingMarketingDepartmentDefine from './deptSpending/marketingDepartment.js';
@@ -307,6 +308,7 @@ db.SalesProjection = SalesProjectionDefine(sequelize, DataTypes);
 db.SalesProjectionLine = SalesProjectionLineDefine(sequelize, DataTypes);
 db.SalesProjectionLog = SalesProjectionLogDefine(sequelize, DataTypes);
 db.SalesProjectionEnterprise = SalesProjectionEnterpriseDefine(sequelize, DataTypes);
+db.ProjectionGoalMode = ProjectionGoalModeDefine(sequelize, DataTypes);
 
 // Gastos por Departamento — config admin + liberação (ex-Viabilidade)
 db.DeptSpendingMarketingDepartment = DeptSpendingMarketingDepartmentDefine(sequelize, DataTypes);

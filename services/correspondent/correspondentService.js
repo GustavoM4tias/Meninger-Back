@@ -22,6 +22,8 @@ import crypto from 'crypto';
 import { Op } from 'sequelize';
 import apiCv from '../../lib/apiCv.js';
 import db from '../../models/sequelize/index.js';
+import { visibleCities } from '../permissions/accessScopeService.js';
+import { cityMatches } from '../realestate/realEstateReportService.js';
 
 const { CorrespondentCompany, CorrespondentRegistration, CorrespondentInvite, CvCorrespondent } = db;
 
@@ -430,12 +432,25 @@ export async function mapaNomesDoPrecadastro() {
  * Empresas que existem no CV mas nunca passaram pelo Office ganham o nome
  * inferido dos pré-cadastros - é o melhor possível sem o GET de empresas.
  */
-export async function montarPanorama() {
+export async function montarPanorama(user = null) {
     const [empresas, usuarios, nomesCv] = await Promise.all([
         CorrespondentCompany.findAll({ order: [['nome', 'ASC']] }),
         CvCorrespondent.findAll({ order: [['nome', 'ASC']] }),
         mapaNomesDoPrecadastro(),
     ]);
+
+    // Escopo de acesso (accessScopeService): correspondente não tem
+    // empreendimento, então vale a mesma régua da tela de Imobiliárias - as
+    // cidades dos empreendimentos liberados. null = admin (sem filtro).
+    // Fail-closed: sem escopo, ou empresa sem cidade, não aparece.
+    const scopeCities = await visibleCities(user);
+    const noEscopo = (empresa) => {
+        if (scopeCities === null) return true;
+        if (!scopeCities.length) return false;
+        const cidade = empresa?.cidade;
+        if (!cidade) return false;
+        return scopeCities.some((sc) => cityMatches(cidade, sc));
+    };
 
     const porEmpresa = new Map();
     for (const u of usuarios) {
@@ -447,23 +462,31 @@ export async function montarPanorama() {
     const mapaLocal = new Map(empresas.filter((e) => e.cv_idempresa).map((e) => [Number(e.cv_idempresa), e]));
     const linhas = [];
 
+    let usuariosVisiveis = 0;
+
     for (const e of empresas) {
+        if (!noEscopo(e)) continue;
         const lista = e.cv_idempresa ? (porEmpresa.get(Number(e.cv_idempresa)) || []) : [];
         const origem = !e.cv_idempresa ? 'pendente' : (e.status === 'imported' ? 'importada' : 'office');
         linhas.push(montaLinha(e, e.cv_idempresa, lista, origem));
+        usuariosVisiveis += lista.length;
     }
     // Empresas vistas no CV que ainda não foram materializadas pelo sync.
     // Sem nome no pré-cadastro, não entram: viraria "Empresa #N" sem serventia.
     for (const [idempresa, lista] of porEmpresa) {
         if (!idempresa || mapaLocal.has(Number(idempresa))) continue;
+        // Empresa que só existe no CV não tem cidade cadastrada aqui, então não
+        // dá para provar que está no escopo: fica só para o admin.
+        if (scopeCities !== null) continue;
         const nomeCv = nomesCv.get(Number(idempresa));
         if (!nomeCv) continue;
         linhas.push(montaLinha(null, idempresa, lista, 'cv', nomeCv));
+        usuariosVisiveis += lista.length;
     }
 
     return {
         empresas: linhas.sort((a, b) => a.nome.localeCompare(b.nome)),
-        total_usuarios: usuarios.length,
+        total_usuarios: scopeCities === null ? usuarios.length : usuariosVisiveis,
     };
 }
 

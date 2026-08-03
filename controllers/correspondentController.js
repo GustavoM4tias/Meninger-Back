@@ -13,6 +13,8 @@ import db from '../models/sequelize/index.js';
 import responseHandler from '../utils/responseHandler.js';
 import { parsePessoas } from '../services/correspondent/correspondentParser.js';
 import correspondentService from '../services/correspondent/correspondentService.js';
+import { visibleCities } from '../services/permissions/accessScopeService.js';
+import { cityMatches } from '../services/realestate/realEstateReportService.js';
 
 const { CorrespondentCompany, CorrespondentRegistration, CorrespondentInvite, User } = db;
 
@@ -21,7 +23,8 @@ const erro = (res, err) => responseHandler.error(res, err?.message || 'Erro ines
 /** Panorama: empresas + usuários agrupados (espelho local do CV). */
 export async function getOverview(req, res) {
     try {
-        const data = await correspondentService.montarPanorama();
+        // Escopo por cidade dentro do serviço (accessScopeService). Admin vê tudo.
+        const data = await correspondentService.montarPanorama(req.user);
         return res.json({ ok: true, ...data });
     } catch (err) {
         return erro(res, err);
@@ -32,7 +35,7 @@ export async function getOverview(req, res) {
 export async function syncCorrespondents(req, res) {
     try {
         const sincronizados = await correspondentService.sincronizarEspelho();
-        const data = await correspondentService.montarPanorama();
+        const data = await correspondentService.montarPanorama(req.user);
         return res.json({ ok: true, ...data, sincronizados });
     } catch (err) {
         return erro(res, err);
@@ -69,10 +72,18 @@ export async function previewPaste(req, res) {
 
 export async function listCompanies(req, res) {
     try {
-        const empresas = await CorrespondentCompany.findAll({
+        const todas = await CorrespondentCompany.findAll({
             order: [['nome', 'ASC']],
             include: User ? [{ model: User, as: 'creator', attributes: ['id', 'username'] }] : [],
         });
+
+        // Mesmo escopo do panorama: cidades dos empreendimentos liberados.
+        // null = admin. Fail-closed: sem escopo ou sem cidade, não aparece.
+        const scopeCities = await visibleCities(req.user);
+        const empresas = scopeCities === null
+            ? todas
+            : todas.filter((e) => e.cidade && scopeCities.some((sc) => cityMatches(e.cidade, sc)));
+
         return res.json({ ok: true, empresas });
     } catch (err) {
         return erro(res, err);
