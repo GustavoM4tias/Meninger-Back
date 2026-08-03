@@ -93,6 +93,17 @@ export default (sequelize, DataTypes) => {
             comment: 'Dias corridos máximos entre hoje e a data de vencimento do boleto. Vencimento acima → erro "excede limite". Override por empreendimento em boleto_comission_rules.max_dias_vencimento.',
         },
 
+        // Teto de segurança: o valor vem cru da série do CV, sem validação de
+        // origem. Um valor absurdo (série em centavos, série errada, digitação)
+        // virava boleto real no banco. Acima deste teto a emissão para com
+        // status 'error' em vez de registrar no Ecobrança.
+        valor_maximo: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+            defaultValue: 300000,
+            comment: 'Valor máximo (R$) aceito para emissão. Série acima disto → erro "excede teto", sem registrar no banco. Vazio = sem teto.',
+        },
+
         // ── Controle ───────────────────────────────────────────────────────────
         active: {
             type: DataTypes.BOOLEAN,

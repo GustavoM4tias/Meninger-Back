@@ -569,6 +569,42 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         // Substitui o valor da série pelo valor a emitir (mantém referência ao original).
         serie.valor = valorEmitir;
 
+        // ── 2b-bis. TETO DE VALOR ─────────────────────────────────────────────
+        // O valor vem cru de `serie.valor` (CV), sem validação de origem. Série
+        // em centavos, série errada ou digitação já geraram boleto real no banco
+        // (03/08/2026: R$ 11.094.500,00 registrado e enviado ao cliente). Barra
+        // ANTES do Ecobrança — depois de registrado só resta baixar.
+        // Teto configurável em /financeiro/boleto-caixa (settings.valor_maximo).
+        const tetoValor = settings.valor_maximo != null ? Number(settings.valor_maximo) : null;
+        if (tetoValor != null && Number.isFinite(tetoValor) && tetoValor > 0 && valorEmitir > tetoValor) {
+            const msg = `❌ Boleto não emitido: valor ${formatCurrency(valorEmitir)} excede o teto de ${formatCurrency(tetoValor)}.\nConfira a condição de pagamento da reserva. Se o valor estiver correto, ajuste o teto nas configurações do Boleto Caixa.`
+                + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+
+            console.warn(
+                `[BOLETO] Emissão barrada pelo teto: reserva ${idreserva}, `
+                + `valor ${formatCurrency(valorEmitir)} > teto ${formatCurrency(tetoValor)}`
+            );
+
+            await history.update({
+                status: 'error',
+                error_message: `Valor ${formatCurrency(valorEmitir)} excede o teto de ${formatCurrency(tetoValor)}.`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                valor: valorEmitir,
+                valor_original: valorOriginal,
+                comissao_percentual_aplicada: comissaoPercentualAplicada,
+                vencimento: serie.vencimento,
+                cv_mensagem_enviada: msgOk,
+                warnings: warnings.length ? warnings : null,
+            });
+            if (settings.situacao_erro_id) {
+                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
+            }
+            return;
+        }
+
         // ── 2c. DECISÃO DE RE-TRIGGER ─────────────────────────────────────────
         // O CV pode disparar o webhook múltiplas vezes pra mesma reserva:
         //   - Quando a 1ª tentativa de envio ao Sienge falhou e ele volta pra etapa
