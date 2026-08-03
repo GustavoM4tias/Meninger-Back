@@ -121,6 +121,7 @@ import { ensureLegacyDrops } from './lib/ensureLegacyDrops.js';
 import { ensureAccessModelSchema } from './lib/ensureAccessModelSchema.js';
 import { ensureAccessModelColumns } from './lib/ensureAccessModelColumns.js';
 import { ensureRoutePolicySchema } from './lib/ensureRoutePolicySchema.js';
+import { ensureEventPlanSchema } from './lib/ensureEventPlanSchema.js';
 import { ensureOrgDefaultsSchema } from './lib/ensureOrgDefaultsSchema.js';
 import { ensureBrazilCitiesSeed } from './lib/ensureBrazilCitiesSeed.js';
 import { registerApp as registerIntegrityApp, runIntegrityCheck } from './security/integrityCheck.js';
@@ -400,6 +401,7 @@ async function syncModelsAndPatches(fingerprint) {
   await runPatch('SignupApprovalColumns', ensureSignupApprovalColumns); // users.approval_status + permission_profiles.department_id
   await runPatch('AccessModelColumns', ensureAccessModelColumns);   // users.position_id/city_id/permission_profile_id + user_permissions.routes_* + positions.level
   await runPatch('RoutePolicy', ensureRoutePolicySchema);           // route_policies + permission_profiles.seed_code/routes_customized
+  await runPatch('EventPlan', ensureEventPlanSchema);               // event_plan_settings.auto_submit_enabled
 
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
