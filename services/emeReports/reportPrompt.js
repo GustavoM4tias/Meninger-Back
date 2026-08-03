@@ -59,8 +59,15 @@ Tons ("tone"): "neutral" | "accent" | "success" | "warning" | "danger" | "info".
 - note — nota pequena em itálico. props: { text }
 - footer — rodapé (1x, sempre o último bloco).
   props: { sources: [string], note }
-  NÃO passe datas: o rodapé usa automaticamente a data do próprio relatório.
+  NÃO passe datas nem período: o rodapé já exibe sozinho o período do relatório,
+  o selo "ao vivo", a data de atualização e a assinatura da Menin.
   NUNCA escreva data em "note" nem em texto solto.
+
+REGRA DE PERÍODO (vale para hero, narrativas e legendas):
+  Em relatório AO VIVO (data_mode "live", sem fim definido), NUNCA escreva uma
+  data final — nem a de hoje, nem a que você usou como data_fim na consulta.
+  Escreva "a partir de DD/MM/AAAA" ou "até hoje". Uma data final fixa num
+  relatório vivo envelhece e passa a mentir no dia seguinte.
 - custom-html — APENAS quando nenhum bloco atende. HTML simples, sem scripts.
   props: { html, purpose } — "purpose" descreve o que o bloco faz (obrigatório).
 `;

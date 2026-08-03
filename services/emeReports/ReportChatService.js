@@ -248,6 +248,47 @@ function summarizeForGemini(result) {
 const MAX_TOOL_ROUNDS = 15;
 const HISTORY_LIMIT = 30;
 
+// ── Teto de contexto da conversa ─────────────────────────────────────────────
+// Só limitar por NÚMERO de mensagens não basta: as do relatório são longas
+// (pedidos com tabelas inteiras coladas), e uma thread comprida empurra o
+// modelo a responder "de memória" em vez de reconsultar — foi assim que uma
+// tabela por empreendimento saiu com números reconstruídos. Aqui o histórico é
+// cortado por ORÇAMENTO DE CARACTERES, mantendo sempre as trocas mais recentes,
+// e o modelo é avisado de que o começo foi omitido para não achar que aquilo
+// nunca existiu.
+const HISTORY_CHAR_BUDGET = 24000;
+const HISTORY_MSG_MAX_CHARS = 4000;
+
+function trimHistory(messages) {
+  const recorte = messages.map((m) => ({
+    role: m.role === 'user' ? 'user' : 'model',
+    text: String(m.content || '(operação no relatório)').slice(0, HISTORY_MSG_MAX_CHARS),
+  }));
+
+  const mantidas = [];
+  let orcamento = HISTORY_CHAR_BUDGET;
+  for (let i = recorte.length - 1; i >= 0; i--) {
+    const custo = recorte[i].text.length;
+    if (mantidas.length && custo > orcamento) break;
+    mantidas.unshift(recorte[i]);
+    orcamento -= custo;
+  }
+
+  const omitidas = recorte.length - mantidas.length;
+  const history = mantidas.map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
+  if (omitidas > 0) {
+    history.unshift({
+      role: 'user',
+      parts: [{
+        text: `[${omitidas} mensagem(ns) anterior(es) desta conversa foram omitidas por tamanho. `
+          + 'O relatório atual, que você recebe no system prompt, é a fonte da verdade sobre o que já foi montado. '
+          + 'Se precisar de qualquer NÚMERO que estava nessas mensagens, RECONSULTE com a ferramenta — nunca reconstrua de memória.]',
+      }],
+    });
+  }
+  return { history, omitidas };
+}
+
 // Cache dos REGISTROS BRUTOS por relatório, para report_analyze_data cruzar os
 // dados sem reconsultar o banco. Em memória, com TTL — se expirar, a Eme
 // simplesmente busca de novo.
@@ -285,10 +326,10 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
     order: [['created_at', 'ASC']],
     limit: HISTORY_LIMIT,
   });
-  const history = prior.map((m) => ({
-    role: m.role === 'user' ? 'user' : 'model',
-    parts: [{ text: m.content || '(operação no relatório)' }],
-  }));
+  const { history, omitidas } = trimHistory(prior);
+  if (omitidas > 0) {
+    console.log(`[ReportChatService] histórico do relatório ${report.id}: ${omitidas} mensagem(ns) antiga(s) omitida(s) por orçamento de contexto.`);
+  }
 
   await db.EmeGeneratedReportMessage.create({ reportId: report.id, role: 'user', content: userMessage });
 

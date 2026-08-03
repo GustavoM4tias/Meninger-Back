@@ -25,7 +25,12 @@ const router = express.Router();
 router.use(authenticate);
 
 // Temas visuais aceitos (espelha front: components/Reports/themes.js)
-const THEMES = ['classic', 'modern', 'executive', 'vibrant', 'nature', 'minimal'];
+// Espelha as chaves de Meninger-Front/src/components/Reports/themes.js.
+// Tema novo no front → adicionar aqui, senão o PUT recusa em silêncio.
+const THEMES = [
+  'classic', 'modern', 'executive', 'vibrant', 'nature',
+  'ocean', 'sunset', 'berry', 'citrus', 'minimal',
+];
 
 // Rate limit do chat do builder (in-memory, mesmo padrão do office-chat)
 const _buckets = new Map();
