@@ -19,6 +19,7 @@
 // GET /v2/cadastros/correspondentes-usuarios.
 
 import crypto from 'crypto';
+import { Op } from 'sequelize';
 import apiCv from '../../lib/apiCv.js';
 import db from '../../models/sequelize/index.js';
 
@@ -355,9 +356,13 @@ export async function importarEmpresasDoCv(usuarios = null) {
         const atual = porId.get(id);
 
         if (!atual) {
+            // Sem nome no pré-cadastro a empresa não entra: seria uma linha
+            // "Empresa #N" sem nenhuma informação útil, só poluindo a lista.
+            // Empresa cadastrada por gente no Office nunca cai aqui.
+            if (!nomeCv) continue;
             await CorrespondentCompany.create({
                 cv_idempresa: id,
-                nome: nomeCv || `Empresa #${id}`,
+                nome: nomeCv,
                 status: 'imported',
             });
             criadas++;
@@ -372,10 +377,17 @@ export async function importarEmpresasDoCv(usuarios = null) {
         }
     }
 
-    if (criadas || atualizadas) {
-        console.log(`[Correspondentes] empresas: ${criadas} criada(s), ${atualizadas} renomeada(s)`);
+    // Limpa resquício de importação antiga: empresa `imported` que ficou só
+    // com o rótulo "Empresa #N" não tem nome no pré-cadastro e não deve
+    // aparecer. Registro confirmado por gente (linked/external) é preservado.
+    const removidas = await CorrespondentCompany.destroy({
+        where: { status: 'imported', nome: { [Op.regexp]: '^Empresa #[0-9]+$' } },
+    });
+
+    if (criadas || atualizadas || removidas) {
+        console.log(`[Correspondentes] empresas: ${criadas} criada(s), ${atualizadas} renomeada(s), ${removidas} removida(s)`);
     }
-    return { criadas, atualizadas };
+    return { criadas, atualizadas, removidas };
 }
 
 const ENTIDADES = { '&amp;': '&', '&quot;': '"', '&#39;': "'", '&lt;': '<', '&gt;': '>', '&nbsp;': ' ' };
@@ -440,9 +452,13 @@ export async function montarPanorama() {
         const origem = !e.cv_idempresa ? 'pendente' : (e.status === 'imported' ? 'importada' : 'office');
         linhas.push(montaLinha(e, e.cv_idempresa, lista, origem));
     }
+    // Empresas vistas no CV que ainda não foram materializadas pelo sync.
+    // Sem nome no pré-cadastro, não entram: viraria "Empresa #N" sem serventia.
     for (const [idempresa, lista] of porEmpresa) {
         if (!idempresa || mapaLocal.has(Number(idempresa))) continue;
-        linhas.push(montaLinha(null, idempresa, lista, 'cv', nomesCv.get(Number(idempresa))));
+        const nomeCv = nomesCv.get(Number(idempresa));
+        if (!nomeCv) continue;
+        linhas.push(montaLinha(null, idempresa, lista, 'cv', nomeCv));
     }
 
     return {
