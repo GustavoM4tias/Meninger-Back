@@ -153,6 +153,40 @@ export async function revokeInvite(req, res) {
     }
 }
 
+// Edita a janela de um link multi-uso (início/encerramento). Estender o
+// encerramento reabre um link já encerrado; revogado continua morto (a rota
+// pública checa status='revoked' antes da janela).
+export async function updateInvite(req, res) {
+    try {
+        const reg = await RealEstateRegistration.findByPk(req.params.id);
+        if (!reg) return res.status(404).json({ ok: false, error: 'Cadastro não encontrado.' });
+        if (!isAdmin(req) && reg.created_by !== req.user.id) {
+            return res.status(403).json({ ok: false, error: 'Sem permissão sobre este link.' });
+        }
+        if (!reg.multi_use) {
+            return res.status(400).json({ ok: false, error: 'Só links de uso múltiplo têm período editável.' });
+        }
+        if (reg.status === 'revoked') {
+            return res.status(400).json({ ok: false, error: 'Link revogado não pode ser alterado. Gere um novo link.' });
+        }
+
+        const startsAt = parseDateOnly(req.body?.starts_at) || reg.starts_at || todayBR();
+        const endsAt = parseDateOnly(req.body?.ends_at);
+        if (!endsAt) {
+            return res.status(400).json({ ok: false, error: 'Informe a data de encerramento do link.' });
+        }
+        if (endsAt < startsAt) {
+            return res.status(400).json({ ok: false, error: 'A data de encerramento deve ser igual ou posterior ao início.' });
+        }
+
+        await reg.update({ starts_at: startsAt, ends_at: endsAt });
+        return res.json({ ok: true, registration: toListItem(reg) });
+    } catch (err) {
+        console.error('[realestate] updateInvite:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao atualizar o link.' });
+    }
+}
+
 export async function createInternalRegistration(req, res) {
     try {
         const enterprises = normalizeEnterprises(req.body?.enterprises);
