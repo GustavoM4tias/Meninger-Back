@@ -202,6 +202,11 @@ Quando o usuário declarar um padrão que deve valer nas PRÓXIMAS vezes ("sempr
 - Ids de bloco: curtos e estáveis ("hero", "s1", "s1-funil", "s2-chart"...). Ao editar um bloco existente, mantenha o id.
 - Metadados (title, enterprise_name, period_start, period_end, data_mode) vão nos campos próprios da ferramenta, não em blocos.
 
+# Data de hoje
+Hoje é ${new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })} (fuso America/Sao_Paulo).
+"Mês atual", "este mês", "hoje" contam a partir DESTA data - nunca chute o ano.
+Pedido de "mês atual" = do dia 1 do mês corrente até hoje.
+
 # Estado atual do relatório
 - Título: ${report.title}
 - Empreendimento: ${report.enterpriseName || '(não definido)'}

@@ -451,12 +451,18 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
   let fullText = '';
   const toolCalls = [];
   let stream = firstStream;
+  let lastFinishReason = null;
+  let malformedRetries = 0;
+  let emptyBuildNudged = false;
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       const pendingCalls = [];
+      lastFinishReason = null;
       for await (const chunk of stream.stream) {
-        for (const part of chunk.candidates?.[0]?.content?.parts || []) {
+        const candidate = chunk.candidates?.[0];
+        if (candidate?.finishReason) lastFinishReason = candidate.finishReason;
+        for (const part of candidate?.content?.parts || []) {
           if (part.text) {
             fullText += part.text;
             emitRun(run, { type: 'chunk', text: part.text });
@@ -464,7 +470,43 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
           if (part.functionCall) pendingCalls.push(part.functionCall);
         }
       }
-      if (!pendingCalls.length) break;
+      if (!pendingCalls.length) {
+        // MALFORMED_FUNCTION_CALL: a API DESCARTA a chamada (tipicamente um
+        // report_apply_ops grande demais) e o round termina "limpo". Sem este
+        // resgate o modelo acha que montou, o relatório fica vazio e o texto
+        // final mente para o usuário — foi exatamente o bug do relatório da
+        // Moradas. Devolve o erro ao modelo e manda refazer em partes menores.
+        if (String(lastFinishReason).toUpperCase() === 'MALFORMED_FUNCTION_CALL'
+          && malformedRetries < 2 && round < MAX_TOOL_ROUNDS) {
+          malformedRetries += 1;
+          emitRun(run, { type: 'tool_start', name: 'report_apply_ops', label: 'Remontando (chamada malformada)' });
+          emitRun(run, { type: 'tool_result', name: 'report_apply_ops', ok: false, summary: 'Chamada descartada pela API; refazendo em partes menores.' });
+          stream = await chat.sendMessageStream(
+            'ERRO TÉCNICO: sua última chamada de ferramenta foi DESCARTADA pela API por vir malformada '
+            + '(provavelmente grande demais). NADA foi aplicado ao relatório. Refaça agora a operação em '
+            + 'chamadas report_apply_ops MENORES - uma seção com 2 a 4 blocos por chamada - até completar '
+            + 'o que você pretendia. Não escreva a resposta final antes de aplicar tudo.',
+          );
+          continue;
+        }
+        // Anti-alucinação: consultou dados, vai encerrar sem ter chamado
+        // report_apply_ops nenhuma vez e o relatório está vazio. Uma cutucada
+        // única obriga a montagem de verdade em vez de só narrar no chat.
+        const aplicou = toolCalls.some((t) => t.name === 'report_apply_ops' && t.ok);
+        const buscouDados = toolCalls.some((t) => DATA_TOOL_NAMES.includes(t.name));
+        const temBlocos = (report.spec?.blocks || []).length > 0;
+        if (!aplicou && buscouDados && !temBlocos && !emptyBuildNudged && round < MAX_TOOL_ROUNDS) {
+          emptyBuildNudged = true;
+          stream = await chat.sendMessageStream(
+            'ERRO TÉCNICO: o relatório continua VAZIO - você não chamou report_apply_ops nenhuma vez '
+            + 'nesta resposta. Texto no chat NÃO monta o relatório. Chame report_apply_ops AGORA, seção '
+            + 'a seção (hero + metadados primeiro, depois cada seção com os dados já consultados), e só '
+            + 'então escreva a resposta final curta.',
+          );
+          continue;
+        }
+        break;
+      }
 
       // Executa as tools do round e devolve todas as respostas de uma vez
       const responses = [];
