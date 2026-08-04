@@ -8,6 +8,7 @@ import responseHandler from '../utils/responseHandler.js';
 import { sendEmail } from '../email/email.service.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 import { issueRefreshToken, rotateRefreshToken, revokeRefreshToken } from '../services/auth/refreshTokenService.js';
+import { normalizeEmail, findUserByEmailCI } from '../utils/userEmail.js';
 
 const { User, Position, UserCity } = db;
 const { Op } = db.Sequelize;
@@ -61,7 +62,8 @@ export function generateSecurePassword() {
 }
 
 export const registerUser = async (req, res) => {
-  const { username, password, email, position, city, city_id, birth_date, phone, manager_id, status } = req.body;
+  const { username, password, position, city, city_id, birth_date, phone, manager_id, status } = req.body;
+  const email = normalizeEmail(req.body.email);
   if (!username || !password || !email || !position || (!city && !city_id) || !birth_date) {
     return responseHandler.error(res, 'Todos os campos são obrigatórios');
   }
@@ -70,6 +72,13 @@ export const registerUser = async (req, res) => {
     const existingUser = await User.findOne({ where: { username } });
     if (existingUser) {
       return responseHandler.error(res, 'Nome já existente');
+    }
+
+    // E-mail duplicado (sem case) = mesma pessoa: bloqueia aqui para não nascer
+    // um segundo cadastro que depois duplica o organograma.
+    const existingEmail = await findUserByEmailCI(email);
+    if (existingEmail) {
+      return responseHandler.error(res, `Este e-mail já está cadastrado para "${existingEmail.username}".`);
     }
 
     // 🔹 valida se cargo e cidade existem e estão ativos. city_id é a forma
@@ -615,7 +624,27 @@ export const updateUser = async (req, res) => {
     const payload = {};
 
     if (username !== undefined) payload.username = username;
-    if (email !== undefined) payload.email = email;
+    if (email !== undefined) {
+      const norm = normalizeEmail(email);
+      if (!norm) return responseHandler.error(res, 'E-mail inválido');
+      const current = await User.findByPk(id, { attributes: ['id', 'email'] });
+      if (!current) return responseHandler.error(res, 'Usuário não encontrado');
+
+      if (normalizeEmail(current.email) !== norm) {
+        // Troca de e-mail de verdade: não pode colidir com outro usuário.
+        const emailOwner = await findUserByEmailCI(norm, { excludeId: id });
+        if (emailOwner) {
+          return responseHandler.error(res, `Este e-mail já está cadastrado para "${emailOwner.username}".`);
+        }
+        payload.email = norm;
+      } else if (current.email !== norm) {
+        // Só ajuste de caixa; se existir um duplicado legado com a grafia
+        // minúscula exata, mantém como está (o UNIQUE recusaria) — o merge da
+        // ativação/limpeza pela tela resolve o par.
+        const exact = await User.findOne({ where: { email: norm, id: { [Op.ne]: Number(id) } } });
+        if (!exact) payload.email = norm;
+      }
+    }
     if (manager_id !== undefined) payload.manager_id = manager_id || null;
     if (status !== undefined) payload.status = status;
     if (birth_date !== undefined) payload.birth_date = birth_date || null;
