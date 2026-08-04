@@ -23,6 +23,11 @@ export default (sequelize, DataTypes) => {
         nome: { type: DataTypes.STRING(160), allowNull: false },
         documento: { type: DataTypes.STRING(11), allowNull: false },
         email: { type: DataTypes.STRING(160) },
+
+        // O POST do CV aceita `celular` (confirmado em 2026-08-04 cadastrando a
+        // equipe da IMPAV: gravou e voltou no GET), apesar de a doc não citar.
+        celular: { type: DataTypes.STRING(40) },
+
         data_nasc: { type: DataTypes.DATEONLY },
         estado: { type: DataTypes.STRING(2) },
         cidade: { type: DataTypes.STRING(120) },
