@@ -436,4 +436,74 @@ router.get('/feedback', authenticate, async (req, res) => {
   }
 });
 
+// ── GET /api/office-chat/incidents ────────────────────────────────────────────
+// Painel admin (Brain Studio > Validação): incidentes do validador anti-alucinação.
+router.get('/incidents', authenticate, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso restrito a administradores.' });
+
+    const { page = 1, per_page = 30, outcome, reviewed } = req.query;
+    const offset = (Number(page) - 1) * Number(per_page);
+    const where = {};
+    if (outcome) where.outcome = outcome;
+    if (reviewed === 'true') where.reviewed = true;
+    if (reviewed === 'false') where.reviewed = false;
+
+    const { count, rows } = await db.EmeValidationIncident.findAndCountAll({
+      where,
+      order: [['created_at', 'DESC']],
+      limit: Number(per_page),
+      offset,
+    });
+
+    const [correctedCount, blockedCount, warnedCount, pendingCount] = await Promise.all([
+      db.EmeValidationIncident.count({ where: { outcome: 'corrected' } }),
+      db.EmeValidationIncident.count({ where: { outcome: 'blocked' } }),
+      db.EmeValidationIncident.count({ where: { outcome: 'warned' } }),
+      db.EmeValidationIncident.count({ where: { reviewed: false } }),
+    ]);
+
+    const enriched = await Promise.all(rows.map(async (inc) => {
+      const user = inc.user_id
+        ? await db.User.findByPk(inc.user_id, { attributes: ['id', 'username', 'email', 'city'] })
+        : null;
+      return { ...inc.toJSON(), user };
+    }));
+
+    res.json({
+      incidents: enriched,
+      total: count,
+      stats: {
+        corrected: correctedCount,
+        blocked: blockedCount,
+        warned: warnedCount,
+        pending: pendingCount,
+        total: correctedCount + blockedCount + warnedCount,
+      },
+    });
+  } catch (err) {
+    console.error('[officeChatRoutes] incidents list error:', err);
+    res.status(500).json({ error: 'Erro ao listar incidentes de validação.' });
+  }
+});
+
+// ── PATCH /api/office-chat/incidents/:id ──────────────────────────────────────
+// Triagem: admin marca/desmarca o incidente como revisado.
+router.patch('/incidents/:id', authenticate, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso restrito a administradores.' });
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'Incidente não encontrado.' });
+
+    const inc = await db.EmeValidationIncident.findByPk(req.params.id);
+    if (!inc) return res.status(404).json({ error: 'Incidente não encontrado.' });
+
+    if (typeof req.body?.reviewed === 'boolean') inc.reviewed = req.body.reviewed;
+    await inc.save();
+    res.json({ ok: true, reviewed: inc.reviewed });
+  } catch (err) {
+    console.error('[officeChatRoutes] incident review error:', err);
+    res.status(500).json({ error: 'Erro ao atualizar incidente.' });
+  }
+});
+
 export default router;

@@ -1093,77 +1093,112 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     sendSSE(res, { type: 'chunk', text: fallback });
   }
 
-  // ── VALIDAÇÃO ANTI-ALUCINAÇÃO + AUTOCORREÇÃO ──────────────────────────────
+  // ── VALIDAÇÃO ANTI-ALUCINAÇÃO + AUTOCORREÇÃO EM LOOP ──────────────────────
   // Detecta números/labels no texto que NÃO existem no tool result do turn nem
-  // no bridge. Quando detecta, tenta REESCREVER a resposta no mesmo turno com
-  // os dados reais em mãos (o usuário vê a correção acontecer, sem reperguntar).
-  // Só se o aviso persistir é que a resposta é marcada como não confiável.
+  // no bridge. Quando detecta, REESCREVE a resposta em até MAX_FIX_ATTEMPTS
+  // tentativas com os dados reais em mãos (o usuário acompanha pela timeline).
+  // Se a divergência persistir E houver dado autoritativo, o texto suspeito NÃO
+  // é entregue: entra um resumo determinístico montado direto do tool result.
   let hallucinationReport = detectHallucinations(fullAssistantText, actionResult, lastBridge);
   let selfCorrected = false;
+  let blockedUnreliable = false;
+  let correctionAttempts = 0;
+  const initialSuspicious = hallucinationReport.suspicious;
+  const originalSuspectText = initialSuspicious.length ? fullAssistantText : null;
 
+  const MAX_FIX_ATTEMPTS = 3;
   if (hallucinationReport.suspicious.length > 0 && actionResult && (correctionChat || chat)) {
     const authoritative = buildAuthoritativeBlock(actionResult);
     if (authoritative) {
-      if (process.env.EME_DEBUG === 'true') {
-        console.warn('[Eme] Alucinação detectada — tentando autocorreção:',
-          hallucinationReport.suspicious.map(s => s.value).join(', '));
-      }
-      sendSSE(res, { type: 'status', stage: 'verifying', message: 'Conferindo os números com os dados consultados…' });
-      try {
-        const flagged = hallucinationReport.suspicious.map(s => s.value).join(', ');
-        const correctivePrompt =
-          `[CORREÇÃO AUTOMÁTICA — não é mensagem do usuário]\n` +
-          `Sua resposta anterior citou valores/nomes que NÃO existem no resultado da consulta: ${flagged}.\n\n` +
-          `DADOS REAIS E COMPLETOS DA CONSULTA (única fonte válida):\n${authoritative}\n\n` +
-          `Reescreva a resposta AGORA, do zero, obedecendo:\n` +
-          `- Use SOMENTE nomes e números que aparecem no bloco acima (nomes copiados LETRA POR LETRA).\n` +
-          `- Se o dado que você citou não existe ali, ele não existe: não o mencione.\n` +
-          `- Se não houver dados suficientes, diga isso claramente.\n` +
-          `- Responda direto, sem pedir desculpas e sem mencionar esta correção.\n` +
-          `- NÃO chame nenhuma ferramenta: escreva só o texto final.`;
-
-        const fixStream = (await (correctionChat || chat).sendMessageStream([{ text: correctivePrompt }])).stream;
-        let fixedText = '';
-        for await (const fixChunk of fixStream) {
-          for (const p of fixChunk.candidates?.[0]?.content?.parts || []) {
-            if (p.text) fixedText += p.text;   // functionCall é ignorada de propósito
-          }
+      while (hallucinationReport.suspicious.length > 0 && correctionAttempts < MAX_FIX_ATTEMPTS) {
+        correctionAttempts++;
+        if (process.env.EME_DEBUG === 'true') {
+          console.warn(`[Eme] Alucinação detectada — autocorreção ${correctionAttempts}/${MAX_FIX_ATTEMPTS}:`,
+            hallucinationReport.suspicious.map(s => s.value).join(', '));
         }
-        fixedText = stripPseudoToolCalls(fixedText).trim();
+        sendSSE(res, {
+          type: 'status',
+          stage: 'verifying',
+          message: correctionAttempts === 1
+            ? 'Conferindo os números com os dados consultados…'
+            : `Ainda há divergências — revalidando (tentativa ${correctionAttempts} de ${MAX_FIX_ATTEMPTS})…`,
+        });
+        try {
+          const flagged = hallucinationReport.suspicious.map(s => s.value).join(', ');
+          const correctivePrompt =
+            `[CORREÇÃO AUTOMÁTICA — não é mensagem do usuário]\n` +
+            `Sua resposta anterior citou valores/nomes que NÃO existem no resultado da consulta: ${flagged}.\n\n` +
+            `DADOS REAIS E COMPLETOS DA CONSULTA (única fonte válida):\n${authoritative}\n\n` +
+            `Reescreva a resposta AGORA, do zero, obedecendo:\n` +
+            `- Use SOMENTE nomes e números que aparecem no bloco acima (nomes copiados LETRA POR LETRA).\n` +
+            `- Se o dado que você citou não existe ali, ele não existe: não o mencione.\n` +
+            `- Se não houver dados suficientes, diga isso claramente.\n` +
+            `- Responda direto, sem pedir desculpas e sem mencionar esta correção.\n` +
+            `- NÃO chame nenhuma ferramenta: escreva só o texto final.`;
 
-        if (fixedText) {
+          const fixStream = (await (correctionChat || chat).sendMessageStream([{ text: correctivePrompt }])).stream;
+          let fixedText = '';
+          for await (const fixChunk of fixStream) {
+            for (const p of fixChunk.candidates?.[0]?.content?.parts || []) {
+              if (p.text) fixedText += p.text;   // functionCall é ignorada de propósito
+            }
+          }
+          fixedText = stripPseudoToolCalls(fixedText).trim();
+          if (!fixedText) break;
+
           const recheck = detectHallucinations(fixedText, actionResult, lastBridge);
-          // Só adota a reescrita se ela ficou melhor (menos suspeitas).
+          // Só adota a reescrita se ela ficou melhor (menos suspeitas). Se não
+          // melhorou, insistir com o mesmo prompt só queimaria tokens: para.
           if (recheck.suspicious.length < hallucinationReport.suspicious.length) {
             fullAssistantText = fixedText;
             hallucinationReport = recheck;
             selfCorrected = true;
             sendSSE(res, { type: 'replace', text: fixedText });
+          } else {
+            break;
           }
+        } catch (fixErr) {
+          console.warn('[OfficeChatService] Falha na autocorreção:', fixErr?.status || fixErr?.message);
+          break;
         }
-      } catch (fixErr) {
-        console.warn('[OfficeChatService] Falha na autocorreção:', fixErr?.status || fixErr?.message);
       }
+    }
+
+    // Fail-safe: a divergência sobreviveu às tentativas → o texto suspeito NÃO
+    // chega ao usuário. Entra um resumo determinístico dos dados reais (sem IA
+    // no meio) apontando para o gráfico/tabela, que vem direto do banco.
+    if (hallucinationReport.suspicious.length > 0) {
+      blockedUnreliable = true;
+      fullAssistantText = buildSafeFallbackText(actionResult);
+      sendSSE(res, { type: 'replace', text: fullAssistantText });
     }
   }
 
-  if (hallucinationReport.suspicious.length > 0 || selfCorrected) {
+  if (initialSuspicious.length > 0 || selfCorrected) {
     const byKind = hallucinationReport.suspicious.reduce((acc, s) => {
       (acc[s.kind || 'number'] = acc[s.kind || 'number'] || []).push(s.value);
       return acc;
     }, {});
     if (process.env.EME_DEBUG === 'true') {
-      console.warn('[Eme] Resultado da validação:', { selfCorrected, byKind },
+      console.warn('[Eme] Resultado da validação:', { selfCorrected, blockedUnreliable, correctionAttempts, byKind },
         '| message:', fullAssistantText.slice(0, 200));
     }
 
     let kind, message;
-    if (!hallucinationReport.suspicious.length) {
+    if (blockedUnreliable) {
+      // Texto suspeito substituído pelos dados reais — informa a troca.
+      kind = 'blocked';
+      message =
+        `A resposta gerada citava valores que não constam nos dados consultados e não passou na validação` +
+        `${correctionAttempts ? ` (após ${correctionAttempts} tentativa${correctionAttempts > 1 ? 's' : ''} de correção)` : ''}. ` +
+        `Para não te passar informação errada, ela foi substituída pelos dados reais, que vêm direto do banco.`;
+    } else if (!hallucinationReport.suspicious.length) {
       // Reescreveu e ficou limpo — informa a correção, sem alarmar.
       kind = 'corrected';
       message = 'Refiz esta resposta: a primeira versão citava valores que não batiam com os dados consultados. Esta já usa os dados da consulta.';
     } else {
-      // Ainda há divergência (corrigida parcialmente ou não corrigível).
+      // Divergência sem dado autoritativo p/ reescrever/substituir (ex.: turno
+      // sem tool result) — entrega com o aviso de não confiável.
       kind = 'unreliable';
       const parts = [];
       if (byKind.number)        parts.push(`números (${byKind.number.join(', ')})`);
@@ -1183,6 +1218,18 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       details: hallucinationReport.suspicious,
     });
   }
+
+  // Incidente de validação: registrado para a aba Validação do Brain Studio
+  // (auditoria dos comportamentos problemáticos, como a tela de like/dislike).
+  const validationIncident = (initialSuspicious.length > 0 || selfCorrected)
+    ? {
+        outcome: blockedUnreliable ? 'blocked' : (hallucinationReport.suspicious.length ? 'warned' : 'corrected'),
+        attempts: correctionAttempts,
+        suspicious: blockedUnreliable || !hallucinationReport.suspicious.length
+          ? initialSuspicious
+          : hallucinationReport.suspicious,
+      }
+    : null;
 
   // ── Supressão de card órfão (consultas plurais) ───────────────────────────
   // Se a cadeia executou 2+ tools que retornam card de item ÚNICO do mesmo tipo
@@ -1212,6 +1259,31 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     tool_calls: toolCalls,
     latency_ms: Date.now() - startedAt,
   });
+
+  // Persiste o incidente de validação (nunca derruba o chat se falhar).
+  if (validationIncident) {
+    try {
+      await db.EmeValidationIncident.create({
+        session_id: session.id,
+        message_id: savedMsg.id,
+        user_id: userId,
+        outcome: validationIncident.outcome,
+        attempts: validationIncident.attempts,
+        suspicious: validationIncident.suspicious,
+        original_text: originalSuspectText,
+        final_text: fullAssistantText,
+        context: {
+          user_question: userMessage,
+          model: geminiModel,
+          pool,
+          latency_ms: Date.now() - startedAt,
+          tool_calls: toolCalls,
+        },
+      });
+    } catch (incErr) {
+      console.warn('[OfficeChatService] Falha ao registrar incidente de validação:', incErr?.message);
+    }
+  }
 
   // `action: null` explícito quando o card foi suprimido — o front usa isso para
   // descartar o pendingAction recebido via SSE no meio da cadeia. Quando o campo
@@ -1286,6 +1358,32 @@ function buildAuthoritativeBlock(result) {
 
   const block = lines.join('\n');
   return block.length > 6000 ? `${block.slice(0, 6000)}\n…(truncado)` : block;
+}
+
+/**
+ * Texto de fail-safe quando a validação anti-alucinação não converge: montado
+ * DETERMINISTICAMENTE a partir do tool result (sem passar pelo modelo), para
+ * garantir que nada inventado chegue ao usuário. O card/tabela do turno segue
+ * anexado e é a fonte completa.
+ */
+function buildSafeFallbackText(result) {
+  const lines = [
+    'Não consegui validar o comentário que escrevi para esta consulta: ele citava valores que não constam nos dados retornados. Para não te passar informação errada, deixei aqui só o que veio do banco.',
+  ];
+
+  if (Array.isArray(result?.labels) && result.labels.length) {
+    const data = Array.isArray(result.data) ? result.data : [];
+    lines.push('', 'Principais itens da consulta:');
+    result.labels.slice(0, 5).forEach((l, i) => {
+      lines.push(`- ${l}: ${data[i] ?? 'sem valor'}`);
+    });
+    if (result.labels.length > 5) lines.push(`- …e mais ${result.labels.length - 5} itens nos dados abaixo.`);
+  } else if (result?.total != null) {
+    lines.push('', `Total da consulta: ${result.total}.`);
+  }
+
+  lines.push('', 'Os dados anexados abaixo vêm direto do banco e podem ser usados com confiança. Se quiser, refaça a pergunta de forma mais específica.');
+  return lines.join('\n');
 }
 
 /**
