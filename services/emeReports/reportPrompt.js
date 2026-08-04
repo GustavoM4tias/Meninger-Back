@@ -70,6 +70,66 @@ REGRA DE PERÍODO (vale para hero, narrativas e legendas):
   relatório vivo envelhece e passa a mentir no dia seguinte.
 - custom-html — APENAS quando nenhum bloco atende. HTML simples, sem scripts.
   props: { html, purpose } — "purpose" descreve o que o bloco faz (obrigatório).
+
+## Relatórios INTERATIVOS (filtros do leitor)
+
+Quando o usuário pedir um relatório "consultável", "painel com filtros", "que dê
+para filtrar por X" (ex.: painel administrativo de uma imobiliária, consulta por
+corretor, cliente ou período), monte TRÊS peças no report_apply_ops:
+
+1. "filters": o que o leitor poderá escolher. Tipos: "select" (com options fixas
+   ou options_from), "text" (busca livre, ex. nome do cliente) e "date-range"
+   (período; vira data_inicio/data_fim automaticamente). O campo "arg" diz qual
+   argumento da tool o filtro alimenta (imobiliaria, corretor, nome, documento,
+   situacao, status_repasse...).
+2. "datasets": consultas parametrizadas. "base_args" são fixos (inclua group_by
+   quando o bloco precisar de dados agrupados, ou format "list" para tabela);
+   "accepts" lista as keys dos filtros que valem para aquela consulta.
+3. Blocos com "bind": { dataset } liga o bloco à consulta. O SERVIDOR recalcula
+   as props quando o leitor muda um filtro — sem você e sem IA, determinístico,
+   sempre com as permissões de quem está vendo.
+
+Bind por tipo de bloco:
+- chart-bar / chart-line / chart-donut / chart-funnel / ranking → dataset
+  agrupado (base_args com group_by) OU bind.aggregate { group_by: "campo_das_linhas" }.
+- table → dataset com base_args { format: "list" }; bind.fields escolhe as colunas.
+- stat-row → bind.values: [{ path }] posicional sobre props.stats. Os paths são
+  campos do retorno resumo da tool (ex.: "total", "em_analise", "aprovados",
+  "taxa_aprovacao", "tempo_medio_em_analise").
+- big-number / progress-goal → bind.path (um campo do retorno).
+- timeline → bind.map { date, title, description } com campos das linhas.
+
+REGRAS DO INTERATIVO:
+- TODO bloco com bind TAMBÉM precisa das props preenchidas com os números reais
+  desta conversa: elas são o retrato usado no primeiro render, no export e no
+  link público (visitante de link público NÃO filtra nada).
+- Números citados em narrative/insight NÃO mudam com filtro. Em relatório
+  interativo, escreva análises sobre a visão geral e deixe claro ("na visão
+  geral do período..."), ou evite citar números filtráveis no texto.
+- Filtro de cliente: prefira type "text" com arg "nome" (ou "documento" para
+  CPF). NUNCA crie select com lista de nomes de clientes (PII exposta de cara).
+
+Exemplo compacto (painel administrativo de imobiliária):
+{
+  "filters": [
+    { "key": "imob", "label": "Imobiliária", "type": "select", "arg": "imobiliaria", "options_from": { "dataset": "reservas-lista", "field": "imobiliaria_nome" } },
+    { "key": "corretor", "label": "Corretor", "type": "text", "arg": "corretor" },
+    { "key": "cliente", "label": "Cliente", "type": "text", "arg": "nome" },
+    { "key": "periodo", "label": "Período", "type": "date-range" }
+  ],
+  "datasets": [
+    { "id": "pastas-kpis", "tool": "query_precadastros", "base_args": {}, "accepts": ["imob", "corretor", "cliente", "periodo"] },
+    { "id": "pastas-situacao", "tool": "query_precadastros", "base_args": { "group_by": "situacao" }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
+    { "id": "reservas-situacao", "tool": "query_reservas", "base_args": { "group_by": "situacao" }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
+    { "id": "repasses", "tool": "query_reservas", "base_args": { "group_by": "status_repasse" }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
+    { "id": "reservas-lista", "tool": "query_reservas", "base_args": { "format": "list", "limit": 100 }, "accepts": ["imob", "corretor", "cliente", "periodo"] }
+  ],
+  "ops": [{ "action": "upsert", "block": {
+    "id": "s1-kpis", "type": "stat-row",
+    "props": { "stats": [{ "label": "Pastas", "value": 42 }, { "label": "Em análise", "value": 12 }, { "label": "Tempo médio (dias)", "value": 9.5 }] },
+    "bind": { "dataset": "pastas-kpis", "values": [{ "path": "total" }, { "path": "em_analise" }, { "path": "tempo_medio_em_analise" }] }
+  } }]
+}
 `;
 
 export const RESPONSE_STYLE = `
@@ -104,7 +164,8 @@ ${RESPONSE_STYLE}
 3. Buscar TODOS os dados via ferramentas de consulta (query_*). NUNCA invente ou estime números. Todo número exibido no relatório DEVE vir do resultado de uma ferramenta desta conversa.
 4. APROFUNDAR a análise: quando o usuário pedir padrões, recortes ou cruzamentos ("de onde vêm os leads", "qual etapa perde mais", "que dia converte melhor"), use report_analyze_data sobre o que já foi buscado — agrupando, somando e ordenando — em vez de pedir tudo de novo. Traga o achado no texto E em bloco visual (ranking, gauge, chart).
 5. Montar/editar o relatório chamando a ferramenta report_apply_ops com blocos do catálogo.
-6. Explicar em 1-2 frases o que fez e sugerir o próximo refinamento.
+6. Se o usuário quiser um relatório CONSULTÁVEL (filtros por imobiliária, corretor, cliente, período...), use filters + datasets + bind (seção "Relatórios INTERATIVOS" do catálogo) — os números continuam vindo de tool, e o servidor recalcula quando o leitor filtra.
+7. Explicar em 1-2 frases o que fez e sugerir o próximo refinamento.
 
 # Análise, não só listagem
 Um bom relatório responde "e daí?". Sempre que possível: compare com o período anterior, aponte a etapa de maior perda no funil, destaque o outlier (a origem que cresceu, o dia fraco), e escreva a leitura em linguagem de negócio. Números sem interpretação não bastam.

@@ -12,6 +12,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
+import { normalizeFilters, normalizeDatasets, normalizeBind } from './ReportDataService.js';
 
 // ── Spec helpers ─────────────────────────────────────────────────────────────
 
@@ -61,6 +62,12 @@ function deepUnescape(value) {
 export function normalizeSpec(rawSpec) {
   const spec = rawSpec && typeof rawSpec === 'object' ? rawSpec : {};
   const blocks = Array.isArray(spec.blocks) ? spec.blocks : [];
+
+  // Relatório interativo: filtros e datasets validados pelo ReportDataService
+  // (allowlist de tools, args e limites). Fora do padrão = descartado.
+  const filters = normalizeFilters(spec.filters);
+  const datasets = normalizeDatasets(spec.datasets, filters);
+
   const seen = new Set();
   const normalized = blocks
     .filter((b) => b && typeof b === 'object' && typeof b.type === 'string')
@@ -70,9 +77,16 @@ export function normalizeSpec(rawSpec) {
       seen.add(id);
       const props = deepUnescape(b.props && typeof b.props === 'object' ? b.props : {});
       if (b.type === 'custom-html') props.html = sanitizeCustomHtml(props.html);
-      return { id, type: b.type, props };
+      const block = { id, type: b.type, props };
+      const bind = normalizeBind(b.bind, datasets);
+      if (bind) block.bind = bind;
+      return block;
     });
-  return { version: 1, blocks: normalized };
+
+  const out = { version: 1, blocks: normalized };
+  if (filters.length) out.filters = filters;
+  if (datasets.length) out.datasets = datasets;
+  return out;
 }
 
 // Registra custom-html no pipeline de promoção (contagem de reuso por hash).
@@ -465,6 +479,7 @@ export function scanPii(report) {
 export function publicExposureSummary(report) {
   const blocks = report.spec?.blocks || [];
   const toolNames = [...new Set((report.dataSnapshot?.calls || []).map((c) => c.label || c.tool))];
+  const datasets = report.spec?.datasets || [];
   return {
     title: report.title,
     enterprise: report.enterpriseName,
@@ -473,6 +488,9 @@ export function publicExposureSummary(report) {
     dataMode: report.dataMode,
     blockCount: blocks.length,
     sections: blocks.filter((b) => b.type === 'section-header').map((b) => b.props?.title).filter(Boolean),
-    dataSources: toolNames,
+    dataSources: [...new Set([...toolNames, ...datasets.map((d) => d.label || d.tool)])],
+    // Relatório interativo: o link público serve o retrato congelado da
+    // publicação — visitante não filtra nem dispara consulta.
+    interactive: (report.spec?.filters || []).length > 0,
   };
 }
