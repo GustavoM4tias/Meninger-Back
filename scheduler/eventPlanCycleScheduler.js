@@ -301,8 +301,9 @@ async function autoSubmitClosingPlans(settings, today) {
                 importance: 8,
             });
         }
-        // Quem valida precisa saber que chegou fila nova.
-        const validadores = await usersOfStage('COMERCIAL');
+        // Quem decide a PRIMEIRA etapa precisa saber que chegou fila nova.
+        const stages = await getStages();
+        const validadores = stages[0] ? await usersOfStage(stages[0].key) : [];
         if (validadores.length) {
             await notifySafe({
                 type: NotificationType.EVENT_PLAN_SUBMITTED,

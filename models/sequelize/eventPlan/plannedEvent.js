@@ -19,6 +19,30 @@ export const DECISION_STATUS = {
 // avanço de etapa.
 export const APPROVED_SET = [DECISION_STATUS.APPROVED, DECISION_STATUS.APPROVED_WITH_NOTES];
 
+/** Status de uma linha numa etapa. Chave ausente = ainda não decidida. */
+export function stageStatusOf(row, stageKey) {
+    return row?.stage_status?.[stageKey] || DECISION_STATUS.PENDING;
+}
+
+/**
+ * A linha (evento ou item) continua de pé? Cai se QUALQUER etapa já decidida a
+ * reprovou ou devolveu. Etapa ainda não alcançada não derruba nada — é isso que
+ * faz o valor aprovado aparecer certo logo depois da primeira autorização.
+ */
+export function isStanding(row, stages = []) {
+    for (const stage of stages) {
+        const status = stageStatusOf(row, stage.key);
+        if (status === DECISION_STATUS.REJECTED || status === DECISION_STATUS.RETURNED) return false;
+    }
+    return true;
+}
+
+/** Passou por TODAS as etapas configuradas com aprovação. */
+export function isFullyApproved(row, stages = []) {
+    if (!stages.length) return true; // sem etapa configurada, enviar já aprova
+    return stages.every(s => APPROVED_SET.includes(stageStatusOf(row, s.key)));
+}
+
 export const PRIORITY = {
     ESSENCIAL: 'ESSENCIAL',
     IMPORTANTE: 'IMPORTANTE',
@@ -41,8 +65,10 @@ export default (sequelize, DataTypes) => {
         objective: { type: DataTypes.TEXT, allowNull: true },        // para que serve
         expected_audience: { type: DataTypes.INTEGER, allowNull: true }, // público estimado
 
-        comercial_status: { type: DataTypes.STRING(30), allowNull: false, defaultValue: DECISION_STATUS.PENDING },
-        marketing_status: { type: DataTypes.STRING(30), allowNull: false, defaultValue: DECISION_STATUS.PENDING },
+        // Decisão POR ETAPA: { [stageKey]: 'APPROVED' | 'REJECTED' | ... }.
+        // Chave ausente = etapa ainda não decidiu. JSONB porque as etapas são
+        // configuráveis na tela; coluna fixa por etapa engessaria o fluxo.
+        stage_status: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
 
         // Evento avulso incluído DEPOIS do plano aprovado (oportunidade que
         // apareceu no meio do mês). Corre o fluxo sozinho, sem reabrir os

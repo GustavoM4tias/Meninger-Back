@@ -7,7 +7,7 @@
 import db from '../../models/sequelize/index.js';
 import { getScope } from '../../services/permissions/accessScopeService.js';
 import { PLAN_STATUS } from '../../models/sequelize/eventPlan/eventPlan.js';
-import { APPROVED_SET } from '../../models/sequelize/eventPlan/plannedEvent.js';
+import { isStanding, isFullyApproved } from '../../models/sequelize/eventPlan/plannedEvent.js';
 import { ACTIVITY } from '../../models/sequelize/eventPlan/eventPlanActivity.js';
 import { NECESSITY, COST_BASIS } from '../../models/sequelize/eventPlan/plannedEventItem.js';
 import { PRIORITY } from '../../models/sequelize/eventPlan/plannedEvent.js';
@@ -141,6 +141,7 @@ export const getConsolidated = async (req, res) => {
             where.idempreendimento = scope.cvIds;
         }
 
+        const stages = await svc.getStages();
         const plans = await EventPlan.findAll({
             where,
             include: [
@@ -160,8 +161,7 @@ export const getConsolidated = async (req, res) => {
             approved += Number(plan.totals?.approved || 0);
 
             for (const ev of plan.events || []) {
-                const eventApproved = APPROVED_SET.includes(ev.comercial_status)
-                    && (APPROVED_SET.includes(ev.marketing_status) || ev.marketing_status === 'PENDING');
+                const eventApproved = isStanding(ev, stages);
 
                 agenda.push({
                     planned_event_id: ev.id,
@@ -171,8 +171,7 @@ export const getConsolidated = async (req, res) => {
                     event_date: ev.event_date,
                     priority: ev.priority,
                     approved: eventApproved,
-                    comercial_status: ev.comercial_status,
-                    marketing_status: ev.marketing_status,
+                    stage_status: ev.stage_status,
                     event_id: ev.event_id,
                     proposed_total: ev.proposed_total,
                     approved_total: ev.approved_total,
@@ -182,9 +181,7 @@ export const getConsolidated = async (req, res) => {
                 // evento reprovado não vira negociação.
                 if (!eventApproved) continue;
                 for (const item of ev.items || []) {
-                    const itemOk = APPROVED_SET.includes(item.comercial_status)
-                        && (APPROVED_SET.includes(item.marketing_status) || item.marketing_status === 'PENDING');
-                    if (!itemOk) continue;
+                    if (!isStanding(item, stages)) continue;
 
                     const key = item.category || 'Sem categoria';
                     if (!byCategory.has(key)) byCategory.set(key, { category: key, total: 0, quantity: 0, items: [] });
@@ -253,8 +250,9 @@ export const getByAgendaEvent = async (req, res) => {
             return res.json(null);
         }
 
+        const stages = await svc.getStages();
         const items = (plannedEvent.items || [])
-            .filter(i => APPROVED_SET.includes(i.comercial_status) && APPROVED_SET.includes(i.marketing_status))
+            .filter(i => isFullyApproved(i, stages))
             .map(i => ({
                 name: i.name,
                 category: i.category,
@@ -330,6 +328,9 @@ export const getPlan = async (req, res) => {
             can_add_extra: svc.canAddExtraEvent(req.user, plan),
             has_pending_extras: svc.hasPendingExtras(events),
             decidable_stages: await svc.decidableStagesForUser(req.user),
+            // A fila de etapas configurada vai junto: a tela monta o
+            // acompanhamento e os rótulos a partir dela, sem nome fixo no front.
+            stages: (await svc.getStages()).map(s => ({ key: s.key, name: s.name, order: s.order })),
         });
     } catch (e) {
         console.error('[eventPlan] getPlan', e?.message);
@@ -647,9 +648,14 @@ export const submitPlan = async (req, res) => {
         if (!result.ok) {
             return res.status(400).json({ error: 'Inclua ao menos um evento antes de enviar.' });
         }
-        await notifier.notifySubmitted(plan);
+        // Sem etapa configurada o envio já aprova: publica na agenda na hora.
+        if (result.approvedImmediately) {
+            await publishApprovedEvents(plan.id, req.user.id);
+        } else {
+            await notifier.notifySubmitted(plan);
+        }
 
-        res.json({ ok: true, status: plan.status });
+        res.json({ ok: true, status: plan.status, approved_immediately: Boolean(result.approvedImmediately) });
     } catch (e) {
         console.error('[eventPlan] submitPlan', e?.message);
         res.status(500).json({ error: 'Falha ao enviar o plano.' });
@@ -658,7 +664,8 @@ export const submitPlan = async (req, res) => {
 
 export const decidePlan = async (req, res) => {
     try {
-        const stage = String(req.body?.stage || '').toUpperCase();
+        // A chave da etapa é gerada na configuração — não normalizar caixa.
+        const stage = String(req.body?.stage || '').trim();
         const result = await applyDecisions({
             user: req.user,
             planId: Number(req.params.id),
@@ -670,8 +677,10 @@ export const decidePlan = async (req, res) => {
 
         // Publicar na agenda e notificar acontecem DEPOIS da transação: efeito
         // colateral não pode derrubar a decisão já gravada.
+        // Publica quando o plano chega ao FIM da fila, seja ela de uma etapa ou
+        // de cinco. É idempotente, então rodar à toa não duplica nada.
         let published = 0;
-        if (!result.returned && stage === 'MARKETING') {
+        if (!result.returned && result.status === PLAN_STATUS.APPROVED) {
             const agenda = await publishApprovedEvents(Number(req.params.id), req.user.id);
             published = agenda.published;
         }
@@ -680,7 +689,7 @@ export const decidePlan = async (req, res) => {
         if (result.returned) {
             await notifier.notifyReturned(fresh, stage, req.body?.plan_comment || null);
         } else {
-            await notifier.notifyDecided(fresh, stage, { nextStatus: result.status });
+            await notifier.notifyDecided(fresh, stage, { nextStage: result.next_stage });
         }
 
         res.json({ ...result, published });
@@ -791,8 +800,17 @@ export const updateSettings = async (req, res) => {
 export const listUsers = async (req, res) => {
     try {
         if (!isAdmin(req)) return res.status(403).json({ error: 'Apenas administradores.' });
+        const { Op } = db.Sequelize;
         const users = await User.findAll({
-            attributes: ['id', 'username', 'email'],
+            where: {
+                // Só gente do Office, ativa: usuário externo (Academy/parceiro)
+                // não decide autorização interna. Mesmo recorte do
+                // listOfficeUsers das Fichas Comerciais.
+                status: true,
+                external_kind: { [Op.is]: null },
+                external_organization_id: { [Op.is]: null },
+            },
+            attributes: ['id', 'username', 'email', 'position'],
             order: [['username', 'ASC']],
         });
         res.json(users);

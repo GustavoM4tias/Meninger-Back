@@ -12,7 +12,7 @@
 import db from '../../models/sequelize/index.js';
 import { getScope } from '../permissions/accessScopeService.js';
 import { PLAN_STATUS, EDITABLE_STATUSES } from '../../models/sequelize/eventPlan/eventPlan.js';
-import { APPROVED_SET } from '../../models/sequelize/eventPlan/plannedEvent.js';
+import { isStanding, isFullyApproved } from '../../models/sequelize/eventPlan/plannedEvent.js';
 import { ACTIVITY } from '../../models/sequelize/eventPlan/eventPlanActivity.js';
 import { DEFAULT_STAGES, DEFAULT_ITEM_CATEGORIES } from '../../models/sequelize/eventPlan/eventPlanSettings.js';
 
@@ -20,11 +20,6 @@ const {
     EventPlan, PlannedEvent, PlannedEventItem,
     EventPlanActivity, EventPlanAuthProfile, EventPlanSettings,
 } = db;
-
-export const STAGE_BY_STATUS = {
-    [PLAN_STATUS.PENDING_COMERCIAL]: 'COMERCIAL',
-    [PLAN_STATUS.PENDING_MARKETING]: 'MARKETING',
-};
 
 // ── Settings (singleton lazy) ────────────────────────────────────────────────
 
@@ -39,9 +34,23 @@ export async function getSettings() {
     return s;
 }
 
+/** A fila de autorização, na ordem configurada. Pode ser vazia. */
 export async function getStages() {
     const s = await getSettings();
-    return [...(s.stages || DEFAULT_STAGES)].sort((a, b) => (a.order || 0) - (b.order || 0));
+    return [...(s.stages || DEFAULT_STAGES)]
+        .filter(st => st && st.key)
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
+}
+
+/** A etapa seguinte a `key` na fila. Null quando `key` é a última. */
+export function nextStageAfter(stages, key) {
+    const i = stages.findIndex(s => s.key === key);
+    if (i < 0) return null;
+    return stages[i + 1] || null;
+}
+
+export function findStage(stages, key) {
+    return stages.find(s => s.key === key) || null;
 }
 
 // ── Papéis ───────────────────────────────────────────────────────────────────
@@ -127,13 +136,18 @@ export function canAddExtraEvent(user, plan) {
 export function canEditEvent(user, plan, event) {
     if (canEditPlan(user, plan)) return true;
     if (!event?.is_extra) return false;
-    if (event.comercial_status !== 'PENDING') return false;
+    if (!isUndecided(event)) return false;
     return canAddExtraEvent(user, plan);
+}
+
+/** Nenhuma etapa decidiu sobre esta linha ainda. */
+export function isUndecided(row) {
+    return Object.keys(row?.stage_status || {}).length === 0;
 }
 
 /** Extras aguardando envio num plano já aprovado. */
 export function hasPendingExtras(events = []) {
-    return events.some(e => e.is_extra && e.comercial_status === 'PENDING');
+    return events.some(e => e.is_extra && isUndecided(e));
 }
 
 // ── Envio para aprovação ─────────────────────────────────────────────────────
@@ -160,20 +174,23 @@ export async function submitPlanCore(plan, { userId = null, auto = false } = {})
     const isResubmit = plan.status === PLAN_STATUS.RETURNED;
     if (isResubmit) {
         const eventIds = events.map(e => e.id);
-        await PlannedEvent.update(
-            { comercial_status: 'PENDING', marketing_status: 'PENDING' },
-            { where: { plan_id: plan.id } }
-        );
+        await PlannedEvent.update({ stage_status: {} }, { where: { plan_id: plan.id } });
         if (eventIds.length) {
             await PlannedEventItem.update(
-                { comercial_status: 'PENDING', marketing_status: 'PENDING', approved_value: null, needs_quote: false },
+                { stage_status: {}, approved_value: null, needs_quote: false },
                 { where: { planned_event_id: eventIds } }
             );
         }
     }
 
+    // Sem etapa configurada não há a quem pedir autorização: enviar já aprova.
+    // A tela de configuração avisa disso ao admin que deixa a fila vazia.
+    const stages = await getStages();
+    const first = stages[0] || null;
+
     await plan.update({
-        status: PLAN_STATUS.PENDING_COMERCIAL,
+        status: first ? PLAN_STATUS.IN_REVIEW : PLAN_STATUS.APPROVED,
+        current_stage_key: first?.key || null,
         submitted_at: new Date(),
         submitted_by: userId,
         updated_by: userId,
@@ -181,10 +198,14 @@ export async function submitPlanCore(plan, { userId = null, auto = false } = {})
     await recomputeTotals(plan.id);
     await logActivity({
         planId: plan.id, userId, action: ACTIVITY.PLAN_SUBMITTED,
-        meta: { round: plan.round, events: events.length, resubmit: isResubmit, auto },
+        meta: {
+            round: plan.round, events: events.length, resubmit: isResubmit, auto,
+            stage: first?.name || null,
+            no_stages: !first,
+        },
     });
 
-    return { ok: true, events: events.length };
+    return { ok: true, events: events.length, approvedImmediately: !first };
 }
 
 // ── Trilha ───────────────────────────────────────────────────────────────────
@@ -201,27 +222,21 @@ export async function logActivity({ planId, plannedEventId = null, itemId = null
 const money = (v) => Math.round(Number(v || 0) * 100) / 100;
 
 /**
- * "Está de pé?" — vale para evento e para item, com a mesma regra: passou no
- * Comercial e o Marketing ainda não derrubou. Marketing PENDING conta como de pé
- * para que o número apareça certo logo depois da validação comercial, em vez de
- * ficar zerado até o fluxo terminar.
- */
-function isStanding(row) {
-    return APPROVED_SET.includes(row.comercial_status)
-        && (APPROVED_SET.includes(row.marketing_status) || row.marketing_status === 'PENDING');
-}
-
-/**
- * A MATEMÁTICA dos totais, sem banco: recebe eventos e seus itens, devolve o que
- * cada evento e o plano somam. Separada da persistência de propósito — é dinheiro
- * na tela do gestor, precisa ser testável sem subir nada.
+ * A MATEMÁTICA dos totais, sem banco: recebe eventos, seus itens e a fila de
+ * etapas, e devolve o que cada evento e o plano somam. Separada da persistência
+ * de propósito — é dinheiro na tela do gestor, precisa ser testável sem subir nada.
+ *
+ * "Aprovado" é o que continua DE PÉ depois das etapas já decididas, não o que
+ * terminou o fluxo: assim o número aparece certo logo após a primeira
+ * autorização, e cai se uma etapa seguinte reprovar.
  *
  * approved_value null em item de pé significa "aprovado sem corte" e vale o proposto.
  *
- * @param {Array} events                 [{ id, comercial_status, marketing_status }]
+ * @param {Array} events                     [{ id, stage_status }]
  * @param {Map<number, Array>} itemsByEvent  id do evento -> itens
+ * @param {Array} stages                     fila de etapas configurada
  */
-export function computeTotals(events, itemsByEvent) {
+export function computeTotals(events, itemsByEvent, stages = []) {
     const perEvent = new Map();
     let planProposed = 0;
     let planApproved = 0;
@@ -231,10 +246,10 @@ export function computeTotals(events, itemsByEvent) {
     for (const ev of events) {
         const evItems = itemsByEvent.get(ev.id) || [];
         const proposed = money(evItems.reduce((s, it) => s + Number(it.proposed_value || 0), 0));
-        const eventStanding = isStanding(ev);
+        const eventStanding = isStanding(ev, stages);
 
         const approved = money(evItems.reduce((s, it) => {
-            if (!eventStanding || !isStanding(it)) return s;
+            if (!eventStanding || !isStanding(it, stages)) return s;
             const value = it.approved_value == null ? Number(it.proposed_value || 0) : Number(it.approved_value);
             return s + value;
         }, 0));
@@ -245,8 +260,9 @@ export function computeTotals(events, itemsByEvent) {
         if (eventStanding) {
             eventsApproved += 1;
             planApproved += approved;
+        } else {
+            eventsRejected += 1;
         }
-        if (ev.comercial_status === 'REJECTED' || ev.marketing_status === 'REJECTED') eventsRejected += 1;
     }
 
     return {
@@ -279,7 +295,7 @@ export async function recomputeTotals(planId, transaction = null) {
         if (byEvent.has(it.planned_event_id)) byEvent.get(it.planned_event_id).push(it);
     }
 
-    const { perEvent, totals } = computeTotals(events, byEvent);
+    const { perEvent, totals } = computeTotals(events, byEvent, await getStages());
 
     for (const ev of events) {
         const { proposed, approved } = perEvent.get(ev.id);
@@ -313,9 +329,10 @@ export function isInPriorityWindow(eventDate, referenceMonth, settings) {
 }
 
 export default {
-    getSettings, getStages, userCanDecideStage, decidableStagesForUser,
+    getSettings, getStages, nextStageAfter, findStage,
+    userCanDecideStage, decidableStagesForUser,
     canReachEnterprise, isPlanOwner, canEditPlan, canAddExtraEvent, canEditEvent,
     hasPendingExtras, logActivity, submitPlanCore,
     recomputeTotals, computeTotals, computeProposedValue, isInPriorityWindow,
-    STAGE_BY_STATUS,
+    isStanding, isFullyApproved,
 };

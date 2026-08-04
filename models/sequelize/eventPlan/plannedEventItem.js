@@ -46,10 +46,10 @@ export default (sequelize, DataTypes) => {
         // Anexo do orçamento (F4). Soft ref ao bucket de upload.
         attachment_url: { type: DataTypes.TEXT, allowNull: true },
 
-        comercial_status: { type: DataTypes.STRING(30), allowNull: false, defaultValue: 'PENDING' },
-        marketing_status: { type: DataTypes.STRING(30), allowNull: false, defaultValue: 'PENDING' },
+        // Decisão POR ETAPA — mesmo formato do evento (ver plannedEvent.js).
+        stage_status: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
 
-        // Item ESTIMADO que passou aprovado: o marketing ainda precisa cotar.
+        // Item ESTIMADO que passou aprovado: alguém ainda precisa cotar.
         // Derivado no service a cada decisão, materializado p/ filtrar na tela.
         needs_quote: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
 

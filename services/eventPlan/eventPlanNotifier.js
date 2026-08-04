@@ -7,7 +7,7 @@
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
-import { getStages } from './eventPlanService.js';
+import { getStages, findStage } from './eventPlanService.js';
 
 const { EventPlanAuthProfile, CvEnterprise } = db;
 
@@ -48,9 +48,13 @@ async function safeNotify(payload) {
     }
 }
 
-/** Gestor enviou: avisa quem valida no Comercial. */
+/** Gestor enviou: avisa quem decide a PRIMEIRA etapa da fila. */
 export async function notifySubmitted(plan) {
-    const users = await usersOfStage('COMERCIAL');
+    // Quem recebe é a PRIMEIRA etapa da fila configurada, seja qual for o nome.
+    const stages = await getStages();
+    const first = stages[0];
+    if (!first) return; // sem etapa, o envio ja aprova: nao ha a quem avisar
+    const users = await usersOfStage(first.key);
     if (!users.length) return;
     const name = await enterpriseName(plan.idempreendimento);
     await safeNotify({
@@ -65,10 +69,12 @@ export async function notifySubmitted(plan) {
 }
 
 /**
- * Decisão de uma etapa. Avisa sempre o gestor; quando o Comercial libera,
- * avisa também quem faz o aceite no Marketing.
+ * Decisão de uma etapa. Avisa sempre o gestor e, quando o plano avança na fila,
+ * também quem decide a etapa seguinte.
  */
-export async function notifyDecided(plan, stage, { nextStatus }) {
+export async function notifyDecided(plan, stage, { nextStage = null } = {}) {
+    const stages = await getStages();
+    const decidida = findStage(stages, stage);
     const name = await enterpriseName(plan.idempreendimento);
     const owners = (plan.owner_user_ids || []).map(Number).filter(Boolean);
     const approved = Number(plan.totals?.approved || 0);
@@ -76,11 +82,9 @@ export async function notifyDecided(plan, stage, { nextStatus }) {
 
     if (owners.length) {
         await safeNotify({
-            type: stage === 'COMERCIAL'
-                ? NotificationType.EVENT_PLAN_COMERCIAL_DECIDED
-                : NotificationType.EVENT_PLAN_MARKETING_DECIDED,
+            type: NotificationType.EVENT_PLAN_STAGE_DECIDED,
             recipients: { users: owners },
-            title: `${stage === 'COMERCIAL' ? 'Comercial validou' : 'Marketing aceitou'} o plano de ${name}`,
+            title: `${decidida?.name || 'Autorização'} decidiu o plano de ${name}`,
             body: `${monthLabel(plan.reference_month)} · ${summary}`,
             data: { planId: plan.id, stage },
             link: PLAN_LINK(plan.id),
@@ -88,13 +92,14 @@ export async function notifyDecided(plan, stage, { nextStatus }) {
         });
     }
 
-    if (stage === 'COMERCIAL' && nextStatus === 'pending_marketing') {
-        const users = await usersOfStage('MARKETING');
+    // Avancou na fila: quem decide a proxima etapa precisa saber que chegou.
+    if (nextStage) {
+        const users = await usersOfStage(nextStage.key);
         if (users.length) {
             await safeNotify({
-                type: NotificationType.EVENT_PLAN_COMERCIAL_DECIDED,
+                type: NotificationType.EVENT_PLAN_STAGE_DECIDED,
                 recipients: { users },
-                title: `Plano de eventos de ${name} aguardando o Marketing`,
+                title: `Plano de eventos de ${name} aguardando ${nextStage.name}`,
                 body: `${monthLabel(plan.reference_month)} · ${summary}`,
                 data: { planId: plan.id, stage },
                 link: PLAN_LINK(plan.id),
@@ -120,13 +125,15 @@ export async function notifyReturned(plan, stage, comment) {
     });
 }
 
-/** Mês fechado: gestor e ambas as etapas ficam sabendo que congelou. */
+/** Mês fechado: gestor e todas as etapas ficam sabendo que congelou. */
 export async function notifyClosed(plan) {
     const name = await enterpriseName(plan.idempreendimento);
+    const stages = await getStages();
+    const decisores = [];
+    for (const st of stages) decisores.push(...(await usersOfStage(st.key)));
     const users = [...new Set([
         ...(plan.owner_user_ids || []).map(Number),
-        ...(await usersOfStage('COMERCIAL')),
-        ...(await usersOfStage('MARKETING')),
+        ...decisores,
     ])].filter(Boolean);
     if (!users.length) return;
 

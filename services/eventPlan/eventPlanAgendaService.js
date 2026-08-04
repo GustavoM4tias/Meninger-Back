@@ -1,16 +1,17 @@
 // services/eventPlan/eventPlanAgendaService.js
 //
-// Ponte com a tela de Eventos: quando o Marketing aceita, o evento aprovado
-// deixa de ser proposta e vira registro na agenda (`events`), já programado.
+// Ponte com a tela de Eventos: ao passar pela ÚLTIMA etapa de autorização, o
+// evento aprovado deixa de ser proposta e vira registro na agenda (`events`),
+// já programado. Quantas etapas existem é configuração, não código.
 //
 // Roda FORA da transação da decisão, de propósito. Publicar na agenda é efeito
 // colateral: se falhar, a decisão continua valendo e a publicação é retentada na
-// próxima aceitação (é idempotente — só publica quem ainda não tem event_id).
+// próxima decisão (é idempotente — só publica quem ainda não tem event_id).
 
 import db from '../../models/sequelize/index.js';
-import { APPROVED_SET } from '../../models/sequelize/eventPlan/plannedEvent.js';
+import { isFullyApproved } from '../../models/sequelize/eventPlan/plannedEvent.js';
 import { ACTIVITY } from '../../models/sequelize/eventPlan/eventPlanActivity.js';
-import { logActivity } from './eventPlanService.js';
+import { logActivity, getStages } from './eventPlanService.js';
 
 const { EventPlan, PlannedEvent, PlannedEventItem, Event, CvEnterprise, User } = db;
 
@@ -21,13 +22,11 @@ const money = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency',
  * Monta a partir do objetivo do gestor e da lista do que foi aprovado — assim a
  * agenda já mostra o que precisa ser providenciado, sem abrir o plano.
  */
-export function buildDescription(plannedEvent, items) {
+export function buildDescription(plannedEvent, items, stages = []) {
     const parts = [];
     if (plannedEvent.objective) parts.push(plannedEvent.objective);
 
-    const approved = items.filter(i =>
-        APPROVED_SET.includes(i.comercial_status) && APPROVED_SET.includes(i.marketing_status)
-    );
+    const approved = items.filter(i => isFullyApproved(i, stages));
     if (approved.length) {
         const lines = approved.map((i) => {
             const value = i.approved_value == null ? i.proposed_value : i.approved_value;
@@ -45,8 +44,8 @@ export function buildDescription(plannedEvent, items) {
 }
 
 /**
- * Publica na agenda todos os eventos do plano que passaram nas duas etapas e
- * ainda não têm registro em `events`.
+ * Publica na agenda todos os eventos do plano que passaram por TODAS as etapas
+ * configuradas e ainda não têm registro em `events`.
  *
  * @returns {Promise<{published:number, skipped:number}>}
  */
@@ -54,12 +53,11 @@ export async function publishApprovedEvents(planId, actorId = null) {
     const plan = await EventPlan.findByPk(planId);
     if (!plan) return { published: 0, skipped: 0 };
 
+    // Vai para a agenda quem passou por TODAS as etapas configuradas. Com a fila
+    // vazia (sem autorizacao nenhuma), enviar ja aprova e publica.
+    const stages = await getStages();
     const events = await PlannedEvent.findAll({ where: { plan_id: plan.id } });
-    const pending = events.filter(ev =>
-        !ev.event_id
-        && APPROVED_SET.includes(ev.comercial_status)
-        && APPROVED_SET.includes(ev.marketing_status)
-    );
+    const pending = events.filter(ev => !ev.event_id && isFullyApproved(ev, stages));
     if (!pending.length) return { published: 0, skipped: events.length };
 
     const [enterprise, owners] = await Promise.all([
@@ -78,7 +76,7 @@ export async function publishApprovedEvents(planId, actorId = null) {
         try {
             const created = await Event.create({
                 title: plannedEvent.title,
-                description: buildDescription(plannedEvent, items),
+                description: buildDescription(plannedEvent, items, stages),
                 event_date: plannedEvent.event_date,
                 tags: [plannedEvent.kind, 'Plano de Eventos'].filter(Boolean),
                 images: [],

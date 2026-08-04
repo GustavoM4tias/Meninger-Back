@@ -11,10 +11,12 @@
 // significa "empreendimento finalizado, não evolui mais". AQUI significa "mês
 // encerrado e congelado". Mesmo nome, sentido diferente — não copie a regra do
 // closeCondition do enterpriseConditionController.
+// As etapas de autorização são configuráveis (quantas e quem), então o status
+// não cita etapa nenhuma: `in_review` significa "aguardando a etapa apontada em
+// current_stage_key". Trocar a configuração não inventa status novo.
 export const PLAN_STATUS = {
     DRAFT: 'draft',
-    PENDING_COMERCIAL: 'pending_comercial',
-    PENDING_MARKETING: 'pending_marketing',
+    IN_REVIEW: 'in_review',
     RETURNED: 'returned',
     APPROVED: 'approved',
     CLOSED: 'closed',
@@ -44,16 +46,19 @@ export default (sequelize, DataTypes) => {
         owner_unresolved: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
 
         status: { type: DataTypes.STRING(30), allowNull: false, defaultValue: PLAN_STATUS.DRAFT },
+        // Etapa que está decidindo agora (chave de event_plan_settings.stages).
+        // Null fora de in_review.
+        current_stage_key: { type: DataTypes.STRING(60), allowNull: true },
         // Incrementa a cada devolução + reenvio. As decisões dos rounds
         // anteriores continuam gravadas (histórico), só saem do cálculo.
         round: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
 
         submitted_at: { type: DataTypes.DATE, allowNull: true },
         submitted_by: { type: DataTypes.INTEGER, allowNull: true },
-        comercial_decided_at: { type: DataTypes.DATE, allowNull: true },
-        comercial_decided_by: { type: DataTypes.INTEGER, allowNull: true },
-        marketing_decided_at: { type: DataTypes.DATE, allowNull: true },
-        marketing_decided_by: { type: DataTypes.INTEGER, allowNull: true },
+        // Quem decidiu cada etapa e quando: { [stageKey]: { at, by } }. É JSONB
+        // porque o número de etapas é configurável — coluna por etapa voltaria a
+        // engessar o fluxo em nomes fixos.
+        stage_decisions: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
 
         // Fechamento do mês: congela o plano, nada mais entra nem é decidido.
         closed_at: { type: DataTypes.DATE, allowNull: true },
