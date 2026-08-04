@@ -10,6 +10,7 @@ import upload from '../middlewares/uploadMiddleware.js';
 import {
     listRegistrations,
     createInvite,
+    updateInvite,
     revokeInvite,
     createInternalRegistration,
     retryRegistration,
@@ -27,6 +28,7 @@ router.post('/registrations', createInternalRegistration);
 router.post('/registrations/:id/retry', retryRegistration);
 
 router.post('/invites', createInvite);
+router.patch('/invites/:id', updateInvite);
 router.post('/invites/:id/revoke', revokeInvite);
 
 router.post('/parse-cnpj-card', upload.single('file'), parseCardAuthenticated);
