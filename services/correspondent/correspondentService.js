@@ -229,6 +229,9 @@ async function criarUsuarioNoCv(pessoa, cvIdempresa, empresa) {
         idempresa: Number(cvIdempresa),
         gerente: pessoa.gerente !== false, // booleano - "sim" é ignorado pelo CV
         ...(pessoa.data_nasc ? { data_nasc: pessoa.data_nasc } : {}),
+        // Fora da doc, mas o CV grava e devolve no GET (equipe da IMPAV,
+        // 2026-08-04). É o número que a tela usa para o atalho de WhatsApp.
+        ...(pessoa.celular ? { celular: pessoa.celular } : {}),
     };
 
     try {
@@ -281,6 +284,7 @@ export async function criarUsuarios({ pessoas, companyId, userId, origem = 'offi
             nome: p.nome,
             documento: soDigitos(p.documento),
             email: p.email || null,
+            celular: p.celular || null,
             data_nasc: p.data_nasc || null,
             estado: p.estado || empresa.estado || null,
             cidade: p.cidade || empresa.cidade || null,
@@ -352,7 +356,7 @@ export async function reprocessar(registrationId) {
     const empresa = r.company_id ? await CorrespondentCompany.findByPk(r.company_id) : null;
     const res = await criarUsuarioNoCv(
         {
-            nome: r.nome, documento: r.documento, email: r.email,
+            nome: r.nome, documento: r.documento, email: r.email, celular: r.celular,
             data_nasc: r.data_nasc, estado: r.estado, cidade: r.cidade, gerente: r.gerente,
         },
         r.cv_idempresa,
