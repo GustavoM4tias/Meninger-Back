@@ -4,6 +4,11 @@
 // Agente multi-passo: busca dados via tools comerciais (reuso das tools do
 // Office chat) e monta/edita o spec de blocos via report_apply_ops.
 //
+// A geração roda como uma RUN desacoplada da conexão HTTP: os eventos são
+// bufferizados e retransmitidos a qualquer assinante SSE. Fechar a aba ou dar
+// F5 NÃO mata a geração — o front detecta a run ativa (GET /:id → activeRun)
+// e reassiste pelo GET /:id/chat/stream, recebendo o replay + o vivo.
+//
 // Eventos SSE:
 //  { type:'chunk', text }                       — texto da Eme
 //  { type:'tool_start', name, label }           — progresso Fase A (busca de dados)
@@ -32,7 +37,7 @@ import {
 // Tool de montagem/edição do relatório.
 const REPORT_APPLY_DECLARATION = {
   name: 'report_apply_ops',
-  description: 'Aplica alterações no relatório em construção: metadados e operações sobre os blocos. Use replace_all na primeira montagem e ops pontuais (upsert/remove/move) nos ajustes.',
+  description: 'Aplica alterações no relatório em construção: metadados e operações sobre os blocos. Chame VÁRIAS vezes durante a montagem — upsert seção a seção conforme os dados chegam, para o usuário ver o preview se formando. replace_all é só para reestruturar um relatório inteiro que já existe.',
   parameters: {
     type: 'OBJECT',
     properties: {
@@ -125,6 +130,101 @@ const REPORT_REMEMBER_DECLARATION = {
 
 function sendSSE(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+// ── Runs ativas (geração desacoplada da conexão) ─────────────────────────────
+// Uma run por relatório. O buffer guarda TODOS os eventos emitidos, para uma
+// reinscrição (F5 no meio da geração) receber o replay completo e continuar
+// ao vivo. A run termina sozinha (done/erro/watchdog) e some do mapa pouco
+// depois — aí o estado do relatório já está todo no banco.
+const RUN_BUFFER_MAX = 5000;
+const RUN_DONE_TTL_MS = 60 * 1000;
+const RUN_WATCHDOG_MS = 12 * 60 * 1000;
+const _activeRuns = new Map(); // reportId -> run
+
+export function getActiveRun(reportId) {
+  const run = _activeRuns.get(Number(reportId));
+  return run && !run.done ? run : null;
+}
+
+function createRun(reportId, userId) {
+  const run = {
+    reportId: Number(reportId),
+    userId,
+    startedAt: Date.now(),
+    buffer: [],
+    subscribers: new Set(),
+    done: false,
+    watchdog: null,
+  };
+  _activeRuns.set(run.reportId, run);
+  // Se o Gemini travar, a run não pode ficar bloqueando o relatório para sempre
+  run.watchdog = setTimeout(() => {
+    if (!run.done) {
+      emitRun(run, { type: 'error', message: 'A geração demorou demais e foi encerrada. Tente novamente.' });
+      emitRun(run, { type: 'done' });
+      finishRun(run);
+    }
+  }, RUN_WATCHDOG_MS);
+  run.watchdog.unref?.();
+  return run;
+}
+
+function emitRun(run, evt) {
+  if (run.done) return;
+  if (run.buffer.length < RUN_BUFFER_MAX) run.buffer.push(evt);
+  for (const res of run.subscribers) {
+    try {
+      if (!res.writableEnded) sendSSE(res, evt);
+    } catch { /* assinante caiu; a run segue */ }
+  }
+}
+
+function finishRun(run) {
+  if (run.done) return;
+  run.done = true;
+  clearTimeout(run.watchdog);
+  for (const res of run.subscribers) {
+    try {
+      if (!res.writableEnded) res.end();
+    } catch { /* já fechada */ }
+  }
+  run.subscribers.clear();
+  setTimeout(() => {
+    if (_activeRuns.get(run.reportId) === run) _activeRuns.delete(run.reportId);
+  }, RUN_DONE_TTL_MS).unref?.();
+}
+
+// Inscreve uma conexão SSE numa run: replay do que já aconteceu + eventos ao
+// vivo. Retorna o unsubscribe (ligar no req.on('close')).
+export function subscribeToRun(run, res) {
+  for (const evt of run.buffer) {
+    try { sendSSE(res, evt); } catch { return () => {}; }
+  }
+  if (run.done) {
+    try { res.end(); } catch { /* já fechada */ }
+    return () => {};
+  }
+  run.subscribers.add(res);
+  return () => run.subscribers.delete(res);
+}
+
+// Dispara a geração em background e devolve a run na hora. Erros inesperados
+// viram evento de erro para quem estiver assistindo — nunca uma exceção solta.
+export function startReportRun({ user, report, userMessage, selectedBlockIds = [] }) {
+  const run = createRun(report.id, user.id);
+  (async () => {
+    try {
+      await runReportGeneration(run, { user, report, userMessage, selectedBlockIds });
+    } catch (err) {
+      console.error('[ReportChatService] run:', err?.message || err);
+      emitRun(run, { type: 'error', message: 'Erro inesperado ao processar. Tente novamente.' });
+      emitRun(run, { type: 'done' });
+    } finally {
+      finishRun(run);
+    }
+  })();
+  return run;
 }
 
 // ── Gemini (mesmo esquema de chaves/modelos do Office chat) ──────────────────
@@ -263,7 +363,7 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref?.();
 
-export async function streamReportChat({ req, res, user, report, userMessage, selectedBlockIds = [] }) {
+async function runReportGeneration(run, { user, report, userMessage, selectedBlockIds = [] }) {
   // Histórico da thread do relatório
   const prior = await db.EmeGeneratedReportMessage.findAll({
     where: { reportId: report.id },
@@ -314,8 +414,8 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
   // Cliente com retry modelo×chave (mesma estratégia do Office chat, compacta)
   const keys = getKeys();
   if (!keys.length) {
-    sendSSE(res, { type: 'error', message: 'GEMINI_API_KEY(S) não configurada(s).' });
-    sendSSE(res, { type: 'done' });
+    emitRun(run, { type: 'error', message: 'GEMINI_API_KEY(S) não configurada(s).' });
+    emitRun(run, { type: 'done' });
     return;
   }
   const models = getModels();
@@ -343,8 +443,8 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
     }
   }
   if (!chat || !firstStream) {
-    sendSSE(res, { type: 'error', message: 'IA indisponível no momento. Tente novamente.' });
-    sendSSE(res, { type: 'done' });
+    emitRun(run, { type: 'error', message: 'IA indisponível no momento. Tente novamente.' });
+    emitRun(run, { type: 'done' });
     return;
   }
 
@@ -359,7 +459,7 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
         for (const part of chunk.candidates?.[0]?.content?.parts || []) {
           if (part.text) {
             fullText += part.text;
-            sendSSE(res, { type: 'chunk', text: part.text });
+            emitRun(run, { type: 'chunk', text: part.text });
           }
           if (part.functionCall) pendingCalls.push(part.functionCall);
         }
@@ -374,7 +474,7 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
             : name === 'report_analyze_data' ? `Analisando ${args?.group_by || 'os dados'}`
               : name === 'report_remember' ? 'Guardando preferência'
                 : name);
-        sendSSE(res, { type: 'tool_start', name, label });
+        emitRun(run, { type: 'tool_start', name, label });
         const t0 = Date.now();
         let result;
         try {
@@ -387,7 +487,7 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
             if ('period_end' in (args || {})) metaPatch.periodEnd = args.period_end || null;
             if (args?.data_mode && ['fixed', 'live'].includes(args.data_mode)) metaPatch.dataMode = args.data_mode;
             await report.update({ spec, ...metaPatch });
-            sendSSE(res, {
+            emitRun(run, {
               type: 'spec',
               spec,
               changedIds,
@@ -402,7 +502,7 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
             result = { ok: true, blockCount: spec.blocks.length, changedIds };
           } else if (name === 'report_remember') {
             result = await remember({ userId: user.id, text: args?.text, source: 'eme' });
-            if (result?.ok) sendSSE(res, { type: 'memory_saved', text: args?.text });
+            if (result?.ok) emitRun(run, { type: 'memory_saved', text: args?.text });
           } else if (name === 'report_analyze_data') {
             const sourceTool = args?.source_tool;
             const rows = getRaw(report.id, sourceTool);
@@ -451,7 +551,7 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
           result = { error: err?.message || 'Falha na ferramenta.' };
         }
         const ok = !result?.error;
-        sendSSE(res, {
+        emitRun(run, {
           type: 'tool_result', name, label, ok,
           summary: ok
             ? (result?.total != null ? `${result.total} registros` : 'ok')
@@ -466,7 +566,7 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
     }
   } catch (err) {
     console.error('[ReportChatService] Erro no stream:', err?.status || err?.message);
-    sendSSE(res, { type: 'error', message: 'Ocorreu um erro ao processar. Tente novamente.' });
+    emitRun(run, { type: 'error', message: 'Ocorreu um erro ao processar. Tente novamente.' });
   }
 
   const saved = await db.EmeGeneratedReportMessage.create({
@@ -475,5 +575,5 @@ export async function streamReportChat({ req, res, user, report, userMessage, se
     content: fullText,
     toolCalls: toolCalls.length ? toolCalls : null,
   });
-  sendSSE(res, { type: 'done', msgId: saved.id });
+  emitRun(run, { type: 'done', msgId: saved.id });
 }
