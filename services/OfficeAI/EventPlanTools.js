@@ -14,8 +14,9 @@
 
 import db from '../../models/sequelize/index.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
-import { APPROVED_SET } from '../../models/sequelize/eventPlan/plannedEvent.js';
+import { isStanding } from '../../models/sequelize/eventPlan/plannedEvent.js';
 import { registerTool } from './ToolRegistry.js';
+import { getStages } from '../eventPlan/eventPlanService.js';
 
 const PLAN_ROUTE = '/comercial/plano-eventos';
 
@@ -23,12 +24,19 @@ const { EventPlan, PlannedEvent, PlannedEventItem, EventPlanDecision, CvEnterpri
 
 const STATUS_LABEL = {
     draft: 'Rascunho',
-    pending_comercial: 'Aguardando validação do Comercial',
-    pending_marketing: 'Aguardando aceite do Marketing',
+    in_review: 'Aguardando autorização',
     returned: 'Devolvido ao gestor para ajuste',
     approved: 'Aprovado',
     closed: 'Mês fechado',
 };
+
+// As etapas são configuráveis, então o rótulo sai da configuração, não de um
+// mapa fixo no código.
+function statusLabel(plan, stages) {
+    if (plan.status !== 'in_review') return STATUS_LABEL[plan.status] || plan.status;
+    const atual = stages.find(s => s.key === plan.current_stage_key);
+    return atual ? `Aguardando ${atual.name}` : 'Aguardando autorização';
+}
 
 const normText = (v) => String(v || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
@@ -61,8 +69,8 @@ async function scopedWhere(user, extra = {}) {
 
 const STATUS_ARG = {
     rascunho: 'draft',
-    aguardando_comercial: 'pending_comercial',
-    aguardando_marketing: 'pending_marketing',
+    aguardando: 'in_review',
+    em_autorizacao: 'in_review',
     devolvido: 'returned',
     aprovado: 'approved',
     fechado: 'closed',
@@ -91,13 +99,14 @@ async function executeQueryPlans(args = {}, user) {
         ? plans.filter(p => normText(`${p.enterprise?.nome} ${p.enterprise?.cidade}`).includes(filter))
         : plans;
 
+    const stages = await getStages();
     return {
         total: rows.length,
         planos: rows.map(p => ({
             id: p.id,
             empreendimento: p.enterprise?.nome || `Empreendimento ${p.idempreendimento}`,
             mes: monthLabel(p.reference_month),
-            status: STATUS_LABEL[p.status] || p.status,
+            status: statusLabel(p, stages),
             eventos_propostos: p.totals?.events_proposed || 0,
             eventos_aprovados: p.totals?.events_approved || 0,
             valor_proposto: money(p.totals?.proposed),
@@ -159,13 +168,13 @@ async function executeGetPlan(args = {}, user) {
         if (d.scope === 'ITEM') reasonByItem.set(Number(d.scope_id), entry);
     }
 
-    const isApproved = (row) => APPROVED_SET.includes(row.comercial_status)
-        && (APPROVED_SET.includes(row.marketing_status) || row.marketing_status === 'PENDING');
+    const stages = await getStages();
+    const isApproved = (row) => isStanding(row, stages);
 
     return {
         empreendimento: plan.enterprise?.nome || `Empreendimento ${plan.idempreendimento}`,
         mes: monthLabel(plan.reference_month),
-        status: STATUS_LABEL[plan.status] || plan.status,
+        status: statusLabel(plan, stages),
         gestores: owners.map(o => o.username),
         valor_proposto: money(plan.totals?.proposed),
         valor_aprovado: money(plan.totals?.approved),
@@ -176,8 +185,7 @@ async function executeGetPlan(args = {}, user) {
             objetivo: ev.objective,
             extra: ev.is_extra,
             aprovado: isApproved(ev),
-            situacao_comercial: ev.comercial_status,
-            situacao_marketing: ev.marketing_status,
+            situacao_por_etapa: ev.stage_status,
             motivo: reasonByEvent.get(Number(ev.id)) || null,
             ja_na_agenda: Boolean(ev.event_id),
             valor_proposto: money(ev.proposed_total),
@@ -219,6 +227,7 @@ async function executeGetAgenda(args = {}, user) {
         ],
     });
 
+    const stages = await getStages();
     const agenda = [];
     const byCategory = new Map();
     let proposed = 0;
@@ -229,8 +238,7 @@ async function executeGetAgenda(args = {}, user) {
         approved += money(plan.totals?.approved);
 
         for (const ev of plan.events || []) {
-            const ok = APPROVED_SET.includes(ev.comercial_status)
-                && (APPROVED_SET.includes(ev.marketing_status) || ev.marketing_status === 'PENDING');
+            const ok = isStanding(ev, stages);
 
             agenda.push({
                 data: ev.event_date,
@@ -243,9 +251,7 @@ async function executeGetAgenda(args = {}, user) {
 
             if (!ok) continue;
             for (const item of ev.items || []) {
-                const itemOk = APPROVED_SET.includes(item.comercial_status)
-                    && (APPROVED_SET.includes(item.marketing_status) || item.marketing_status === 'PENDING');
-                if (!itemOk) continue;
+                if (!isStanding(item, stages)) continue;
 
                 const key = item.category || 'Sem categoria';
                 if (!byCategory.has(key)) byCategory.set(key, { categoria: key, total: 0, quantidade: 0, itens: [] });

@@ -17,12 +17,13 @@
 
 import db from '../../models/sequelize/index.js';
 import { PLAN_STATUS } from '../../models/sequelize/eventPlan/eventPlan.js';
-import { APPROVED_SET } from '../../models/sequelize/eventPlan/plannedEvent.js';
-import { COMMENT_REQUIRED, SCOPE, STAGE } from '../../models/sequelize/eventPlan/eventPlanDecision.js';
+import { APPROVED_SET, stageStatusOf, isStanding } from '../../models/sequelize/eventPlan/plannedEvent.js';
+import { COMMENT_REQUIRED, SCOPE } from '../../models/sequelize/eventPlan/eventPlanDecision.js';
 import { NECESSITY } from '../../models/sequelize/eventPlan/plannedEventItem.js';
 import { ACTIVITY } from '../../models/sequelize/eventPlan/eventPlanActivity.js';
 import {
-    userCanDecideStage, canReachEnterprise, logActivity, recomputeTotals, STAGE_BY_STATUS,
+    userCanDecideStage, canReachEnterprise, logActivity, recomputeTotals,
+    getStages, nextStageAfter, findStage,
 } from './eventPlanService.js';
 
 const { EventPlan, PlannedEvent, PlannedEventItem, EventPlanDecision, sequelize } = db;
@@ -38,7 +39,9 @@ export class DecisionError extends Error {
 }
 
 const money = (v) => Math.round(Number(v || 0) * 100) / 100;
-const statusField = (stage) => (stage === STAGE.COMERCIAL ? 'comercial_status' : 'marketing_status');
+
+/** Grava o status desta etapa preservando o que as outras já decidiram. */
+const withStage = (row, stageKey, status) => ({ ...(row.stage_status || {}), [stageKey]: status });
 
 /**
  * Valida o lote ANTES de gravar qualquer coisa. Falha aqui devolve 422 com a
@@ -48,7 +51,9 @@ const statusField = (stage) => (stage === STAGE.COMERCIAL ? 'comercial_status' :
  * Pura de propósito (só dados dentro, lista de problemas fora): é onde moram as
  * regras que não podem quebrar, então precisa ser testável sem banco.
  */
-export function validateBatch({ events, plannedEvents, itemsByEvent, stage }) {
+export function validateBatch({ events, plannedEvents, itemsByEvent, stages = [], stageKey }) {
+    // Etapas anteriores a esta na fila: quem já foi reprovado lá não volta.
+    const previous = stages.slice(0, Math.max(0, stages.findIndex(s => s.key === stageKey)));
     const problems = [];
 
     for (const decision of events) {
@@ -65,9 +70,9 @@ export function validateBatch({ events, plannedEvents, itemsByEvent, stage }) {
             problems.push({ scope: 'EVENT', id: ev.id, error: 'Ressalva, reprovação e devolução exigem comentário.' });
         }
 
-        // No aceite do Marketing só entram eventos que sobreviveram ao Comercial.
-        if (stage === STAGE.MARKETING && !APPROVED_SET.includes(ev.comercial_status)) {
-            problems.push({ scope: 'EVENT', id: ev.id, error: 'Evento não foi aprovado no Comercial.' });
+        // Só chega nesta etapa quem sobreviveu às anteriores.
+        if (previous.length && !isStanding(ev, previous)) {
+            problems.push({ scope: 'EVENT', id: ev.id, error: 'Evento não passou por uma etapa anterior.' });
         }
 
         const eventRejected = decision.decision === 'REJECTED';
@@ -127,15 +132,15 @@ export function validateBatch({ events, plannedEvents, itemsByEvent, stage }) {
  * @param {object} params
  * @param {object} params.user            usuário logado (req.user)
  * @param {number} params.planId
- * @param {string} params.stage           COMERCIAL | MARKETING
+ * @param {string} params.stage           chave da etapa (event_plan_settings.stages)
  * @param {Array}  params.events          [{ id, decision, comment, items: [...] }]
  * @param {string} [params.planComment]
  * @param {boolean} [params.returnPlan]   devolve o plano inteiro ao gestor
  */
 export async function applyDecisions({ user, planId, stage, events = [], planComment = null, returnPlan = false }) {
-    if (!Object.values(STAGE).includes(stage)) {
-        throw new DecisionError('Etapa inválida.', 400);
-    }
+    const stages = await getStages();
+    const stageDef = findStage(stages, stage);
+    if (!stageDef) throw new DecisionError('Etapa de autorização inexistente.', 400);
 
     const plan = await EventPlan.findByPk(planId);
     if (!plan) throw new DecisionError('Plano não encontrado.', 404);
@@ -143,14 +148,12 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
         throw new DecisionError('Mês fechado — o plano está congelado.', 409);
     }
 
-    // Etapa tem que bater com onde o plano está. Evita o marketing decidir antes
-    // do comercial e vice-versa.
-    const expected = STAGE_BY_STATUS[plan.status];
-    if (expected !== stage) {
+    // A etapa tem que ser a que o plano está aguardando: ninguém decide fora da
+    // vez nem pula a fila.
+    if (plan.status !== PLAN_STATUS.IN_REVIEW || plan.current_stage_key !== stage) {
+        const atual = findStage(stages, plan.current_stage_key);
         throw new DecisionError(
-            expected
-                ? `Este plano está aguardando a etapa ${expected}.`
-                : 'Este plano não está aguardando decisão.',
+            atual ? `Este plano está aguardando a etapa "${atual.name}".` : 'Este plano não está aguardando decisão.',
             409
         );
     }
@@ -179,14 +182,14 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
     }
 
     if (!returnPlan) {
-        const problems = validateBatch({ events, plannedEvents, itemsByEvent, stage });
+        const problems = validateBatch({ events, plannedEvents, itemsByEvent, stages, stageKey: stage });
         if (problems.length) {
             throw new DecisionError('Há pendências na decisão.', 422, problems);
         }
     }
 
-    const field = statusField(stage);
     const round = plan.round;
+    const stageName = stageDef.name;
 
     return sequelize.transaction(async (transaction) => {
         const t = { transaction };
@@ -199,12 +202,13 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
             }, t);
             await plan.update({
                 status: PLAN_STATUS.RETURNED,
+                current_stage_key: null,
                 round: plan.round + 1,
                 updated_by: user.id,
             }, t);
             await logActivity({
                 planId: plan.id, userId: user.id, action: ACTIVITY.PLAN_RETURNED,
-                meta: { stage, round, comment: planComment },
+                meta: { stage: stageName, round, comment: planComment },
             }, transaction);
             await recomputeTotals(plan.id, transaction);
             return { status: PLAN_STATUS.RETURNED, returned: true };
@@ -219,10 +223,10 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
                 plan_id: plan.id, scope: SCOPE.EVENT, scope_id: ev.id, stage,
                 user_id: user.id, round, decision: decision.decision, comment: decision.comment || null,
             }, t);
-            await ev.update({ [field]: decision.decision, updated_by: user.id }, t);
+            await ev.update({ stage_status: withStage(ev, stage, decision.decision), updated_by: user.id }, t);
             await logActivity({
                 planId: plan.id, plannedEventId: ev.id, userId: user.id, action: ACTIVITY.EVENT_DECIDED,
-                meta: { stage, round, decision: decision.decision, comment: decision.comment || null },
+                meta: { stage: stageName, round, decision: decision.decision, comment: decision.comment || null },
             }, transaction);
 
             const known = itemsByEvent.get(ev.id) || new Map();
@@ -231,7 +235,11 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
             // de evento que não vai acontecer.
             if (eventRejected) {
                 for (const item of known.values()) {
-                    await item.update({ [field]: 'REJECTED', needs_quote: false, updated_by: user.id }, t);
+                    await item.update({
+                        stage_status: withStage(item, stage, 'REJECTED'),
+                        needs_quote: false,
+                        updated_by: user.id,
+                    }, t);
                 }
                 continue;
             }
@@ -260,7 +268,7 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
 
                 const approvedNow = APPROVED_SET.includes(finalDecision);
                 const patch = {
-                    [field]: finalDecision,
+                    stage_status: withStage(item, stage, finalDecision),
                     updated_by: user.id,
                     // Item ESTIMADO que passou vira pendência de cotação do mkt.
                     needs_quote: approvedNow && item.cost_basis === 'ESTIMADO',
@@ -274,57 +282,59 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
                     await logActivity({
                         planId: plan.id, plannedEventId: ev.id, itemId: item.id, userId: user.id,
                         action: ACTIVITY.ITEM_VALUE_CUT,
-                        meta: { stage, round, from: proposed, to: cutValue, comment: itemDecision.comment || null },
+                        meta: { stage: stageName, round, from: proposed, to: cutValue, comment: itemDecision.comment || null },
                     }, transaction);
                 }
                 if (reclassified) {
                     await logActivity({
                         planId: plan.id, plannedEventId: ev.id, itemId: item.id, userId: user.id,
                         action: ACTIVITY.ITEM_RECLASSIFIED,
-                        meta: { stage, round, from: NECESSITY.OBRIGATORIO, to: NECESSITY.OPCIONAL },
+                        meta: { stage: stageName, round, from: NECESSITY.OBRIGATORIO, to: NECESSITY.OPCIONAL },
                     }, transaction);
                 }
                 await logActivity({
                     planId: plan.id, plannedEventId: ev.id, itemId: item.id, userId: user.id,
                     action: ACTIVITY.ITEM_DECIDED,
-                    meta: { stage, round, decision: finalDecision, approved_value: cutValue },
+                    meta: { stage: stageName, round, decision: finalDecision, approved_value: cutValue },
                 }, transaction);
             }
         }
 
-        // ── Avanço de etapa ───────────────────────────────────────────────────
+        // ── Avanço na fila de etapas ──────────────────────────────────────────
         const refreshed = await PlannedEvent.findAll({ where: { plan_id: plan.id }, transaction });
-        const survived = refreshed.filter(e => APPROVED_SET.includes(e[field]));
+        const survived = refreshed.filter(e => APPROVED_SET.includes(stageStatusOf(e, stage)));
 
-        let nextStatus;
-        if (stage === STAGE.COMERCIAL) {
-            // Nenhum evento sobreviveu: não há o que o marketing aceitar. O
-            // fluxo encerra aqui com totals.approved = 0 — a tela mostra
-            // "nenhum evento aprovado", não um plano preso numa etapa vazia.
-            nextStatus = survived.length ? PLAN_STATUS.PENDING_MARKETING : PLAN_STATUS.APPROVED;
-        } else {
-            nextStatus = PLAN_STATUS.APPROVED;
-        }
+        // Nenhum evento sobreviveu: não há o que a próxima etapa decidir. O fluxo
+        // encerra aqui com aprovado zero, em vez de empurrar um plano vazio fila
+        // afora.
+        const next = survived.length ? nextStageAfter(stages, stage) : null;
+        const nextStatus = next ? PLAN_STATUS.IN_REVIEW : PLAN_STATUS.APPROVED;
 
-        const patch = { status: nextStatus, updated_by: user.id };
-        if (stage === STAGE.COMERCIAL) {
-            patch.comercial_decided_at = new Date();
-            patch.comercial_decided_by = user.id;
-        } else {
-            patch.marketing_decided_at = new Date();
-            patch.marketing_decided_by = user.id;
-        }
-        await plan.update(patch, t);
+        await plan.update({
+            status: nextStatus,
+            current_stage_key: next?.key || null,
+            // Trilha de quem fechou cada etapa, sem coluna fixa por etapa.
+            stage_decisions: {
+                ...(plan.stage_decisions || {}),
+                [stage]: { at: new Date().toISOString(), by: user.id, name: stageName },
+            },
+            updated_by: user.id,
+        }, t);
 
         if (nextStatus === PLAN_STATUS.APPROVED) {
             await logActivity({
                 planId: plan.id, userId: user.id, action: ACTIVITY.PLAN_APPROVED,
-                meta: { stage, round, events_approved: survived.length },
+                meta: { stage: stageName, round, events_approved: survived.length },
             }, transaction);
         }
 
         const totals = await recomputeTotals(plan.id, transaction);
-        return { status: nextStatus, totals, events_approved: survived.length };
+        return {
+            status: nextStatus,
+            next_stage: next ? { key: next.key, name: next.name } : null,
+            totals,
+            events_approved: survived.length,
+        };
     });
 }
 

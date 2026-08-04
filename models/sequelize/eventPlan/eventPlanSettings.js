@@ -2,13 +2,12 @@
 //
 // Configuração global do módulo (linha única, criada lazy no service).
 //
-// As ETAPAS vivem em JSONB: hoje são duas (Comercial valida, Marketing aceita).
-// Acrescentar uma terceira depois — diretoria acima de um teto de valor — é
-// configuração pela tela, não código novo.
-export const DEFAULT_STAGES = [
-    { order: 1, key: 'COMERCIAL', name: 'Validação Comercial', profile_ids: [], min_amount: null },
-    { order: 2, key: 'MARKETING', name: 'Aceite do Marketing', profile_ids: [], min_amount: null },
-];
+// As ETAPAS de autorização são TOTALMENTE definidas na tela: quantas são, como
+// se chamam e quem decide em cada uma. Não existe etapa fixa no código.
+//
+// Nasce VAZIO de propósito: quem configura decide o fluxo do zero. Sem etapa
+// nenhuma, o plano enviado é aprovado na hora (a tela avisa disso).
+export const DEFAULT_STAGES = [];
 
 export const DEFAULT_ITEM_CATEGORIES = [
     { key: 'alimentacao', label: 'Alimentação', active: true },
@@ -25,8 +24,9 @@ export default (sequelize, DataTypes) => {
     const EventPlanSettings = sequelize.define('EventPlanSettings', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
 
-        // [{ order, key, name, profile_ids, min_amount }] — min_amount null =
-        // etapa sempre obrigatória; com valor = só entra acima daquele total.
+        // [{ key, name, order, profile_ids }] — a fila de autorização inteira,
+        // na ordem. `key` é gerado na criação e nunca muda (as decisões gravadas
+        // apontam para ele); `name` pode ser renomeado à vontade.
         stages: { type: DataTypes.JSONB, allowNull: false, defaultValue: DEFAULT_STAGES },
 
         // ── Ciclo mensal ──────────────────────────────────────────────────────
