@@ -17,7 +17,7 @@ import {
   dismissForUser, undismissForUser, listOrphans, transferOwnership,
 } from '../services/emeReports/ReportService.js';
 import { startReportRun, getActiveRun, subscribeToRun } from '../services/emeReports/ReportChatService.js';
-import { runReportData } from '../services/emeReports/ReportDataService.js';
+import { runReportData, runReportDrill, runReportExport } from '../services/emeReports/ReportDataService.js';
 import { rerunSnapshotCalls, buildRefreshMessage } from '../services/emeReports/ReportRefreshService.js';
 import {
   listMemories, remember, updateMemory, deleteMemory,
@@ -254,22 +254,33 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref?.();
 
+// Carrega o relatório validando visualização e resolve o spec que o leitor
+// pode consultar. Mesma regra do /view: editor em rascunho consulta o
+// rascunho; todos os outros consultam a versão PUBLICADA (edição não vaza).
+async function loadViewableSpec(req, res) {
+  const report = await loadReport(req, res);
+  if (!report) return null;
+  if (!(await canView(report, req.user))) {
+    res.status(403).json({ error: 'Sem permissão.' });
+    return null;
+  }
+  if (report.deletedAt) {
+    res.status(410).json({ error: 'Relatório na lixeira.' });
+    return null;
+  }
+  const isEditor = canEdit(report, req.user);
+  const spec = isEditor && report.status === 'draft'
+    ? report.spec
+    : (await getPublishedPayload(report)).spec;
+  return { report, spec };
+}
+
 router.post('/:id/data', rateLimitData, async (req, res) => {
   try {
-    const report = await loadReport(req, res);
-    if (!report) return;
-    if (!(await canView(report, req.user))) return res.status(403).json({ error: 'Sem permissão.' });
-    if (report.deletedAt) return res.status(410).json({ error: 'Relatório na lixeira.' });
-
-    // Mesma regra do /view: editor em rascunho consulta o rascunho; todos os
-    // outros consultam a versão PUBLICADA (edição em curso não vaza).
-    const isEditor = canEdit(report, req.user);
-    const spec = isEditor && report.status === 'draft'
-      ? report.spec
-      : (await getPublishedPayload(report)).spec;
-
+    const loaded = await loadViewableSpec(req, res);
+    if (!loaded) return;
     const result = await runReportData({
-      report: { id: report.id, spec },
+      report: { id: loaded.report.id, spec: loaded.spec },
       user: req.user,
       rawFilterValues: req.body?.filters,
     });
@@ -278,6 +289,47 @@ router.post('/:id/data', rateLimitData, async (req, res) => {
   } catch (err) {
     console.error('[emeReports] data:', err);
     res.status(500).json({ error: 'Falha ao consultar os dados do relatório.' });
+  }
+});
+
+// Drill-down: lista dos registros por trás de um item clicado (barra, fatia,
+// posição do ranking). Mesmas alçadas e escopo do /data; o valor clicado só
+// filtra DEPOIS que a tool devolveu o que o leitor pode ver.
+router.post('/:id/data/drill', rateLimitData, async (req, res) => {
+  try {
+    const loaded = await loadViewableSpec(req, res);
+    if (!loaded) return;
+    const result = await runReportDrill({
+      report: { id: loaded.report.id, spec: loaded.spec },
+      user: req.user,
+      rawFilterValues: req.body?.filters,
+      blockId: String(req.body?.block_id || ''),
+      label: String(req.body?.label ?? ''),
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    console.error('[emeReports] drill:', err);
+    res.status(500).json({ error: 'Falha ao abrir os registros.' });
+  }
+});
+
+// Dados em linhas para exportação (Excel no front). Só leitor autenticado com
+// acesso ao relatório; o link público continua servindo apenas o snapshot.
+router.post('/:id/data/export', rateLimitData, async (req, res) => {
+  try {
+    const loaded = await loadViewableSpec(req, res);
+    if (!loaded) return;
+    const result = await runReportExport({
+      report: { id: loaded.report.id, spec: loaded.spec },
+      user: req.user,
+      rawFilterValues: req.body?.filters,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    console.error('[emeReports] export:', err);
+    res.status(500).json({ error: 'Falha ao exportar os dados do relatório.' });
   }
 });
 
