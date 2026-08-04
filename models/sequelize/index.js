@@ -147,6 +147,7 @@ import ChatSessionDefine from './chatSession.js';
 import ChatMessageDefine from './chatMessage.js';
 import UserAIMemoryDefine from './userAIMemory.js';
 import ChatFeedbackDefine from './chatFeedback.js';
+import EmeValidationIncidentDefine from './emeValidationIncident.js';
 
 // Cérebro da Eme (Brain Studio) — config DB-driven do assistente
 import EmePromptBlockDefine   from './eme/promptBlock.js';
@@ -415,6 +416,7 @@ db.ChatSession  = ChatSessionDefine(sequelize, DataTypes);
 db.ChatMessage  = ChatMessageDefine(sequelize, DataTypes);
 db.UserAIMemory = UserAIMemoryDefine(sequelize, DataTypes);
 db.ChatFeedback = ChatFeedbackDefine(sequelize, DataTypes);
+db.EmeValidationIncident = EmeValidationIncidentDefine(sequelize, DataTypes);
 
 // Cérebro da Eme (Brain Studio)
 db.EmePromptBlock   = EmePromptBlockDefine(sequelize, DataTypes);
