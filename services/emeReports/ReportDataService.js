@@ -405,6 +405,153 @@ export async function runReportData({ report, user, rawFilterValues }) {
   };
 }
 
+// ── Drill: linhas por trás de um item clicado no relatório ───────────────────
+// O leitor clica numa fatia/barra/posição e recebe a LISTA de registros que
+// compõem aquele número. Tudo determinístico: o bloco/spec dizem qual dataset
+// e qual campo agrupa; o valor clicado só serve de comparação depois que as
+// linhas já voltaram da tool (rodada com as alçadas de quem pede).
+
+const MAX_DRILL_ROWS = 200;
+const MAX_EXPORT_ROWS = 1000;
+const MAX_EXPORT_COLS = 24;
+
+// Colunas exportáveis/listáveis: só campos escalares (objeto aninhado não cabe
+// em célula) presentes na primeira linha.
+function scalarColumns(rows, cap = MAX_EXPORT_COLS) {
+  const first = rows[0] || {};
+  return Object.keys(first)
+    .filter((k) => {
+      const v = first[k];
+      return v == null || ['string', 'number', 'boolean'].includes(typeof v);
+    })
+    .slice(0, cap)
+    .map((key) => ({ key, label: key }));
+}
+
+function pickRow(row, columns) {
+  const out = {};
+  for (const c of columns) out[c.key] = row?.[c.key] ?? null;
+  return out;
+}
+
+// Linhas CRUAS de um dataset. Se o autor pediu o retorno já agrupado
+// (base_args.group_by), reexecuta sem os args de forma para obter os registros.
+async function rawDatasetRows(dataset, args, user, reportId) {
+  const shapeless = { ...args };
+  for (const k of ['group_by', 'metric', 'format']) delete shapeless[k];
+
+  const cacheKey = `${reportId}:${user.id}:${dataset.id}:raw:${JSON.stringify(shapeless)}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return { rows: extractRows(cached), result: cached };
+
+  const result = await runDataset(dataset, shapeless, user);
+  if (result?.error) return { error: String(result.error).slice(0, 200) };
+  cachePut(cacheKey, result);
+  return { rows: extractRows(result), result };
+}
+
+export async function runReportDrill({ report, user, rawFilterValues, blockId, label }) {
+  const spec = report.spec || {};
+  const filters = Array.isArray(spec.filters) ? spec.filters : [];
+  const datasets = Array.isArray(spec.datasets) ? spec.datasets : [];
+
+  const block = (spec.blocks || []).find((b) => b?.id === blockId && b?.bind?.dataset);
+  if (!block) return { ok: false, error: 'Este bloco não tem consulta vinculada.' };
+  const dataset = datasets.find((d) => d.id === block.bind.dataset);
+  if (!dataset) return { ok: false, error: 'Consulta do bloco não encontrada.' };
+
+  const groupBy = block.bind.aggregate?.group_by || dataset.base_args?.group_by;
+  if (!groupBy) return { ok: false, error: 'Este bloco não permite abrir a lista de registros.' };
+
+  const values = sanitizeFilterValues(filters, rawFilterValues);
+  const args = buildDatasetArgs(dataset, filters, values);
+  const { rows, error } = await rawDatasetRows(dataset, args, user, report.id);
+  if (error) return { ok: false, error };
+  if (!rows?.length) return { ok: false, error: 'Nenhum registro disponível para o seu acesso.' };
+
+  const gran = block.bind.aggregate?.date_granularity || null;
+  const target = cleanStr(label);
+  const matched = rows.filter((r) => {
+    let v = r?.[groupBy];
+    if (v === null || v === undefined || v === '') v = '(não informado)';
+    else if (gran) v = bucketDate(v, gran);
+    else v = String(v).trim();
+    return v === target;
+  });
+
+  const columns = scalarColumns(matched.length ? matched : rows);
+  return {
+    ok: true,
+    label: target,
+    groupBy,
+    datasetId: dataset.id,
+    datasetLabel: dataset.label,
+    total: matched.length,
+    truncated: matched.length > MAX_DRILL_ROWS,
+    columns,
+    rows: matched.slice(0, MAX_DRILL_ROWS).map((r) => pickRow(r, columns)),
+  };
+}
+
+// ── Export: dados do relatório em linhas, para planilha ──────────────────────
+// Mesmo caminho de segurança do /data: tools rodam com o usuário leitor e os
+// filtros escolhidos por ele. O link público NUNCA chega aqui.
+
+export async function runReportExport({ report, user, rawFilterValues }) {
+  const spec = report.spec || {};
+  const filters = Array.isArray(spec.filters) ? spec.filters : [];
+  const datasets = Array.isArray(spec.datasets) ? spec.datasets : [];
+  if (!datasets.length) {
+    return { ok: false, error: 'Este relatório não tem consultas interativas.' };
+  }
+
+  const values = sanitizeFilterValues(filters, rawFilterValues);
+  const sheets = [];
+  const datasetErrors = [];
+
+  for (const dataset of datasets) {
+    const args = buildDatasetArgs(dataset, filters, values);
+    try {
+      const { rows, result, error } = await rawDatasetRows(dataset, args, user, report.id);
+      if (error) {
+        datasetErrors.push({ id: dataset.id, label: dataset.label, error });
+        continue;
+      }
+      if (rows?.length) {
+        const columns = scalarColumns(rows);
+        sheets.push({
+          id: dataset.id,
+          label: dataset.label,
+          columns,
+          total: rows.length,
+          truncated: rows.length > MAX_EXPORT_ROWS,
+          rows: rows.slice(0, MAX_EXPORT_ROWS).map((r) => pickRow(r, columns)),
+        });
+      } else if (Array.isArray(result?.labels) && Array.isArray(result?.data)) {
+        // Tool que só devolve o agrupado: exporta os pares label/valor
+        sheets.push({
+          id: dataset.id,
+          label: dataset.label,
+          columns: [{ key: 'label', label: 'Item' }, { key: 'value', label: 'Valor' }],
+          total: result.labels.length,
+          truncated: false,
+          rows: result.labels.map((l, i) => ({ label: String(l), value: result.data[i] ?? 0 })),
+        });
+      } else {
+        datasetErrors.push({ id: dataset.id, label: dataset.label, error: 'Sem registros para exportar.' });
+      }
+    } catch (err) {
+      console.warn('[ReportDataService] export', dataset.id, err?.message);
+      datasetErrors.push({ id: dataset.id, label: dataset.label, error: 'Falha ao consultar os dados.' });
+    }
+  }
+
+  if (!sheets.length) {
+    return { ok: false, error: datasetErrors[0]?.error || 'Nenhum dado disponível para exportar.' };
+  }
+  return { ok: true, sheets, values, datasetErrors, refreshedAt: new Date().toISOString() };
+}
+
 // ── Opções dinâmicas de filtro (distinct de um campo do dataset) ─────────────
 
 function computeFilterOptions(filters, results) {
@@ -579,6 +726,6 @@ export function projectSpec(spec, results) {
 export default {
   DATA_TOOL_NAMES, DATA_TOOL_LABELS,
   normalizeFilters, normalizeDatasets, normalizeBind,
-  sanitizeFilterValues, runReportData, projectSpec,
+  sanitizeFilterValues, runReportData, runReportDrill, runReportExport, projectSpec,
   extractRows, analyzeRows,
 };
