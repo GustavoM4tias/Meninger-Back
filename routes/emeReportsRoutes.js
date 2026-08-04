@@ -16,7 +16,7 @@ import {
   listTrash, deletionImpact, softDelete, restore, purge, TRASH_RETENTION_DAYS,
   dismissForUser, undismissForUser, listOrphans, transferOwnership,
 } from '../services/emeReports/ReportService.js';
-import { streamReportChat } from '../services/emeReports/ReportChatService.js';
+import { startReportRun, getActiveRun, subscribeToRun } from '../services/emeReports/ReportChatService.js';
 import { runReportData } from '../services/emeReports/ReportDataService.js';
 import { rerunSnapshotCalls, buildRefreshMessage } from '../services/emeReports/ReportRefreshService.js';
 import {
@@ -103,7 +103,8 @@ router.get('/:id', async (req, res) => {
     limit: 80,
   });
   const access = await db.EmeGeneratedReportAccess.findAll({ where: { reportId: report.id } });
-  res.json({ report, messages, access });
+  // activeRun: a Eme ainda está gerando (o front reconecta em /chat/stream)
+  res.json({ report, messages, access, activeRun: !!getActiveRun(report.id) });
 });
 
 // Visualização (dono/admin/compartilhado): sempre a versão publicada
@@ -281,6 +282,21 @@ router.post('/:id/data', rateLimitData, async (req, res) => {
 });
 
 // ── Chat do builder (SSE) ────────────────────────────────────────────────────
+// A geração roda como RUN em background (ReportChatService): a resposta SSE é
+// só um ASSINANTE. Se a aba fechar/recarregar, a run continua; o front vê
+// activeRun no GET /:id e reassiste pelo GET /:id/chat/stream.
+
+function openSSE(req, res) {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  const heartbeat = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch { /* conexão fechada */ }
+  }, 15000);
+  req.on('close', () => clearInterval(heartbeat));
+}
 
 router.post('/:id/chat', requireAdmin, rateLimitChat, async (req, res) => {
   const report = await loadReport(req, res);
@@ -288,30 +304,33 @@ router.post('/:id/chat', requireAdmin, rateLimitChat, async (req, res) => {
   if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
   const message = String(req.body?.message || '').trim();
   if (!message) return res.status(400).json({ error: 'Mensagem obrigatória.' });
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
-  req.on('close', () => clearInterval(heartbeat));
-
-  try {
-    await streamReportChat({
-      req, res,
-      user: req.user,
-      report,
-      userMessage: message,
-      selectedBlockIds: Array.isArray(req.body?.selected_block_ids) ? req.body.selected_block_ids : [],
-    });
-  } catch (err) {
-    console.error('[emeReports] chat:', err);
-    try { res.write(`data: ${JSON.stringify({ type: 'error', message: 'Erro inesperado.' })}\n\n`); } catch { /* conexão fechada */ }
-  } finally {
-    clearInterval(heartbeat);
-    res.end();
+  if (getActiveRun(report.id)) {
+    return res.status(409).json({ error: 'A Eme ainda está trabalhando neste relatório. Aguarde a geração atual terminar.' });
   }
+
+  openSSE(req, res);
+  const run = startReportRun({
+    user: req.user,
+    report,
+    userMessage: message,
+    selectedBlockIds: Array.isArray(req.body?.selected_block_ids) ? req.body.selected_block_ids : [],
+  });
+  const unsubscribe = subscribeToRun(run, res);
+  req.on('close', unsubscribe);
+});
+
+// Reinscrição na geração em andamento (depois de F5 ou queda de conexão):
+// replay de tudo que já aconteceu + eventos ao vivo. 204 = nada rodando.
+router.get('/:id/chat/stream', requireAdmin, async (req, res) => {
+  const report = await loadReport(req, res);
+  if (!report) return;
+  if (!canEdit(report, req.user)) return res.status(403).json({ error: 'Sem permissão.' });
+  const run = getActiveRun(report.id);
+  if (!run) return res.status(204).end();
+
+  openSSE(req, res);
+  const unsubscribe = subscribeToRun(run, res);
+  req.on('close', unsubscribe);
 });
 
 // ── Refresh do modo AO VIVO (SSE) ────────────────────────────────────────────
@@ -325,6 +344,9 @@ router.post('/:id/refresh', requireAdmin, rateLimitChat, async (req, res) => {
   if (report.dataMode !== 'live') {
     return res.status(400).json({ error: 'Relatório com dados congelados (modo fixo). Mude para "ao vivo" para atualizar.' });
   }
+  if (getActiveRun(report.id)) {
+    return res.status(409).json({ error: 'A Eme ainda está trabalhando neste relatório. Aguarde a geração atual terminar.' });
+  }
 
   // A reexecução roda ANTES do stream: se não houver o que atualizar, a
   // resposta é um erro HTTP limpo em vez de um SSE que abre e morre.
@@ -336,32 +358,18 @@ router.post('/:id/refresh', requireAdmin, rateLimitChat, async (req, res) => {
     });
   }
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
-  req.on('close', () => clearInterval(heartbeat));
-
-  try {
-    await streamReportChat({
-      req, res,
-      user: req.user,
-      report,
-      userMessage: buildRefreshMessage({
-        calls: rerun.calls,
-        erros: rerun.erros,
-        periodStart: report.periodStart,
-      }),
-    });
-  } catch (err) {
-    console.error('[emeReports] refresh:', err);
-    try { res.write(`data: ${JSON.stringify({ type: 'error', message: 'Erro inesperado ao atualizar.' })}\n\n`); } catch { /* conexão fechada */ }
-  } finally {
-    clearInterval(heartbeat);
-    res.end();
-  }
+  openSSE(req, res);
+  const run = startReportRun({
+    user: req.user,
+    report,
+    userMessage: buildRefreshMessage({
+      calls: rerun.calls,
+      erros: rerun.erros,
+      periodStart: report.periodStart,
+    }),
+  });
+  const unsubscribe = subscribeToRun(run, res);
+  req.on('close', unsubscribe);
 });
 
 // ── Publicação / versões ─────────────────────────────────────────────────────

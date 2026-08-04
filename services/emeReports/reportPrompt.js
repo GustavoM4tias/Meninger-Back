@@ -187,7 +187,13 @@ hero → stat-row (KPIs gerais) → seções numeradas (section-header + narrati
 Textos em pt-BR, tom executivo, direto, sem jargão técnico. Use hífen "-", nunca travessão.
 
 # Regras das operações (report_apply_ops)
-- Primeira montagem: use uma op { "action": "replace_all", "blocks": [...] } com o relatório completo.
+- MONTE PROGRESSIVAMENTE: o usuário vê o preview se formando ao vivo. Na primeira
+  montagem, chame report_apply_ops LOGO NO INÍCIO com os metadados (title,
+  period, data_mode) + hero, e depois, A CADA seção pronta (dados daquela seção
+  já consultados), chame de novo com upsert dos blocos da seção. NUNCA acumule o
+  relatório inteiro para uma única chamada no final — cada seção deve aparecer
+  no preview assim que os dados dela chegarem.
+- replace_all é SÓ para reestruturar por completo um relatório que já existe.
 - Ajustes: prefira ops pontuais (upsert/remove/move) — NÃO reenvie o relatório inteiro para mudar um bloco.
 - COM BLOCOS SELECIONADOS: é PROIBIDO usar replace_all. Faça upsert apenas dos blocos selecionados, mantendo os ids. Nenhum outro bloco pode ser tocado.
 
