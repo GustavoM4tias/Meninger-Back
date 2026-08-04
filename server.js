@@ -123,6 +123,7 @@ import { ensureAccessModelColumns } from './lib/ensureAccessModelColumns.js';
 import { ensureRoutePolicySchema } from './lib/ensureRoutePolicySchema.js';
 import { ensureEventPlanSchema } from './lib/ensureEventPlanSchema.js';
 import { ensureOrgDefaultsSchema } from './lib/ensureOrgDefaultsSchema.js';
+import { ensureUserEmailNormalization } from './lib/ensureUserEmailNormalization.js';
 import { ensureBrazilCitiesSeed } from './lib/ensureBrazilCitiesSeed.js';
 import { registerApp as registerIntegrityApp, runIntegrityCheck } from './security/integrityCheck.js';
 import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
@@ -491,6 +492,8 @@ async function syncModelsAndPatches(fingerprint) {
     ['Checklist', ensureChecklistSchema],
     ['LegacyDrops', ensureLegacyDrops],
     ['AccessModel', ensureAccessModelSchema],
+    // E-mails minúsculos + aviso de cadastros duplicados (pessoa em dobro no organograma)
+    ['UserEmailNormalization', ensureUserEmailNormalization],
     // Catálogo de cidades (IBGE) ANTES do OrgDefaults: o backfill de
     // users.city_id casa por nome e precisa das cidades já no lugar.
     ['BrazilCities', ensureBrazilCitiesSeed],

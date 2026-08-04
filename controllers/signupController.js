@@ -20,6 +20,7 @@ import { sendEmail } from '../email/email.service.js';
 import NotificationService from '../services/notification/NotificationService.js';
 import { NotificationType } from '../services/notification/notificationTypes.js';
 import { generateSecurePassword } from './authController.js';
+import { findUserByEmailCI } from '../utils/userEmail.js';
 
 const { User, Position, UserCity, Department, PermissionProfile, UserPermission } = db;
 
@@ -53,13 +54,42 @@ async function notifyAdminsSignup(user, departmentName, cityName) {
   });
 }
 
-async function uniqueUsername(base) {
+// Nome único (users.username tem UNIQUE). excludeId permite o próprio usuário
+// manter o nome que já é dele ao reenviar o formulário.
+async function uniqueUsername(base, excludeId = null) {
   let name = base;
   let counter = 1;
-  while (await User.findOne({ where: { username: name } })) {
+  for (;;) {
+    const existing = await User.findOne({ where: { username: name } });
+    if (!existing || existing.id === excludeId) return name;
     name = `${base} ${counter++}`;
   }
-  return name;
+}
+
+// Remove o usuário e qualquer resto que aponte para ele (tokens de sessão
+// etc.), varrendo as FKs dinamicamente para não quebrar com tabela nova.
+// Roda DENTRO da transação recebida — quem chama faz commit/rollback.
+async function deleteUserCascade(id, t) {
+  const fks = await db.sequelize.query(`
+    SELECT tc.table_name, kcu.column_name
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+    JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
+    WHERE tc.constraint_type = 'FOREIGN KEY' AND ccu.table_name = 'users' AND ccu.column_name = 'id'
+  `, { type: db.Sequelize.QueryTypes.SELECT, transaction: t });
+
+  for (const fk of fks) {
+    if (fk.table_name === 'users') {
+      await db.sequelize.query(
+        `UPDATE users SET ${fk.column_name} = NULL WHERE ${fk.column_name} = :id`,
+        { replacements: { id }, transaction: t });
+    } else {
+      await db.sequelize.query(
+        `DELETE FROM ${fk.table_name} WHERE ${fk.column_name} = :id`,
+        { replacements: { id }, transaction: t });
+    }
+  }
+  await db.sequelize.query('DELETE FROM users WHERE id = :id', { replacements: { id }, transaction: t });
 }
 
 // ── GET /api/auth/signup-options ─────────────────────────────────────────────
@@ -116,7 +146,9 @@ export const completeSignup = async (req, res) => {
     if (!cityRecord) return responseHandler.error(res, 'Cidade inválida ou inativa');
 
     await user.update({
-      username: username.trim(),
+      // Sufixa se o nome já existir (ex.: o admin já cadastrou a pessoa à mão);
+      // sem isso o UNIQUE de username derruba o formulário com erro genérico.
+      username: await uniqueUsername(username.trim(), user.id),
       birth_date,
       phone: phone || null,
       city: cityRecord.name,
@@ -154,7 +186,7 @@ export const requestSignup = async (req, res) => {
   }
 
   try {
-    const existing = await User.findOne({ where: { email: cleanEmail } });
+    const existing = await findUserByEmailCI(cleanEmail);
     if (existing) {
       return responseHandler.error(res, 'Este e-mail já possui cadastro. Use "Esqueceu a senha?" ou fale com seu gestor.');
     }
@@ -216,30 +248,9 @@ export const rejectUser = async (req, res) => {
 
     const { username, email } = user;
 
-    // Remove o cadastro e qualquer resto que aponte para ele (tokens de sessão
-    // etc.), varrendo as FKs dinamicamente para não quebrar com tabela nova.
     const t = await db.sequelize.transaction();
     try {
-      const fks = await db.sequelize.query(`
-        SELECT tc.table_name, kcu.column_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-        JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
-        WHERE tc.constraint_type = 'FOREIGN KEY' AND ccu.table_name = 'users' AND ccu.column_name = 'id'
-      `, { type: db.Sequelize.QueryTypes.SELECT, transaction: t });
-
-      for (const fk of fks) {
-        if (fk.table_name === 'users') {
-          await db.sequelize.query(
-            `UPDATE users SET ${fk.column_name} = NULL WHERE ${fk.column_name} = :id`,
-            { replacements: { id }, transaction: t });
-        } else {
-          await db.sequelize.query(
-            `DELETE FROM ${fk.table_name} WHERE ${fk.column_name} = :id`,
-            { replacements: { id }, transaction: t });
-        }
-      }
-      await db.sequelize.query('DELETE FROM users WHERE id = :id', { replacements: { id }, transaction: t });
+      await deleteUserCascade(id, t);
       await t.commit();
     } catch (err) {
       await t.rollback();
@@ -269,6 +280,93 @@ export const rejectUser = async (req, res) => {
   }
 };
 
+// Mescla o cadastro pendente (primeiro acesso) no usuário já existente com o
+// mesmo e-mail e ativa o EXISTENTE: preserva cargo/gestor/posição no
+// organograma do antigo, traz do pendente o vínculo Microsoft e os dados de
+// formulário que faltavam, e remove o registro duplicado.
+async function mergeAndActivateTwin(res, pending, twin) {
+  // Dados do formulário que o cadastro antigo não tinha
+  if (!twin.birth_date && pending.birth_date) twin.birth_date = pending.birth_date;
+  if (!twin.phone && pending.phone) twin.phone = pending.phone;
+  if (!twin.signup_department_id && pending.signup_department_id) {
+    twin.signup_department_id = pending.signup_department_id;
+  }
+  if (!twin.position && pending.position) {
+    twin.position = pending.position;
+    twin.position_id = pending.position_id;
+  }
+  if (!twin.city && pending.city) {
+    twin.city = pending.city;
+    twin.city_id = pending.city_id;
+  }
+
+  // Vínculo Microsoft migra para o cadastro que fica
+  if (pending.microsoft_id) {
+    twin.microsoft_id = pending.microsoft_id;
+    twin.microsoft_access_token = pending.microsoft_access_token;
+    twin.microsoft_refresh_token = pending.microsoft_refresh_token;
+    twin.microsoft_token_expires_at = pending.microsoft_token_expires_at;
+    twin.auth_provider = 'MICROSOFT';
+  }
+
+  // Alçadas padrão do departamento — mesma regra da ativação normal
+  let appliedProfile = null;
+  if (twin.role !== 'admin') {
+    const positionRecord = await Position.findOne({ where: { name: twin.position } });
+    if (positionRecord && !twin.position_id) twin.position_id = positionRecord.id;
+    if (positionRecord?.department_id) {
+      appliedProfile = await PermissionProfile.findOne({
+        where: { department_id: positionRecord.department_id, active: true },
+      });
+    }
+    if (appliedProfile && !twin.permission_profile_id) {
+      twin.permission_profile_id = appliedProfile.id;
+    }
+  }
+
+  const provisionalPassword = generateSecurePassword();
+  twin.password = provisionalPassword;
+  twin.status = true;
+  twin.reset_password_code = null;
+  twin.reset_password_expires_at = null;
+  twin.reset_password_attempts = 0;
+  twin.reset_password_last_sent_at = null;
+
+  // O UNIQUE de microsoft_id exige remover o pendente ANTES de salvar o antigo.
+  const t = await db.sequelize.transaction();
+  try {
+    await deleteUserCascade(pending.id, t);
+    await twin.save({ transaction: t });
+    await t.commit();
+  } catch (err) {
+    await t.rollback();
+    throw err;
+  }
+
+  let emailSent = true;
+  try {
+    await sendEmail('user.activated', twin.email, {
+      name: twin.username,
+      email: twin.email,
+      password: provisionalPassword,
+      loginUrl: FRONTEND_URL,
+    });
+  } catch (err) {
+    emailSent = false;
+    console.error('[Signup] e-mail de liberação falhou:', err?.message || err);
+  }
+
+  return responseHandler.success(res, {
+    message: emailSent
+      ? `Cadastro mesclado com o usuário já existente "${twin.username}" (o duplicado foi removido; a posição no organograma foi mantida). E-mail com senha provisória enviado para ${twin.email}.`
+      : `Cadastro mesclado com o usuário já existente "${twin.username}", mas o e-mail de liberação FALHOU. Use "Resetar senha" no modal e repasse manualmente.`,
+    emailSent,
+    mergedInto: twin.id,
+    profileApplied: appliedProfile ? appliedProfile.name : null,
+    routesApplied: appliedProfile && Array.isArray(appliedProfile.routes) ? appliedProfile.routes : [],
+  });
+}
+
 // ── POST /api/auth/users/:id/activate (admin) ────────────────────────────────
 export const activateUser = async (req, res) => {
   try {
@@ -283,6 +381,16 @@ export const activateUser = async (req, res) => {
     // A ativação só vale DEPOIS do formulário de primeiro acesso enviado.
     if (user.approval_status === 'incomplete') {
       return responseHandler.error(res, 'Este usuário ainda não concluiu o formulário de primeiro acesso.');
+    }
+
+    // Gêmeo manual: o admin muitas vezes já cadastrou a pessoa à mão (para o
+    // organograma) antes do primeiro login Microsoft. Se existe OUTRO usuário
+    // aprovado com o mesmo e-mail (sem case), ativa NELE: o cadastro antigo
+    // mantém cargo/gestor/posição no organograma e ganha o vínculo Microsoft;
+    // o registro do primeiro acesso é removido — nada de pessoa duplicada.
+    const twin = await findUserByEmailCI(user.email, { excludeId: user.id });
+    if (twin && twin.approval_status === 'approved') {
+      return mergeAndActivateTwin(res, user, twin);
     }
 
     // Alçadas padrão do departamento — modelo PERFIL VIVO: em vez de copiar as

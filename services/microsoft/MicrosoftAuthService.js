@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import db from '../../models/sequelize/index.js';
 import jwtConfig from '../../config/jwtConfig.js';
+import { normalizeEmail, findUserByEmailCI } from '../../utils/userEmail.js';
 
 const {
     MICROSOFT_TENANT_ID,
@@ -217,7 +218,10 @@ class MicrosoftAuthService {
      * @returns {{ user: User, isNew: boolean }}
      */
     async findOrCreateUser(msProfile, tokens) {
-        const email = msProfile.mail || msProfile.userPrincipalName;
+        // Minúsculo SEMPRE: o Azure devolve o mail com capitalização própria
+        // ("Fulano.Silva@...") e o match por e-mail precisa casar com o cadastro
+        // manual do admin — senão nasce um usuário duplicado.
+        const email = normalizeEmail(msProfile.mail || msProfile.userPrincipalName);
         if (!email) throw new Error('Microsoft não retornou e-mail para o usuário.');
 
         const expiresAt = Date.now() + tokens.expires_in * 1000;
@@ -242,8 +246,10 @@ class MicrosoftAuthService {
             return { user, isNew: false };
         }
 
-        // 2. Busca por e-mail (vincula conta existente da plataforma)
-        user = await db.User.findOne({ where: { email } });
+        // 2. Busca por e-mail SEM case (vincula conta existente da plataforma,
+        //    inclusive a cadastrada manualmente pelo admin para o organograma —
+        //    vincular aqui evita cair na fila de aprovação e duplicar a pessoa)
+        user = await findUserByEmailCI(email);
         if (user) {
             await user.update({ ...microsoftFields, auth_provider: 'MICROSOFT' });
             return { user, isNew: false };

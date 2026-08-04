@@ -5,6 +5,7 @@ import db from '../../models/sequelize/index.js';
 import orgUsersService from '../../services/microsoft/MicrosoftOrgUsersService.js';
 import { sendEmail } from '../../email/email.service.js';
 import { EmailType } from '../../email/types.js';
+import { normalizeEmail } from '../../utils/userEmail.js';
 
 class MicrosoftOrgUsersController {
 
@@ -61,19 +62,22 @@ class MicrosoftOrgUsersController {
 
             for (const u of users) {
                 try {
-                    const { microsoft_id, name, email, phone, city, sendInvite } = u;
+                    const { microsoft_id, name, phone, city, sendInvite } = u;
+                    const email = normalizeEmail(u.email);
 
                     if (!microsoft_id || !email) {
                         errors.push({ microsoft_id, reason: 'microsoft_id e email são obrigatórios.' });
                         continue;
                     }
 
-                    // Verifica duplicidade por microsoft_id ou email
+                    // Verifica duplicidade por microsoft_id ou email (sem case —
+                    // cobre o cadastro manual feito pelo admin com outra grafia)
+                    const { fn, col, where: sqWhere, Op } = db.Sequelize;
                     const existing = await db.User.findOne({
                         where: {
-                            [db.Sequelize.Op.or]: [
+                            [Op.or]: [
                                 { microsoft_id },
-                                { email },
+                                sqWhere(fn('lower', col('email')), email),
                             ],
                         },
                         attributes: ['id', 'email', 'username'],
