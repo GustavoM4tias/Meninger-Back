@@ -22,27 +22,12 @@ import { runTool as runSecureTool } from '../OfficeAI/SecureRunner.js';
 import { buildReportSystemPrompt } from './reportPrompt.js';
 import { normalizeSpec } from './ReportService.js';
 import { buildMemoryPrompt, remember } from './ReportMemoryService.js';
-
-// Tools de DADOS liberadas no modo relatório (subset das tools do Office chat).
-// Tools de dados liberadas no modo Relatório. O chat do relatório é
-// admin-only (requireAdmin na rota), então tools adminOnly podem entrar aqui.
-const DATA_TOOL_NAMES = [
-  'query_leads', 'query_enterprises', 'get_enterprise_detail',
-  'query_precadastros', 'query_reservas', 'query_mcmv',
-  'query_condition_sheets', 'get_condition_sheet',
-  'query_boletos',
-];
-const DATA_TOOL_LABELS = {
-  query_leads: 'Leads de marketing',
-  query_enterprises: 'Empreendimentos',
-  get_enterprise_detail: 'Detalhe do empreendimento',
-  query_precadastros: 'Pré-cadastros',
-  query_reservas: 'Reservas',
-  query_mcmv: 'Teto MCMV',
-  query_condition_sheets: 'Fichas comerciais',
-  get_condition_sheet: 'Ficha comercial',
-  query_boletos: 'Boletos Caixa (ato)',
-};
+// Fonte única do modo relatório interativo: allowlist de tools, análise de
+// linhas e labels vivem no ReportDataService (o refresh e a rota /data usam o
+// mesmo contrato). Tool nova de dados no relatório → DATA_TOOL_NAMES de lá.
+import {
+  DATA_TOOL_NAMES, DATA_TOOL_LABELS, extractRows, analyzeRows,
+} from './ReportDataService.js';
 
 // Tool de montagem/edição do relatório.
 const REPORT_APPLY_DECLARATION = {
@@ -56,6 +41,36 @@ const REPORT_APPLY_DECLARATION = {
       period_start: { type: 'STRING', description: 'Início do período AAAA-MM-DD (opcional)' },
       period_end: { type: 'STRING', description: 'Fim do período AAAA-MM-DD; omita para período aberto (opcional)' },
       data_mode: { type: 'STRING', description: 'fixed (dados congelados) ou live (fim aberto) (opcional)' },
+      filters: {
+        type: 'ARRAY',
+        description: 'RELATÓRIO INTERATIVO: filtros que o leitor poderá usar. Quando enviado, SUBSTITUI a lista atual de filtros.',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            key: { type: 'STRING', description: 'Identificador curto minúsculo (ex: "imob", "corretor", "periodo")' },
+            label: { type: 'STRING', description: 'Rótulo exibido ao leitor' },
+            type: { type: 'STRING', description: 'select | text | date-range' },
+            arg: { type: 'STRING', description: 'Argumento da tool que este filtro alimenta (ex: imobiliaria, corretor, nome, documento, situacao, status_repasse). OMITIR para date-range (vira data_inicio/data_fim automaticamente).' },
+            options: { type: 'ARRAY', description: 'Opções fixas do select (opcional)', items: { type: 'STRING' } },
+            options_from: { type: 'OBJECT', description: 'Opções dinâmicas do select: distinct de um campo de um dataset. Ex: { dataset: "reservas-lista", field: "imobiliaria_nome" }', properties: { dataset: { type: 'STRING' }, field: { type: 'STRING' } } },
+            placeholder: { type: 'STRING', description: 'Texto de apoio (opcional)' },
+          },
+        },
+      },
+      datasets: {
+        type: 'ARRAY',
+        description: 'RELATÓRIO INTERATIVO: consultas parametrizadas que alimentam os blocos com bind. Quando enviado, SUBSTITUI a lista atual.',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            id: { type: 'STRING', description: 'Identificador minúsculo (ex: "pastas-kpis", "reservas-situacao")' },
+            tool: { type: 'STRING', description: 'Tool de dados permitida (ex: query_precadastros, query_reservas, query_leads)' },
+            label: { type: 'STRING', description: 'Nome amigável da fonte' },
+            base_args: { type: 'OBJECT', description: 'Args FIXOS da consulta (pode incluir group_by/format/limit — o leitor nunca muda esses)', properties: {} },
+            accepts: { type: 'ARRAY', description: 'Keys dos filtros que se aplicam a este dataset', items: { type: 'STRING' } },
+          },
+        },
+      },
       ops: {
         type: 'ARRAY',
         description: 'Operações sobre os blocos, aplicadas em ordem.',
@@ -63,8 +78,8 @@ const REPORT_APPLY_DECLARATION = {
           type: 'OBJECT',
           properties: {
             action: { type: 'STRING', description: 'replace_all | upsert | remove | move' },
-            blocks: { type: 'ARRAY', description: 'replace_all: lista completa de blocos {id,type,props}', items: { type: 'OBJECT', properties: { id: { type: 'STRING' }, type: { type: 'STRING' }, props: { type: 'OBJECT', properties: {} } } } },
-            block: { type: 'OBJECT', description: 'upsert: o bloco {id,type,props} a criar/atualizar', properties: { id: { type: 'STRING' }, type: { type: 'STRING' }, props: { type: 'OBJECT', properties: {} } } },
+            blocks: { type: 'ARRAY', description: 'replace_all: lista completa de blocos {id,type,props,bind?}', items: { type: 'OBJECT', properties: { id: { type: 'STRING' }, type: { type: 'STRING' }, props: { type: 'OBJECT', properties: {} }, bind: { type: 'OBJECT', description: 'Liga o bloco a um dataset (relatório interativo)', properties: {} } } } },
+            block: { type: 'OBJECT', description: 'upsert: o bloco {id,type,props,bind?} a criar/atualizar', properties: { id: { type: 'STRING' }, type: { type: 'STRING' }, props: { type: 'OBJECT', properties: {} }, bind: { type: 'OBJECT', description: 'Liga o bloco a um dataset (relatório interativo)', properties: {} } } },
             id: { type: 'STRING', description: 'remove/move: id do bloco alvo' },
             after_id: { type: 'STRING', description: 'upsert/move: inserir depois deste bloco; omita para o fim' },
           },
@@ -93,83 +108,6 @@ const REPORT_ANALYZE_DECLARATION = {
     required: ['source_tool', 'group_by'],
   },
 };
-
-// Extrai a lista de registros de um resultado de tool (formatos variam).
-function extractRows(result) {
-  if (!result || typeof result !== 'object') return [];
-  for (const key of ['rows', 'data', 'items', 'list', 'leads', 'reservas', 'precadastros', 'results']) {
-    if (Array.isArray(result[key])) return result[key];
-  }
-  const firstArray = Object.values(result).find((v) => Array.isArray(v) && v.length && typeof v[0] === 'object');
-  return firstArray || [];
-}
-
-function bucketDate(value, granularity) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  if (granularity === 'month') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  if (granularity === 'week') {
-    const monday = new Date(d);
-    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    return monday.toISOString().slice(0, 10);
-  }
-  return d.toISOString().slice(0, 10);
-}
-
-export function analyzeRows(rows, { group_by, metric = 'count', metric_field, date_granularity, top = 10 }) {
-  if (!rows.length) return { error: 'Nenhum registro disponível dessa consulta para analisar.' };
-  const sample = rows[0];
-  if (!(group_by in sample)) {
-    return {
-      error: `Campo "${group_by}" não existe nos registros.`,
-      availableFields: Object.keys(sample).slice(0, 40),
-    };
-  }
-
-  const groups = new Map();
-  for (const row of rows) {
-    let key = row[group_by];
-    if (key === null || key === undefined || key === '') key = '(não informado)';
-    else if (date_granularity) key = bucketDate(key, date_granularity);
-    else key = String(key);
-
-    const g = groups.get(key) || { count: 0, sum: 0 };
-    g.count += 1;
-    if (metric_field != null) {
-      const n = Number(row[metric_field]);
-      if (Number.isFinite(n)) g.sum += n;
-    }
-    groups.set(key, g);
-  }
-
-  let items = [...groups.entries()].map(([label, g]) => ({
-    label,
-    value: metric === 'sum' ? g.sum : metric === 'avg' ? (g.count ? g.sum / g.count : 0) : g.count,
-    count: g.count,
-  }));
-
-  // Série temporal mantém ordem cronológica; o resto ordena por valor
-  if (date_granularity) items.sort((a, b) => String(a.label).localeCompare(String(b.label)));
-  else items.sort((a, b) => b.value - a.value);
-
-  const total = items.reduce((s, i) => s + i.value, 0);
-  const limited = date_granularity ? items : items.slice(0, top);
-
-  return {
-    groupBy: group_by,
-    metric,
-    total: Math.round(total * 100) / 100,
-    groupCount: items.length,
-    items: limited.map((i) => ({
-      ...i,
-      value: Math.round(i.value * 100) / 100,
-      share: total ? Math.round((i.value / total) * 1000) / 10 : 0,
-    })),
-    // Leitura pronta para a Eme usar no texto de análise
-    topLabel: limited[0]?.label ?? null,
-    topShare: total && limited[0] ? Math.round((limited[0].value / total) * 1000) / 10 : null,
-  };
-}
 
 // Tool de MEMÓRIA: a Eme guarda preferências declaradas pelo usuário para não
 // precisar ouvir a mesma instrução em toda conversa.
@@ -231,7 +169,13 @@ export function applyOps(currentSpec, payload) {
       }
     }
   }
-  return { spec: normalizeSpec({ version: 1, blocks }), changedIds: [...new Set(changedIds)] };
+  // Filtros/datasets: enviados = substituem; omitidos = preservados.
+  const filters = payload?.filters !== undefined ? payload.filters : currentSpec?.filters;
+  const datasets = payload?.datasets !== undefined ? payload.datasets : currentSpec?.datasets;
+  return {
+    spec: normalizeSpec({ version: 1, filters, datasets, blocks }),
+    changedIds: [...new Set(changedIds)],
+  };
 }
 
 // Remove arrays volumosos do resultado antes de devolver ao Gemini (custo de tokens).

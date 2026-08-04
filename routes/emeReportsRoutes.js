@@ -17,6 +17,7 @@ import {
   dismissForUser, undismissForUser, listOrphans, transferOwnership,
 } from '../services/emeReports/ReportService.js';
 import { streamReportChat } from '../services/emeReports/ReportChatService.js';
+import { runReportData } from '../services/emeReports/ReportDataService.js';
 import { rerunSnapshotCalls, buildRefreshMessage } from '../services/emeReports/ReportRefreshService.js';
 import {
   listMemories, remember, updateMemory, deleteMemory,
@@ -222,6 +223,61 @@ router.post('/:id/dismiss', async (req, res) => {
 router.delete('/:id/dismiss', async (req, res) => {
   await undismissForUser(req.params.id, req.user.id);
   res.json({ ok: true });
+});
+
+// ── Dados interativos (filtros do leitor) ────────────────────────────────────
+// Recalcula os blocos com bind aplicando os filtros que o LEITOR escolheu.
+// NÃO é admin-only: quem pode VER o relatório pode filtrar. As consultas rodam
+// com as alçadas e o escopo de QUEM PEDE (fail-closed dentro das tools); o
+// ReportDataService só aceita filtros/args declarados no spec. O link público
+// nunca passa por aqui (rota pública serve snapshot congelado).
+
+const _dataBuckets = new Map();
+function rateLimitData(req, res, next) {
+  const now = Date.now();
+  const arr = _dataBuckets.get(req.user.id) || [];
+  while (arr.length && now - arr[0] > 60 * 1000) arr.shift();
+  if (arr.length >= 30) {
+    res.set('Retry-After', '60');
+    return res.status(429).json({ error: 'Muitas consultas em sequência. Aguarde um instante.' });
+  }
+  arr.push(now);
+  _dataBuckets.set(req.user.id, arr);
+  next();
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, arr] of _dataBuckets) {
+    while (arr.length && now - arr[0] > 60 * 1000) arr.shift();
+    if (!arr.length) _dataBuckets.delete(uid);
+  }
+}, 10 * 60 * 1000).unref?.();
+
+router.post('/:id/data', rateLimitData, async (req, res) => {
+  try {
+    const report = await loadReport(req, res);
+    if (!report) return;
+    if (!(await canView(report, req.user))) return res.status(403).json({ error: 'Sem permissão.' });
+    if (report.deletedAt) return res.status(410).json({ error: 'Relatório na lixeira.' });
+
+    // Mesma regra do /view: editor em rascunho consulta o rascunho; todos os
+    // outros consultam a versão PUBLICADA (edição em curso não vaza).
+    const isEditor = canEdit(report, req.user);
+    const spec = isEditor && report.status === 'draft'
+      ? report.spec
+      : (await getPublishedPayload(report)).spec;
+
+    const result = await runReportData({
+      report: { id: report.id, spec },
+      user: req.user,
+      rawFilterValues: req.body?.filters,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    console.error('[emeReports] data:', err);
+    res.status(500).json({ error: 'Falha ao consultar os dados do relatório.' });
+  }
 });
 
 // ── Chat do builder (SSE) ────────────────────────────────────────────────────

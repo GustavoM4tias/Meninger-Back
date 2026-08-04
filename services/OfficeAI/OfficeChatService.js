@@ -77,7 +77,7 @@ const LEGACY_TOOL_ROUTES = {
   open_alert_editor: null,
 };
 
-async function legacyToolAllowed(user, name) {
+export async function legacyToolAllowed(user, name) {
   if (!(name in LEGACY_TOOL_ROUTES)) return false; // fail-closed p/ tool não mapeada
   const route = LEGACY_TOOL_ROUTES[name];
   if (route === null) return true;
