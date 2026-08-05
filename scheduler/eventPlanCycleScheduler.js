@@ -170,7 +170,7 @@ async function openNextMonthPlans(settings, today) {
                 body: `${enterprise?.nome || 'Empreendimento'} · monte a proposta de eventos. A janela fecha em ${fecha}; `
                     + 'você pode enviar antes disso, e o que não for enviado vai automaticamente para aprovação no fechamento.',
                 data: { planId: plan.id, referenceMonth: reference },
-                link: `/comercial/plano-eventos/${plan.id}`,
+                link: `/marketing/plano-eventos/${plan.id}`,
                 importance: 8,
                 // Abertura de janela é o gatilho da rotina do gestor: garante o
                 // e-mail mesmo que ele tenha desligado o canal.
@@ -228,7 +228,7 @@ async function chasePendingPlans(settings, today) {
                     ? 'No fechamento ele vai automaticamente para aprovação do jeito que estiver.'
                     : 'Envie antes do fechamento.'),
             data: { planId: plan.id },
-            link: `/comercial/plano-eventos/${plan.id}`,
+            link: `/marketing/plano-eventos/${plan.id}`,
             importance: hoje ? 9 : 7,
         });
 
@@ -281,7 +281,7 @@ async function autoSubmitClosingPlans(settings, today) {
                     body: `${nome} · a janela fechou e o plano estava vazio, então não houve o que enviar para aprovação. `
                         + 'Fale com o Comercial se ainda precisar propor algo para o mês.',
                     data: { planId: plan.id },
-                    link: `/comercial/plano-eventos/${plan.id}`,
+                    link: `/marketing/plano-eventos/${plan.id}`,
                     importance: 8,
                 });
             }
@@ -297,7 +297,7 @@ async function autoSubmitClosingPlans(settings, today) {
                 body: `${nome} · a janela fechou e o plano seguiu para a validação do Comercial com ${result.events} evento(s), `
                     + 'do jeito que estava. Se algo ficou faltando, peça a devolução para ajustar.',
                 data: { planId: plan.id },
-                link: `/comercial/plano-eventos/${plan.id}`,
+                link: `/marketing/plano-eventos/${plan.id}`,
                 importance: 8,
             });
         }
@@ -311,7 +311,7 @@ async function autoSubmitClosingPlans(settings, today) {
                 title: `Plano de eventos de ${nome} aguardando validação`,
                 body: `${monthLabel(reference)} · ${result.events} evento(s), enviado automaticamente no fechamento da janela.`,
                 data: { planId: plan.id },
-                link: `/comercial/plano-eventos/${plan.id}`,
+                link: `/marketing/plano-eventos/${plan.id}`,
                 importance: 7,
             });
         }

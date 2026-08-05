@@ -11,7 +11,7 @@ import { getStages, findStage } from './eventPlanService.js';
 
 const { EventPlanAuthProfile, CvEnterprise } = db;
 
-const PLAN_LINK = (planId) => `/comercial/plano-eventos?plan=${planId}`;
+const PLAN_LINK = (planId) => `/marketing/plano-eventos?plan=${planId}`;
 
 function monthLabel(referenceMonth) {
     const [year, month] = String(referenceMonth || '').split('-');

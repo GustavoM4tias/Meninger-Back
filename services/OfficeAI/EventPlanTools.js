@@ -3,7 +3,7 @@
 // Tools da Eme para o PLANO DE EVENTOS (proposta mensal de eventos comerciais).
 //
 // PERMISSÃO em duas camadas, como manda o padrão:
-//   1. `requiredPermissions: ['/comercial/plano-eventos']` no registerTool —
+//   1. `requiredPermissions: ['/marketing/plano-eventos']` no registerTool —
 //      mesma alçada da tela, checada pelo ToolRegistry (admin bypassa);
 //   2. escopo por empreendimento DENTRO de cada handler, via accessScopeService.
 // Fail-closed: sem grant, nenhum plano. Args do Gemini nunca ampliam escopo —
@@ -18,7 +18,7 @@ import { isStanding } from '../../models/sequelize/eventPlan/plannedEvent.js';
 import { registerTool } from './ToolRegistry.js';
 import { getStages } from '../eventPlan/eventPlanService.js';
 
-const PLAN_ROUTE = '/comercial/plano-eventos';
+const PLAN_ROUTE = '/marketing/plano-eventos';
 
 const { EventPlan, PlannedEvent, PlannedEventItem, EventPlanDecision, CvEnterprise, User } = db;
 
