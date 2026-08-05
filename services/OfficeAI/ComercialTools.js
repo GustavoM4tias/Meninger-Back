@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { QueryTypes, Op, where, fn, col } from 'sequelize';
 import fetch from 'node-fetch';
-import { buildSubtitle } from './MarketingTools.js';
+import { buildSubtitle, LIST_HARD_CAP } from './MarketingTools.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
 
 const MCMV_FAIXA3 = 400000;
@@ -120,7 +120,7 @@ export const TOOL_DECLARATIONS = [
           enum: ['summary', 'list'],
           description: 'Formato da resposta. "summary" (padrão sem group_by) retorna KPIs agregados. "list" retorna TABELA com dados individuais das pastas: nome do cliente, CPF, empreendimento, CCA, etapa, dias em análise, valor, corretor, imobiliária, link CV. Use "list" quando o usuário pedir "nomes", "dados", "lista", "detalhes", "quem são", "mostre os clientes" ou similar.',
         },
-        limit: { type: 'NUMBER', description: 'Limite de linhas quando format="list". Padrão: 50, máximo: 200.' },
+        limit: { type: 'NUMBER', description: 'Limite de linhas quando format="list". Padrão: 50. O retorno traz total_geral (universo real do filtro) e truncado, para você nunca confundir a página com o total.' },
       },
     },
   },
@@ -173,7 +173,7 @@ export const TOOL_DECLARATIONS = [
           enum: ['summary', 'list'],
           description: 'Formato. "summary" (padrão sem group_by) retorna KPIs. "list" retorna TABELA com dados individuais (cliente, CPF, empreendimento, unidade, situação, vendida, dias, corretor, imobiliária, lead origem, score). Use "list" quando o usuário pedir nomes/dados/lista/detalhes.',
         },
-        limit: { type: 'NUMBER', description: 'Limite de linhas quando format="list". Padrão: 50, máximo: 200.' },
+        limit: { type: 'NUMBER', description: 'Limite de linhas quando format="list". Padrão: 50. O retorno traz total_geral (universo real do filtro) e truncado, para você nunca confundir a página com o total.' },
       },
     },
   },
@@ -818,6 +818,9 @@ async function executePrecadGrouped(args, whereSql, replacements, context) {
 
   if (!groupExpr) return { error: `group_by inválido: ${args.group_by}` };
 
+  // Série temporal: ordem cronológica e sem teto de 30 grupos (agrupar por dia
+  // devolvia só os 30 dias mais cheios, fora de ordem - não é uma evolução).
+  const isSerie = args.group_by === 'dia' || args.group_by === 'mes';
   const metric = args.metric || 'count';
 
   // Cada métrica tem expressão própria. Usa CTE base com bucket pré-calculado.
@@ -880,8 +883,8 @@ async function executePrecadGrouped(args, whereSql, replacements, context) {
     FROM base AS base
     GROUP BY label
     HAVING COUNT(*) > 0
-    ORDER BY ${orderBy}
-    LIMIT 30
+    ORDER BY ${isSerie ? 'label ASC' : orderBy}
+    LIMIT ${isSerie ? 800 : 50}
   `;
 
   const rows = await db.sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
@@ -935,7 +938,7 @@ async function executePrecadGrouped(args, whereSql, replacements, context) {
 }
 
 async function executePrecadList(args, whereSql, replacements, context, start, end) {
-  const limit = Math.min(Number(args.limit) || 50, 200);
+  const limit = Math.min(Number(args.limit) || 50, LIST_HARD_CAP);
 
   // LATERAL JOIN: pega o lead mais antigo associado (geralmente o lead "fonte")
   // para inlinear origem/mídia/ID — evita segunda chamada ao query_leads.
@@ -1005,6 +1008,14 @@ async function executePrecadList(args, whereSql, replacements, context, start, e
   const idleads         = [...new Set(rows.map(r => r.lead_id).filter(Boolean))];
   const idprecadastros  = rows.map(r => r.idprecadastro).filter(Boolean);
 
+  // Total REAL do filtro (a lista é uma página; `total` sozinho enganava quem
+  // lesse o resultado como se fosse o universo inteiro).
+  const [{ cnt }] = await db.sequelize.query(
+    `SELECT COUNT(*)::int AS cnt FROM cv_precadastros p WHERE ${whereSql}`,
+    { replacements, type: QueryTypes.SELECT },
+  );
+  const totalGeral = Number(cnt) || 0;
+
   return {
     type:    'table',
     title:   'Pré-cadastros',
@@ -1012,6 +1023,9 @@ async function executePrecadList(args, whereSql, replacements, context, start, e
     columns,
     rows,
     total:   rows.length,
+    total_geral:     totalGeral,
+    truncado:        totalGeral > rows.length,
+    limite_aplicado: limit,
     context: {
       ...context,
       format: 'list',
@@ -1315,6 +1329,9 @@ async function executeReservasGrouped(args, whereSql, replacements, context) {
 
   if (!groupExpr) return { error: `group_by inválido: ${args.group_by}` };
 
+  // Série temporal: ordem cronológica e sem teto de 30 grupos (agrupar por dia
+  // devolvia só os 30 dias mais cheios, fora de ordem - não é uma evolução).
+  const isSerie = args.group_by === 'dia' || args.group_by === 'mes';
   const metric = args.metric || 'count';
 
   let metricExpr;
@@ -1373,8 +1390,8 @@ async function executeReservasGrouped(args, whereSql, replacements, context) {
     FROM base
     GROUP BY label
     HAVING COUNT(*) > 0
-    ORDER BY ${orderBy}
-    LIMIT 30
+    ORDER BY ${isSerie ? 'label ASC' : orderBy}
+    LIMIT ${isSerie ? 800 : 50}
   `;
   const rows = await db.sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
 
@@ -1427,7 +1444,7 @@ async function executeReservasGrouped(args, whereSql, replacements, context) {
 }
 
 async function executeReservasList(args, whereSql, replacements, context, start, end) {
-  const limit = Math.min(Number(args.limit) || 50, 200);
+  const limit = Math.min(Number(args.limit) || 50, LIST_HARD_CAP);
 
   const sql = `
     SELECT
@@ -1495,6 +1512,12 @@ async function executeReservasList(args, whereSql, replacements, context, start,
   const idreservas     = rows.map(r => r.idreserva).filter(Boolean);
   const idprecadastros = [...new Set(rows.map(r => r.idprecadastro).filter(Boolean))];
 
+  const [{ cnt }] = await db.sequelize.query(
+    `SELECT COUNT(*)::int AS cnt FROM reservas r WHERE ${whereSql}`,
+    { replacements, type: QueryTypes.SELECT },
+  );
+  const totalGeral = Number(cnt) || 0;
+
   return {
     type:    'table',
     title:   'Reservas',
@@ -1502,6 +1525,9 @@ async function executeReservasList(args, whereSql, replacements, context, start,
     columns,
     rows,
     total:   rows.length,
+    total_geral:     totalGeral,
+    truncado:        totalGeral > rows.length,
+    limite_aplicado: limit,
     context: {
       ...context,
       format: 'list',

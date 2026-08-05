@@ -31,8 +31,14 @@ import { buildMemoryPrompt, remember } from './ReportMemoryService.js';
 // linhas e labels vivem no ReportDataService (o refresh e a rota /data usam o
 // mesmo contrato). Tool nova de dados no relatório → DATA_TOOL_NAMES de lá.
 import {
-  DATA_TOOL_NAMES, DATA_TOOL_LABELS, extractRows, analyzeRows,
+  DATA_TOOL_NAMES, DATA_TOOL_LABELS, extractRows, analyzeRows, allowedArgsForTool,
 } from './ReportDataService.js';
+
+// Quantas linhas o modo Relatório pede quando o modelo lista registros sem
+// dizer o limite. O chat usa 50 (visualização); um relatório PRECISA do
+// universo inteiro para agregar — analisar 700 leads sobre as 50 primeiras
+// linhas foi exatamente a origem dos números errados.
+const REPORT_LIST_LIMIT = 2000;
 
 // Tool de montagem/edição do relatório.
 const REPORT_APPLY_DECLARATION = {
@@ -59,6 +65,12 @@ const REPORT_APPLY_DECLARATION = {
             options: { type: 'ARRAY', description: 'Opções fixas do select (opcional)', items: { type: 'STRING' } },
             options_from: { type: 'OBJECT', description: 'Opções dinâmicas do select: distinct de um campo de um dataset. Ex: { dataset: "reservas-lista", field: "imobiliaria_nome" }', properties: { dataset: { type: 'STRING' }, field: { type: 'STRING' } } },
             placeholder: { type: 'STRING', description: 'Texto de apoio (opcional)' },
+            default: { type: 'STRING', description: 'Valor inicial do filtro (select/text). O leitor abre o relatório já com ele aplicado.' },
+            default_range: {
+              type: 'OBJECT',
+              description: 'OBRIGATÓRIO em date-range: período inicial do filtro, igual ao período do relatório. Nunca deixe o campo de data em branco.',
+              properties: { from: { type: 'STRING', description: 'AAAA-MM-DD' }, to: { type: 'STRING', description: 'AAAA-MM-DD' } },
+            },
           },
         },
       },
@@ -111,6 +123,61 @@ const REPORT_ANALYZE_DECLARATION = {
       top: { type: 'NUMBER', description: 'Quantos grupos retornar (padrão 10)' },
     },
     required: ['source_tool', 'group_by'],
+  },
+};
+
+// Tool de PLANO: antes de sair consultando, a Eme quebra o pedido em FRENTES
+// (blocos de trabalho independentes) e vai marcando cada uma conforme resolve.
+// O usuário acompanha o progresso na tela e sabe o que ainda falta — antes a
+// geração era um monólito opaco que ou saía inteiro ou não saía.
+const REPORT_PLAN_DECLARATION = {
+  name: 'report_plan',
+  description: 'Declara ou atualiza o PLANO do relatório: as frentes de trabalho (seções/temas) que serão resolvidas uma a uma. Chame com "fronts" na PRIMEIRA resposta de uma montagem, antes de consultar dados. Depois chame com "update" para marcar cada frente como doing/done/blocked conforme avança.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      fronts: {
+        type: 'ARRAY',
+        description: 'Frentes do relatório, em ordem de execução. Substitui o plano atual.',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            id: { type: 'STRING', description: 'Identificador curto e estável (ex: "leads", "funil", "origem")' },
+            title: { type: 'STRING', description: 'O que esta frente entrega, em linguagem de negócio (ex: "Geração de leads e evolução mensal")' },
+            needs: { type: 'STRING', description: 'O que falta saber para resolver esta frente (opcional; use junto de report_ask)' },
+          },
+        },
+      },
+      update: {
+        type: 'ARRAY',
+        description: 'Atualização de status das frentes já declaradas.',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            id: { type: 'STRING' },
+            status: { type: 'STRING', description: 'todo | doing | done | blocked' },
+            note: { type: 'STRING', description: 'Uma linha: o que saiu, ou por que travou (obrigatório em blocked)' },
+          },
+        },
+      },
+    },
+  },
+};
+
+// Tool de PERGUNTA: quando falta uma decisão do usuário, a Eme pergunta de
+// forma estruturada (com opções clicáveis) em vez de chutar ou de escrever a
+// pergunta no meio do texto, onde ela se perde.
+const REPORT_ASK_DECLARATION = {
+  name: 'report_ask',
+  description: 'Faz UMA pergunta objetiva ao usuário e PARA, aguardando a resposta. Use quando faltar uma decisão que muda o relatório (empreendimento, período, recorte, o que incluir). Prefira oferecer opções clicáveis. Não use para pedir permissão de continuar: se dá para decidir sozinha com o padrão da casa, decida e siga.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      question: { type: 'STRING', description: 'A pergunta, curta e direta.' },
+      options: { type: 'ARRAY', description: 'Respostas prontas para o usuário clicar (2 a 5). Cada uma deve ser uma resposta completa, não um rótulo vago.', items: { type: 'STRING' } },
+      context: { type: 'STRING', description: 'Meia linha explicando por que isso muda o relatório (opcional).' },
+    },
+    required: ['question'],
   },
 };
 
@@ -278,19 +345,97 @@ export function applyOps(currentSpec, payload) {
   };
 }
 
+// ── Plano de frentes ─────────────────────────────────────────────────────────
+// Guardado em dataSnapshot.plan (coluna JSONB que já existe), então sobrevive a
+// F5 e volta no GET /:id junto do relatório.
+const PLAN_STATUS = new Set(['todo', 'doing', 'done', 'blocked']);
+const MAX_FRONTS = 12;
+
+function applyPlan(currentPlan, args = {}) {
+  let fronts = Array.isArray(currentPlan?.fronts) ? [...currentPlan.fronts] : [];
+
+  if (Array.isArray(args.fronts) && args.fronts.length) {
+    const seen = new Set();
+    fronts = [];
+    for (const f of args.fronts.slice(0, MAX_FRONTS)) {
+      const id = String(f?.id || f?.title || '').trim().slice(0, 40).toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      // Frente redeclarada mantém o status que já tinha (replanejar no meio da
+      // montagem não pode "desfazer" o que já ficou pronto).
+      const anterior = (currentPlan?.fronts || []).find((p) => p.id === id);
+      fronts.push({
+        id,
+        title: String(f?.title || id).slice(0, 120),
+        ...(f?.needs ? { needs: String(f.needs).slice(0, 200) } : {}),
+        status: anterior?.status && PLAN_STATUS.has(anterior.status) ? anterior.status : 'todo',
+        ...(anterior?.note ? { note: anterior.note } : {}),
+      });
+    }
+  }
+
+  for (const u of Array.isArray(args.update) ? args.update.slice(0, MAX_FRONTS) : []) {
+    const id = String(u?.id || '').trim().toLowerCase();
+    const front = fronts.find((f) => f.id === id);
+    if (!front) continue;
+    if (PLAN_STATUS.has(u?.status)) front.status = u.status;
+    if (u?.note) front.note = String(u.note).slice(0, 200);
+  }
+
+  return { fronts, updatedAt: new Date().toISOString() };
+}
+
+// Grava plano/pergunta pendente sem mexer no resto do snapshot. O objeto TEM
+// que ser novo: mutar dataSnapshot no lugar faz o Sequelize comparar a
+// referência consigo mesma e pular a coluna em silêncio.
+async function patchSnapshot(report, patch) {
+  await report.update({ dataSnapshot: { ...(report.dataSnapshot || {}), ...patch } });
+}
+
 // Remove arrays volumosos do resultado antes de devolver ao Gemini (custo de tokens).
 function summarizeForGemini(result) {
   if (!result || typeof result !== 'object') return { ok: true };
   const out = {};
+  const cortados = [];
   for (const [k, v] of Object.entries(result)) {
-    if (Array.isArray(v)) out[k] = v.length > 120 ? v.slice(0, 120) : v;
-    else out[k] = v;
+    if (Array.isArray(v) && v.length > 120) {
+      out[k] = v.slice(0, 120);
+      cortados.push(`${k}: ${v.length}`);
+    } else {
+      out[k] = v;
+    }
+  }
+  // Sem este aviso o modelo conta as linhas que ENXERGA nesta mensagem e
+  // apresenta o resultado como total. Os registros completos ficam no cache do
+  // relatório e são agregados pelo report_analyze_data.
+  if (cortados.length) {
+    out._amostra = `Esta mensagem mostra só as 120 primeiras linhas (${cortados.join(', ')}). `
+      + 'NÃO conte nem agregue por elas: use report_analyze_data (que trabalha sobre TODOS os registros buscados) '
+      + 'ou uma consulta com group_by.';
   }
   return out;
 }
 
-const MAX_TOOL_ROUNDS = 15;
+// Montagem modular (uma frente por vez, cada uma com consulta + upsert) gasta
+// mais rodadas que o monólito antigo.
+const MAX_TOOL_ROUNDS = 26;
 const HISTORY_LIMIT = 30;
+
+// O que aparece no progresso da tela. Mostra o universo REAL da consulta, e
+// avisa quando a lista veio cortada em vez de exibir o tamanho da página como
+// se fosse o total.
+function resumoDoResultado(result) {
+  if (!result || typeof result !== 'object') return 'ok';
+  if (result.total_geral != null) {
+    const total = Number(result.total_geral);
+    const linhas = Array.isArray(result.rows) ? result.rows.length : null;
+    if (result.truncado && linhas != null) return `${total} registros (lista cortada em ${linhas})`;
+    return `${total} registros`;
+  }
+  if (result.total != null) return `${result.total} registros`;
+  if (result.blockCount != null) return `${result.blockCount} blocos no relatório`;
+  return 'ok';
+}
 
 // ── Teto de contexto da conversa ─────────────────────────────────────────────
 // Só limitar por NÚMERO de mensagens não basta: as do relatório são longas
@@ -337,13 +482,27 @@ function trimHistory(messages) {
 // dados sem reconsultar o banco. Em memória, com TTL — se expirar, a Eme
 // simplesmente busca de novo.
 const RAW_TTL_MS = 30 * 60 * 1000;
-const _rawCache = new Map(); // reportId -> { at, byTool: { [toolName]: rows } }
+const _rawCache = new Map(); // reportId -> { at, byTool: { [toolName]: entrada } }
 
-function putRaw(reportId, toolName, rows) {
+// Guarda também se a listagem veio CORTADA e qual o universo real. Sem isso o
+// report_analyze_data agregava as 50 primeiras linhas e apresentava o resultado
+// como se fosse o total — origem direta de número errado no relatório.
+function putRaw(reportId, toolName, rows, result) {
   if (!Array.isArray(rows) || !rows.length) return;
   const entry = _rawCache.get(reportId) || { at: Date.now(), byTool: {} };
   entry.at = Date.now();
-  entry.byTool[toolName] = rows.slice(0, 5000); // teto de memória
+  // Só LISTAGEM pode estar truncada. Num retorno agrupado, `total` é a soma das
+  // categorias (718) e `rows` são os grupos (12) — comparar os dois marcaria
+  // como "cortado" um resultado que já veio somado pelo banco.
+  const eLista = Array.isArray(result?.rows);
+  const totalGeral = eLista
+    ? (Number(result?.total_geral) || rows.length)
+    : rows.length;
+  entry.byTool[toolName] = {
+    rows: rows.slice(0, 5000), // teto de memória
+    totalGeral,
+    truncado: eLista && (!!result?.truncado || totalGeral > rows.length),
+  };
   _rawCache.set(reportId, entry);
 }
 function getRaw(reportId, toolName) {
@@ -377,12 +536,20 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
 
   await db.EmeGeneratedReportMessage.create({ reportId: report.id, role: 'user', content: userMessage });
 
+  // O usuário falou: a pergunta pendente (se havia) foi respondida ou ignorada.
+  if (report.dataSnapshot?.pendingAsk) {
+    await patchSnapshot(report, { pendingAsk: null });
+    emitRun(run, { type: 'ask', ask: null });
+  }
+
   const selectedBlocks = selectedBlockIds.length
     ? (report.spec?.blocks || []).filter((b) => selectedBlockIds.includes(b.id))
     : [];
 
   const memoryPrompt = await buildMemoryPrompt(user.id).catch(() => '');
-  const systemPrompt = buildReportSystemPrompt({ user, report, selectedBlocks }) + memoryPrompt;
+  const systemPrompt = buildReportSystemPrompt({
+    user, report, selectedBlocks, plan: report.dataSnapshot?.plan,
+  }) + memoryPrompt;
 
   // Declarações das tools de dados. Duas fontes, porque o Office tem dois
   // registros: o mapa LEGADO (Marketing/Comercial/Alert/Condition) e o
@@ -400,6 +567,8 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
   ];
   const declarations = [
     ...dataDeclarations,
+    REPORT_PLAN_DECLARATION,
+    REPORT_ASK_DECLARATION,
     REPORT_ANALYZE_DECLARATION,
     REPORT_REMEMBER_DECLARATION,
     REPORT_APPLY_DECLARATION,
@@ -494,8 +663,11 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
         // única obriga a montagem de verdade em vez de só narrar no chat.
         const aplicou = toolCalls.some((t) => t.name === 'report_apply_ops' && t.ok);
         const buscouDados = toolCalls.some((t) => DATA_TOOL_NAMES.includes(t.name));
+        const perguntou = toolCalls.some((t) => t.name === 'report_ask' && t.ok);
         const temBlocos = (report.spec?.blocks || []).length > 0;
-        if (!aplicou && buscouDados && !temBlocos && !emptyBuildNudged && round < MAX_TOOL_ROUNDS) {
+        // Parar sem montar é legítimo quando a Eme fez uma PERGUNTA e está
+        // esperando a resposta — cutucar aqui a faria montar no escuro.
+        if (!aplicou && buscouDados && !temBlocos && !perguntou && !emptyBuildNudged && round < MAX_TOOL_ROUNDS) {
           emptyBuildNudged = true;
           stream = await chat.sendMessageStream(
             'ERRO TÉCNICO: o relatório continua VAZIO - você não chamou report_apply_ops nenhuma vez '
@@ -515,7 +687,9 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
           || (name === 'report_apply_ops' ? 'Montando o relatório'
             : name === 'report_analyze_data' ? `Analisando ${args?.group_by || 'os dados'}`
               : name === 'report_remember' ? 'Guardando preferência'
-                : name);
+                : name === 'report_plan' ? (args?.fronts?.length ? 'Planejando as frentes' : 'Atualizando o plano')
+                  : name === 'report_ask' ? 'Perguntando ao usuário'
+                    : name);
         emitRun(run, { type: 'tool_start', name, label });
         const t0 = Date.now();
         let result;
@@ -545,31 +719,80 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
           } else if (name === 'report_remember') {
             result = await remember({ userId: user.id, text: args?.text, source: 'eme' });
             if (result?.ok) emitRun(run, { type: 'memory_saved', text: args?.text });
+          } else if (name === 'report_plan') {
+            const plan = applyPlan(report.dataSnapshot?.plan, args || {});
+            await patchSnapshot(report, { plan });
+            emitRun(run, { type: 'plan', plan });
+            result = {
+              ok: true,
+              fronts: plan.fronts.map((f) => ({ id: f.id, status: f.status })),
+              pendentes: plan.fronts.filter((f) => f.status !== 'done').length,
+            };
+          } else if (name === 'report_ask') {
+            const ask = {
+              question: String(args?.question || '').slice(0, 400),
+              options: (Array.isArray(args?.options) ? args.options : [])
+                .map((o) => String(o).slice(0, 120)).filter(Boolean).slice(0, 5),
+              context: args?.context ? String(args.context).slice(0, 200) : null,
+              at: new Date().toISOString(),
+            };
+            if (!ask.question) {
+              result = { error: 'Pergunta vazia.' };
+            } else {
+              await patchSnapshot(report, { pendingAsk: ask });
+              emitRun(run, { type: 'ask', ask });
+              result = {
+                ok: true,
+                entregue: true,
+                instrucao: 'A pergunta foi entregue ao usuário na tela. ENCERRE esta resposta agora, sem consultar mais nada e sem montar blocos que dependam da resposta. Continue quando ele responder.',
+              };
+            }
           } else if (name === 'report_analyze_data') {
             const sourceTool = args?.source_tool;
-            const rows = getRaw(report.id, sourceTool);
-            if (!rows) {
+            const cached = getRaw(report.id, sourceTool);
+            if (!cached) {
               const available = listRawTools(report.id);
               result = {
                 error: available.length
                   ? `Nenhum dado em memória de "${sourceTool}". Disponíveis: ${available.join(', ')}. Rode a consulta antes de analisar.`
                   : 'Nenhuma consulta feita ainda nesta conversa. Busque os dados primeiro.',
               };
+            } else if (cached.truncado) {
+              // Analisar uma amostra e apresentar como total é pior que não
+              // analisar: a distribuição sai errada e parece exata.
+              result = {
+                error: `A listagem de "${sourceTool}" veio CORTADA: ${cached.rows.length} linhas de ${cached.totalGeral} registros. `
+                  + 'Analisar essa amostra produziria uma distribuição errada. Refaça a consulta com '
+                  + `group_by (o agrupamento é feito no banco, sobre os ${cached.totalGeral}) ou com limit maior que ${cached.totalGeral}.`,
+                total_geral: cached.totalGeral,
+                linhas_disponiveis: cached.rows.length,
+              };
             } else {
-              result = analyzeRows(rows, args || {});
+              result = { ...analyzeRows(cached.rows, args || {}), base: cached.rows.length };
             }
           } else if (DATA_TOOL_NAMES.includes(name)) {
+            // Relatório trabalha com o universo completo: quando o modelo pede
+            // uma LISTAGEM sem dizer o tamanho, o padrão do chat (50 linhas)
+            // viraria uma amostra silenciosa. Aqui a listagem nasce grande.
+            const toolArgs = { ...(args || {}) };
+            const aceita = allowedArgsForTool(name);
+            const eListagem = !toolArgs.group_by
+              && (!aceita.has('format') || toolArgs.format === 'list');
+            if (aceita.has('limit') && eListagem && !toolArgs.limit) {
+              toolArgs.limit = REPORT_LIST_LIMIT;
+            }
+
             // Tool do ToolRegistry → SecureRunner (valida alçada/adminOnly e
             // grava auditoria). Tool legada → executor histórico do Office.
             if (findTool(name)) {
               result = await runSecureTool({
-                user, toolName: name, args: args || {}, context: 'OFFICE',
+                user, toolName: name, args: toolArgs, context: 'OFFICE',
               });
             } else {
-              result = await officeExecuteTool(name, args || {}, user);
+              result = await officeExecuteTool(name, toolArgs, user);
             }
             // Guarda os registros brutos para o report_analyze_data cruzar depois
-            putRaw(report.id, name, extractRows(result));
+            putRaw(report.id, name, extractRows(result), result);
             // Snapshot dos dados usados (auditoria + base do refresh do modo live).
             // O objeto precisa ser NOVO: mutar `report.dataSnapshot` no lugar faz
             // o Sequelize comparar a referência consigo mesma, concluir que nada
@@ -581,7 +804,9 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
               ...(report.dataSnapshot || {}),
               calls: [
                 ...anteriores.slice(-30),
-                { tool: name, label, args: args || {}, at: new Date().toISOString() },
+                // Grava os args EFETIVOS (com o limite do relatório), senão o
+                // refresh do modo ao vivo repetiria a consulta menor.
+                { tool: name, label, args: toolArgs, at: new Date().toISOString() },
               ],
             };
             await report.update({ dataSnapshot: snapshot, refreshedAt: new Date() });
@@ -595,9 +820,7 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
         const ok = !result?.error;
         emitRun(run, {
           type: 'tool_result', name, label, ok,
-          summary: ok
-            ? (result?.total != null ? `${result.total} registros` : 'ok')
-            : String(result.error).slice(0, 200),
+          summary: ok ? resumoDoResultado(result) : String(result.error).slice(0, 200),
         });
         toolCalls.push({ name, args: args || {}, ok, ms: Date.now() - t0 });
         responses.push({ functionResponse: { name, response: summarizeForGemini(result) } });
