@@ -1,7 +1,7 @@
 // routes/eventPlanRoutes.js
 //
 // Plano de Eventos — planejamento mensal de eventos comerciais.
-// Uma tela só (/comercial/plano-eventos) com três visões conforme o papel.
+// Uma tela só (/marketing/plano-eventos) com três visões conforme o papel.
 
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
@@ -26,14 +26,14 @@ router.get('/permissions', ctrl.getMyPermissions);
 // sendo conferido no controller.
 router.get(
     '/by-event/:eventId(\\d+)',
-    requireRoutePermission(['/comercial/plano-eventos', '/marketing/events']),
+    requireRoutePermission(['/marketing/plano-eventos', '/marketing/events']),
     ctrl.getByAgendaEvent
 );
 
-// Alçada de TELA: daqui para baixo tudo exige /comercial/plano-eventos liberado.
+// Alçada de TELA: daqui para baixo tudo exige /marketing/plano-eventos liberado.
 // Admin bypassa no middleware. O escopo por empreendimento (grant) é conferido
 // dentro do controller, sempre fail-closed.
-router.use(requireRoutePermission(['/comercial/plano-eventos']));
+router.use(requireRoutePermission(['/marketing/plano-eventos']));
 
 // Opções do formulário (categorias de item, janela de prioridade). Quem tem a
 // tela precisa disso para cadastrar; a configuração em si segue admin-only.
