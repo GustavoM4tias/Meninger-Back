@@ -193,3 +193,156 @@ export const deleteEvent = async (req, res) => {
         responseHandler.error(res, error.message);
     }
 };
+
+// ─── Relatório de eventos por e-mail ──────────────────────────────────────────
+//
+// A tela captura o relatório como imagem e manda pra cá. O destinatário pode ser
+// escolhido de quatro formas, que se somam: pessoas, cargos, departamentos
+// inteiros ou e-mail avulso digitado. Escolher por cargo/departamento evita o
+// erro clássico de esquecer alguém ao digitar endereço a endereço.
+
+/**
+ * Catálogo de destinatários para o seletor da tela: pessoas ativas e internas,
+ * mais os cargos e departamentos existentes.
+ */
+export const listReportRecipients = async (req, res) => {
+    try {
+        const { User, Position, Department } = db;
+
+        const users = await User.findAll({
+            where: {
+                status: true,
+                // Usuário externo (Academy/parceiro) não recebe relatório interno.
+                external_kind: { [Op.is]: null },
+                external_organization_id: { [Op.is]: null },
+                email: { [Op.ne]: null },
+            },
+            attributes: ['id', 'username', 'email', 'position', 'position_id'],
+            order: [['username', 'ASC']],
+        });
+
+        const positions = await Position.findAll({
+            where: { active: true },
+            attributes: ['id', 'name', 'department_id'],
+            include: [{ model: Department, as: 'department', attributes: ['id', 'name'], required: false }],
+            order: [['name', 'ASC']],
+        });
+
+        const departments = await Department.findAll({
+            where: { active: true },
+            attributes: ['id', 'name'],
+            order: [['name', 'ASC']],
+        });
+
+        const deptByPosition = new Map(positions.map(p => [p.id, p.department?.name || null]));
+
+        res.json({
+            users: users.map(u => ({
+                id: u.id,
+                username: u.username,
+                email: u.email,
+                position: u.position || null,
+                department: deptByPosition.get(u.position_id) || null,
+            })),
+            positions: [...new Set(positions.map(p => p.name).filter(Boolean))],
+            departments: departments.map(d => ({ id: d.id, name: d.name })),
+        });
+    } catch (error) {
+        responseHandler.error(res, error.message);
+    }
+};
+
+/** E-mails de todos os destinatários escolhidos, sem repetir ninguém. */
+async function resolveReportRecipients({ emails = [], userIds = [], positions = [], departmentIds = [] }) {
+    const { User, Position } = db;
+    const base = {
+        status: true,
+        external_kind: { [Op.is]: null },
+        external_organization_id: { [Op.is]: null },
+        email: { [Op.ne]: null },
+    };
+
+    const found = new Map();
+    const push = (rows) => rows.forEach(u => { if (u.email) found.set(u.email.toLowerCase(), u.email); });
+
+    if (userIds.length) {
+        push(await User.findAll({ where: { ...base, id: userIds }, attributes: ['email'] }));
+    }
+    if (positions.length) {
+        push(await User.findAll({ where: { ...base, position: { [Op.in]: positions } }, attributes: ['email'] }));
+    }
+    if (departmentIds.length) {
+        // Departamento chega às pessoas pelos cargos dele (positions.department_id).
+        const cargos = await Position.findAll({
+            where: { department_id: departmentIds }, attributes: ['id'],
+        });
+        const ids = cargos.map(c => c.id);
+        if (ids.length) {
+            push(await User.findAll({ where: { ...base, position_id: { [Op.in]: ids } }, attributes: ['email'] }));
+        }
+    }
+
+    // E-mail digitado à mão entra por último e não duplica quem já veio do cadastro.
+    for (const raw of emails) {
+        const e = String(raw || '').trim();
+        if (e && !found.has(e.toLowerCase())) found.set(e.toLowerCase(), e);
+    }
+
+    return [...found.values()];
+}
+
+export const sendReportEmail = async (req, res) => {
+    try {
+        const {
+            to = [], userIds = [], positions = [], departmentIds = [],
+            subject, message, imageBase64, reportTitle,
+        } = req.body || {};
+
+        const destinatarios = await resolveReportRecipients({
+            emails: Array.isArray(to) ? to : [],
+            userIds: (Array.isArray(userIds) ? userIds : []).map(Number).filter(Boolean),
+            positions: Array.isArray(positions) ? positions : [],
+            departmentIds: (Array.isArray(departmentIds) ? departmentIds : []).map(Number).filter(Boolean),
+        });
+
+        if (!destinatarios.length) {
+            return res.status(400).json({ error: 'Escolha ao menos um destinatário.' });
+        }
+        if (!imageBase64) {
+            return res.status(400).json({ error: 'Relatório sem imagem para enviar.' });
+        }
+
+        // dataURL -> Buffer. A imagem vai anexada E embutida por cid, para
+        // aparecer no corpo mesmo em cliente que bloqueia imagem remota.
+        const base64 = String(imageBase64).replace(/^data:image\/\w+;base64,/, '');
+        const buffer = Buffer.from(base64, 'base64');
+        const titulo = String(reportTitle || 'Cronograma de Eventos').trim();
+        const assunto = String(subject || '').trim() || `${titulo} — Menin`;
+        const corpo = String(message || '').trim();
+
+        const bodyHtml = [
+            corpo ? `<p style="margin:0 0 16px 0;">${corpo.replace(/</g, '&lt;').replace(/\n/g, '<br>')}</p>` : '',
+            '<img src="cid:relatorio-eventos" alt="' + titulo.replace(/"/g, '') + '"',
+            ' style="width:100%;max-width:640px;border:1px solid #e5e7eb;border-radius:8px;" />',
+        ].join('');
+
+        const { sendEmail } = await import('../email/email.service.js');
+        await sendEmail(
+            'generic.notification',
+            destinatarios,
+            { title: assunto, preview: titulo, bodyHtml },
+            {
+                attachments: [{
+                    filename: `${titulo.replace(/[^\w\s-]/g, '').trim() || 'relatorio'}.jpg`,
+                    content: buffer,
+                    cid: 'relatorio-eventos',
+                }],
+            },
+        );
+
+        res.json({ ok: true, sent: destinatarios.length, recipients: destinatarios });
+    } catch (error) {
+        console.error('[events] sendReportEmail', error?.message);
+        responseHandler.error(res, error.message);
+    }
+};

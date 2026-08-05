@@ -89,8 +89,11 @@ export function validateBatch({ events, plannedEvents, itemsByEvent, stages = []
                 continue;
             }
 
+            // O teto e o valor que esta DE PE agora: se uma etapa anterior ja
+            // cortou de 1.400 para 1.000, a seguinte so pode cortar mais.
+            const standing = item.approved_value == null ? item.proposed_value : item.approved_value;
             const cutting = itemDecision.approved_value != null
-                && money(itemDecision.approved_value) < money(item.proposed_value);
+                && money(itemDecision.approved_value) < money(standing);
 
             if ((COMMENT_REQUIRED.includes(itemDecision.decision) || cutting)
                 && !String(itemDecision.comment || '').trim()) {
@@ -102,10 +105,10 @@ export function validateBatch({ events, plannedEvents, itemsByEvent, stages = []
             if (itemDecision.approved_value != null && money(itemDecision.approved_value) < 0) {
                 problems.push({ scope: 'ITEM', id: item.id, error: 'Valor aprovado não pode ser negativo.' });
             }
-            if (itemDecision.approved_value != null && money(itemDecision.approved_value) > money(item.proposed_value)) {
+            if (itemDecision.approved_value != null && money(itemDecision.approved_value) > money(standing)) {
                 problems.push({
                     scope: 'ITEM', id: item.id,
-                    error: 'Valor aprovado maior que o proposto. Para aumentar, devolva ao gestor com a ressalva.',
+                    error: 'Valor aprovado maior que o que está de pé. Para aumentar, devolva ao gestor com a ressalva.',
                 });
             }
 
@@ -247,8 +250,11 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
             for (const itemDecision of (decision.items || [])) {
                 const item = known.get(Number(itemDecision.id));
                 const proposed = money(item.proposed_value);
+                // Valor que chega nesta etapa: o proposto, ou o corte que uma
+                // etapa anterior ja aplicou.
+                const standing = item.approved_value == null ? proposed : money(item.approved_value);
                 const cutValue = itemDecision.approved_value == null ? null : money(itemDecision.approved_value);
-                const cutting = cutValue != null && cutValue < proposed;
+                const cutting = cutValue != null && cutValue < standing;
 
                 // Corte de valor É ressalva, mesmo que a tela tenha mandado
                 // APPROVED — o gestor precisa ver que houve corte.
@@ -273,7 +279,9 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
                     // Item ESTIMADO que passou vira pendência de cotação do mkt.
                     needs_quote: approvedNow && item.cost_basis === 'ESTIMADO',
                 };
-                if (approvedNow) patch.approved_value = cutValue == null ? proposed : cutValue;
+                // Aprovar sem informar valor MANTEM o que estava de pe - a etapa
+                // seguinte nao desfaz o corte da anterior sem querer.
+                if (approvedNow) patch.approved_value = cutValue == null ? standing : cutValue;
                 if (reclassified) patch.necessity = NECESSITY.OPCIONAL;
 
                 await item.update(patch, t);
@@ -282,7 +290,7 @@ export async function applyDecisions({ user, planId, stage, events = [], planCom
                     await logActivity({
                         planId: plan.id, plannedEventId: ev.id, itemId: item.id, userId: user.id,
                         action: ACTIVITY.ITEM_VALUE_CUT,
-                        meta: { stage: stageName, round, from: proposed, to: cutValue, comment: itemDecision.comment || null },
+                        meta: { stage: stageName, round, from: standing, to: cutValue, comment: itemDecision.comment || null },
                     }, transaction);
                 }
                 if (reclassified) {
