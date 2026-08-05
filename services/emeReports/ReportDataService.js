@@ -25,14 +25,26 @@ import { findTool } from '../OfficeAI/ToolRegistry.js';
 import { runTool as runSecureTool } from '../OfficeAI/SecureRunner.js';
 
 // ── Allowlist de tools de dados (fonte única; ReportChatService importa) ─────
+// Tudo que a Eme consegue consultar no Office e que faz sentido virar
+// relatório entra aqui. O que ela alcança no chat, ela alcança no relatório —
+// sempre com as alçadas de quem executa (SecureRunner nas tools do registry,
+// gate legacyToolAllowed nas legadas).
 export const DATA_TOOL_NAMES = [
-  'query_leads', 'query_enterprises', 'get_enterprise_detail',
+  // Marketing / comercial
+  'query_leads', 'query_events', 'query_enterprises', 'get_enterprise_detail',
   'query_precadastros', 'query_reservas', 'query_mcmv',
   'query_condition_sheets', 'get_condition_sheet',
-  'query_boletos',
+  'imobiliarias_search',
+  // Vendas / metas
+  'get_consolidated_sales', 'query_projections',
+  // Financeiro
+  'query_custos', 'query_boletos', 'query_repasses_contratos',
+  // Operação / pessoas
+  'query_checklists', 'query_event_plans', 'query_people',
 ];
 export const DATA_TOOL_LABELS = {
   query_leads: 'Leads de marketing',
+  query_events: 'Eventos',
   query_enterprises: 'Empreendimentos',
   get_enterprise_detail: 'Detalhe do empreendimento',
   query_precadastros: 'Pré-cadastros',
@@ -40,7 +52,15 @@ export const DATA_TOOL_LABELS = {
   query_mcmv: 'Teto MCMV',
   query_condition_sheets: 'Fichas comerciais',
   get_condition_sheet: 'Ficha comercial',
+  imobiliarias_search: 'Imobiliárias parceiras',
+  get_consolidated_sales: 'Vendas (Faturamento)',
+  query_projections: 'Projeção de vendas',
+  query_custos: 'Custos financeiros',
   query_boletos: 'Boletos Caixa (ato)',
+  query_repasses_contratos: 'Repasses e contratos',
+  query_checklists: 'Checklists',
+  query_event_plans: 'Plano de eventos',
+  query_people: 'Pessoas e organograma',
 };
 
 // ── Limites do spec interativo ───────────────────────────────────────────────
@@ -93,10 +113,14 @@ export function normalizeFilters(raw) {
         if (ds && field) filter.options_from = { dataset: ds, field };
       }
     }
-    if (f.default != null && f.default !== '') {
-      filter.default = f.type === 'date-range'
-        ? normalizeDateRange(f.default)
-        : cleanStr(f.default);
+    // Valor inicial. Em date-range aceita tanto `default` quanto `default_range`
+    // (nome que a ferramenta da Eme expõe, por o schema do Gemini exigir tipo
+    // fixo por campo).
+    const brutoDefault = type === 'date-range' ? (f.default_range || f.default) : f.default;
+    if (brutoDefault != null && brutoDefault !== '') {
+      filter.default = type === 'date-range'
+        ? normalizeDateRange(brutoDefault)
+        : cleanStr(brutoDefault);
       if (!filter.default) delete filter.default;
     }
     out.push(filter);
@@ -129,7 +153,9 @@ export function normalizeDatasets(raw, filters = []) {
     for (const [k, v] of Object.entries(rawArgs).slice(0, 20)) {
       const key = cleanStr(k, 40).toLowerCase();
       if (!ARG_RE.test(key)) continue;
-      if (typeof v === 'number' && Number.isFinite(v)) baseArgs[key] = key === 'limit' ? Math.min(Math.max(1, v), 200) : v;
+      // O teto de 200 cortava a tabela/exportação de um empreendimento com
+      // centenas de registros sem ninguém perceber.
+      if (typeof v === 'number' && Number.isFinite(v)) baseArgs[key] = key === 'limit' ? Math.min(Math.max(1, v), 2000) : v;
       else if (typeof v === 'boolean') baseArgs[key] = v;
       else if (typeof v === 'string') baseArgs[key] = cleanStr(v, 200);
     }
@@ -272,7 +298,7 @@ export function analyzeRows(rows, { group_by, metric = 'count', metric_field, da
 
 // ── Argumentos permitidos por tool (declarações = contrato) ──────────────────
 
-function allowedArgsForTool(toolName) {
+export function allowedArgsForTool(toolName) {
   const registry = findTool(toolName);
   if (registry?.parameters?.properties) return new Set(Object.keys(registry.parameters.properties));
   const legacy = OFFICE_TOOL_DECLARATIONS.find((d) => d.name === toolName);
@@ -414,6 +440,10 @@ export async function runReportData({ report, user, rawFilterValues }) {
 const MAX_DRILL_ROWS = 200;
 const MAX_EXPORT_ROWS = 1000;
 const MAX_EXPORT_COLS = 24;
+// Universo pedido à tool quando o relatório precisa das linhas cruas (drill,
+// export). O corte de exibição continua sendo MAX_DRILL_ROWS/MAX_EXPORT_ROWS,
+// mas a CONTAGEM passa a ser verdadeira.
+const MAX_RAW_ROWS = 2000;
 
 // Colunas exportáveis/listáveis: só campos escalares (objeto aninhado não cabe
 // em célula) presentes na primeira linha.
@@ -439,6 +469,10 @@ function pickRow(row, columns) {
 async function rawDatasetRows(dataset, args, user, reportId) {
   const shapeless = { ...args };
   for (const k of ['group_by', 'metric', 'format']) delete shapeless[k];
+  // Sem group_by a tool volta ao modo listagem, cujo padrão é 50 linhas: o
+  // drill-down de uma barra com 300 registros mostrava 50 e dizia "300".
+  if (allowedArgsForTool(dataset.tool).has('limit')) shapeless.limit = MAX_RAW_ROWS;
+  if (allowedArgsForTool(dataset.tool).has('format')) shapeless.format = 'list';
 
   const cacheKey = `${reportId}:${user.id}:${dataset.id}:raw:${JSON.stringify(shapeless)}`;
   const cached = cacheGet(cacheKey);
@@ -645,8 +679,15 @@ function projectBlock(block, result) {
     }
     if (bind.fields?.length) columns = columns.filter((c) => bind.fields.includes(c.key));
     const fmtMap = { date: 'date', currency: 'currency', percent: 'percent' };
+    // O universo real do filtro (não o tamanho da página) vira nota da tabela,
+    // para o leitor nunca tomar as 100 primeiras linhas pelo total.
+    const totalGeral = Number(result?.total_geral ?? rows.length) || rows.length;
+    const exibidas = Math.min(rows.length, MAX_TABLE_ROWS);
     return {
       props: {
+        ...(totalGeral > exibidas
+          ? { footnote: `Mostrando ${exibidas} de ${totalGeral} registros. Use "Exportar > Excel" para a lista completa.` }
+          : { footnote: null }),
         columns: columns.map((c) => ({
           key: c.key,
           label: c.label || c.key,

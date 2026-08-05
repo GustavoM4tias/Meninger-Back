@@ -86,7 +86,7 @@ export const TOOL_DECLARATIONS = [
           enum: ['situacao', 'midia', 'empreendimento', 'corretor', 'imobiliaria', 'motivo_cancelamento', 'dia', 'mes'],
           description: 'Campo para agrupar e gerar gráfico com totais reais. PADRÃO RECOMENDADO: use sempre que possível. "situacao" para visão geral, "midia" para origem, "empreendimento" para por empreendimento.',
         },
-        limit: { type: 'NUMBER', description: 'Máximo de registros na listagem SEM group_by. Padrão: 50. Ignorado quando group_by é usado.' },
+        limit: { type: 'NUMBER', description: 'Máximo de registros na listagem SEM group_by. Padrão: 50 (chat). Em relatório, peça o volume que precisa analisar (ex: 2000) — o retorno traz total_geral e truncado indicando se a lista veio cortada.' },
       },
     },
   },
@@ -126,8 +126,14 @@ function executeNavigate(args) {
   return { type: 'navigate', route: args.route, filters: args.filters || {}, message: args.message };
 }
 
+// Teto de linhas de uma listagem. O padrão (50) continua o de sempre para o
+// chat; o teto máximo é alto porque o modo Relatório precisa dos registros
+// COMPLETOS para agregar (um empreendimento com 700 leads no ano não pode ser
+// analisado sobre as 200 primeiras linhas).
+export const LIST_HARD_CAP = 5000;
+
 async function executeQueryLeads(args, user) {
-  const limit = Math.min(args.limit || 50, 200);
+  const limit = Math.min(Number(args.limit) || 50, LIST_HARD_CAP);
 
   // ── Escopo de acesso (accessScopeService): null = admin (sem filtro) ──
   const cvIds = await visibleCvIds(user);
@@ -153,8 +159,9 @@ async function executeQueryLeads(args, user) {
   }
 
   // ── Exclusão de Painel (padrão: excluir) ─────────���────────────────────────
+  const SEM_PAINEL = `(l.origem IS NULL OR l.origem NOT ILIKE 'Painel %')`;
   if (!args.incluir_painel) {
-    whereClauses.push(`(l.origem IS NULL OR l.origem NOT ILIKE 'Painel %')`);
+    whereClauses.push(SEM_PAINEL);
   }
 
   // ── Filtro de empreendimento (com validação dentro do escopo) ──────────────
@@ -280,6 +287,10 @@ async function executeQueryLeads(args, user) {
   }
 
   const where = whereClauses.length ? whereClauses.join(' AND ') : '1=1';
+  // Mesmo recorte, só os cadastros internos de Painel: é o que explica a
+  // diferença entre o total daqui e o total bruto do CRM. Sem esse número, uma
+  // contagem "a menos" parecia erro do sistema.
+  const wherePainel = [...whereClauses.filter((c) => c !== SEM_PAINEL), `l.origem ILIKE 'Painel %'`].join(' AND ');
 
   // Contexto para botões de ação no frontend
   const context = {
@@ -298,7 +309,7 @@ async function executeQueryLeads(args, user) {
   };
 
   if (args.group_by) {
-    return executeLeadsGrouped(args.group_by, where, replacements, context);
+    return executeLeadsGrouped(args.group_by, where, replacements, context, await contarPainel(args, wherePainel, replacements));
   }
 
   const sql = `
@@ -322,6 +333,16 @@ async function executeQueryLeads(args, user) {
   replacements.limit = limit;
 
   const rows = await db.sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
+
+  // TOTAL REAL do filtro (não o tamanho da página). Sem isto a listagem devolvia
+  // `total: rows.length` e quem lesse o resultado — inclusive a Eme no modo
+  // Relatório — concluía que o empreendimento tinha 50 leads quando tinha 700.
+  const [{ cnt }] = await db.sequelize.query(
+    `SELECT COUNT(DISTINCT l.idlead)::int AS cnt FROM leads l WHERE ${where}`,
+    { replacements, type: QueryTypes.SELECT },
+  );
+  const totalGeral = Number(cnt) || 0;
+  const painelExcluidos = await contarPainel(args, wherePainel, replacements);
 
   const hasDescartado = rows.some(r => r.situacao_nome?.toLowerCase().includes('descard'));
 
@@ -360,6 +381,16 @@ async function executeQueryLeads(args, user) {
     columns,
     rows,
     total:   rows.length,
+    // Verdade sobre o recorte: quantos existem de fato e se a lista veio cortada.
+    total_geral:    totalGeral,
+    truncado:       totalGeral > rows.length,
+    limite_aplicado: limit,
+    ...(painelExcluidos
+      ? {
+          leads_painel_excluidos: painelExcluidos,
+          nota_painel: `${painelExcluidos} lead(s) de origem "Painel" (cadastro interno da equipe) ficaram FORA desta contagem. Passe incluir_painel: true se quiser o total bruto do CRM.`,
+        }
+      : {}),
     context: {
       ...context,
       has_cancelled: hasDescartado,
@@ -369,7 +400,22 @@ async function executeQueryLeads(args, user) {
   };
 }
 
-async function executeLeadsGrouped(groupBy, where, replacements, context) {
+// Quantos leads o filtro de Painel tirou da conta (0 quando o usuário pediu
+// para incluí-los, ou quando não há nenhum no recorte).
+async function contarPainel(args, wherePainel, replacements) {
+  if (args.incluir_painel) return 0;
+  try {
+    const [{ cnt }] = await db.sequelize.query(
+      `SELECT COUNT(DISTINCT l.idlead)::int AS cnt FROM leads l WHERE ${wherePainel}`,
+      { replacements, type: QueryTypes.SELECT },
+    );
+    return Number(cnt) || 0;
+  } catch {
+    return 0; // explicação é bônus: nunca derruba a consulta principal
+  }
+}
+
+async function executeLeadsGrouped(groupBy, where, replacements, context, painelExcluidos = 0) {
   const groupMap = {
     situacao:            { select: `l.situacao_nome AS label`,                              group: `l.situacao_nome`,            count: `COUNT(*)` },
     midia:               { select: `COALESCE(l.midia_principal, 'Não informado') AS label`, group: `l.midia_principal`,          count: `COUNT(*)` },
@@ -383,14 +429,18 @@ async function executeLeadsGrouped(groupBy, where, replacements, context) {
 
   const { select, group, count } = groupMap[groupBy] || groupMap.situacao;
 
+  // Série temporal sai em ORDEM CRONOLÓGICA e sem teto de 30: agrupar por dia
+  // num período longo devolvia só os 30 dias de maior volume, fora de ordem —
+  // uma "evolução diária" que não era evolução nenhuma.
+  const isSerie = groupBy === 'dia' || groupBy === 'mes';
   const sql = `
     SELECT ${select}, ${count} AS total
     FROM leads l
     LEFT JOIN LATERAL jsonb_array_elements(COALESCE(l.empreendimento, '[]'::jsonb)) AS e ON true
     WHERE ${where}
     GROUP BY ${group}
-    ORDER BY total DESC
-    LIMIT 30
+    ORDER BY ${isSerie ? 'label ASC' : 'total DESC'}
+    LIMIT ${isSerie ? 800 : 50}
   `;
 
   const rows = await db.sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
@@ -410,10 +460,12 @@ async function executeLeadsGrouped(groupBy, where, replacements, context) {
   const labels = rows.map(r => r.label || 'Não informado');
   const data   = rows.map(r => Number(r.total));
   const total  = data.reduce((acc, v) => acc + (Number(v) || 0), 0);
+  // Top 3 é sempre por VOLUME (a série temporal vem em ordem cronológica, e
+  // "os 3 primeiros dias" não seriam destaque nenhum).
   const top    = labels.length && data.length
     ? labels.map((label, i) => ({
         label, value: data[i], percent: total > 0 ? Math.round((data[i] / total) * 1000) / 10 : 0,
-      })).slice(0, 3)
+      })).sort((a, b) => b.value - a.value).slice(0, 3)
     : [];
 
   return {
@@ -425,7 +477,14 @@ async function executeLeadsGrouped(groupBy, where, replacements, context) {
     data,
     rawRows:   rows,
     total,             // soma agregada — exibida pelo ChatChart no cabeçalho
+    total_geral: total, // mesmo número: aqui a soma vem do banco, sem corte
     top_breakdown: top, // top 3 categorias com %
+    ...(painelExcluidos
+      ? {
+          leads_painel_excluidos: painelExcluidos,
+          nota_painel: `${painelExcluidos} lead(s) de origem "Painel" (cadastro interno da equipe) ficaram FORA desta contagem. Passe incluir_painel: true se quiser o total bruto do CRM.`,
+        }
+      : {}),
     context:   { ...context, group_by: groupBy },
   };
 }

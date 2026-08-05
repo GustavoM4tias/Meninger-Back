@@ -32,6 +32,7 @@ import eventPlanRoutes from './routes/eventPlanRoutes.js';
 import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
 import reservaCancelRoutes from './routes/reservaCancelRoutes.js';
+import aboutRoutes from './routes/aboutRoutes.js';
 import shortLinkRoutes from './routes/shortLinkRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
@@ -249,6 +250,7 @@ app.use('/api/conditions', conditionsRoutes);
 app.use('/api/event-plans', eventPlanRoutes); // Plano de Eventos (comercial)
 app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/api/cancelamento-reservas', reservaCancelRoutes);
+app.use('/api/about', aboutRoutes); // Sobre o Office: números ao vivo (admin)
 // Encurtador de URL público — rota fora de /api por elegância.
 // Cliente que recebeu link curto via WhatsApp acessa `${host}/s/{slug}` e cai aqui.
 app.use('/s', shortLinkRoutes);
