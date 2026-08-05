@@ -1,7 +1,7 @@
 // api/routes/eventRoutes.js
 import express from 'express';
 import axios from 'axios';
-import { addEvent, getEvents, updateEvent, deleteEvent } from '../controllers/eventController.js';
+import { addEvent, getEvents, updateEvent, deleteEvent, listReportRecipients, sendReportEmail } from '../controllers/eventController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 const router = express.Router();
@@ -13,6 +13,10 @@ router.post('/add', authenticate, requireEvents, addEvent);
 router.get('/', authenticate, requireEvents, getEvents);
 router.put('/edit/:id', authenticate, requireEvents, updateEvent);
 router.delete('/delete/:id', authenticate, requireEvents, deleteEvent);
+
+// Relatório por e-mail: catálogo de destinatários + envio.
+router.get('/report/recipients', authenticate, requireEvents, listReportRecipients);
+router.post('/report/email', authenticate, requireEvents, sendReportEmail);
 
 // Proxy para imagens externas (evita CORS do CRM no browser)
 router.get('/proxy-image', authenticate, requireEvents, async (req, res) => {
