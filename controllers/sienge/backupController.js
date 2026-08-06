@@ -1,21 +1,41 @@
 // controllers/sienge/backupController.js
 // Endpoints pra a UI do Menin Office consultar status dos backups do Sienge.
 
+import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { runDailyBackup } from '../../services/sienge/SiengeBackupService.js';
 
+/**
+ * GET /sienge/backups
+ * Filtro por período em `started_at` (?from=YYYY-MM-DD&to=YYYY-MM-DD). A tela
+ * consulta sempre um intervalo (padrão: mês corrente) e traz tudo dele - o
+ * `limit` só vale quando nenhuma data é informada, pra não devolver a tabela
+ * inteira em chamadas sem filtro.
+ */
 export async function listBackups(req, res) {
   try {
-    const limit  = Math.min(parseInt(req.query.limit, 10) || 30, 200);
     const status = req.query.status; // opcional: 'success' | 'failed' | 'running'
+    const { from, to } = req.query;
 
     const where = {};
     if (status) where.status = status;
 
+    // A tela manda instantes ISO já no fuso do usuário; se vier só a data
+    // (YYYY-MM-DD), completa com os limites do dia no fuso do servidor.
+    const bound = (v, end) => (String(v).includes('T')
+      ? new Date(v)
+      : new Date(`${v}T${end ? '23:59:59.999' : '00:00:00'}`));
+
+    const range = {};
+    if (from) range[Op.gte] = bound(from, false);
+    if (to)   range[Op.lte] = bound(to, true);
+    const hasRange = Object.getOwnPropertySymbols(range).length > 0;
+    if (hasRange) where.started_at = range;
+
     const items = await db.SiengeBackupLog.findAll({
       where,
       order: [['started_at', 'DESC']],
-      limit,
+      ...(hasRange ? {} : { limit: Math.min(parseInt(req.query.limit, 10) || 30, 200) }),
     });
 
     res.json({ items });
