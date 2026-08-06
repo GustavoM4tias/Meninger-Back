@@ -66,37 +66,45 @@ export async function getEnterpriseSpending(req, res) {
     }
 }
 
-/* Relatório Gerencial de Investimento de 1 empreendimento (empresa Sienge).
-   Diretoria (não-admin) só acessa empreendimentos CONFIGURADOS + LIBERADOS. */
+/* Relatório Gerencial de Investimento de 1 EMPREENDIMENTO (etapa/CC da projeção).
+   `key` = enterprise_key; um id de empresa Sienge ainda é aceito (links antigos) e
+   devolve a SPE inteira somada. Diretoria (não-admin) só acessa CONFIGURADOS +
+   LIBERADOS. */
 export async function getCompanyReport(req, res) {
     try {
         if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
 
-        const companyId = Number(req.params.companyId);
-        if (!Number.isFinite(companyId)) return res.status(400).json({ error: 'companyId inválido.' });
+        const key = String(req.params.key || '').trim();
+        if (!key) return res.status(400).json({ error: 'Empreendimento inválido.' });
 
         const month = normYM(req.query.month || new Date().toISOString().slice(0, 7));
         const isAdmin = req.user?.role === 'admin';
 
-        // Escopo de acesso: não-admin só consulta empresa do seu escopo
-        // (fail-closed; mesma resposta da governança para não vazar existência)
-        const scope = await getScope(req.user);
-        if (!scope.all && !companyAllowedByScope(scope, companyId)) {
-            return res.status(404).json({ error: 'Relatório não disponível.' });
-        }
-
         const report = await service.computeCompanyReport({
-            companyId,
+            key,
             refMonth: month,
             aliasId: req.query.aliasId || 'default',
         });
+
+        // Escopo de acesso: não-admin só consulta empreendimento do seu escopo
+        // (fail-closed; mesma resposta da governança para não vazar existência)
+        const scope = await getScope(req.user);
+        const ccs = report.company?.costCenterIds || [];
+        const inScope = scope.all
+            || companyAllowedByScope(scope, report.company?.companyId)
+            || ccs.some((cc) => isErpAllowed(scope, cc));
+        if (!inScope) return res.status(404).json({ error: 'Relatório não disponível.' });
 
         // Governança: fora do backoffice, rascunho/não-configurado não existe.
         if (!isAdmin && (!report.viability.released || !report.viability.configured)) {
             return res.status(404).json({ error: 'Relatório não disponível.' });
         }
 
-        const insights = await getReportInsights({ companyId, report });
+        const insights = await getReportInsights({
+            enterpriseKey: report.company?.enterpriseKey || null,
+            companyId: report.company?.companyId ?? null,
+            report,
+        });
         return res.json({ ...report, insights, isAdmin });
     } catch (e) {
         console.error('[DeptSpendingController] getCompanyReport erro', e);

@@ -43,8 +43,11 @@ export async function putMarketingDepartment(req, res) {
 
 export async function getEnterpriseSettings(req, res) {
     try {
-        const rows = await cfg.listEnterpriseSettings();
-        return res.json({ results: rows });
+        const [rows, stages] = await Promise.all([
+            cfg.listEnterpriseSettings(),
+            cfg.listStageSettings(),
+        ]);
+        return res.json({ results: rows, stages });
     } catch (e) {
         console.error('[DeptSpendingAdmin] getEnterpriseSettings erro', e);
         return res.status(500).json({ error: e.message || 'Erro ao carregar configurações por empreendimento.' });
@@ -72,18 +75,39 @@ export async function putEnterpriseSettings(req, res) {
     }
 }
 
-/* ===== Liberação (rascunho → liberado) por empreendimento ===== */
+/* ===== Configuração por EMPREENDIMENTO (etapa/CC): status manual ===== */
+
+export async function putStageSettings(req, res) {
+    try {
+        const key = String(req.params.key || '').trim();
+        const { status_override, company_id } = req.body || {};
+        const out = await cfg.setStageSettings(
+            key,
+            { statusOverride: status_override, companyId: company_id },
+            actor(req)
+        );
+        return res.json(out);
+    } catch (e) {
+        console.error('[DeptSpendingAdmin] putStageSettings erro', e);
+        return res.status(400).json({ error: e.message || 'Erro ao salvar configuração do empreendimento.' });
+    }
+}
 
 /* ===== Relatório: regenerar "Leitura para decisão" (IA) ===== */
 
 export async function regenerateReportInsights(req, res) {
     try {
-        const companyId = Number(req.params.companyId);
-        if (!Number.isFinite(companyId)) return res.status(400).json({ error: 'companyId inválido.' });
+        const key = String(req.params.key || '').trim();
+        if (!key) return res.status(400).json({ error: 'Empreendimento inválido.' });
         const month = String(req.query.month || req.body?.month || new Date().toISOString().slice(0, 7)).slice(0, 7);
 
-        const report = await service.computeCompanyReport({ companyId, refMonth: month });
-        const insights = await getReportInsights({ companyId, report, force: true });
+        const report = await service.computeCompanyReport({ key, refMonth: month });
+        const insights = await getReportInsights({
+            enterpriseKey: report.company?.enterpriseKey || null,
+            companyId: report.company?.companyId ?? null,
+            report,
+            force: true,
+        });
         return res.json(insights);
     } catch (e) {
         console.error('[DeptSpendingAdmin] regenerateReportInsights erro', e);
@@ -91,13 +115,15 @@ export async function regenerateReportInsights(req, res) {
     }
 }
 
+/* ===== Liberação (rascunho → liberado) por EMPREENDIMENTO ===== */
+
 export async function putEnterpriseRelease(req, res) {
     try {
-        const { companyId } = req.params;
-        const { is_released, notes } = req.body || {};
-        const out = await cfg.setEnterpriseRelease(
-            companyId,
-            { isReleased: is_released, notes },
+        const key = String(req.params.key || '').trim();
+        const { is_released, notes, company_id } = req.body || {};
+        const out = await cfg.setStageRelease(
+            key,
+            { isReleased: is_released, notes, companyId: company_id },
             actor(req)
         );
         return res.json(out);

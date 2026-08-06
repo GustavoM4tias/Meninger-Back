@@ -3,17 +3,22 @@
 // Config admin + governança da tela "Gastos por Departamento":
 //  - quais departamentos têm o gasto acompanhado (global + exceções por empresa)
 //  - quantas unidades bloqueadas considerar disponíveis (por empresa, padrão 0)
-//  - LIBERAÇÃO por empreendimento (rascunho → liberado)
+//  - LIBERAÇÃO e status por EMPREENDIMENTO (etapa/CC)
 //
-// A config "por empresa" é chaveada por company_id (empresa Sienge = empreendimento),
-// que é a unidade de agrupamento do relatório. O resolver buildSpendingResolver() é
-// o que o motor de cálculo usa para decidir se uma despesa é acompanhada, o status
-// e se o empreendimento está liberado para a diretoria.
+// DOIS NÍVEIS:
+//  - EMPRESA Sienge (company_id, tabela viability_enterprise_settings): o que vale
+//    para a SPE inteira (departamentos acompanhados, bucket Loja, bloqueadas).
+//  - EMPREENDIMENTO (enterprise_key = CC, tabela viability_stage_settings): o que é
+//    decisão de etapa (liberação p/ diretoria, status manual, leitura da IA). Sem
+//    linha de etapa, cai no ajuste da empresa (compatibilidade com o que já existia).
+//
+// O resolver buildSpendingResolver() é o que o motor de cálculo usa para decidir se
+// uma despesa é acompanhada, o status e se o empreendimento está liberado.
 
 import db from '../../models/sequelize/index.js';
 import { listActiveDepartmentNames } from '../sienge/payableLiveService.js';
 
-const { DeptSpendingMarketingDepartment, DeptSpendingEnterpriseSettings } = db;
+const { DeptSpendingMarketingDepartment, DeptSpendingEnterpriseSettings, DeptSpendingStageSettings } = db;
 
 // Normaliza nome de departamento para comparação robusta (sem acento, minúsculo, trim).
 const norm = (s) =>
@@ -88,14 +93,60 @@ export async function setEnterpriseSettings(companyId, { blockedConsideredAvaila
     return getEnterpriseSettings(company_id);
 }
 
-/* ===== Cache da narrativa IA ("Leitura para decisão") por empreendimento ===== */
+/* ============== Configuração por EMPREENDIMENTO (enterprise_key = CC) ============== */
 
-export async function getReportInsightsCache(companyId) {
+const normKey = (v) => {
+    const k = String(v ?? '').trim();
+    return k || null;
+};
+
+export async function listStageSettings() {
+    const rows = await DeptSpendingStageSettings.findAll();
+    return rows.map((r) => r.toJSON());
+}
+
+export async function getStageSettings(enterpriseKey) {
+    const key = normKey(enterpriseKey);
+    if (!key) return null;
+    const row = await DeptSpendingStageSettings.findByPk(key);
+    return row ? row.toJSON() : null;
+}
+
+export async function setStageSettings(enterpriseKey, { statusOverride, companyId } = {}, updatedBy) {
+    const key = normKey(enterpriseKey);
+    if (!key) throw new Error('enterprise_key inválido.');
+
+    const payload = { enterprise_key: key, updated_by: updatedBy || null };
+    if (companyId !== undefined && Number.isFinite(Number(companyId))) payload.company_id = Number(companyId);
+    if (statusOverride !== undefined) {
+        payload.status_override = ALLOWED_STATUS.includes(statusOverride) ? statusOverride : null;
+    }
+
+    await DeptSpendingStageSettings.upsert(payload);
+    return getStageSettings(key);
+}
+
+/* ===== Cache da narrativa IA ("Leitura para decisão") ===== */
+// Relatório de etapa grava na etapa; relatório da empresa inteira (rota legada)
+// continua gravando na empresa.
+
+export async function getReportInsightsCache({ enterpriseKey = null, companyId = null } = {}) {
+    if (normKey(enterpriseKey)) {
+        const stage = await getStageSettings(enterpriseKey);
+        return stage?.report_insights || null;
+    }
     const row = await getEnterpriseSettings(companyId);
     return row?.report_insights || null;
 }
 
-export async function setReportInsightsCache(companyId, insights) {
+export async function setReportInsightsCache({ enterpriseKey = null, companyId = null } = {}, insights) {
+    const key = normKey(enterpriseKey);
+    if (key) {
+        const payload = { enterprise_key: key, report_insights: insights || null };
+        if (Number.isFinite(Number(companyId))) payload.company_id = Number(companyId);
+        await DeptSpendingStageSettings.upsert(payload);
+        return insights || null;
+    }
     const company_id = Number(companyId);
     if (!Number.isFinite(company_id)) throw new Error('company_id inválido.');
     await DeptSpendingEnterpriseSettings.upsert({ company_id, report_insights: insights || null });
@@ -104,8 +155,30 @@ export async function setReportInsightsCache(companyId, insights) {
 
 /* ============================ Liberação (rascunho → liberado) ============================ */
 
-// Marca/desmarca um empreendimento como liberado para a diretoria. Sem empresa Sienge
-// (company_id) não há como liberar — a linha não tem chave estável.
+// Liberação por EMPREENDIMENTO (etapa): a linha da tela é uma etapa da projeção,
+// então a chave é o enterprise_key (CC). Liberar uma etapa não libera as irmãs.
+export async function setStageRelease(enterpriseKey, { isReleased, notes, companyId } = {}, actor) {
+    const key = normKey(enterpriseKey);
+    if (!key) throw new Error('enterprise_key inválido (empreendimento sem centro de custo).');
+
+    const released = !!isReleased;
+    const payload = {
+        enterprise_key: key,
+        is_released: released,
+        release_notes: notes !== undefined ? (notes || null) : undefined,
+        released_by: released ? (actor || null) : null,
+        released_at: released ? new Date() : null,
+        updated_by: actor || null,
+    };
+    if (companyId !== undefined && Number.isFinite(Number(companyId))) payload.company_id = Number(companyId);
+    Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+
+    await DeptSpendingStageSettings.upsert(payload);
+    return getStageSettings(key);
+}
+
+// Liberação por EMPRESA (legado): mantida para a rota antiga e como fallback das
+// etapas que ainda não têm ajuste próprio.
 export async function setEnterpriseRelease(companyId, { isReleased, notes } = {}, actor) {
     const company_id = Number(companyId);
     if (!Number.isFinite(company_id)) throw new Error('company_id inválido (empreendimento sem vínculo Sienge).');
@@ -132,14 +205,18 @@ export async function setEnterpriseRelease(companyId, { isReleased, notes } = {}
  * Carrega config global + overrides + liberação numa passada e devolve helpers
  * síncronos:
  *  - isMarketing(deptName, companyId): boolean (depto acompanhado?)
- *  - statusOverride(companyId): string|null
- *  - isReleased(companyId): boolean (liberado para a diretoria?)
+ *  - statusOverride(companyId, enterpriseKey): string|null
+ *  - isReleased(companyId, enterpriseKey): boolean (liberado para a diretoria?)
  *  - hasAnyMarketingConfig: se existe ao menos 1 depto global marcado
+ *
+ * Status e liberação olham PRIMEIRO o ajuste da etapa (enterprise_key); sem linha
+ * de etapa, valem os da empresa.
  */
 export async function buildSpendingResolver() {
-    const [globalRows, entRows] = await Promise.all([
+    const [globalRows, entRows, stageRows] = await Promise.all([
         DeptSpendingMarketingDepartment.findAll(),
         DeptSpendingEnterpriseSettings.findAll(),
+        DeptSpendingStageSettings.findAll(),
     ]);
 
     const globalMap = new Map(); // norm(name) -> bool
@@ -167,6 +244,14 @@ export async function buildSpendingResolver() {
         lojaByCompany.set(key, Array.isArray(r.loja_departments) ? r.loja_departments.filter(Boolean) : []);
     }
 
+    const statusByStage = new Map();   // enterprise_key -> status | null
+    const releasedByStage = new Map(); // enterprise_key -> bool
+    for (const r of stageRows) {
+        const key = String(r.enterprise_key);
+        statusByStage.set(key, r.status_override || null);
+        releasedByStage.set(key, !!r.is_released);
+    }
+
     function isMarketing(deptName, companyId) {
         const key = norm(deptName);
         if (!key) return false;
@@ -179,11 +264,15 @@ export async function buildSpendingResolver() {
         return blockedByCompany.get(Number(companyId)) || 0;
     }
 
-    function statusOverride(companyId) {
+    function statusOverride(companyId, enterpriseKey) {
+        const key = normKey(enterpriseKey);
+        if (key && statusByStage.has(key)) return statusByStage.get(key) || null;
         return statusByCompany.get(Number(companyId)) || null;
     }
 
-    function isReleased(companyId) {
+    function isReleased(companyId, enterpriseKey) {
+        const key = normKey(enterpriseKey);
+        if (key && releasedByStage.has(key)) return releasedByStage.get(key) === true;
         return releasedByCompany.get(Number(companyId)) === true;
     }
 
@@ -222,6 +311,10 @@ export default {
     getEnterpriseSettings,
     setEnterpriseSettings,
     setEnterpriseRelease,
+    listStageSettings,
+    getStageSettings,
+    setStageSettings,
+    setStageRelease,
     getReportInsightsCache,
     setReportInsightsCache,
     buildSpendingResolver,
