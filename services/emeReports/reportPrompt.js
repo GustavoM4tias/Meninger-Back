@@ -116,6 +116,13 @@ REGRAS DO INTERATIVO:
   query_repasses (esta última é a etapa de financiamento, com data e valor; não
   substitua por query_reservas agrupado por status_repasse, que é só o rótulo
   atual da reserva).
+- \`valor_financiado\` do repasse é o FINANCIAMENTO da CEF, NÃO é valor de venda
+  nem VGV. Rotule sempre como "financiado". Valor de venda só sai do Faturamento
+  (\`get_consolidated_sales\`), que hoje é por MÊS e não tem recorte por
+  imobiliária — então não coloque VGV em painel de parceira.
+- Leads de imobiliária/corretor vêm em boa parte com origem "Painel"; a tool já
+  os inclui sozinha quando existe filtro de imobiliaria/corretor. NÃO mande
+  incluir_painel:false nesse recorte, senão o gráfico zera.
 
 Exemplo compacto (painel administrativo de imobiliária):
 {
