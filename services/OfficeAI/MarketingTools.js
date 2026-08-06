@@ -75,7 +75,7 @@ export const TOOL_DECLARATIONS = [
         midia:           { type: 'STRING',  description: 'Mídia principal. Ex: Google, Facebook Ads, Instagram.' },
         origem:          { type: 'STRING',  description: 'Origem do lead. Ex: Busca Compartilhada, Busca Orgânica. Origens "Painel" são excluídas por padrão.' },
         situacao:        { type: 'STRING',  description: 'Situação do lead. Ex: Ativo, Descartado, Vendido.' },
-        incluir_painel:  { type: 'BOOLEAN', description: 'Se true, inclui leads com origem "Painel Corretor/Gestor/Imobiliária". Por padrão são EXCLUÍDOS.' },
+        incluir_painel:  { type: 'BOOLEAN', description: 'Leads com origem "Painel Corretor/Gestor/Imobiliária" (cadastro interno, não vieram de campanha). Padrão: EXCLUÍDOS em pergunta de captação/mídia/CAC; INCLUÍDOS automaticamente quando há filtro de imobiliaria ou corretor, porque nesse recorte eles são justamente o trabalho do parceiro. Mande false para forçar a exclusão mesmo com filtro de parceiro.' },
         cidade:          { type: 'STRING',  description: 'Filtro adicional por cidade do empreendimento, aplicado DENTRO do escopo de acesso do usuário (nunca amplia o que ele pode ver).' },
         documento:       { type: 'STRING',  description: 'CPF/documento do cliente. Aceita CSV (múltiplos CPFs separados por vírgula). Útil para fazer bridge a partir de pré-cadastros/reservas — pegue os CPFs e passe aqui.' },
         idleads:         { type: 'STRING',  description: 'IDs específicos de leads a buscar. CSV de inteiros. Usado quando se tem os idleads de um contexto anterior (pré-cadastros, reservas, etc.).' },
@@ -158,9 +158,21 @@ async function executeQueryLeads(args, user) {
     replacements.end   = `${end} 23:59:59`;
   }
 
-  // ── Exclusão de Painel (padrão: excluir) ─────────���────────────────────────
+  // ── Exclusão de Painel ──────────────────────────────────────────────────────
+  // Excluir "Painel Corretor/Imobiliária" é o certo para medir CAPTAÇÃO (mídia,
+  // CAC): são leads digitados internamente, não vieram de campanha. Mas quando a
+  // pergunta É sobre uma imobiliária ou um corretor, esses leads são exatamente
+  // o trabalho dela — e o padrão zerava o resultado sem dizer por quê (a Moradas
+  // teve 30 leads em agosto/26, TODOS de Painel, e o painel exibia "nenhum lead").
+  // Com filtro de parceiro, o padrão passa a INCLUIR; quem quiser o contrário
+  // manda incluir_painel:false explicitamente.
+  const filtroParceiro = !!(args.imobiliaria || args.corretor);
+  const incluirPainel = args.incluir_painel === undefined || args.incluir_painel === null
+    ? filtroParceiro
+    : !!args.incluir_painel;
   const SEM_PAINEL = `(l.origem IS NULL OR l.origem NOT ILIKE 'Painel %')`;
-  if (!args.incluir_painel) {
+  const SO_PAINEL  = `l.origem ILIKE 'Painel %'`;
+  if (!incluirPainel) {
     whereClauses.push(SEM_PAINEL);
   }
 
@@ -301,7 +313,7 @@ async function executeQueryLeads(args, user) {
   // Mesmo recorte, só os cadastros internos de Painel: é o que explica a
   // diferença entre o total daqui e o total bruto do CRM. Sem esse número, uma
   // contagem "a menos" parecia erro do sistema.
-  const wherePainel = [...whereClauses.filter((c) => c !== SEM_PAINEL), `l.origem ILIKE 'Painel %'`].join(' AND ');
+  const wherePainel = [...whereClauses.filter((c) => c !== SEM_PAINEL), SO_PAINEL].join(' AND ');
 
   // Contexto para botões de ação no frontend
   const context = {
@@ -315,12 +327,12 @@ async function executeQueryLeads(args, user) {
     situacao:       args.situacao       || null,
     cidade:         args.cidade         || null,
     group_by:       args.group_by       || null,
-    incluir_painel: args.incluir_painel || false,
+    incluir_painel: incluirPainel,
     visibility:     cvIds ? 'scope-restricted' : 'admin-full',
   };
 
   if (args.group_by) {
-    return executeLeadsGrouped(args.group_by, where, replacements, context, await contarPainel(args, wherePainel, replacements));
+    return executeLeadsGrouped(args.group_by, where, replacements, context, await contarPainel(incluirPainel, wherePainel, replacements));
   }
 
   const sql = `
@@ -353,7 +365,7 @@ async function executeQueryLeads(args, user) {
     { replacements, type: QueryTypes.SELECT },
   );
   const totalGeral = Number(cnt) || 0;
-  const painelExcluidos = await contarPainel(args, wherePainel, replacements);
+  const painelExcluidos = await contarPainel(incluirPainel, wherePainel, replacements);
 
   const hasDescartado = rows.some(r => r.situacao_nome?.toLowerCase().includes('descard'));
 
@@ -413,8 +425,8 @@ async function executeQueryLeads(args, user) {
 
 // Quantos leads o filtro de Painel tirou da conta (0 quando o usuário pediu
 // para incluí-los, ou quando não há nenhum no recorte).
-async function contarPainel(args, wherePainel, replacements) {
-  if (args.incluir_painel) return 0;
+async function contarPainel(incluirPainel, wherePainel, replacements) {
+  if (incluirPainel) return 0;
   try {
     const [{ cnt }] = await db.sequelize.query(
       `SELECT COUNT(DISTINCT l.idlead)::int AS cnt FROM leads l WHERE ${wherePainel}`,
