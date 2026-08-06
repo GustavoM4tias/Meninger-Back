@@ -41,6 +41,19 @@ const RESERVA_BUCKET_CASE = `
   END
 `;
 
+// ── Imobiliária/corretor da RESERVA ─────────────────────────────────────────
+// O bloco `imobiliaria` que o CV manda na reserva só traz `nome` em ~15% das
+// linhas (o resto vem só com cnpj/e-mail/telefone), e o bloco `corretor` usa a
+// chave `corretor` para o nome — não `nome`. Filtrar por `imobiliaria->>'nome'`
+// devolvia 90 reservas onde o correto eram 724, e por `corretor->>'nome'`
+// devolvia sempre zero, tudo calado. O `corretor` carrega a imobiliária em 100%
+// das reservas e, quando as duas fontes existem, os nomes batem — daí a ordem
+// do COALESCE.
+// Exportadas para o RepasseTools reutilizar a MESMA regra (o repasse não tem
+// imobiliária própria — ele a herda da reserva).
+export const RESERVA_IMOB_NOME     = `COALESCE(NULLIF(r.imobiliaria->>'nome',''), NULLIF(r.corretor->>'imobiliaria',''))`;
+export const RESERVA_CORRETOR_NOME = `COALESCE(NULLIF(r.corretor->>'corretor',''), NULLIF(r.corretor->>'nome',''))`;
+
 export const TOOL_DECLARATIONS = [
   {
     name: 'query_mcmv',
@@ -86,8 +99,8 @@ export const TOOL_DECLARATIONS = [
         empreendimento: { type: 'STRING', description: 'Nome (ou parte) do empreendimento. Aceita CSV para múltiplos.' },
         empresa_correspondente: { type: 'STRING', description: 'Nome da empresa correspondente (CCA/banco). Ex: "Caixa", "Itaú", "Santander". Aceita CSV.' },
         correspondente: { type: 'STRING', description: 'Nome do usuário correspondente (operador da CCA).' },
-        imobiliaria:    { type: 'STRING', description: 'Nome da imobiliária parceira.' },
-        corretor:       { type: 'STRING', description: 'Nome do corretor.' },
+        imobiliaria:    { type: 'STRING', description: 'Imobiliária parceira: nome (acento é ignorado) ou id do CV.' },
+        corretor:       { type: 'STRING', description: 'Nome do corretor (acento é ignorado).' },
         situacao_nome:  { type: 'STRING', description: 'Nome da etapa real do CV (ex: "Em Reserva", "Aprovado Restrição", "Pasta Incompleta"). Aceita CSV. Para grupos amplos prefira `bucket`.' },
         bucket: {
           type: 'STRING',
@@ -144,8 +157,8 @@ export const TOOL_DECLARATIONS = [
           enum: ['reservada', 'contrato', 'em_repasse', 'vendida', 'cancelada', 'outros'],
           description: 'Filtra por bucket macro do funil. "vendida" = etapa CRM (NÃO venda concretizada); "cancelada" cobre Distrato + Cancelada + Reprovado.',
         },
-        imobiliaria:    { type: 'STRING', description: 'Nome da imobiliária. CSV aceito.' },
-        corretor:       { type: 'STRING', description: 'Nome do corretor. CSV aceito.' },
+        imobiliaria:    { type: 'STRING', description: 'Imobiliária: nome (acento é ignorado), CNPJ (com ou sem máscara) ou id do CV. CSV aceito. A imobiliária é resolvida pelo cadastro do corretor quando a reserva não traz o nome, então o histórico completo é considerado.' },
+        corretor:       { type: 'STRING', description: 'Nome do corretor (acento é ignorado). CSV aceito.' },
         empresa_correspondente: { type: 'STRING', description: 'Nome da CCA/empresa correspondente associada à reserva. CSV aceito.' },
         documento:      { type: 'STRING', description: 'CPF/CNPJ do titular. CSV aceito (busca exata por dígitos normalizados ou parcial).' },
         nome:           { type: 'STRING', description: 'Nome do titular (busca parcial).' },
@@ -553,18 +566,45 @@ async function executeGetEnterpriseDetail(args, user) {
 
 // ── Pré-cadastros ──────────────────────────────────────────────────────────────
 
-function addIlikeCsv(whereClauses, replacements, paramName, column, rawVal) {
+// ILIKE do Postgres ignora caixa mas NÃO ignora acento: "MORADAS IMOVEIS"
+// digitado pelo usuário não casava com "MORADAS IMÓVEIS" gravado no CV e a
+// consulta voltava vazia sem erro nenhum. unaccent() nos dois lados resolve
+// (extensão já usada em todo o backend).
+export function addIlikeCsv(whereClauses, replacements, paramName, column, rawVal) {
   if (!rawVal) return;
   const termos = String(rawVal).split(',').map(s => s.trim()).filter(Boolean);
   if (!termos.length) return;
   if (termos.length === 1) {
-    whereClauses.push(`${column} ILIKE :${paramName}`);
+    whereClauses.push(`unaccent(${column}) ILIKE unaccent(:${paramName})`);
     replacements[paramName] = `%${termos[0]}%`;
   } else {
-    const parts = termos.map((_, i) => `${column} ILIKE :${paramName}_${i}`);
+    const parts = termos.map((_, i) => `unaccent(${column}) ILIKE unaccent(:${paramName}_${i})`);
     whereClauses.push(`(${parts.join(' OR ')})`);
     termos.forEach((t, i) => (replacements[`${paramName}_${i}`] = `%${t}%`));
   }
+}
+
+// Imobiliária da reserva: além do nome (sem acento), aceita CNPJ com ou sem
+// máscara e o id do CV — os três identificam a mesma parceira e nenhum deles
+// está preenchido em todas as linhas.
+export function addReservaImobiliariaFilter(whereClauses, replacements, rawVal) {
+  if (!rawVal) return;
+  const termos = String(rawVal).split(',').map(s => s.trim()).filter(Boolean);
+  if (!termos.length) return;
+  const parts = [];
+  termos.forEach((t, i) => {
+    parts.push(`unaccent(${RESERVA_IMOB_NOME}) ILIKE unaccent(:imob_${i})`);
+    replacements[`imob_${i}`] = `%${t}%`;
+    const digits = t.replace(/\D/g, '');
+    if (digits.length === 14) {
+      parts.push(`REGEXP_REPLACE(COALESCE(r.imobiliaria->>'cnpj',''), '[^0-9]', '', 'g') = :imob_cnpj_${i}`);
+      replacements[`imob_cnpj_${i}`] = digits;
+    } else if (digits && digits === t) {
+      parts.push(`r.corretor->>'idimobiliaria_cv' = :imob_id_${i}`);
+      replacements[`imob_id_${i}`] = digits;
+    }
+  });
+  whereClauses.push(`(${parts.join(' OR ')})`);
 }
 
 async function executeQueryPrecadastros(args, user) {
@@ -643,7 +683,19 @@ async function executeQueryPrecadastros(args, user) {
   addIlikeCsv(whereClauses, replacements, 'situacao_nome',          `p.situacao_nome`,                       args.situacao_nome);
   addIlikeCsv(whereClauses, replacements, 'intencao_compra',        `p.intencao_compra`,                     args.intencao_compra);
   addIlikeCsv(whereClauses, replacements, 'empreendimento',         `p.empreendimento->>'nome'`,             args.empreendimento);
-  addIlikeCsv(whereClauses, replacements, 'imobiliaria',            `p.imobiliaria->>'nome'`,                args.imobiliaria);
+  // Imobiliária: nome (sem depender de acento) ou id do CV — o mesmo par que
+  // query_leads e query_reservas aceitam, para o recorte por parceira casar nas
+  // três etapas do funil.
+  if (args.imobiliaria) {
+    const imobDigits = String(args.imobiliaria).replace(/\D/g, '');
+    if (imobDigits && imobDigits === String(args.imobiliaria).trim()) {
+      whereClauses.push(`(unaccent(p.imobiliaria->>'nome') ILIKE unaccent(:imobiliaria) OR p.idimobiliaria = :imobiliaria_id)`);
+      replacements.imobiliaria = `%${args.imobiliaria}%`;
+      replacements.imobiliaria_id = Number(imobDigits);
+    } else {
+      addIlikeCsv(whereClauses, replacements, 'imobiliaria', `p.imobiliaria->>'nome'`, args.imobiliaria);
+    }
+  }
   addIlikeCsv(whereClauses, replacements, 'corretor',               `p.corretor->>'nome'`,                   args.corretor);
   addIlikeCsv(whereClauses, replacements, 'correspondente',         `p.correspondente->>'nome'`,             args.correspondente);
   addIlikeCsv(whereClauses, replacements, 'empresa_correspondente', `p.empresa_correspondente->>'nome'`,     args.empresa_correspondente);
@@ -1042,7 +1094,7 @@ async function executePrecadList(args, whereSql, replacements, context, start, e
 // estratégias (padrão idêntico ao dashboard reservasReport.js): Sienge ERP id →
 // CRM id direto → idempreendimento_cv → fallback por nome normalizado. O
 // `extraCond` é a condição aplicada sobre a linha ec_r que casou (escopo/cidade).
-function reservaEnterpriseExists(extraCond) {
+export function reservaEnterpriseExists(extraCond) {
   return `
       EXISTS (
         SELECT 1
@@ -1105,8 +1157,8 @@ async function executeQueryReservas(args, user) {
   addIlikeCsv(whereClauses, replacements, 'tipovenda',              `r.tipovenda`,                       args.tipovenda);
   addIlikeCsv(whereClauses, replacements, 'status_repasse',         `r.status_repasse`,                  args.status_repasse);
   addIlikeCsv(whereClauses, replacements, 'situacao',               `r.situacao->>'nome'`,               args.situacao);
-  addIlikeCsv(whereClauses, replacements, 'imobiliaria',            `r.imobiliaria->>'nome'`,            args.imobiliaria);
-  addIlikeCsv(whereClauses, replacements, 'corretor',               `r.corretor->>'nome'`,               args.corretor);
+  addReservaImobiliariaFilter(whereClauses, replacements, args.imobiliaria);
+  addIlikeCsv(whereClauses, replacements, 'corretor',               RESERVA_CORRETOR_NOME,               args.corretor);
   addIlikeCsv(whereClauses, replacements, 'empresa_correspondente', `r.empresa_correspondente->>'nome'`, args.empresa_correspondente);
 
   if (args.nome) {
@@ -1317,8 +1369,8 @@ async function executeReservasGrouped(args, whereSql, replacements, context) {
     situacao:               `COALESCE(r.situacao->>'nome', r.status_reserva, 'Não informado')`,
     status_repasse:         `COALESCE(NULLIF(r.status_repasse, ''), 'Sem repasse')`,
     bucket:                 `(${RESERVA_BUCKET_CASE})`,
-    corretor:               `COALESCE(r.corretor->>'nome', 'Sem corretor')`,
-    imobiliaria:            `COALESCE(r.imobiliaria->>'nome', 'Sem imobiliária')`,
+    corretor:               `COALESCE(${RESERVA_CORRETOR_NOME}, 'Sem corretor')`,
+    imobiliaria:            `COALESCE(${RESERVA_IMOB_NOME}, 'Sem imobiliária')`,
     empresa_correspondente: `COALESCE(r.empresa_correspondente->>'nome', 'Sem CCA')`,
     lead_origem:            `COALESCE((SELECT l3.origem FROM jsonb_array_elements(COALESCE(r.leads_associados, '[]'::jsonb)) la3 JOIN leads l3 ON l3.idlead = NULLIF(la3->>'idlead','')::int LIMIT 1), 'Sem origem')`,
     tipovenda:              `COALESCE(NULLIF(r.tipovenda, ''), 'Não informado')`,
@@ -1465,8 +1517,8 @@ async function executeReservasList(args, whereSql, replacements, context, start,
       r.data_contrato,
       r.data_venda,
       ROUND(EXTRACT(EPOCH FROM (COALESCE(r.data_venda, r.data_contrato, NOW()) - r.data_reserva)) / 86400)::int AS dias_em_reserva,
-      r.corretor->>'nome'                 AS corretor_nome,
-      r.imobiliaria->>'nome'              AS imobiliaria_nome,
+      ${RESERVA_CORRETOR_NOME}            AS corretor_nome,
+      ${RESERVA_IMOB_NOME}                AS imobiliaria_nome,
       r.empresa_correspondente->>'nome'   AS cca_nome,
       first_lead.idlead          AS lead_id,
       first_lead.origem          AS lead_origem,

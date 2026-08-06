@@ -108,6 +108,14 @@ REGRAS DO INTERATIVO:
   geral do período..."), ou evite citar números filtráveis no texto.
 - Filtro de cliente: prefira type "text" com arg "nome" (ou "documento" para
   CPF). NUNCA crie select com lista de nomes de clientes (PII exposta de cara).
+- Relatório de UMA imobiliária/corretor: confirme o nome no cadastro
+  (imobiliarias_search) e fixe-o em base_args de TODOS os datasets, não só no
+  default do filtro. Se um dataset voltar vazio em TODAS as etapas, o nome está
+  errado — corrija antes de escrever "sem registros no período".
+- Funil de imobiliária = query_leads → query_precadastros → query_reservas →
+  query_repasses (esta última é a etapa de financiamento, com data e valor; não
+  substitua por query_reservas agrupado por status_repasse, que é só o rótulo
+  atual da reserva).
 
 Exemplo compacto (painel administrativo de imobiliária):
 {
@@ -118,10 +126,12 @@ Exemplo compacto (painel administrativo de imobiliária):
     { "key": "periodo", "label": "Período", "type": "date-range" }
   ],
   "datasets": [
+    { "id": "leads-mes", "tool": "query_leads", "base_args": { "group_by": "mes" }, "accepts": ["imob", "corretor", "periodo"] },
     { "id": "pastas-kpis", "tool": "query_precadastros", "base_args": {}, "accepts": ["imob", "corretor", "cliente", "periodo"] },
     { "id": "pastas-situacao", "tool": "query_precadastros", "base_args": { "group_by": "situacao" }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
     { "id": "reservas-situacao", "tool": "query_reservas", "base_args": { "group_by": "situacao" }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
-    { "id": "repasses", "tool": "query_reservas", "base_args": { "group_by": "status_repasse" }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
+    { "id": "repasses-etapa", "tool": "query_repasses", "base_args": { "group_by": "etapa" }, "accepts": ["imob", "corretor", "periodo"] },
+    { "id": "repasses-lista", "tool": "query_repasses", "base_args": { "format": "list", "limit": 200 }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
     { "id": "reservas-lista", "tool": "query_reservas", "base_args": { "format": "list", "limit": 100 }, "accepts": ["imob", "corretor", "cliente", "periodo"] }
   ],
   "ops": [{ "action": "upsert", "block": {

@@ -70,8 +70,8 @@ export const TOOL_DECLARATIONS = [
         data_inicio:     { type: 'STRING',  description: 'Data inicial YYYY-MM-DD. Padrão: início do mês atual.' },
         data_fim:        { type: 'STRING',  description: 'Data final YYYY-MM-DD. Padrão: hoje.' },
         empreendimento:  { type: 'STRING',  description: 'Nome do empreendimento (deve constar na lista de empreendimentos disponíveis).' },
-        imobiliaria:     { type: 'STRING',  description: 'Nome da imobiliária parceira para filtrar.' },
-        corretor:        { type: 'STRING',  description: 'Nome do corretor para filtrar.' },
+        imobiliaria:     { type: 'STRING',  description: 'Imobiliária parceira: nome (acento é ignorado) ou id do CV.' },
+        corretor:        { type: 'STRING',  description: 'Nome do corretor para filtrar (acento é ignorado).' },
         midia:           { type: 'STRING',  description: 'Mídia principal. Ex: Google, Facebook Ads, Instagram.' },
         origem:          { type: 'STRING',  description: 'Origem do lead. Ex: Busca Compartilhada, Busca Orgânica. Origens "Painel" são excluídas por padrão.' },
         situacao:        { type: 'STRING',  description: 'Situação do lead. Ex: Ativo, Descartado, Vendido.' },
@@ -183,24 +183,35 @@ async function executeQueryLeads(args, user) {
   }
 
   // ── Filtros simples ────────────────────────────────────────────────────────
+  // ILIKE ignora caixa mas não acento: "MORADAS IMOVEIS" não casava com
+  // "MORADAS IMÓVEIS" e a consulta voltava vazia sem erro. unaccent nos dois
+  // lados (mesmo tratamento em ComercialTools).
   if (args.situacao) {
-    whereClauses.push(`l.situacao_nome ILIKE :situacao`);
+    whereClauses.push(`unaccent(l.situacao_nome) ILIKE unaccent(:situacao)`);
     replacements.situacao = `%${args.situacao}%`;
   }
   if (args.midia) {
-    whereClauses.push(`l.midia_principal ILIKE :midia`);
+    whereClauses.push(`unaccent(l.midia_principal) ILIKE unaccent(:midia)`);
     replacements.midia = `%${args.midia}%`;
   }
   if (args.origem) {
-    whereClauses.push(`l.origem ILIKE :origem`);
+    whereClauses.push(`unaccent(l.origem) ILIKE unaccent(:origem)`);
     replacements.origem = `%${args.origem}%`;
   }
   if (args.imobiliaria) {
-    whereClauses.push(`l.imobiliaria->>'nome' ILIKE :imobiliaria`);
+    // Aceita nome ou id do CV (a mesma parceira aparece dos dois jeitos entre
+    // leads, pré-cadastros e reservas).
+    const imobDigits = String(args.imobiliaria).replace(/\D/g, '');
+    const imobParts = [`unaccent(l.imobiliaria->>'nome') ILIKE unaccent(:imobiliaria)`];
     replacements.imobiliaria = `%${args.imobiliaria}%`;
+    if (imobDigits && imobDigits === String(args.imobiliaria).trim()) {
+      imobParts.push(`l.imobiliaria->>'id' = :imobiliaria_id`);
+      replacements.imobiliaria_id = imobDigits;
+    }
+    whereClauses.push(`(${imobParts.join(' OR ')})`);
   }
   if (args.corretor) {
-    whereClauses.push(`l.corretor->>'nome' ILIKE :corretor`);
+    whereClauses.push(`unaccent(l.corretor->>'nome') ILIKE unaccent(:corretor)`);
     replacements.corretor = `%${args.corretor}%`;
   }
 

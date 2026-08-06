@@ -38,7 +38,7 @@ export const DATA_TOOL_NAMES = [
   // Vendas / metas
   'get_consolidated_sales', 'query_projections',
   // Financeiro
-  'query_custos', 'query_boletos', 'query_repasses_contratos',
+  'query_custos', 'query_boletos', 'query_repasses_contratos', 'query_repasses',
   // Operação / pessoas
   'query_checklists', 'query_event_plans', 'query_people',
 ];
@@ -57,7 +57,8 @@ export const DATA_TOOL_LABELS = {
   query_projections: 'Projeção de vendas',
   query_custos: 'Custos financeiros',
   query_boletos: 'Boletos Caixa (ato)',
-  query_repasses_contratos: 'Repasses e contratos',
+  query_repasses_contratos: 'Fila do validador de contratos',
+  query_repasses: 'Repasses',
   query_checklists: 'Checklists',
   query_event_plans: 'Plano de eventos',
   query_people: 'Pessoas e organograma',
