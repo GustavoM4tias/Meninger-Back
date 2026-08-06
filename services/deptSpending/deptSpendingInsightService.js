@@ -5,7 +5,8 @@
 // JÁ COMPUTADOS pelo motor + regras de análise fixas. A IA nunca inventa número —
 // o prompt fornece tudo pronto e formatado.
 //
-// Cache: viability_enterprise_settings.report_insights =
+// Cache: report_insights do EMPREENDIMENTO (viability_stage_settings) ou, no
+// relatório legado da SPE inteira, da empresa (viability_enterprise_settings) =
 //   { month, hash, generatedAt, source: 'ai'|'fallback', blocks: [{title, tone, text}] }
 // Regenera quando o mês de referência ou os números mudam (hash), ou quando o
 // admin força pelo endpoint de regeneração. Sem chave Gemini / falha → fallback
@@ -117,12 +118,16 @@ function sanitizeBlocks(raw) {
 /**
  * Devolve os insights do relatório (cache → IA → fallback). `force` ignora o cache.
  */
-export async function getReportInsights({ companyId, report, force = false }) {
+export async function getReportInsights({ enterpriseKey = null, companyId = null, report, force = false }) {
     const hash = buildReportHash(report);
     const month = report.refMonth;
+    const cacheKey = {
+        enterpriseKey: enterpriseKey ?? report?.company?.enterpriseKey ?? null,
+        companyId: companyId ?? report?.company?.companyId ?? null,
+    };
 
     if (!force) {
-        const cached = await getReportInsightsCache(companyId);
+        const cached = await getReportInsightsCache(cacheKey);
         if (cached?.month === month && cached?.hash === hash && Array.isArray(cached?.blocks) && cached.blocks.length) {
             return cached;
         }
@@ -143,7 +148,7 @@ export async function getReportInsights({ companyId, report, force = false }) {
 
     const insights = { month, hash, generatedAt: new Date().toISOString(), source, blocks };
     try {
-        await setReportInsightsCache(companyId, insights);
+        await setReportInsightsCache(cacheKey, insights);
     } catch (e) {
         console.warn('[DeptSpendingInsights] falha ao salvar cache:', e?.message);
     }

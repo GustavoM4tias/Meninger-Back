@@ -455,11 +455,14 @@ export default class DeptSpendingService {
         const autoStatus = (availableInventory <= 0 && !hasFuture) ? 'concluido'
             : (hasFuture && !hasStarted) ? (spentTotal > 0 ? 'pre_lancamento' : 'previsao_futura')
                 : 'em_andamento';
-        const statusOverride = resolver.statusOverride(company.companyId);
+        // Status e liberação são decisão de EMPREENDIMENTO (etapa); sem ajuste de
+        // etapa o resolver cai no que estiver configurado na empresa.
+        const stageKey = company.enterpriseKey ?? (ccRows.length === 1 ? String(ccRows[0].enterprise_key) : null);
+        const statusOverride = resolver.statusOverride(company.companyId, stageKey);
         const status = statusOverride || autoStatus;
 
         // ----- Governança: liberado p/ diretoria? -----
-        const released = resolver.isReleased(company.companyId);
+        const released = resolver.isReleased(company.companyId, stageKey);
 
         const representativeErp = erpIds.length ? erpIds.slice().sort()[0] : null;
 
@@ -471,10 +474,11 @@ export default class DeptSpendingService {
                 startMonth: startYM,
                 endMonth: endYM,
 
-                // identidade da empresa (empreendimento)
+                // identidade do empreendimento (etapa) + empresa Sienge que o abriga
                 companyId: company.companyId,
                 companyName: company.companyName,
                 enterpriseName: company.companyName,
+                enterpriseKey: stageKey,
                 erpId: representativeErp,
                 displayId: company.companyId != null ? String(company.companyId) : representativeErp,
                 costCenterIds,
@@ -630,15 +634,20 @@ export default class DeptSpendingService {
         const erpToCompany = await this.mapErpsToCompany(erpIds);
         const resolver = await buildSpendingResolver();
 
-        // agrupa defaults por empresa (chave: company_id; sem idCompany → agrupa pelo próprio enterprise_key)
+        // UMA LINHA POR EMPREENDIMENTO (etapa da projeção = enterprise_key = CC).
+        // A empresa Sienge (SPE) costuma ter várias etapas em CCs diferentes, cada uma
+        // com o seu % de marketing e a sua verba — agrupar por empresa somava etapas
+        // distintas numa linha só. A empresa segue no item, como rótulo e chave da
+        // config de departamentos.
         const groups = new Map();
         for (const d of defaults) {
             const info = d.erp_id ? erpToCompany.get(String(d.erp_id)) : null;
             const companyId = info?.companyId ?? null;
-            const groupKey = companyId != null ? `co:${companyId}` : `ek:${d.enterprise_key}`;
+            const groupKey = String(d.enterprise_key);
             if (!groups.has(groupKey)) {
                 groups.set(groupKey, {
                     companyId,
+                    enterpriseKey: groupKey,
                     companyName: d.enterprise_name_cache || info?.companyName || (d.erp_id ? `Empresa ${companyId ?? d.erp_id}` : d.enterprise_key),
                     ccRows: [],
                     linesByKey,
@@ -705,13 +714,18 @@ export default class DeptSpendingService {
                 if (!item) continue;
                 const { company, viability } = item;
                 const h = viability.header;
-                // mostra só se há projeção no mês selecionado OU gasto acompanhado em algum momento
-                if (num(h.projectedUnitsMonth) <= 0 && num(h.spentTotal) <= 0) continue;
+                // Mostra se há projeção no mês selecionado, gasto acompanhado em algum
+                // momento OU verba no exercício com centro de custo (etapa que só vende
+                // nos meses seguintes já tem verba a controlar; sem CC não há gasto
+                // para acompanhar, então essa linha continua entrando só pela projeção).
+                const temVerbaComCc = num(h.budgetTotal) > 0 && (h.costCenterIds || []).length > 0;
+                if (!temVerbaComCc && num(h.projectedUnitsMonth) <= 0 && num(h.spentTotal) <= 0) continue;
                 // governança: diretoria (onlyReleased) só vê empreendimentos CONFIGURADOS + liberados
                 if (onlyReleased && (!h.released || !resolver.isConfigured(company.companyId))) continue;
 
                 results.push({
                     companyId: company.companyId,
+                    enterpriseKey: company.enterpriseKey ?? h.enterpriseKey ?? null,
                     erpId: h.erpId,
                     displayId: h.displayId,
                     enterpriseName: h.enterpriseName,
@@ -825,7 +839,7 @@ export default class DeptSpendingService {
      * vendas: units × price × %mkt). Tetos: Marketing = VGV vida útil × % (motor atual);
      * Loja = Σ custo_loja dos CCs.
      */
-    async computeCompanyReport({ companyId, refMonth, aliasId = 'default' }) {
+    async computeCompanyReport({ key, companyId, refMonth, aliasId = 'default' }) {
         const endYM = normYM(refMonth);
         const year = String(endYM).slice(0, 4);
         const startYM = `${year}-01`;
@@ -841,15 +855,30 @@ export default class DeptSpendingService {
         const erpToCompany = await this.mapErpsToCompany(defaults.map((d) => d.erp_id).filter(Boolean));
         const resolver = await buildSpendingResolver();
 
-        const cid = Number(companyId);
-        const ccRows = defaults.filter((d) => {
-            const info = d.erp_id ? erpToCompany.get(String(d.erp_id)) : null;
-            return info?.companyId === cid;
-        });
+        // A chave da tela é o EMPREENDIMENTO (enterprise_key = CC). Um id de empresa
+        // Sienge continua aceito (links antigos) e devolve a SPE inteira somada.
+        const target = String(key ?? companyId ?? '').trim();
+        let ccRows = defaults.filter((d) => String(d.enterprise_key) === target);
+        let scope = 'stage';
+        if (!ccRows.length) {
+            const cidLegacy = Number(target);
+            ccRows = Number.isFinite(cidLegacy)
+                ? defaults.filter((d) => {
+                    const info = d.erp_id ? erpToCompany.get(String(d.erp_id)) : null;
+                    return info?.companyId === cidLegacy;
+                })
+                : [];
+            scope = 'company';
+        }
         if (!ccRows.length) throw new Error('Empreendimento não encontrado na projeção ativa.');
 
+        // Etapa manual (sem CC no Sienge) não tem empresa: cid fica null em vez de NaN.
+        const cid = erpToCompany.get(String(ccRows[0]?.erp_id))?.companyId
+            ?? (Number.isFinite(Number(target)) ? Number(target) : null);
+        const enterpriseKey = scope === 'stage' ? target : null;
         const company = {
             companyId: cid,
+            enterpriseKey,
             companyName: ccRows[0]?.enterprise_name_cache
                 || erpToCompany.get(String(ccRows[0]?.erp_id))?.companyName
                 || `Empresa ${cid}`,
@@ -997,6 +1026,8 @@ export default class DeptSpendingService {
             monthIndex,
             company: {
                 companyId: cid,
+                enterpriseKey,
+                scope,                       // 'stage' = 1 empreendimento | 'company' = SPE inteira (legado)
                 name: company.companyName,
                 erpId: h.erpId,
                 costCenterIds: h.costCenterIds,
@@ -1042,7 +1073,7 @@ export default class DeptSpendingService {
         };
     }
 
-    /* ===== Compat: análise de 1 CC → resolve a empresa dele e devolve a da empresa ===== */
+    /* ===== Análise de 1 EMPREENDIMENTO pelo CC (erp_id) ===== */
     async computeEnterpriseViability({ year, upToMonth = null, startMonth = null, endMonth = null, aliasId = 'default', erpId = null }) {
         const { startMonth: startYM, endMonth: endYM } = resolveRange({ year, upToMonth, startMonth, endMonth });
         const ymList = buildYmRange(startYM, endYM);
@@ -1059,18 +1090,14 @@ export default class DeptSpendingService {
         const target = erpId ? erpToCompany.get(String(erpId)) : null;
         const companyId = target?.companyId ?? null;
 
-        const ccRows = defaults.filter((d) => {
-            if (companyId != null) {
-                const info = d.erp_id ? erpToCompany.get(String(d.erp_id)) : null;
-                return info?.companyId === companyId;
-            }
-            return String(d.erp_id) === String(erpId);
-        });
+        // Só o CC pedido: cada etapa da SPE tem verba e % próprios.
+        const ccRows = defaults.filter((d) => String(d.erp_id) === String(erpId));
 
         const company = {
             companyId,
-            companyName: target?.companyName || (ccRows[0]?.enterprise_name_cache) || `Empresa ${companyId ?? erpId}`,
-            ccRows: ccRows.length ? ccRows : defaults.filter((d) => String(d.erp_id) === String(erpId)),
+            enterpriseKey: ccRows[0] ? String(ccRows[0].enterprise_key) : String(erpId),
+            companyName: ccRows[0]?.enterprise_name_cache || target?.companyName || `Empresa ${companyId ?? erpId}`,
+            ccRows,
             linesByKey,
             fullByKey,
             futureByKey,

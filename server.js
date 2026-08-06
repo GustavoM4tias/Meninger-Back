@@ -73,6 +73,7 @@ import seedChecklist from './services/checklist/seedChecklist.js';
 import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import salesClosingScheduler from './scheduler/salesClosingScheduler.js';
+import contractAdjustmentScheduler from './scheduler/contractAdjustmentScheduler.js';
 import leadCvScheduler from './scheduler/leadCvScheduler.js';
 import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
 import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
@@ -427,6 +428,8 @@ async function syncModelsAndPatches(fingerprint) {
     // Gastos por Departamento (ex-Viabilidade) — colunas de liberação novas em viability_enterprise_settings
     ['DeptSpendingEnterpriseSettings', db.DeptSpendingEnterpriseSettings],
     ['DeptSpendingMarketingDepartment', db.DeptSpendingMarketingDepartment],
+    // Liberação/status por EMPREENDIMENTO (etapa/CC) — tabela nova viability_stage_settings
+    ['DeptSpendingStageSettings', db.DeptSpendingStageSettings],
     // Personalização de custos (categoria + observação) — Títulos/Custos agora ao vivo do backup
     ['ExpensePersonalization', db.ExpensePersonalization],
     // Eme Atende — atendente IA de leads (módulo novo em evolução)
@@ -557,6 +560,9 @@ async function startBackgroundServices() {
   // Vigilância dos meses consolidados acompanha o sync de contratos: se os
   // contratos sincronizam, os fechamentos precisam ser conferidos.
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') salesClosingScheduler.start();
+  // Mesma lógica para os ajustes contábeis: o sync pode reescrever justamente o
+  // dado que foi corrigido à mão.
+  if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractAdjustmentScheduler.start();
   if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCvScheduler.start();
   if (process.env.ENABLE_CV_REPASSE_SCHEDULE === 'true') repasseCvScheduler.start();
   if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') reservaCvScheduler.start();

@@ -45,6 +45,7 @@ import ProjectionGoalModeDefine from './projection/projectionGoalMode.js';
 // Gastos por Departamento — config admin + liberação (ex-Viabilidade)
 import DeptSpendingMarketingDepartmentDefine from './deptSpending/marketingDepartment.js';
 import DeptSpendingEnterpriseSettingsDefine from './deptSpending/enterpriseSettings.js';
+import DeptSpendingStageSettingsDefine from './deptSpending/stageSettings.js';
 
 // ... imports existentes
 import CvEnterpriseDefine from './cv/enterprise.js';
@@ -64,6 +65,7 @@ import stageCommissionRuleDefine from './stageCommissionRule.js';
 import enterpriseValueRuleDefine from './enterpriseValueRule.js';
 import enterpriseErpLinkDefine from './enterpriseErpLink.js';
 import trSatelliteEnterpriseDefine from './trSatelliteEnterprise.js';
+import contractAdjustmentDefine from './contractAdjustment.js';
 
 import PaymentLaunchDefine from './sienge/paymentLaunch.js';
 import LaunchTypeConfigDefine from './sienge/launchTypeConfig.js';
@@ -314,6 +316,7 @@ db.ProjectionGoalMode = ProjectionGoalModeDefine(sequelize, DataTypes);
 // Gastos por Departamento — config admin + liberação (ex-Viabilidade)
 db.DeptSpendingMarketingDepartment = DeptSpendingMarketingDepartmentDefine(sequelize, DataTypes);
 db.DeptSpendingEnterpriseSettings = DeptSpendingEnterpriseSettingsDefine(sequelize, DataTypes);
+db.DeptSpendingStageSettings = DeptSpendingStageSettingsDefine(sequelize, DataTypes);
 
 // ... modelos já existentes
 db.CvEnterprise = CvEnterpriseDefine(sequelize, DataTypes);
@@ -333,6 +336,7 @@ db.StageCommissionRule = stageCommissionRuleDefine(sequelize, DataTypes);
 db.EnterpriseValueRule = enterpriseValueRuleDefine(sequelize, DataTypes);
 db.EnterpriseErpLink = enterpriseErpLinkDefine(sequelize, DataTypes);
 db.TrSatelliteEnterprise = trSatelliteEnterpriseDefine(sequelize, DataTypes);
+db.ContractAdjustment = contractAdjustmentDefine(sequelize, DataTypes);
 
 db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);
 db.LaunchTypeConfig = LaunchTypeConfigDefine(sequelize, DataTypes);

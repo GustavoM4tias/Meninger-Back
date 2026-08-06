@@ -8,6 +8,7 @@ import {
     putMarketingDepartment,
     getEnterpriseSettings,
     putEnterpriseSettings,
+    putStageSettings,
     putEnterpriseRelease,
     regenerateReportInsights,
 } from '../controllers/deptSpendingAdminController.js';
@@ -27,19 +28,22 @@ router.get('/enterprise/:erpId', authenticate, requireViability, getEnterpriseSp
 // Diretoria (não-admin) recebe só os liberados; admin recebe tudo (rascunho + liberado).
 router.get('/enterprises', authenticate, requireViability, getEnterprisesSpending);
 
-// Relatório Gerencial de Investimento (por empresa Sienge). Não-admin: só configurado+liberado.
-router.get('/report/:companyId', authenticate, requireViability, getCompanyReport);
+// Relatório Gerencial de Investimento (por EMPREENDIMENTO: enterprise_key = CC;
+// id de empresa Sienge ainda aceito p/ links antigos). Não-admin: só configurado+liberado.
+router.get('/report/:key', authenticate, requireViability, getCompanyReport);
 
 /* ===== ADMIN — configuração + liberação (admin-only) ===== */
 // Departamentos acompanhados (global)
 router.get('/admin/marketing-departments', authenticate, requireAdmin, getMarketingDepartments);
 router.put('/admin/marketing-departments', authenticate, requireAdmin, putMarketingDepartment);
-// Configuração por empreendimento (bloqueadas + overrides de depto + status)
+// Configuração por EMPRESA Sienge (bloqueadas + overrides de depto + deptos da loja)
 router.get('/admin/enterprise-settings', authenticate, requireAdmin, getEnterpriseSettings);
 router.put('/admin/enterprise-settings/:companyId', authenticate, requireAdmin, putEnterpriseSettings);
-// Liberação por empreendimento (rascunho → liberado)
-router.put('/admin/release/:companyId', authenticate, requireAdmin, putEnterpriseRelease);
+// Configuração por EMPREENDIMENTO (status manual)
+router.put('/admin/stage-settings/:key', authenticate, requireAdmin, putStageSettings);
+// Liberação por EMPREENDIMENTO (rascunho → liberado)
+router.put('/admin/release/:key', authenticate, requireAdmin, putEnterpriseRelease);
 // Regenerar a "Leitura para decisão" (IA) do relatório
-router.post('/admin/report/:companyId/insights/regenerate', authenticate, requireAdmin, regenerateReportInsights);
+router.post('/admin/report/:key/insights/regenerate', authenticate, requireAdmin, regenerateReportInsights);
 
 export default router;
