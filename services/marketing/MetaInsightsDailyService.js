@@ -12,6 +12,13 @@
 //                  diária do escopo, totais e totais do período ANTERIOR
 //                  (mesma duração) pros deltas dos KPIs.
 //
+// FONTE DE LEAD (2026-08-06): o relatório conta LEAD DA NOSSA BASE
+// (inbound_leads — gente com nome/telefone/e-mail), não a contagem da Meta.
+// A Meta reporta também leads de pixel, que são só um inteiro agregado, sem
+// identificação e sem como cruzar com o CV. Por isso `office_leads` é o número
+// de leads da tela e o CAC é gasto ÷ leads da base (cac_source: 'office').
+// As métricas de mídia (gasto/impressões/cliques/CTR/CPM/CPC) seguem da Meta.
+//
 // Métricas derivadas (CTR/CPM/CPC/CAC) são SEMPRE recalculadas das somas —
 // nunca médias de médias. Reach não é somado entre dias (não-aditivo).
 
@@ -20,8 +27,9 @@ import { Op, fn, col, literal } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { getCreds, listAdAccounts } from './MetaCampaignService.js';
 import { extractLeadBreakdown } from './metaLeadExtract.js';
+import { LEAD_DAY_SQL, LEAD_DAY_TEXT_SQL } from './leadDaySql.js';
 
-const { MetaInsightDaily, MetaCampaign, MetaAdSet, MetaAd, sequelize } = db;
+const { MetaInsightDaily, MetaCampaign, MetaAdSet, MetaAd, InboundLead, sequelize } = db;
 
 const LEVELS = ['campaign', 'adset', 'ad'];
 
@@ -153,42 +161,141 @@ function buildWhere({ level, since, until, accountIds, campaignId, adsetId }) {
 }
 
 const SUM_ATTRS = [
-    [fn('SUM', col('spend')),            'spend'],
-    [fn('SUM', col('impressions')),      'impressions'],
-    [fn('SUM', col('clicks')),           'clicks'],
-    [fn('SUM', col('meta_leads')),       'meta_leads'],
-    [fn('SUM', col('meta_leads_form')),  'meta_leads_form'],
-    [fn('SUM', col('meta_leads_pixel')), 'meta_leads_pixel'],
+    [fn('SUM', col('spend')),       'spend'],
+    [fn('SUM', col('impressions')), 'impressions'],
+    [fn('SUM', col('clicks')),      'clicks'],
 ];
 
-/** Deriva CTR/CPM/CPC/CAC a partir das somas do período. */
-function derive(m) {
+/**
+ * Deriva CTR/CPM/CPC/CAC a partir das somas do período.
+ * `officeLeads` = leads da NOSSA base atribuídos ao escopo (ver officeLeadStats).
+ */
+function derive(m, officeLeads = 0, officeDelivered = 0) {
     const spend = Number(m.spend) || 0;
     const impressions = Number(m.impressions) || 0;
     const clicks = Number(m.clicks) || 0;
-    const leads = Number(m.meta_leads) || 0;
+    const leads = Number(officeLeads) || 0;
     return {
         spend: +spend.toFixed(2),
         impressions, clicks,
-        meta_leads_total: leads,
-        // Desdobramento form × pixel. Linhas sincronizadas antes do desdobramento
-        // têm 0/0 — o front só exibe o breakdown quando form + pixel > 0.
-        meta_leads_form:  Number(m.meta_leads_form)  || 0,
-        meta_leads_pixel: Number(m.meta_leads_pixel) || 0,
+        office_leads: leads,
+        office_leads_delivered: Number(officeDelivered) || 0,
         ctr: impressions > 0 ? +((clicks / impressions) * 100).toFixed(4) : null,
         cpm: impressions > 0 ? +((spend / impressions) * 1000).toFixed(2) : null,
         cpc: clicks > 0 ? +(spend / clicks).toFixed(2) : null,
+        // CAC sobre lead que existe na base — não sobre a contagem da Meta.
         cac: leads > 0 ? +(spend / leads).toFixed(2) : null,
-        cac_source: 'meta',
+        cac_source: 'office',
     };
 }
 
-/** Totais agregados de um período (sem group by). */
-async function periodTotals(where) {
-    const row = await MetaInsightDaily.findOne({
-        where, attributes: SUM_ATTRS, raw: true,
+// ── Leads da nossa base (inbound_leads) ─────────────────────────────────────
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Recorta o escopo de leads a partir do mesmo `where` dos insights.
+ * A nossa base não guarda adset_id no lead — no drill por conjunto o recorte
+ * é feito pelos anúncios do conjunto (meta_ad_id vem do webhook de Lead Ads).
+ */
+async function leadScope(where, adsetId) {
+    const camps = await MetaInsightDaily.findAll({
+        where, attributes: ['campaign_id'], group: ['campaign_id'], raw: true,
     });
-    return derive(row || {});
+    const campaignIds = camps.map(c => c.campaign_id).filter(Boolean).map(String);
+    if (!adsetId) return { campaignIds, adIds: null };
+
+    const ads = await MetaAd.findAll({
+        where: { adset_id: String(adsetId) }, attributes: ['id'], raw: true,
+    });
+    return { campaignIds, adIds: ads.map(a => String(a.id)) };
+}
+
+/**
+ * Contagem de leads da base por (campanha, anúncio, dia) no período/escopo.
+ * Spam fica de fora — é lead sem valor comercial e distorceria o CAC pra baixo.
+ *
+ * @returns {{ rows: Array, total: number, delivered: number }}
+ */
+async function officeLeadStats({ since, until, campaignIds, adIds }) {
+    const empty = { rows: [], total: 0, delivered: 0 };
+    if (!campaignIds?.length) return empty;
+    if (adIds && !adIds.length) return empty;
+
+    const where = {
+        meta_campaign_id: { [Op.in]: campaignIds },
+        is_spam: false,
+        status: { [Op.ne]: 'spam' },
+        [Op.and]: [literal(`${LEAD_DAY_SQL} BETWEEN '${since}' AND '${until}'`)],
+    };
+    if (adIds) where.meta_ad_id = { [Op.in]: adIds };
+
+    const raw = await InboundLead.findAll({
+        where,
+        attributes: [
+            'meta_campaign_id',
+            'meta_ad_id',
+            [literal(LEAD_DAY_TEXT_SQL), 'day'],
+            [fn('COUNT', col('id')), 'total'],
+            [fn('SUM', literal(`CASE WHEN status = 'delivered' THEN 1 ELSE 0 END`)), 'delivered'],
+        ],
+        group: ['meta_campaign_id', 'meta_ad_id', literal(LEAD_DAY_SQL)],
+        raw: true,
+    });
+
+    const rows = raw.map(r => ({
+        campaign_id: r.meta_campaign_id ? String(r.meta_campaign_id) : null,
+        ad_id:       r.meta_ad_id ? String(r.meta_ad_id) : null,
+        day:         String(r.day).slice(0, 10),
+        total:       Number(r.total) || 0,
+        delivered:   Number(r.delivered) || 0,
+    }));
+
+    return {
+        rows,
+        total:     rows.reduce((a, r) => a + r.total, 0),
+        delivered: rows.reduce((a, r) => a + r.delivered, 0),
+    };
+}
+
+/** Soma as linhas de lead numa chave (campaign_id | ad_id). */
+function sumLeadsBy(rows, keyField) {
+    const map = new Map();
+    for (const r of rows) {
+        const k = r[keyField];
+        if (!k) continue;
+        const cur = map.get(k) || { total: 0, delivered: 0 };
+        cur.total += r.total;
+        cur.delivered += r.delivered;
+        map.set(k, cur);
+    }
+    return map;
+}
+
+/** Idem, mas por conjunto — resolvido pelo anúncio (o lead não guarda adset). */
+async function groupLeadsByAdSet(rows) {
+    const adIds = [...new Set(rows.map(r => r.ad_id).filter(Boolean))];
+    if (!adIds.length) return new Map();
+
+    const ads = await MetaAd.findAll({
+        where: { id: { [Op.in]: adIds } }, attributes: ['id', 'adset_id'], raw: true,
+    });
+    const adsetOf = new Map(ads.map(a => [String(a.id), a.adset_id ? String(a.adset_id) : null]));
+
+    return sumLeadsBy(
+        rows.map(r => ({ ...r, adset_id: adsetOf.get(r.ad_id) || null })),
+        'adset_id',
+    );
+}
+
+/** Totais agregados de um período (sem group by), já com os leads da base. */
+async function periodTotals({ where, since, until, adsetId }) {
+    const [row, scope] = await Promise.all([
+        MetaInsightDaily.findOne({ where, attributes: SUM_ATTRS, raw: true }),
+        leadScope(where, adsetId),
+    ]);
+    const leads = await officeLeadStats({ since, until, ...scope });
+    return derive(row || {}, leads.total, leads.delivered);
 }
 
 /** Enxerta metadados do cache da entidade (nome, status, criativo...). */
@@ -270,9 +377,28 @@ async function campaignNameMap(campaignIds) {
  */
 export async function getReport({ since, until, level = 'campaign', accountIds = [], campaignId = null, adsetId = null } = {}) {
     if (!since || !until) throw new Error('Período (since/until) é obrigatório.');
+    if (!YMD_RE.test(since) || !YMD_RE.test(until)) {
+        throw new Error('Período deve estar no formato YYYY-MM-DD.');
+    }
     if (!LEVELS.includes(level)) throw new Error(`Nível inválido: ${level}`);
 
     const where = buildWhere({ level, since, until, accountIds, campaignId, adsetId });
+
+    // ── Leads da nossa base no mesmo escopo/período ─────────────────────────
+    const scope = await leadScope(where, adsetId);
+    const leadStats = await officeLeadStats({ since, until, ...scope });
+
+    // Chave de atribuição por nível. Lead sem meta_ad_id (formulário do site,
+    // ou webhook antigo sem o campo) entra nos totais mas não cai em linha de
+    // anúncio/conjunto — por isso a soma das linhas pode ficar abaixo do total.
+    let officeByEntity;
+    if (level === 'campaign') {
+        officeByEntity = sumLeadsBy(leadStats.rows, 'campaign_id');
+    } else if (level === 'ad') {
+        officeByEntity = sumLeadsBy(leadStats.rows, 'ad_id');
+    } else {
+        officeByEntity = await groupLeadsByAdSet(leadStats.rows);
+    }
 
     // ── Linhas por entidade ─────────────────────────────────────────────────
     const grouped = await MetaInsightDaily.findAll({
@@ -288,13 +414,16 @@ export async function getReport({ since, until, level = 'campaign', accountIds =
         raw: true,
     });
 
-    const rows = await attachMetadata(level, grouped.map(g => ({
-        entity_id: String(g.entity_id),
-        account_id: g.account_id,
-        campaign_id: g.campaign_id,
-        adset_id: g.adset_id,
-        metrics: derive(g),
-    })));
+    const rows = await attachMetadata(level, grouped.map(g => {
+        const l = officeByEntity.get(String(g.entity_id)) || { total: 0, delivered: 0 };
+        return {
+            entity_id: String(g.entity_id),
+            account_id: g.account_id,
+            campaign_id: g.campaign_id,
+            adset_id: g.adset_id,
+            metrics: derive(g, l.total, l.delivered),
+        };
+    }));
 
     // ── Série diária do escopo ──────────────────────────────────────────────
     const seriesRaw = await MetaInsightDaily.findAll({
@@ -304,25 +433,26 @@ export async function getReport({ since, until, level = 'campaign', accountIds =
         order: [[col('date'), 'ASC']],
         raw: true,
     });
-    const series = seriesRaw.map(s => ({
-        day: String(s.day).slice(0, 10),
-        spend: +(Number(s.spend) || 0).toFixed(2),
-        impressions: Number(s.impressions) || 0,
-        clicks: Number(s.clicks) || 0,
-        meta_leads: Number(s.meta_leads) || 0,
-        meta_leads_form: Number(s.meta_leads_form) || 0,
-        meta_leads_pixel: Number(s.meta_leads_pixel) || 0,
-    }));
+    const leadsByDay = sumLeadsBy(leadStats.rows, 'day');
+    const series = seriesRaw.map(s => {
+        const day = String(s.day).slice(0, 10);
+        const l = leadsByDay.get(day) || { total: 0, delivered: 0 };
+        return {
+            day,
+            spend: +(Number(s.spend) || 0).toFixed(2),
+            impressions: Number(s.impressions) || 0,
+            clicks: Number(s.clicks) || 0,
+            office_leads: l.total,
+            office_leads_delivered: l.delivered,
+        };
+    });
 
     // ── Totais do período + período anterior (mesma duração, pros deltas) ──
     const totals = derive(grouped.reduce((acc, g) => ({
         spend: acc.spend + (Number(g.spend) || 0),
         impressions: acc.impressions + (Number(g.impressions) || 0),
         clicks: acc.clicks + (Number(g.clicks) || 0),
-        meta_leads: acc.meta_leads + (Number(g.meta_leads) || 0),
-        meta_leads_form: acc.meta_leads_form + (Number(g.meta_leads_form) || 0),
-        meta_leads_pixel: acc.meta_leads_pixel + (Number(g.meta_leads_pixel) || 0),
-    }), { spend: 0, impressions: 0, clicks: 0, meta_leads: 0, meta_leads_form: 0, meta_leads_pixel: 0 }));
+    }), { spend: 0, impressions: 0, clicks: 0 }), leadStats.total, leadStats.delivered);
     totals.entities = grouped.length;
 
     const dSince = new Date(`${since}T00:00:00Z`);
@@ -333,9 +463,10 @@ export async function getReport({ since, until, level = 'campaign', accountIds =
     const prevSince = ymd(prevSinceD);
     const prevUntil = ymd(prevUntilD);
 
-    const totalsPrev = await periodTotals(
-        buildWhere({ level, since: prevSince, until: prevUntil, accountIds, campaignId, adsetId }),
-    );
+    const totalsPrev = await periodTotals({
+        where: buildWhere({ level, since: prevSince, until: prevUntil, accountIds, campaignId, adsetId }),
+        since: prevSince, until: prevUntil, adsetId,
+    });
 
     return {
         rows,

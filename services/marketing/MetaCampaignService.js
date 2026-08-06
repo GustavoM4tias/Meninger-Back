@@ -10,6 +10,7 @@ import db from '../../models/sequelize/index.js';
 import MarketingConfigService from './MarketingConfigService.js';
 import MetaCampaignsTokenService from '../meta/MetaCampaignsTokenService.js';
 import { extractLeadBreakdown } from './metaLeadExtract.js';
+import { LEAD_DAY_SQL, LEAD_DAY_TEXT_SQL } from './leadDaySql.js';
 
 const { MetaCampaign, InboundLead } = db;
 
@@ -239,12 +240,15 @@ async function attachLeadStats(rows) {
 
     const byId = new Map();
     for (const s of stats) {
+        const total = Number(s.total) || 0;
+        const spam  = Number(s.spam)  || 0;
         byId.set(String(s.meta_campaign_id), {
-            total:        Number(s.total)     || 0,
+            total,
+            valid:        Math.max(0, total - spam),
             last_30d:     Number(s.last_30d)  || 0,
             delivered:    Number(s.delivered) || 0,
             held:         Number(s.held)      || 0,
-            spam:         Number(s.spam)      || 0,
+            spam,
             last_lead_at: s.last_lead_at || null,
         });
     }
@@ -252,16 +256,16 @@ async function attachLeadStats(rows) {
     return rows.map(r => {
         const plain = r.get ? r.get({ plain: true }) : r;
         const lead_stats = byId.get(String(plain.id)) || {
-            total: 0, last_30d: 0, delivered: 0, held: 0, spam: 0, last_lead_at: null,
+            total: 0, valid: 0, last_30d: 0, delivered: 0, held: 0, spam: 0, last_lead_at: null,
         };
         const spend = Number(plain.spend) || 0;
-        const metaLeads = Number(plain.meta_leads_total) || 0;
 
-        // CAC base Meta: gasto ÷ leads contados pela Meta. As telas Meta passaram
-        // a ser "só Meta" — sem o comparativo com a contagem do Office.
-        const cac = metaLeads > 0 ? +(spend / metaLeads).toFixed(2) : null;
+        // CAC base própria (2026-08-06): gasto ÷ leads que existem na nossa base,
+        // sem spam. A contagem da Meta inclui lead de pixel — um inteiro agregado,
+        // sem identificação e sem como cruzar com o CV.
+        const cac = lead_stats.valid > 0 ? +(spend / lead_stats.valid).toFixed(2) : null;
 
-        return { ...plain, lead_stats, meta_leads_total: metaLeads, cac, cac_source: 'meta' };
+        return { ...plain, lead_stats, office_leads: lead_stats.valid, cac, cac_source: 'office' };
     });
 }
 
@@ -370,29 +374,28 @@ export async function listCampaignLeads(campaignId, { limit = 50, since = null, 
 
 /**
  * Breakdown diário com:
- *  - Gasto / impressões / cliques / leads-Meta vindos de insights diários da Meta
- *  - Contagem de leads no nosso DB
+ *  - Gasto / impressões / cliques vindos de insights diários da Meta
+ *  - Contagem de leads da NOSSA base (inbound_leads), que é o número de lead
+ *    exibido nas telas — a contagem da Meta inclui pixel, que é agregado e sem
+ *    identificação (ver MetaInsightsDailyService).
  *
  * Faz 1 chamada de insights na Meta + 1 query no DB. Resultado: array de
- * { day, spend, impressions, clicks, meta_leads, office_leads, delivered }.
+ * { day, spend, impressions, clicks, office_leads, delivered }.
  */
 export async function getDailyBreakdown(campaignId, { days = 30, since = null, until = null } = {}) {
     // Período explícito (since/until do relatório) tem prioridade; senão usa a
     // janela relativa de `days` (comportamento legado). Assim o gráfico do modal
     // acompanha o período selecionado em vez de mostrar sempre os últimos 30d.
-    let sinceStr, untilStr, sinceDate, untilDate;
-    if (since && until) {
+    const YMD = /^\d{4}-\d{2}-\d{2}$/;
+    let sinceStr, untilStr;
+    if (YMD.test(String(since)) && YMD.test(String(until))) {
         sinceStr = since;
         untilStr = until;
-        sinceDate = new Date(`${since}T00:00:00`);
-        untilDate = new Date(`${until}T23:59:59.999`);
     } else {
         const s = new Date();
         s.setDate(s.getDate() - days);
         sinceStr = s.toISOString().slice(0, 10);
         untilStr = new Date().toISOString().slice(0, 10);
-        sinceDate = s;
-        untilDate = new Date();
     }
 
     // ── Insights diários da Meta ────────────────────────────────────────────
@@ -412,17 +415,11 @@ export async function getDailyBreakdown(campaignId, { days = 30, since = null, u
 
         for (const row of data) {
             const day = row.date_start;
-            // Mesmo extrator do sync — antes este modal ignorava leads de pixel
-            // e divergia dos totais da tela.
-            const bd = extractLeadBreakdown(row.actions);
             byDay.set(day, {
                 day,
                 spend: Number(row.spend) || 0,
                 impressions: Number(row.impressions) || 0,
                 clicks: Number(row.clicks) || 0,
-                meta_leads: bd.total,
-                meta_leads_form: bd.form,
-                meta_leads_pixel: bd.pixel,
                 office_leads: 0,
                 delivered: 0,
             });
@@ -433,18 +430,21 @@ export async function getDailyBreakdown(campaignId, { days = 30, since = null, u
     }
 
     // ── Leads do nosso DB por dia ───────────────────────────────────────────
+    // Mesma régua de data do relatório (LEAD_DAY_SQL) e sem spam, pro gráfico do
+    // modal bater com os totais da tela.
     const officeRows = await InboundLead.findAll({
         where: {
             meta_campaign_id: String(campaignId),
-            created_at: { [Op.between]: [sinceDate, untilDate] },
+            is_spam: false,
+            status: { [Op.ne]: 'spam' },
+            [Op.and]: [literal(`${LEAD_DAY_SQL} BETWEEN '${sinceStr}' AND '${untilStr}'`)],
         },
         attributes: [
-            [fn('DATE', col('created_at')), 'day'],
+            [literal(LEAD_DAY_TEXT_SQL), 'day'],
             [fn('COUNT', col('id')), 'count'],
             [fn('SUM', literal(`CASE WHEN status='delivered' THEN 1 ELSE 0 END`)), 'delivered'],
         ],
-        group: [fn('DATE', col('created_at'))],
-        order: [[fn('DATE', col('created_at')), 'ASC']],
+        group: [literal(LEAD_DAY_SQL)],
         raw: true,
     });
 
@@ -452,7 +452,6 @@ export async function getDailyBreakdown(campaignId, { days = 30, since = null, u
         const day = String(r.day).slice(0, 10);
         const existing = byDay.get(day) || {
             day, spend: 0, impressions: 0, clicks: 0,
-            meta_leads: 0, meta_leads_form: 0, meta_leads_pixel: 0,
             office_leads: 0, delivered: 0,
         };
         existing.office_leads = Number(r.count) || 0;

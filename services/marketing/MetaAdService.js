@@ -4,12 +4,32 @@
 // + insights individuais. É o nível mais granular antes do criativo.
 
 import axios from 'axios';
-import { Op } from 'sequelize';
+import { Op, fn, col } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import MarketingConfigService from './MarketingConfigService.js';
 import MetaCampaignsTokenService from '../meta/MetaCampaignsTokenService.js';
 
-const { MetaAd, MetaAdSet } = db;
+const { MetaAd, MetaAdSet, InboundLead } = db;
+
+/**
+ * Leads da NOSSA base por anúncio (meta_ad_id), sem spam. É a contagem exibida
+ * nas telas — a da Meta inclui lead de pixel, que é um inteiro agregado, sem
+ * identificação e sem como cruzar com o CV.
+ */
+async function officeLeadsByAd(campaignId) {
+    const rows = await InboundLead.findAll({
+        where: {
+            meta_campaign_id: String(campaignId),
+            meta_ad_id: { [Op.ne]: null },
+            is_spam: false,
+            status: { [Op.ne]: 'spam' },
+        },
+        attributes: ['meta_ad_id', [fn('COUNT', col('id')), 'total']],
+        group: ['meta_ad_id'],
+        raw: true,
+    });
+    return new Map(rows.map(r => [String(r.meta_ad_id), Number(r.total) || 0]));
+}
 
 async function getCreds() {
     // Mesmo token de gestão de campanhas do MetaCampaignService (admin, vê todas
@@ -386,11 +406,18 @@ export async function listForCampaign(campaignId, { activeOnly = false } = {}) {
         for (const f of forms) formsById.set(String(f.id), f.get({ plain: true }));
     }
 
+    const leadsByAd = await officeLeadsByAd(campaignId);
+
     return rows.map(r => {
         const plain = r.get({ plain: true });
+        const office_leads = leadsByAd.get(String(plain.id)) || 0;
+        const spend = Number(plain.spend) || 0;
         return {
             ...plain,
             lead_form: plain.lead_form_id ? (formsById.get(String(plain.lead_form_id)) || null) : null,
+            office_leads,
+            cac: office_leads > 0 ? +(spend / office_leads).toFixed(2) : null,
+            cac_source: 'office',
         };
     });
 }
@@ -489,11 +516,27 @@ export async function listAdSetsForCampaign(campaignId) {
         adsCount.set(k, (adsCount.get(k) || 0) + 1);
     }
 
+    // Leads da nossa base sobem do anúncio pro conjunto — o lead não guarda
+    // adset_id, só meta_ad_id.
+    const leadsByAd = await officeLeadsByAd(campaignId);
+    const leadsByAdSet = new Map();
+    for (const ad of ads) {
+        const n = leadsByAd.get(String(ad.id)) || 0;
+        if (!n) continue;
+        const k = String(ad.adset_id);
+        leadsByAdSet.set(k, (leadsByAdSet.get(k) || 0) + n);
+    }
+
     return adsets.map(a => {
         const plain = a.get({ plain: true });
+        const office_leads = leadsByAdSet.get(String(plain.id)) || 0;
+        const spend = Number(plain.spend) || 0;
         return {
             ...plain,
             ads_count: adsCount.get(String(plain.id)) || 0,
+            office_leads,
+            cac: office_leads > 0 ? +(spend / office_leads).toFixed(2) : null,
+            cac_source: 'office',
         };
     });
 }
@@ -534,12 +577,30 @@ export async function listAll() {
         for (const f of forms) formsById.set(String(f.id), f.get({ plain: true }));
     }
 
+    // Leads da nossa base por anúncio (todas as campanhas de uma vez).
+    const leadRows = await InboundLead.findAll({
+        where: {
+            meta_ad_id: { [Op.ne]: null },
+            is_spam: false,
+            status: { [Op.ne]: 'spam' },
+        },
+        attributes: ['meta_ad_id', [fn('COUNT', col('id')), 'total']],
+        group: ['meta_ad_id'],
+        raw: true,
+    });
+    const leadsByAd = new Map(leadRows.map(r => [String(r.meta_ad_id), Number(r.total) || 0]));
+
     return ads.map(a => {
         const plain = a.get({ plain: true });
+        const office_leads = leadsByAd.get(String(plain.id)) || 0;
+        const spend = Number(plain.spend) || 0;
         return {
             ...plain,
             campaign:  plain.campaign_id  ? (campaignsById.get(String(plain.campaign_id))  || null) : null,
             lead_form: plain.lead_form_id ? (formsById.get(String(plain.lead_form_id))     || null) : null,
+            office_leads,
+            cac: office_leads > 0 ? +(spend / office_leads).toFixed(2) : null,
+            cac_source: 'office',
         };
     });
 }
