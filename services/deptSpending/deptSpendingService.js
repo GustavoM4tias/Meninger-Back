@@ -88,10 +88,8 @@ function resolveRange({ year, upToMonth, startMonth, endMonth }) {
 
 const num = (v) => Number(v || 0);
 
-// Regra "excedente da loja vira gasto de MKT": DESATIVADA por enquanto (pedido do
-// usuário em 2026-07-25). O mecanismo (applyLojaOverflow + campos lojaExcedente*)
-// fica pronto — religar aqui quando for a hora.
-const LOJA_OVERFLOW_TO_MKT = false;
+// Regra "excedente da loja vira gasto de MKT": ATIVA (o que a loja paga acima do
+// teto entra no consumo de marketing, separado em campos lojaExcedente*).
 
 export default class DeptSpendingService {
     async getActiveProjection() {
@@ -561,9 +559,7 @@ export default class DeptSpendingService {
             costCenterIds, endDate, resolver, companyId: company.companyId, prefetch,
         });
         const tetoLoja = num(h.custoLoja);
-        const { overflowByYm } = LOJA_OVERFLOW_TO_MKT
-            ? this.applyLojaOverflow(spend.loja, tetoLoja)
-            : { overflowByYm: new Map() };
+        const { overflowByYm } = this.applyLojaOverflow(spend.loja, tetoLoja);
 
         const pctFallback = num(h.marketingPct);
         let tetoMktAno = 0;
@@ -597,7 +593,7 @@ export default class DeptSpendingService {
         h.yearUnits = yearUnits;
         h.lojaExcedenteAno = excedAno;
         h.lojaPagoTotal = num(spend.lojaTotal);
-        h.lojaConsumida = LOJA_OVERFLOW_TO_MKT ? Math.min(num(spend.lojaTotal), tetoLoja) : num(spend.lojaTotal);
+        h.lojaConsumida = Math.min(num(spend.lojaTotal), tetoLoja);
         h.tetoLoja = tetoLoja;
         h.saldoPerUnit = num(h.availableInventory) > 0 ? saldo / num(h.availableInventory) : 0;
         h.recommendedCostPerUnit = h.saldoPerUnit;
@@ -899,9 +895,7 @@ export default class DeptSpendingService {
         // Mantido em campo separado (mktLojaExcedente) p/ exibição clara.
         const tetoLoja = num(h.custoLoja);
         const { cappedByYm: lojaCappedByYm, overflowByYm: lojaOverflowByYm, overflowTotal: lojaOverflowVida } =
-            LOJA_OVERFLOW_TO_MKT
-                ? this.applyLojaOverflow(spend.loja, tetoLoja)
-                : { cappedByYm: spend.loja, overflowByYm: new Map(), overflowTotal: 0 };
+            this.applyLojaOverflow(spend.loja, tetoLoja);
 
         // ----- Série mensal do exercício (realizado × projetado) -----
         const months = yearMonths.map((ym) => {
@@ -960,8 +954,9 @@ export default class DeptSpendingService {
         const mktProprioVida = num(spend.mktTotal);
         const lojaPagoVida = num(spend.lojaTotal);
         const mktConsumidoVida = mktProprioVida + lojaOverflowVida;
-        // Com a regra do excedente OFF, a loja mostra TUDO que pagou contra o teto.
-        const lojaConsumidaVida = LOJA_OVERFLOW_TO_MKT ? Math.min(lojaPagoVida, tetoLoja) : lojaPagoVida;
+        // Com a regra do excedente ATIVA, a loja consome no máximo o próprio teto:
+        // o que passou disso já foi transferido ao MKT (lojaOverflowVida).
+        const lojaConsumidaVida = Math.min(lojaPagoVida, tetoLoja);
         const buckets = {
             marketing: buildBucket('marketing', 'Marketing', tetoMktAno, mktRealizadoAno, {
                 tetoVidaUtil,
