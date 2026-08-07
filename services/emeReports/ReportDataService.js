@@ -230,13 +230,17 @@ export function extractRows(result) {
   return firstArray || [];
 }
 
+// Buckets em UTC, o mesmo fuso da sessão do Postgres — as tools rotulam mês/dia
+// com TO_CHAR/DATE no banco, e agrupar aqui pelo fuso local do processo jogava
+// os registros da virada do dia para o mês vizinho: o drill de janeiro trazia
+// 471 linhas para uma barra de 474.
 function bucketDate(value, granularity) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
-  if (granularity === 'month') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  if (granularity === 'month') return d.toISOString().slice(0, 7);
   if (granularity === 'week') {
     const monday = new Date(d);
-    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    monday.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
     return monday.toISOString().slice(0, 10);
   }
   return d.toISOString().slice(0, 10);
@@ -485,6 +489,42 @@ async function rawDatasetRows(dataset, args, user, reportId) {
   return { rows: extractRows(result), result };
 }
 
+// O `group_by` das tools é um nome LÓGICO ("situacao", "imobiliaria", "mes"),
+// mas a listagem devolve a coluna com outro nome ("situacao_nome",
+// "imobiliaria_nome", "data_cad"). Comparar o valor clicado com `row[group_by]`
+// achava campo nenhum e o drill abria uma lista VAZIA sem dizer por quê —
+// clicar em "Reprovado (114)" mostrava zero registro.
+const DRILL_ALIASES = {
+  situacao: ['situacao_nome', 'situacao'],
+  imobiliaria: ['imobiliaria_nome'],
+  corretor: ['corretor_nome'],
+  empresa_correspondente: ['cca_nome', 'empresa_correspondente_nome'],
+  correspondente: ['correspondente_nome'],
+  empreendimento: ['empreendimento_nome', 'empreendimento'],
+  lead_origem: ['lead_origem', 'origem'],
+  midia: ['midia_principal', 'lead_midia'],
+  etapa: ['etapa'],
+  bucket: ['bucket'],
+  status_repasse: ['status_repasse'],
+  tipovenda: ['tipovenda'],
+};
+
+// Campo real + granularidade de data para casar o rótulo clicado com as linhas.
+function resolveDrillField(rows, groupBy, granDeclarada) {
+  const amostra = rows[0] || {};
+  const tem = (k) => k && Object.prototype.hasOwnProperty.call(amostra, k);
+
+  if (groupBy === 'mes' || groupBy === 'dia') {
+    const campoData = ['data_cad', 'data_reserva', 'data_status_repasse', 'data_contrato', 'data_venda']
+      .find(tem) || Object.keys(amostra).find((k) => /^data(_|$)/.test(k));
+    if (!campoData) return null;
+    return { field: campoData, gran: groupBy === 'mes' ? 'month' : 'day' };
+  }
+
+  const candidato = [groupBy, ...(DRILL_ALIASES[groupBy] || []), `${groupBy}_nome`].find(tem);
+  return candidato ? { field: candidato, gran: granDeclarada || null } : null;
+}
+
 export async function runReportDrill({ report, user, rawFilterValues, blockId, label }) {
   const spec = report.spec || {};
   const filters = Array.isArray(spec.filters) ? spec.filters : [];
@@ -495,8 +535,15 @@ export async function runReportDrill({ report, user, rawFilterValues, blockId, l
   const dataset = datasets.find((d) => d.id === block.bind.dataset);
   if (!dataset) return { ok: false, error: 'Consulta do bloco não encontrada.' };
 
-  const groupBy = block.bind.aggregate?.group_by || dataset.base_args?.group_by;
-  if (!groupBy) return { ok: false, error: 'Este bloco não permite abrir a lista de registros.' };
+  const groupBy = block.bind.aggregate?.group_by || dataset.base_args?.group_by || null;
+  // Sem `label` o leitor clicou num bloco que não tem categoria (KPI, número
+  // grande, meta): a resposta é o universo inteiro da consulta que gerou aquele
+  // número, e não faz sentido exigir group_by.
+  const target = cleanStr(label);
+  const semCategoria = !target;
+  if (!semCategoria && !groupBy) {
+    return { ok: false, error: 'Este bloco não permite abrir a lista de registros.' };
+  }
 
   const values = sanitizeFilterValues(filters, rawFilterValues);
   const args = buildDatasetArgs(dataset, filters, values);
@@ -504,21 +551,32 @@ export async function runReportDrill({ report, user, rawFilterValues, blockId, l
   if (error) return { ok: false, error };
   if (!rows?.length) return { ok: false, error: 'Nenhum registro disponível para o seu acesso.' };
 
-  const gran = block.bind.aggregate?.date_granularity || null;
-  const target = cleanStr(label);
-  const matched = rows.filter((r) => {
-    let v = r?.[groupBy];
-    if (v === null || v === undefined || v === '') v = '(não informado)';
-    else if (gran) v = bucketDate(v, gran);
-    else v = String(v).trim();
-    return v === target;
-  });
+  let matched = rows;
+  if (!semCategoria) {
+    const resolvido = resolveDrillField(rows, groupBy, block.bind.aggregate?.date_granularity || null);
+    if (!resolvido) {
+      return {
+        ok: false,
+        error: `Não foi possível casar "${target}" com os registros desta consulta (o agrupamento "${groupBy}" não aparece na listagem). Use a exportação para Excel para ver a lista completa.`,
+      };
+    }
+    matched = rows.filter((r) => {
+      let v = r?.[resolvido.field];
+      if (v === null || v === undefined || v === '') v = '(não informado)';
+      else if (resolvido.gran) v = bucketDate(v, resolvido.gran);
+      else v = String(v).trim();
+      return v === target;
+    });
+  }
 
   const columns = scalarColumns(matched.length ? matched : rows);
   return {
     ok: true,
-    label: target,
-    groupBy,
+    label: semCategoria ? dataset.label : target,
+    // groupBy só volta quando houve categoria: é ele que habilita o "filtrar
+    // por este item" na tela, que não existe para o universo inteiro.
+    groupBy: semCategoria ? null : groupBy,
+    scope: semCategoria ? 'dataset' : 'category',
     datasetId: dataset.id,
     datasetLabel: dataset.label,
     total: matched.length,
