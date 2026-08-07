@@ -39,7 +39,9 @@ export const ASSUMPTIONS = {
     // `since` é quando o corte passou a valer.
     recurringSavings: [
         { key: 'rd_station', label: 'RD Station', annual: 33000, since: '2026-05-01' },
-        { key: 'external_db', label: 'Banco de dados de terceiro', annual: 3600, since: '2026-07-30' },
+        // 07/05/2026: quando o banco próprio do Sienge entrou no ar e a
+        // dependência do Postgres de terceiro deixou de ser paga.
+        { key: 'external_db', label: 'Banco de dados de terceiro', annual: 3600, since: '2026-05-07' },
     ],
 
     // Potencial ainda não capturado (roadmap). Fixo: é projeção, não medição.
@@ -75,12 +77,18 @@ async function collect() {
         SELECT COUNT(*)::int                                                   AS emitidos,
                COALESCE(SUM(valor), 0)::float                                  AS valor_emitido,
                COUNT(*) FILTER (WHERE payment_status = 'paid')::int            AS pagos,
-               COALESCE(SUM(valor) FILTER (WHERE payment_status = 'paid'), 0)::float AS valor_pago
+               COALESCE(SUM(valor) FILTER (WHERE payment_status = 'paid'), 0)::float AS valor_pago,
+               COUNT(*) FILTER (WHERE payment_status = 'cancelled')::int       AS baixados,
+               COALESCE(SUM(valor) FILTER (WHERE payment_status = 'cancelled'), 0)::float AS valor_baixado,
+               COUNT(*) FILTER (WHERE payment_status NOT IN ('paid','cancelled')
+                                   OR payment_status IS NULL)::int             AS em_aberto,
+               COALESCE(SUM(valor) FILTER (WHERE payment_status NOT IN ('paid','cancelled')
+                                              OR payment_status IS NULL), 0)::float AS valor_em_aberto
         FROM boleto_history
         WHERE id IN (
             SELECT MAX(id) FROM boleto_history WHERE status = 'success' GROUP BY idreserva
         )
-    `, { emitidos: 0, valor_emitido: 0, pagos: 0, valor_pago: 0 });
+    `, { emitidos: 0, valor_emitido: 0, pagos: 0, valor_pago: 0, baixados: 0, valor_baixado: 0, em_aberto: 0, valor_em_aberto: 0 });
 
     // Emissões barradas pela validação do titular. Não existe flag dedicada: o
     // bloqueio vira status='error' com prefixo fixo na mensagem (ver
@@ -97,16 +105,19 @@ async function collect() {
     // igual ao agrupamento padrão da tela de Cancelamento.
     const cancel = await safeQuery('cancelamentos', `
         SELECT COUNT(*)::int                                          AS casos,
-               COUNT(*) FILTER (WHERE status = 'success')::int        AS sucesso
+               COUNT(*) FILTER (WHERE status = 'success')::int        AS sucesso,
+               COUNT(*) FILTER (WHERE status IN ('blocked','error'))::int AS conferencia_humana
         FROM reserva_cancel_history
         WHERE id IN (SELECT MAX(id) FROM reserva_cancel_history GROUP BY idreserva)
-    `, { casos: 0, sucesso: 0 });
+    `, { casos: 0, sucesso: 0, conferencia_humana: 0 });
 
+    // Cada métrica com seu próprio filtro: unidade liberada e contrato excluído
+    // são ações independentes e um WHERE comum inflaria a contagem de unidades.
     const unidades = await safeQuery('unidades liberadas', `
-        SELECT COUNT(DISTINCT idunidade_cv)::int AS unidades
+        SELECT COUNT(DISTINCT idunidade_cv) FILTER (WHERE cv_unidade_disponibilizada = true)::int AS unidades,
+               COUNT(*) FILTER (WHERE sienge_contrato_excluido = true)::int                       AS contratos_excluidos
         FROM reserva_cancel_history
-        WHERE cv_unidade_disponibilizada = true
-    `, { unidades: 0 });
+    `, { unidades: 0, contratos_excluidos: 0 });
 
     // Validador por IA. Falha técnica do provider não grava linha, então o total
     // é sempre aprovados + reprovados.
@@ -126,7 +137,13 @@ async function collect() {
         WHERE source = 'public' AND status = 'completed'
     `, { por_link: 0 });
 
-    return { boleto, titular, cancel, unidades, contratos, imobiliarias };
+    // Base total de imobiliárias no CV: dá a dimensão de onde os cadastros por
+    // link entram. Espelho do CV, não conta como produção do Office.
+    const imobiliariasBase = await safeQuery('base de imobiliárias', `
+        SELECT COUNT(*)::int AS base FROM cv_imobiliarias
+    `, { base: 0 });
+
+    return { boleto, titular, cancel, unidades, contratos, imobiliarias, imobiliariasBase };
 }
 
 export async function getAboutMetrics({ force = false } = {}) {
@@ -148,14 +165,27 @@ export async function getAboutMetrics({ force = false } = {}) {
         contratosReprovados: n(raw.contratos, 'reprovados'),
         boletosEmitidos: n(raw.boleto, 'emitidos'),
         boletosPagos: n(raw.boleto, 'pagos'),
+        boletosEmAberto: n(raw.boleto, 'em_aberto'),
+        boletosBaixados: n(raw.boleto, 'baixados'),
         valorEmitido: n(raw.boleto, 'valor_emitido'),
         valorPago: n(raw.boleto, 'valor_pago'),
+        valorEmAberto: n(raw.boleto, 'valor_em_aberto'),
+        valorBaixado: n(raw.boleto, 'valor_baixado'),
         titularBarrados: n(raw.titular, 'barrados'),
         cancelamentosCasos: n(raw.cancel, 'casos'),
         cancelamentosSucesso: n(raw.cancel, 'sucesso'),
+        cancelamentosConferencia: n(raw.cancel, 'conferencia_humana'),
         unidadesLiberadas: n(raw.unidades, 'unidades'),
+        contratosExcluidosSienge: n(raw.unidades, 'contratos_excluidos'),
         imobiliariasPorLink: n(raw.imobiliarias, 'por_link'),
+        imobiliariasBase: n(raw.imobiliariasBase, 'base'),
     };
+
+    // Percentuais que o relatório cita em texto.
+    const pct = (part, whole) => (whole > 0 ? Number(((part / whole) * 100).toFixed(1)) : 0);
+    counts.taxaSucessoCancelamento = pct(counts.cancelamentosSucesso, counts.cancelamentosCasos);
+    counts.taxaEvasaoBoleto = pct(counts.boletosBaixados, counts.boletosEmitidos);
+    counts.taxaPagamentoBoleto = pct(counts.boletosPagos, counts.boletosEmitidos);
 
     // ── 1. Trabalho devolvido ────────────────────────────────────────────────
     const breakdown = [
