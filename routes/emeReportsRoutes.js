@@ -324,6 +324,8 @@ router.post('/:id/data/export', rateLimitData, async (req, res) => {
       report: { id: loaded.report.id, spec: loaded.spec },
       user: req.user,
       rawFilterValues: req.body?.filters,
+      // Quais consultas o leitor marcou no modal. Ausente/vazio = todas.
+      datasetIds: Array.isArray(req.body?.datasets) ? req.body.datasets.slice(0, 20) : null,
     });
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.json(result);
