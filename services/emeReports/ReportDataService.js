@@ -590,20 +590,50 @@ export async function runReportDrill({ report, user, rawFilterValues, blockId, l
 // Mesmo caminho de segurança do /data: tools rodam com o usuário leitor e os
 // filtros escolhidos por ele. O link público NUNCA chega aqui.
 
-export async function runReportExport({ report, user, rawFilterValues }) {
+// Identidade da FONTE de uma consulta na exportação: tool + argumentos que
+// sobram depois de tirar o que só muda a forma do retorno (o mesmo descarte que
+// rawDatasetRows faz). Exportada para o front montar a lista de escolha com as
+// mesmas fontes que o servidor vai devolver.
+export function chaveDeFonte(tool, args = {}) {
+  const semForma = { ...args };
+  for (const k of ['group_by', 'metric', 'format', 'limit']) delete semForma[k];
+  const ordenado = Object.keys(semForma).sort().map((k) => `${k}=${semForma[k]}`);
+  return `${tool}|${ordenado.join('&')}`;
+}
+
+export async function runReportExport({ report, user, rawFilterValues, datasetIds }) {
   const spec = report.spec || {};
   const filters = Array.isArray(spec.filters) ? spec.filters : [];
-  const datasets = Array.isArray(spec.datasets) ? spec.datasets : [];
+  let datasets = Array.isArray(spec.datasets) ? spec.datasets : [];
   if (!datasets.length) {
     return { ok: false, error: 'Este relatório não tem consultas interativas.' };
+  }
+
+  // Seleção do leitor (modal de exportação). Ids desconhecidos são ignorados —
+  // a lista do spec continua sendo o universo, o pedido só recorta.
+  if (Array.isArray(datasetIds) && datasetIds.length) {
+    const escolhidos = new Set(datasetIds.map((id) => cleanStr(id, 40).toLowerCase()));
+    const filtrados = datasets.filter((d) => escolhidos.has(d.id));
+    if (!filtrados.length) {
+      return { ok: false, error: 'Nenhuma das consultas escolhidas existe neste relatório.' };
+    }
+    datasets = filtrados;
   }
 
   const values = sanitizeFilterValues(filters, rawFilterValues);
   const sheets = [];
   const datasetErrors = [];
+  // A exportação reconsulta em modo LISTA (sem group_by/metric/format), então
+  // dois datasets da mesma tool com o mesmo recorte devolvem exatamente as
+  // mesmas linhas: um painel de funil com "pastas-kpis" e "pastas-situacao"
+  // gerava duas abas idênticas. Uma aba por FONTE de dados.
+  const jaExportado = new Set();
 
   for (const dataset of datasets) {
     const args = buildDatasetArgs(dataset, filters, values);
+    const chaveFonte = chaveDeFonte(dataset.tool, args);
+    if (jaExportado.has(chaveFonte)) continue;
+    jaExportado.add(chaveFonte);
     try {
       const { rows, result, error } = await rawDatasetRows(dataset, args, user, report.id);
       if (error) {
