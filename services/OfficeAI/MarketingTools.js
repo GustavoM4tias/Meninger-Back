@@ -439,15 +439,22 @@ async function contarPainel(incluirPainel, wherePainel, replacements) {
 }
 
 async function executeLeadsGrouped(groupBy, where, replacements, context, painelExcluidos = 0) {
+  // A consulta abre um LEFT JOIN LATERAL sobre os empreendimentos do lead, ou
+  // seja: um lead interessado em 2 empreendimentos vira 2 linhas. Só o
+  // agrupamento por empreendimento contava DISTINCT; todos os outros usavam
+  // COUNT(*) e inflavam o gráfico (a Moradas aparecia com 476 leads em janeiro
+  // quando eram 474, e o total do proprio retorno dizia 865). A unidade aqui é
+  // LEAD, então a contagem é sempre distinta.
+  const DISTINTO = `COUNT(DISTINCT l.idlead)`;
   const groupMap = {
-    situacao:            { select: `l.situacao_nome AS label`,                              group: `l.situacao_nome`,            count: `COUNT(*)` },
-    midia:               { select: `COALESCE(l.midia_principal, 'Não informado') AS label`, group: `l.midia_principal`,          count: `COUNT(*)` },
-    empreendimento:      { select: `COALESCE(e->>'nome', 'Não informado') AS label`,        group: `e->>'nome'`,                 count: `COUNT(DISTINCT l.idlead)` },
-    corretor:            { select: `COALESCE(l.corretor->>'nome', 'Sem corretor') AS label`, group: `l.corretor->>'nome'`,       count: `COUNT(*)` },
-    imobiliaria:         { select: `COALESCE(l.imobiliaria->>'nome', 'Sem imobiliária') AS label`, group: `l.imobiliaria->>'nome'`, count: `COUNT(*)` },
-    motivo_cancelamento: { select: `COALESCE(l.motivo_cancelamento, 'Não informado') AS label`, group: `l.motivo_cancelamento`, count: `COUNT(*)` },
-    dia:                 { select: `DATE(l.data_cad)::text AS label`,                       group: `DATE(l.data_cad)`,           count: `COUNT(*)` },
-    mes:                 { select: `TO_CHAR(l.data_cad, 'YYYY-MM') AS label`,               group: `TO_CHAR(l.data_cad, 'YYYY-MM')`, count: `COUNT(*)` },
+    situacao:            { select: `l.situacao_nome AS label`,                              group: `l.situacao_nome`,            count: DISTINTO },
+    midia:               { select: `COALESCE(l.midia_principal, 'Não informado') AS label`, group: `l.midia_principal`,          count: DISTINTO },
+    empreendimento:      { select: `COALESCE(e->>'nome', 'Não informado') AS label`,        group: `e->>'nome'`,                 count: DISTINTO },
+    corretor:            { select: `COALESCE(l.corretor->>'nome', 'Sem corretor') AS label`, group: `l.corretor->>'nome'`,       count: DISTINTO },
+    imobiliaria:         { select: `COALESCE(l.imobiliaria->>'nome', 'Sem imobiliária') AS label`, group: `l.imobiliaria->>'nome'`, count: DISTINTO },
+    motivo_cancelamento: { select: `COALESCE(l.motivo_cancelamento, 'Não informado') AS label`, group: `l.motivo_cancelamento`, count: DISTINTO },
+    dia:                 { select: `DATE(l.data_cad)::text AS label`,                       group: `DATE(l.data_cad)`,           count: DISTINTO },
+    mes:                 { select: `TO_CHAR(l.data_cad, 'YYYY-MM') AS label`,               group: `TO_CHAR(l.data_cad, 'YYYY-MM')`, count: DISTINTO },
   };
 
   const { select, group, count } = groupMap[groupBy] || groupMap.situacao;

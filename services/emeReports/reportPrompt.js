@@ -100,6 +100,10 @@ Bind por tipo de bloco:
 - timeline → bind.map { date, title, description } com campos das linhas.
 
 REGRAS DO INTERATIVO:
+- Bloco de NÚMERO (stat-row, big-number) num relatório com datasets SEMPRE leva
+  bind. Sem bind ele vira número congelado: não muda quando o leitor filtra e
+  não abre os registros ao clique, enquanto os gráficos ao lado mudam — a tela
+  passa a mostrar dois períodos ao mesmo tempo.
 - TODO bloco com bind TAMBÉM precisa das props preenchidas com os números reais
   desta conversa: elas são o retrato usado no primeiro render, no export e no
   link público (visitante de link público NÃO filtra nada).
