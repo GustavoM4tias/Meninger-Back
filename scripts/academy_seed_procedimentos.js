@@ -15,6 +15,7 @@
  *
  * Como rodar (a partir de Meninger-Back/):
  *   node scripts/academy_seed_procedimentos.js
+ *   node scripts/academy_seed_procedimentos.js --only=slug-a,slug-b   (só esses)
  *
  * Atenção: usa a mesma conexão de banco do app (config/config.cjs + .env).
  *
@@ -2403,65 +2404,204 @@ O pagamento de **despesas de viagem** é feito **somente** mediante o envio da *
 *Passo a passo transcrito do vídeo de treinamento. O fluxo de reserva direta vale apenas para empreendimentos configurados para isso - confirme com o setor Comercial.*`,
     },
 
-    // ── Financeiro (vídeo-tutorial do CV CRM) ──
+    // ── Financeiro - Boleto de Ato (2 artigos: regras por texto + treinamento em vídeo) ──
     {
-        code: 'CV-BOLETO-ATO',
-        slug: 'emissao-boleto-de-ato-cv-crm',
-        title: 'Emissão Automática de Boleto de Ato (CV CRM)',
-        categorySlug: 'procedimentos', // movido: é procedimento (sai do Construtor de Vendas)
-        subcategorySlug: null,
+        code: 'ATO01',
+        slug: 'boleto-de-ato',
+        title: 'Boleto de Ato - Regras, Prazos e Responsabilidades',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'financeiro',
         authorUserId: 1,
-        status: 'DRAFT',
+        status: 'PUBLISHED',
+        forceStatus: 'PUBLISHED', // divulgação combinada: o artigo precisa estar no ar
         audiences: ['INTERNAL'],
-        aliases: ['Boleto de Ato', 'Emissão de Boleto de Ato', 'Ato', 'Boleto Ato'],
+        aliases: ['Boleto de Ato', 'Boleto Ato', 'Ato', 'Regras do Ato', 'Valor do Ato', 'ATO01'],
+        body: `# Boleto de Ato - Regras, Prazos e Responsabilidades
+
+> **Procedimento Operacional - Comercial** · Uso interno
+> O boleto de ato é **emitido automaticamente** pelo CV CRM depois que o cliente assina o contrato. Este artigo reúne **as regras que você precisa cumprir** ao montar a condição de pagamento.
+> Prefere assistir? Veja o [Boleto de Ato - Treinamento em Vídeo](/academy/kb/procedimentos/emissao-boleto-de-ato-cv-crm).
+
+## ⚡ Resumo em 8 linhas
+
+| Item | Regra |
+| --- | --- |
+| **Valor padrão do ato** | **R$ 1.200,00** |
+| **Pode ser diferente?** | Somente por **cidade e empreendimento**, e apenas com **ficha comercial aprovada pela direção** |
+| **Série no CV** | **Recurso próprio à vista** - sempre **1 (uma) única parcela** |
+| **Vencimento do ato** | Até **5 dias** após a **escolha da unidade**. Ideal: **no mesmo dia** ou **D+1** |
+| **1ª parcela mensal** | Até **30 dias** após o ato |
+| **Emissão** | **Automática**, quando a reserva chega em **Envio Sienge** (após a assinatura) |
+| **Como o cliente recebe** | **WhatsApp** + **e-mail** + **Documentos da reserva** (tipo \`BOLETO ATO\`) |
+| **Quem acompanha** | **O gestor do empreendimento** |
+
+## 1. Valor do ato
+
+- O valor padrão do ato é **R$ 1.200,00**.
+- Esse valor **só pode variar por cidade e por empreendimento** - e **somente** quando existir **ficha comercial aprovada pela direção** com a condição diferente.
+- **Sem ficha comercial aprovada, use R$ 1.200,00.** Não combine valor por exceção verbal, por negociação de corretor ou "porque no outro empreendimento é assim".
+- O ato é lançado na série **"Recurso próprio à vista"** e é **sempre uma única parcela**.
+
+> 💡 **Cliente sem ato?** Então **não lance** a série "Recurso próprio à vista" na reserva - sem essa série o sistema simplesmente **não emite** boleto (nenhum erro é gerado).
+
+## 2. Prazos (a parte que mais gera divergência)
+
+**Vencimento do ato: até 5 dias após a escolha da unidade.**
+
+- A contagem começa na **escolha da unidade** (reserva), **não** na data da assinatura.
+- **Dê preferência ao mesmo dia ou D+1.** Quanto mais longe você joga o vencimento, maior o risco de o boleto ser emitido **já vencido** (a assinatura do cliente pode demorar) - e aí a emissão falha.
+- Vencimento **no passado** ou **fora da janela permitida** = **não emite** e a reserva vai para **Ato Divergente**.
+
+**1ª parcela mensal: até 30 dias após o ato.**
+
+- A primeira parcela do **recurso próprio parcelado** deve vencer em **no máximo 30 dias** após a data do ato.
+- Isso mantém a régua de cobrança do cliente contínua (ato → 1ª mensal → demais mensais).
+
+| Momento | Prazo máximo | Recomendado |
+| --- | --- | --- |
+| Escolha da unidade → **vencimento do ato** | **5 dias** | mesmo dia ou **D+1** |
+| Ato → **1ª parcela mensal** | **30 dias** | 30 dias |
+
+## 3. Como o boleto chega ao cliente
+
+Assim que a reserva entra em **Envio Sienge** com o contrato assinado, o sistema emite o boleto e o entrega em **3 lugares**:
+
+1. **WhatsApp do cliente** - notificação com o boleto em anexo (PDF).
+2. **E-mail do cliente** - mensagem do sistema com o PDF e o link para download.
+3. **Reserva no CV CRM** - menu **Documentos**, com o tipo **\`BOLETO ATO\`**. É de lá que você reenvia ou reimprime o boleto para o cliente a qualquer momento.
+
+> ⚠️ **O WhatsApp é um canal só de aviso.** Se o cliente responder aquela mensagem, **ninguém vai atender**. O contato com o cliente sobre o ato é **do gestor**: confirme o recebimento, oriente o pagamento e cobre o comprovante.
+
+## 4. Como ver o status do processo
+
+Você tem **dois lugares** para olhar, sempre dentro da reserva no CV CRM:
+
+- **Etapa da reserva** (Informações) - mostra em que ponto o ato está.
+- **Menu Mensagens** - traz a **descrição detalhada** da situação e, quando houver falha, **o motivo do erro**. É sempre aqui que você descobre o que aconteceu.
+
+### Etapas do ato
+
+| Etapa | O que significa | O que fazer |
+| --- | --- | --- |
+| **Ato Emitido** | Boleto gerado, anexado na reserva e enviado ao cliente. | Acompanhar o pagamento. |
+| **Ato Divergente** | A emissão **não** foi concluída. | Ler o **Mensagens**, corrigir a condição/os dados e reprocessar. |
+| **Ato Pago** | Pagamento identificado pelo sistema. | Nada - segue o fluxo da venda. |
+| **Ato Vencido** | Passou do vencimento sem pagamento. | Cobrar o cliente e tratar a nova condição. |
+
+As etapas de **Ato Pago** e **Ato Vencido** avançam **automaticamente** (o sistema confere os pagamentos diariamente). Você só volta a reserva para **Envio Sienge** quando precisar de uma **nova tentativa de emissão**.
+
+## 5. Ato Divergente: causas mais comuns
+
+Leia sempre o **Mensagens** da reserva - o motivo está descrito lá. As causas frequentes são:
+
+- **Vencimento fora da regra** - vencido ou além da janela permitida.
+- **Mais de uma parcela** na série de ato (o ato é sempre **1 parcela**).
+- **Valor divergente** do padrão sem ficha comercial aprovada.
+- **Dados do titular incompletos ou inválidos** - nome, **CPF/CNPJ**, endereço, bairro, **CEP**, cidade ou UF. O boleto não sai sem cadastro correto.
+- **Contrato ainda não refletido no Sienge** - o Envio Sienge leva alguns minutos para atualizar.
+
+**Como reprocessar:** corrija o que o Mensagens apontou (condição financeira e/ou cadastro do cliente) e **volte a reserva para Envio Sienge** para uma nova análise. Se depois disso o problema persistir, **acione a equipe interna** para ajuste manual - não deixe a reserva parada.
+
+## 6. Responsabilidades do gestor
+
+**O acompanhamento do processo é do gestor do empreendimento.** Isso inclui:
+
+- ✅ Conferir **valor, série e vencimentos** antes de gerar o contrato para assinatura.
+- ✅ Confirmar que o cliente **recebeu** o boleto (WhatsApp/e-mail) e que os **dados de contato estão corretos**.
+- ✅ Acompanhar o **pagamento** do ato e cobrar o cliente quando necessário.
+- ✅ Monitorar **falhas de emissão** (Ato Divergente), corrigir e reprocessar.
+- ✅ Corrigir **informações incorretas** de cadastro (CPF, endereço, CEP, telefone, e-mail).
+- ✅ Tratar **qualquer outra divergência** do processo, acionando a equipe interna quando não for possível resolver na reserva.
+
+> 🚩 Boleto não emitido, emitido errado ou não pago **não é problema do sistema**: é uma pendência da venda, e a venda tem dono.
+
+## Checklist antes de mandar o contrato para assinatura
+
+- [ ] Série **Recurso próprio à vista** com **1 parcela**;
+- [ ] Valor = **R$ 1.200,00** (ou o valor da **ficha comercial aprovada** daquela cidade/empreendimento);
+- [ ] Vencimento do ato **dentro de 5 dias** da escolha da unidade (ideal: hoje ou amanhã);
+- [ ] **1ª parcela mensal** em até **30 dias** após o ato;
+- [ ] Cadastro do cliente completo: **CPF, endereço, bairro, CEP, cidade, UF, e-mail e WhatsApp**.
+
+## Veja também
+
+- [Boleto de Ato - Treinamento em Vídeo](/academy/kb/procedimentos/emissao-boleto-de-ato-cv-crm) - o passo a passo na tela.
+
+---
+
+*Uso interno. As condições específicas de cada cidade/empreendimento estão na ficha comercial aprovada pela direção. Dúvidas sobre as regras de emissão: Departamento Comercial.*`,
+    },
+    {
+        code: 'ATO02',
+        slug: 'emissao-boleto-de-ato-cv-crm',
+        title: 'Boleto de Ato - Treinamento em Vídeo (CV CRM)',
+        categorySlug: 'procedimentos',
+        subcategorySlug: 'financeiro',
+        authorUserId: 1,
+        status: 'PUBLISHED',
+        forceStatus: 'PUBLISHED', // divulgação combinada: o artigo precisa estar no ar
+        aliases: ['Treinamento Boleto de Ato', 'Vídeo Boleto de Ato', 'Emissão de Boleto de Ato', 'Emissão Automática de Boleto de Ato'],
+        audiences: ['INTERNAL'],
         payload: { embeds: [{ type: 'VIDEO', ref: '_66V0eHf7Y8', url: 'https://youtu.be/_66V0eHf7Y8', durationSec: 425, title: 'Nova Funcionalidade: Emissão Automática de Boleto de Ato no CRM' }] },
-        body: `# Emissão Automática de Boleto de Ato (CV CRM)
+        body: `# Boleto de Ato - Treinamento em Vídeo (CV CRM)
 
-> **Treinamento - Construtor de Vendas (CV CRM)** · Vídeo + passo a passo
-> Nova funcionalidade: após a assinatura dos contratos de reserva, o **boleto de ato** é **emitido automaticamente** conforme as regras do financeiro do CV.
+> **Treinamento Menin** · Vídeo de ~7 minutos
+> Passo a passo na tela da **emissão automática do boleto de ato** (integração CV CRM × Sienge): o que validar na análise comercial, como o boleto é emitido após a assinatura, o que o cliente recebe e como auditar.
+> As regras de valor e de prazo estão em [Boleto de Ato - Regras, Prazos e Responsabilidades](/academy/kb/procedimentos/boleto-de-ato).
 
-## 🎥 Vídeo do passo a passo
+## 🎥 Assista ao passo a passo
 
 @[VIDEO:_66V0eHf7Y8]
 
 > Não vê o player acima? [Assista no YouTube](https://youtu.be/_66V0eHf7Y8).
 
-## Como funciona
+## O que o vídeo mostra
 
-1. Na reserva, na etapa **Análise comercial**, a gestão administrativa/de produto faz a **conferência e validação** dos dados (menu **Financeiro**).
-2. No **Financeiro**, preencha a tabela. As séries padrão do **Minha Casa Minha Vida** são: recurso próprio à vista, recurso próprio parcelado, financiamento e subsídio federal (alguns casos têm desconto e/ou subsídio estadual).
-3. O **boleto de ato** usa a parcela **"recurso próprio à vista"**. ⚠️ **O ato é sempre uma única parcela** - defina o valor conforme o empreendimento.
-4. **Gere os contratos** (reserva, uso de imagem etc.) para a assinatura do cliente.
-5. Após o envio do contrato, o sistema passa para **Em assinatura**. Quando o cliente assina, passa para **Envio Sienge**.
-6. No **Envio Sienge**, com o contrato assinado, o sistema **identifica a reserva MCMV com a série ATO e emite o boleto automaticamente**.
-   - Se o cliente **não tiver ato** (apenas recurso), **não adicione** a série "recurso próprio à vista" - assim o sistema não emite o boleto.
+1. ✅ As **regras financeiras** e a validação na **análise comercial**;
+2. ✅ O **gatilho da emissão automática** depois da assinatura do contrato;
+3. ✅ A **visão do cliente** recebendo o boleto (e-mail e WhatsApp);
+4. ✅ Como **auditar** a emissão e lidar com o status **Ato Divergente**.
 
-## Regras de emissão do ato
+## Roteiro (para acompanhar assistindo)
 
-- Sempre **uma única parcela**;
-- Dentro dos **valores prescritos** para o empreendimento;
-- Dentro das **datas propostas**: **não emitir boleto com vencimento superior a 10 dias** da data atual (ex.: no dia 11, não emitir com vencimento após o dia 21).
+### 1. Análise comercial - montar a condição
 
-> As regras **variam por empreendimento**. Para consultá-las, use a **ficha comercial do produto**.
+- Na reserva, entre no menu **Financeiro** e confira a tabela de pagamento.
+- Séries padrão do **Minha Casa Minha Vida**: **recurso próprio à vista**, recurso próprio parcelado, financiamento e subsídio federal (alguns casos têm desconto e/ou subsídio estadual).
+- O boleto de ato sai da série **"Recurso próprio à vista"** e é **sempre uma única parcela**.
+- Valor padrão: **R$ 1.200,00** - só muda por cidade/empreendimento **com ficha comercial aprovada pela direção**.
+- Vencimento: até **5 dias** após a escolha da unidade (ideal **no mesmo dia** ou **D+1**); a **1ª parcela mensal** em até **30 dias** após o ato.
 
-## Conferir a emissão e tratar problemas
+### 2. Assinatura - o gatilho
 
-- **Documentos:** se emitido, o boleto é anexado com o tipo **"boleto ato"**.
-- **Ações:** permite **visualizar** o boleto com as condições do período.
-- **Mensagens:** após 1-2 minutos do Envio Sienge, informa o resultado (emitido, falha ou já emitido).
-- **Informações (etapas do cliente):** a etapa correta é **"ato emitido"**. Se houver erro, aparece **"ato divergente"** - geralmente **data de emissão, valor do boleto ou alguma regra não atingida** (detalhe no campo Mensagens). Depois seguem, de forma automática, **"ato pago"** e **"ato vencido"**.
-- **Reemitir:** clique novamente em **Envio Sienge** para solicitar nova análise. As etapas de ato passam **automaticamente** - só clique para **voltar ao Envio Sienge** em caso de problema.
-- Problemas que você não conseguir ajustar facilmente: **acione a equipe interna** para ajuste manual do boleto.
-- O sistema valida **diariamente** pagamento e etapas. O **Envio Sienge** demora um pouco mais para atualizar (depende de o contrato estar corretamente no Sienge).
+- **Gere os contratos** (reserva, uso de imagem etc.) e envie para assinatura: a reserva passa para **Em assinatura**.
+- Quando o cliente assina, a reserva vai para **Envio Sienge** - é **aqui** que o sistema identifica a série de ato e **emite o boleto automaticamente**.
+- Cliente **sem ato**? Não lance a série "recurso próprio à vista" - assim nada é emitido.
 
-## Para o cliente
+### 3. Visão do cliente
 
-- O cliente recebe o boleto por **WhatsApp** (notificação com o boleto em anexo) e por **e-mail** (enviado pelo sistema @menin, com botão de download do PDF e link direto).
-- ⚠️ O número de **WhatsApp é somente para notificações** - se o cliente responder, **não será atendido**. O **gestor deve manter contato direto** com o cliente e orientá-lo na emissão e no pagamento do ato.
+- O cliente recebe o boleto por **WhatsApp** (com o PDF em anexo) e por **e-mail** (com download e link).
+- ⚠️ Esse **WhatsApp é só de aviso**: se o cliente responder, não há atendimento. O contato é sempre **do gestor**.
+
+### 4. Auditoria - onde conferir
+
+- **Documentos** da reserva: o boleto emitido aparece com o tipo **\`BOLETO ATO\`**.
+- **Mensagens**: 1-2 minutos após o Envio Sienge, o sistema informa o resultado (emitido, já emitido ou falha) com a **descrição detalhada** e o motivo do erro.
+- **Etapa da reserva**: **Ato Emitido** quando deu certo; **Ato Divergente** quando falhou. **Ato Pago** e **Ato Vencido** avançam sozinhos.
+
+### 5. Ato Divergente - o que fazer
+
+- Leia o **Mensagens** para saber o motivo (vencimento fora da regra, valor, mais de uma parcela, cadastro do titular incompleto).
+- Corrija a condição e/ou o cadastro e **volte a reserva para Envio Sienge** para nova análise.
+- Se não resolver, **acione a equipe interna** para ajuste manual - a reserva não pode ficar parada.
+
+## Veja também
+
+- [Boleto de Ato - Regras, Prazos e Responsabilidades](/academy/kb/procedimentos/boleto-de-ato) - o procedimento por escrito, com checklist.
 
 ---
 
-*Passo a passo transcrito do vídeo de treinamento. As regras de valores e datas de cada empreendimento estão na respectiva ficha comercial.*`,
+*Vídeo de treinamento interno. Em caso de divergência entre o vídeo e as regras vigentes, valem as regras do procedimento escrito e a ficha comercial aprovada.*`,
     },
 
     // ── Referência (Cartório / Contratos) ──
@@ -2758,6 +2898,7 @@ const LINK_TARGETS = [
     { slug: 'cv-vincular-imobiliaria-empreendimento', category: 'construtor-de-vendas', aliases: ['Vincular Imobiliária ao Empreendimento'] },
     { slug: 'cv-vincular-corretor-empreendimento', category: 'construtor-de-vendas', aliases: ['Vincular Corretor ao Empreendimento'] },
     { slug: 'cv-campos-obrigatorios-reservas', category: 'construtor-de-vendas', aliases: ['Campos Obrigatórios nas Reservas', 'Campos obrigatórios'] },
+    { slug: 'boleto-de-ato', category: 'procedimentos', aliases: ['Boleto de Ato', 'Boleto Ato'] },
 ];
 
 function escapeRe(s) {
@@ -2852,7 +2993,10 @@ async function upsertProcedure(proc) {
     // rascunho nasce 'DRAFT'). Em updates o status atual é PRESERVADO - re-rodar
     // o seed NÃO republica nem rebaixa um artigo. A publicação dos rascunhos é
     // feita pelo fluxo normal da UI (que também dispara a notificação).
-    const initialStatus = proc.status || 'PUBLISHED';
+    // Exceção: `forceStatus` IMPÕE o status também em update - use só quando o
+    // artigo tem que estar no ar pelo seed (ex.: divulgação combinada).
+    const initialStatus = proc.forceStatus || proc.status || 'PUBLISHED';
+    if (proc.forceStatus) fields.status = proc.forceStatus;
     // Quando o autor é declarado, ele é a fonte de verdade da autoria - então
     // estabelece/corrige o createdBy também em updates. Sem autor declarado,
     // preserva o createdBy já existente (não sobrescreve).
@@ -2872,7 +3016,10 @@ async function upsertProcedure(proc) {
     return { action: 'created', article: created };
 }
 
-async function run() {
+// `only` = lista de slugs a processar (o resto é ignorado). Sem ela, roda tudo.
+// Útil para publicar/atualizar 1-2 artigos sem reescrever o corpo dos demais
+// (que podem ter sido editados pela UI depois da última rodada do seed).
+async function run({ only = null } = {}) {
     // Confirma a conexão antes de escrever.
     await db.sequelize.authenticate();
     const dbName = db.sequelize.config?.database;
@@ -2883,8 +3030,18 @@ async function run() {
     // sem depender de redeploy do app (que adicionaria via ensureAcademySchema).
     await db.sequelize.query('ALTER TABLE academy_articles ADD COLUMN IF NOT EXISTS subcategory_slug VARCHAR(255)');
 
+    const wanted = Array.isArray(only) && only.length ? only : null;
+    const list = wanted
+        ? PROCEDURES.filter((p) => wanted.includes(p.slug || kebab(p.title)))
+        : PROCEDURES;
+    if (wanted) {
+        console.log(`🎯 Filtro --only: ${wanted.join(', ')} → ${list.length} artigo(s)`);
+        const faltando = wanted.filter((s) => !list.some((p) => (p.slug || kebab(p.title)) === s));
+        if (faltando.length) console.warn(`⚠️  slug(s) não encontrado(s) no seed: ${faltando.join(', ')}`);
+    }
+
     const out = [];
-    for (const proc of PROCEDURES) {
+    for (const proc of list) {
         // eslint-disable-next-line no-await-in-loop
         const r = await upsertProcedure(proc);
         const a = r.article;
@@ -2900,7 +3057,11 @@ async function run() {
 
 const isDirectRun = process.argv[1] && process.argv[1].endsWith('academy_seed_procedimentos.js');
 if (isDirectRun) {
-    run()
+    const onlyArg = process.argv.slice(2).find((a) => a.startsWith('--only='));
+    const only = onlyArg
+        ? onlyArg.slice('--only='.length).split(',').map((s) => s.trim()).filter(Boolean)
+        : null;
+    run({ only })
         .then((out) => {
             const created = out.filter((r) => r.action === 'created').length;
             const updated = out.filter((r) => r.action === 'updated').length;
