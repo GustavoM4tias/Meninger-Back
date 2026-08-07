@@ -65,6 +65,7 @@ import stageCommissionRuleDefine from './stageCommissionRule.js';
 import enterpriseValueRuleDefine from './enterpriseValueRule.js';
 import enterpriseErpLinkDefine from './enterpriseErpLink.js';
 import trSatelliteEnterpriseDefine from './trSatelliteEnterprise.js';
+import contractAdjustmentDefine from './contractAdjustment.js';
 
 import PaymentLaunchDefine from './sienge/paymentLaunch.js';
 import LaunchTypeConfigDefine from './sienge/launchTypeConfig.js';
@@ -335,6 +336,7 @@ db.StageCommissionRule = stageCommissionRuleDefine(sequelize, DataTypes);
 db.EnterpriseValueRule = enterpriseValueRuleDefine(sequelize, DataTypes);
 db.EnterpriseErpLink = enterpriseErpLinkDefine(sequelize, DataTypes);
 db.TrSatelliteEnterprise = trSatelliteEnterpriseDefine(sequelize, DataTypes);
+db.ContractAdjustment = contractAdjustmentDefine(sequelize, DataTypes);
 
 db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);
 db.LaunchTypeConfig = LaunchTypeConfigDefine(sequelize, DataTypes);

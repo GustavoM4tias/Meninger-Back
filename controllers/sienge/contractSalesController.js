@@ -2,6 +2,11 @@
 import dayjs from 'dayjs'
 import db from '../../models/sequelize/index.js'
 import { visibleErpIds } from '../../services/permissions/accessScopeService.js'
+import {
+  effectiveFiDateSql,
+  fiDateInRangeSql,
+  applyAdjustmentsToRows
+} from '../../services/comercial/contractAdjustmentsService.js'
 
 // caches globais (somente para admin em listEnterprises)
 let _enterprisesCache = null
@@ -61,12 +66,19 @@ export async function getContracts(req, res) {
     // nem como distrato (o mês não chegou a fechar com essa venda). Cancelado
     // só entra quando o cancelamento foi em mês posterior ao da venda. A
     // exceção não se aplica ao filtro explícito situation=Cancelado.
+    //
+    // Ajuste contábil: quando existe máscara de data para o contrato, é ELA que
+    // define o recorte. Um contrato com a data corrigida de 30/06 para 05/07
+    // precisa sair de junho e entrar em julho já no WHERE — corrigir depois da
+    // query não traria o contrato de volta.
+    const effectiveFiDate = effectiveFiDateSql('sc')
+
     const situations = sit === 'Emitido' ? ['Emitido', 'Cancelado'] : [sit]
     const whereSameMonthCancelClause = sit === 'Emitido'
       ? ` AND (
       sc.situation <> 'Cancelado'
       OR sc.cancellation_date IS NULL
-      OR date_trunc('month', sc.cancellation_date) > date_trunc('month', sc.financial_institution_date)
+      OR date_trunc('month', sc.cancellation_date) > date_trunc('month', ${effectiveFiDate})
     )`
       : ''
 
@@ -214,9 +226,10 @@ export async function getContracts(req, res) {
 
     const sql = `
 WITH base AS (
-  SELECT sc.*
+  SELECT sc.*,
+         ${effectiveFiDate} AS effective_fi_date
   FROM contracts sc
-  WHERE sc.financial_institution_date BETWEEN :start AND :end
+  WHERE ${fiDateInRangeSql('sc')}
     AND sc.situation IN (:situations)
     ${whereSameMonthCancelClause}
     -- Empreendimentos ocultos pelo admin somem para TODO mundo, e já no SQL:
@@ -242,7 +255,9 @@ pivots AS (
     b.company_id,
     b.company_name,
     b.company_id::text AS company_id_str,
-    b.financial_institution_date,
+    -- data já mascarada: todo o resto do relatório enxerga só a data efetiva
+    b.effective_fi_date AS financial_institution_date,
+    b.financial_institution_date AS original_financial_institution_date,
     b.situation,
     b.cancellation_date,
 
@@ -417,6 +432,7 @@ SELECT
   p.company_id AS company_id,
   p.company_name AS company_name,
   p.financial_institution_date,
+  p.original_financial_institution_date,
   p.situation,
   p.cancellation_date,
   p.unit_name,
@@ -491,6 +507,11 @@ ORDER BY p.financial_institution_date, p.contract_id;
       replacements,
       type: db.Sequelize.QueryTypes.SELECT
     })
+
+    // Máscara de séries (adicionada/editada). A de data já veio aplicada no SQL;
+    // aqui cada linha ganha também o resumo `adjustments`, que é o que a tela
+    // usa para o selo — do mesmo jeito que o selo de distrato.
+    await applyAdjustmentsToRows(results)
 
     return res.json({ count: results.length, results })
   } catch (err) {

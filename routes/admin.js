@@ -46,6 +46,17 @@ import {
 } from '../controllers/enterpriseValueRuleController.js';
 
 import {
+  listContractAdjustments,
+  lookupContracts,
+  getContractForAdjustment,
+  createContractAdjustment,
+  updateContractAdjustment,
+  removeContractAdjustment,
+  runAdjustmentCheck,
+  reviewContractAdjustment
+} from '../controllers/comercial/contractAdjustmentController.js';
+
+import {
   listErpLinks,
   addErpLink,
   removeErpLink,
@@ -169,5 +180,18 @@ router.get('/tr-satellite-enterprises', authMiddleware, listTrSatellites);
 router.post('/tr-satellite-enterprises', authMiddleware, requireAdmin, addTrSatellite);
 router.put('/tr-satellite-enterprises/:id', authMiddleware, requireAdmin, updateTrSatellite);
 router.delete('/tr-satellite-enterprises/:id', authMiddleware, requireAdmin, removeTrSatellite);
+
+// Ajustes contábeis do Faturamento — TUDO admin, inclusive a leitura.
+// O selo do ajuste, que todo usuário do dashboard vê, viaja junto com os
+// contratos (GET /api/sienge/contracts); esta rota é só a mesa de trabalho.
+router.get('/contract-adjustments', authMiddleware, requireAdmin, listContractAdjustments);
+router.get('/contract-adjustments/contracts', authMiddleware, requireAdmin, lookupContracts);
+router.get('/contract-adjustments/contracts/:contractId', authMiddleware, requireAdmin, getContractForAdjustment);
+router.post('/contract-adjustments', authMiddleware, requireAdmin, createContractAdjustment);
+// Antes de '/:id' — senão 'check' seria capturado como id.
+router.post('/contract-adjustments/check', authMiddleware, requireAdmin, runAdjustmentCheck);
+router.put('/contract-adjustments/:id/review', authMiddleware, requireAdmin, reviewContractAdjustment);
+router.put('/contract-adjustments/:id', authMiddleware, requireAdmin, updateContractAdjustment);
+router.delete('/contract-adjustments/:id', authMiddleware, requireAdmin, removeContractAdjustment);
 
 export default router;
