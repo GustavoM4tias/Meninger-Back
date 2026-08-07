@@ -15,6 +15,12 @@
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
+import {
+    effectiveFiDateSql,
+    fiDateInRangeSql,
+    loadSerieAdjustments,
+    adjustmentsSignature
+} from './contractAdjustmentsService.js';
 
 const { SalesClosing, SalesClosingDivergence, User } = db;
 
@@ -62,12 +68,17 @@ export async function buildInputsSnapshot(period) {
     const { start, end } = periodBounds(period);
 
     // Mesmo recorte da visão padrão do dashboard: Emitido + Cancelado com data
-    // no período, regra do mesmo mês, sem empreendimentos ocultos.
+    // no período, regra do mesmo mês, sem empreendimentos ocultos — e com a
+    // MESMA máscara de ajuste contábil que o dashboard aplica. Fotografar o
+    // dado cru aqui faria a vigilância nunca enxergar um ajuste: o número da
+    // tela mudaria e o mês consolidado seguiria "sem divergência".
+    const effectiveFiDate = effectiveFiDateSql('sc');
+
     const contracts = await db.sequelize.query(`
         SELECT
             sc.id,
             sc.situation,
-            sc.financial_institution_date::date::text AS financial_institution_date,
+            ${effectiveFiDate}::date::text            AS financial_institution_date,
             sc.cancellation_date::date::text          AS cancellation_date,
             sc.enterprise_id,
             sc.enterprise_name,
@@ -91,12 +102,12 @@ export async function buildInputsSnapshot(period) {
                 (SELECT u ->> 'name' FROM jsonb_array_elements(sc.units) u LIMIT 1)
             ) AS unit_name
         FROM contracts sc
-        WHERE sc.financial_institution_date BETWEEN :start AND :end
+        WHERE ${fiDateInRangeSql('sc')}
           AND sc.situation IN ('Emitido', 'Cancelado')
           AND (
             sc.situation <> 'Cancelado'
             OR sc.cancellation_date IS NULL
-            OR date_trunc('month', sc.cancellation_date) > date_trunc('month', sc.financial_institution_date)
+            OR date_trunc('month', sc.cancellation_date) > date_trunc('month', ${effectiveFiDate})
           )
           AND NOT EXISTS (
             SELECT 1 FROM hidden_dashboard_enterprises h
@@ -105,9 +116,19 @@ export async function buildInputsSnapshot(period) {
         ORDER BY sc.id
     `, { replacements: { start, end }, type: db.Sequelize.QueryTypes.SELECT });
 
+    // O fingerprint acima é calculado sobre o JSONB CRU. Uma série adicionada ou
+    // editada por ajuste contábil muda o VGV da tela sem mexer nele — então a
+    // assinatura do ajuste entra no fingerprint para a diferença virar
+    // divergência explicada em vez de sumir.
+    const serieAdjustments = await loadSerieAdjustments(contracts.map(c => c.id));
+
     const byId = {};
     for (const c of contracts) {
         const { id, ...fields } = c;
+        const sig = adjustmentsSignature(serieAdjustments.get(String(id)) || []);
+        if (sig) {
+            fields.conditions_fingerprint = `${fields.conditions_fingerprint ?? ''}|AJUSTE:${sig}`;
+        }
         byId[String(id)] = fields;
     }
 
@@ -117,7 +138,8 @@ export async function buildInputsSnapshot(period) {
         'stage_commission_rules',
         'tr_satellite_enterprises',
         'hidden_dashboard_enterprises',
-        'enterprise_erp_links'
+        'enterprise_erp_links',
+        'contract_adjustments'
     ];
     const rules = {};
     for (const t of RULE_TABLES) {

@@ -52,6 +52,9 @@ export const NotificationType = {
     // Comercial — Fechamento de vendas
     SALES_CLOSING_DIVERGENCE: 'sales.closing.divergence',
 
+    // Comercial — Ajustes contábeis do Faturamento
+    CONTRACT_ADJUSTMENT_DRIFT: 'contract.adjustment.drift',
+
     // Comercial — Plano de Eventos (planejamento mensal dos gestores)
     EVENT_PLAN_OPENED:            'event_plan.opened',
     EVENT_PLAN_CHASE:             'event_plan.chase',
@@ -183,6 +186,15 @@ export const NOTIFICATION_CATALOG = {
         label: 'Divergência em vendas consolidadas',
         group: 'Comercial',
         description: 'Quando os dados de um mês de vendas já consolidado mudam no Sienge/regras depois do fechamento (o consolidado não é alterado; a mudança fica registrada para revisão).',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CONTRACT_ADJUSTMENT_DRIFT]: {
+        label: 'Contrato ajustado mudou no Sienge',
+        group: 'Comercial',
+        description: 'Quando o dado de origem de um contrato com ajuste contábil muda no Sienge depois da correção. A correção continua valendo no relatório até um admin decidir; se o Sienge passar a trazer exatamente o valor ajustado, o ajuste se resolve sozinho e não gera aviso.',
         emailType: 'generic.notification',
         whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },

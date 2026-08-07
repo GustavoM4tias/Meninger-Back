@@ -13,6 +13,12 @@ import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
 import { getClosing, PERIOD_RE, periodBounds } from '../comercial/salesClosingService.js';
 import { visibleErpIds } from '../permissions/accessScopeService.js';
+import {
+    effectiveFiDateSql,
+    fiDateInRangeSql,
+    loadSerieAdjustments,
+    serieValueDelta
+} from '../comercial/contractAdjustmentsService.js';
 
 const fmtBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(v) || 0);
 
@@ -27,6 +33,9 @@ function defaultPeriod() {
 async function livePartialAggregate(period, scopeErpIds) {
     const { start, end } = periodBounds(period);
     const whereScope = scopeErpIds === null ? '' : ' AND sc.enterprise_id IN (:scopeErpIds)';
+    // Mesma máscara de ajuste contábil do dashboard: a Eme não pode responder um
+    // número diferente do que está na tela.
+    const effectiveFiDate = effectiveFiDateSql('sc');
 
     const rows = await db.sequelize.query(`
         SELECT
@@ -48,12 +57,12 @@ async function livePartialAggregate(period, scopeErpIds) {
                 (SELECT u ->> 'name' FROM jsonb_array_elements(sc.units) u LIMIT 1)
             ) AS unit_name
         FROM contracts sc
-        WHERE sc.financial_institution_date BETWEEN :start AND :end
+        WHERE ${fiDateInRangeSql('sc')}
           AND sc.situation IN ('Emitido', 'Cancelado')
           AND (
             sc.situation <> 'Cancelado'
             OR sc.cancellation_date IS NULL
-            OR date_trunc('month', sc.cancellation_date) > date_trunc('month', sc.financial_institution_date)
+            OR date_trunc('month', sc.cancellation_date) > date_trunc('month', ${effectiveFiDate})
           )
           AND NOT EXISTS (
             SELECT 1 FROM hidden_dashboard_enterprises h
@@ -65,13 +74,18 @@ async function livePartialAggregate(period, scopeErpIds) {
         type: db.Sequelize.QueryTypes.SELECT
     });
 
+    // Séries adicionadas/editadas por ajuste contábil: o SQL somou o JSONB cru,
+    // então a diferença entra aqui.
+    const serieAdj = await loadSerieAdjustments(rows.map(r => r.id));
+
     // Agrupa contratos em VENDAS (cliente+unidade+empreendimento), como o dashboard.
     const sales = new Map();
     for (const r of rows) {
         const key = `${r.customer_id}|${r.unit_name}|${r.enterprise_id}|${r.company_id}`;
         const s = sales.get(key) || { net: 0, gross: 0, enterprise_name: r.enterprise_name, distratada: true };
-        s.net += Number(r.net_sum) || 0;
-        s.gross += Number(r.gross_sum) || 0;
+        const delta = serieValueDelta(serieAdj.get(String(r.id)) || []);
+        s.net += (Number(r.net_sum) || 0) + delta.exceptDc;
+        s.gross += (Number(r.gross_sum) || 0) + delta.all;
         if (r.situation !== 'Cancelado') s.distratada = false;
         sales.set(key, s);
     }
