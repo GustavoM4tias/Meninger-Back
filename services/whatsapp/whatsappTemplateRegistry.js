@@ -188,6 +188,36 @@ export const TEMPLATE_REGISTRY = [
         managedBy: 'codigo', autoProvisioned: false, critical: false,
     },
 
+    // ── Eme Atende (fala com LEAD) ───────────────────────────────────────────
+    {
+        name: 'eme_atende_opener_v1', language: 'pt_BR',
+        feature: 'emeAtende', audience: 'cliente',
+        purpose: 'Primeira mensagem ao lead novo, abrindo a conversa com a Eme.',
+        trigger: 'Entrada do lead na base da Eme Atende (intake por API).',
+        variables: ['Nome do lead'],
+        buttons: [
+            { text: 'Quero sim', does: 'Abre a janela de 24h e a IA assume a conversa.' },
+            { text: 'Agora não', does: 'Também abre a janela; a IA responde e encerra sem insistir.' },
+        ],
+        source: 'services/emeAtende/emeAtendeOpenerTemplates.js',
+        managedBy: 'codigo', autoProvisioned: true, critical: false,
+        note: 'MARKETING de propósito: abordar quem preencheu formulário é marketing pela régua da Meta, e forçar UTILITY (mais barato) faz ela reclassificar e derruba a qualidade do número, que é o mesmo do boleto.',
+    },
+    {
+        name: 'eme_atende_opener_empreendimento_v1', language: 'pt_BR',
+        feature: 'emeAtende', audience: 'cliente',
+        purpose: 'Abertura citando o empreendimento de interesse do lead.',
+        trigger: 'Mesma entrada, em fluxo cujo lead sempre traz empreendimento.',
+        variables: ['Nome do lead', 'Empreendimento de interesse'],
+        buttons: [
+            { text: 'Quero sim', does: 'Abre a janela de 24h e a IA assume a conversa.' },
+            { text: 'Agora não', does: 'Também abre a janela; a IA responde e encerra sem insistir.' },
+        ],
+        source: 'services/emeAtende/emeAtendeOpenerTemplates.js',
+        managedBy: 'codigo', autoProvisioned: true, critical: false,
+        note: 'Só use em fluxo onde o lead SEMPRE tem empreendimento — sem o dado a mensagem sai com o texto de fallback.',
+    },
+
     // ── Boleto (único que fala com CLIENTE) ──────────────────────────────────
     {
         name: 'boleto_caixa_ato_v2', language: 'pt_BR',

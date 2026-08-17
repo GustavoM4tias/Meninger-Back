@@ -113,6 +113,7 @@ import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
 import { ensureMarketingApprovalWhatsappTemplates } from './lib/ensureMarketingApprovalWhatsappTemplates.js';
+import { ensureEmeAtendeOpenerTemplates } from './lib/ensureEmeAtendeOpenerTemplates.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
 import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
@@ -544,6 +545,9 @@ async function startBackgroundServices() {
       console.warn('⚠️  ensureChecklistWhatsappTemplates falhou:', err.message));
   ensureMarketingApprovalWhatsappTemplates().catch(err =>
       console.warn('⚠️  ensureMarketingApprovalWhatsappTemplates falhou:', err.message));
+  // Abertura da Eme Atende: precisa estar APPROVED antes de ligar o atendimento.
+  ensureEmeAtendeOpenerTemplates().catch(err =>
+      console.warn('⚠️  ensureEmeAtendeOpenerTemplates falhou:', err.message));
 
   // ── Gate de schedulers ────────────────────────────────────────────────────
   // Produção: cada cron mantém o comportamento histórico. DEV (local): NENHUM

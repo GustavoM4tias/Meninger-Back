@@ -3,6 +3,7 @@
 
 import db from '../../models/sequelize/index.js';
 import { DEFAULT_PERSONA, DEFAULT_GLOBAL_RULES, DEFAULT_STANDARDS } from './emeAtendeRules.js';
+import { DEFAULT_OPENER } from './emeAtendeOpenerTemplates.js';
 
 /**
  * Semeia a camada GERAL de regras na primeira vez. Só preenche campo vazio —
@@ -21,9 +22,28 @@ async function ensureGlobalRules() {
     }
 }
 
+/**
+ * O fluxo default foi semeado com `opener_template: null` porque o template de
+ * abertura ainda não existia. Agora existe — preenche SÓ o default e SÓ se
+ * estiver vazio. Os demais fluxos não são tocados: "sem abertura" lá é escolha
+ * do admin (fluxo que só responde quem chama).
+ */
+async function ensureDefaultOpener() {
+    const flow = await db.EmeAtendeFlow.findOne({ where: { is_default: true } });
+    if (!flow || flow.opener_template) return;
+    await flow.update({
+        opener_template: DEFAULT_OPENER.template,
+        opener_language: DEFAULT_OPENER.language,
+        opener_variables: DEFAULT_OPENER.variables,
+    });
+    console.log(`[eme-atende/seed] fluxo default "${flow.name}" recebeu a abertura ${DEFAULT_OPENER.template} `
+        + '(era vazio; troque ou volte pra "sem abertura" na tela se não for o desejado).');
+}
+
 export async function ensureEmeAtendeSeed() {
     try {
         await ensureGlobalRules();
+        await ensureDefaultOpener();
 
         const count = await db.EmeAtendeFlow.count();
         if (count > 0) return;
@@ -36,9 +56,9 @@ export async function ensureEmeAtendeSeed() {
             // diferente do padrão da casa.
             system_prompt: null,
             business_context: null,
-            opener_template: null, // definir quando o template for aprovado na Meta
-            opener_language: 'pt_BR',
-            opener_variables: [],
+            opener_template: DEFAULT_OPENER.template,
+            opener_language: DEFAULT_OPENER.language,
+            opener_variables: DEFAULT_OPENER.variables,
             triggers: [],
             settings: {},
         });
