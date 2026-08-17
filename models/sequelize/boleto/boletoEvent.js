@@ -20,6 +20,7 @@
 //   baixa_failed      Baixa falhou (com motivo no message)
 //   emission_deferred        Acionamento fora da janela — emissão agendada
 //   emission_window_released Janela abriu — emissão agendada retomada
+//   emission_retry_scheduled Portal indisponível — nova tentativa agendada
 //   error             Erro genérico
 
 export default (sequelize, DataTypes) => {
