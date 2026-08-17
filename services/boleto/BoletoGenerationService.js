@@ -8,6 +8,7 @@ import { sendBoletoToTitular } from './BoletoNotifyService.js';
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { computeSituacaoTarget } from '../../lib/cvLoteTiming.js';
+import { dentroDaJanela, proximaAbertura, descreverJanela, formatarAgendamento } from '../../lib/boletoJanela.js';
 import { Op } from 'sequelize';
 
 // Tempo máximo de espera no lock Ecobrança antes de desistir (em ms).
@@ -293,9 +294,16 @@ async function attachToCV(idreserva, buffer, settings) {
  *   CV e **envia ao cliente normalmente** (email/WhatsApp). A ÚNICA diferença
  *   para o fluxo do webhook é que **não altera a etapa/situação no CV** — uma
  *   ação manual não deve mover a reserva de etapa como o lote do Sienge faz.
+ * @param {boolean} [params.forcarAgora=false] - Ignora a janela de funcionamento
+ *   e processa na hora. Usado por ações deliberadas do admin (retry/regerar) e
+ *   pelo `boletoWindowScheduler` ao retomar um registro agendado.
+ * @param {number} [params.historyId] - Reaproveita um registro de histórico já
+ *   existente em vez de criar outro. Usado pelo scheduler da janela: o registro
+ *   que nasceu 'queued' vira a emissão de verdade, mantendo UMA linha por
+ *   acionamento na tela.
  */
-export async function processBoletoWebhook({ idreserva, idtransacao, manual = false }) {
-    console.log(`[BOLETO] Iniciando processamento — reserva ${idreserva}${manual ? ' (geração interna manual — sem envio ao cliente)' : ''}`);
+export async function processBoletoWebhook({ idreserva, idtransacao, manual = false, forcarAgora = false, historyId = null }) {
+    console.log(`[BOLETO] Iniciando processamento — reserva ${idreserva}${manual ? ' (geração interna manual — sem envio ao cliente)' : ''}${historyId ? ` (retomando histórico #${historyId})` : ''}`);
 
     const settings = await getSettings();
 
@@ -309,11 +317,25 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         return;
     }
 
-    const history = await db.BoletoHistory.create({
-        idreserva,
-        idtransacao: idtransacao || null,
-        status: 'processing',
-    });
+    // Retomada de um registro agendado pela janela: reaproveita a MESMA linha
+    // (nasceu 'queued') pra não duplicar o acionamento na tela. Se o registro
+    // sumiu, cai no fluxo normal e cria um novo.
+    let history = null;
+    if (historyId) {
+        history = await db.BoletoHistory.findByPk(historyId);
+        if (history) {
+            await history.update({ status: 'processing', error_message: null });
+        } else {
+            console.warn(`[BOLETO] Histórico #${historyId} não encontrado — criando registro novo.`);
+        }
+    }
+    if (!history) {
+        history = await db.BoletoHistory.create({
+            idreserva,
+            idtransacao: idtransacao || null,
+            status: 'processing',
+        });
+    }
 
     // Avisos por etapa que não jogam exceção (anexo CV, mensagem CV, alteração
     // de situação). Persistidos em `history.warnings` ao final pra aparecerem
@@ -421,6 +443,90 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 type: 'ignored_duplicate', severity: 'info',
                 message: `Acionamento ignorado - ato já pago pelo boleto #${atoPago.id} (Nosso Nº ${atoPago.nosso_numero || '-'}).`,
                 data: { paidHistoryId: atoPago.id, nossoNumero: atoPago.nosso_numero, paid_at: atoPago.paid_at, manual },
+            });
+            return;
+        }
+
+        // ── 1.7. Fora da janela de funcionamento? Agenda pra próxima abertura ──
+        // Acionamento de madrugada virava erro em série (11/08/2026: 8 reservas
+        // do RESIDENCIAL DOS ANJOS entre 23:33 e 23:40). Em vez de tentar e
+        // falhar, o registro nasce 'queued' e o `boletoWindowScheduler` retoma
+        // ESTE MESMO registro na abertura (08:00 por padrão).
+        //
+        // Deliberado: NÃO mexe na situação CV. A reserva fica onde está, o lote
+        // do Sienge segue seu curso e a emissão acontece de manhã. Também não
+        // roda nenhuma validação (série, titular, teto, vencimento) agora — elas
+        // são refeitas na retomada, com os dados frescos do CV.
+        //
+        // `forcarAgora` pula tudo isto: retry/regerar do admin e a própria
+        // retomada do scheduler são ações deliberadas.
+        if (!forcarAgora && !dentroDaJanela(settings)) {
+            const agendadoPara = proximaAbertura(settings);
+            const janelaLabel = descreverJanela(settings);
+            const quandoLabel = formatarAgendamento(agendadoPara);
+
+            // Já existe acionamento agendado pra esta reserva? Não enfileira de
+            // novo — senão uma noite de re-disparos do CV vira uma fila de
+            // emissões idênticas de manhã.
+            const jaAgendado = await db.BoletoHistory.findOne({
+                where: {
+                    idreserva,
+                    status: 'queued',
+                    emissao_agendada_processada: false,
+                    id: { [Op.ne]: history.id },
+                },
+                order: [['id', 'DESC']],
+            });
+
+            if (jaAgendado) {
+                console.log(`[BOLETO] Reserva ${idreserva} fora da janela (${janelaLabel}) e já agendada no histórico #${jaAgendado.id} — acionamento descartado.`);
+                await history.update({
+                    status: 'skipped',
+                    ignorado: true,
+                    substitui_id: jaAgendado.id,
+                    error_message: `Fora da janela de funcionamento (${janelaLabel}) e já havia emissão agendada (registro #${jaAgendado.id}) - acionamento duplicado descartado.`,
+                    titular_nome: titular?.nome,
+                    empreendimento: unidade?.empreendimento,
+                    idpessoa_cv: titular?.idpessoa_cv,
+                });
+                await EventLogger.log({
+                    historyId: history.id, idreserva,
+                    type: 'ignored_duplicate', severity: 'info',
+                    message: `Acionamento fora da janela descartado - emissão já agendada no registro #${jaAgendado.id}.`,
+                    data: { agendadoNoHistoryId: jaAgendado.id, agendadoPara: jaAgendado.emissao_agendada_para },
+                });
+                return;
+            }
+
+            console.log(`[BOLETO] Reserva ${idreserva} recebida fora da janela (${janelaLabel}) — emissão agendada pra ${quandoLabel}.`);
+
+            const msg = [
+                '🕒 Boleto do ato agendado - fora do horário de funcionamento.',
+                '',
+                `A emissão automática funciona das ${janelaLabel} (horário de Brasília).`,
+                `Este acionamento chegou fora desse intervalo, então o boleto será emitido em ${quandoLabel}.`,
+                '',
+                'A reserva PERMANECE na situação atual - nenhuma mudança de etapa foi feita.',
+                'Não é preciso reenviar: a emissão acontece sozinha na abertura.',
+            ].join('\n');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+
+            await history.update({
+                status: 'queued',
+                emissao_agendada_para: agendadoPara,
+                emissao_agendada_processada: false,
+                error_message: `Recebido fora da janela de funcionamento (${janelaLabel}) - emissão agendada para ${quandoLabel}.`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                cv_mensagem_enviada: msgOk,
+                warnings: warnings.length ? warnings : null,
+            });
+            await EventLogger.log({
+                historyId: history.id, idreserva,
+                type: 'emission_deferred', severity: 'info',
+                message: `Fora da janela (${janelaLabel}) - emissão agendada para ${quandoLabel}.`,
+                data: { agendadoPara, janela: janelaLabel },
             });
             return;
         }

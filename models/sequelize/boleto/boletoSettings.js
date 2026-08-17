@@ -104,6 +104,29 @@ export default (sequelize, DataTypes) => {
             comment: 'Valor máximo (R$) aceito para emissão. Série acima disto → erro "excede teto", sem registrar no banco. Vazio = sem teto.',
         },
 
+        // ── Janela de funcionamento (horário de Brasília) ──────────────────────
+        // Acionamentos recebidos fora da janela não são processados na hora: a
+        // emissão fica agendada pra próxima abertura (ver lib/boletoJanela.js e
+        // scheduler/boletoWindowScheduler.js).
+        janela_ativa: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: true,
+            comment: 'Liga a janela de funcionamento. Desligada = emite a qualquer hora (comportamento antigo).',
+        },
+        janela_inicio_hora: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 8,
+            comment: 'Hora cheia de abertura da janela, no fuso de Brasília (0-23).',
+        },
+        janela_fim_hora: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 20,
+            comment: 'Hora cheia de fechamento da janela, no fuso de Brasília (1-24). Janela aberta em [início, fim).',
+        },
+
         // ── Controle ───────────────────────────────────────────────────────────
         active: {
             type: DataTypes.BOOLEAN,

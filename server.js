@@ -92,6 +92,7 @@ import eventPlanCycleScheduler from './scheduler/eventPlanCycleScheduler.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import boletoPaymentCheckScheduler from './scheduler/boletoPaymentCheckScheduler.js';
 import boletoSituacaoApplyScheduler from './scheduler/boletoSituacaoApplyScheduler.js';
+import boletoWindowScheduler from './scheduler/boletoWindowScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import marketingDispatchScheduler from './scheduler/marketingDispatchScheduler.js';
 import marketingSyncScheduler     from './scheduler/marketingSyncScheduler.js';
@@ -607,6 +608,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase
   if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
   if (schedulerOn('ENABLE_BOLETO_SITUACAO_APPLY')) boletoSituacaoApplyScheduler.start(); // 1min: aplica situações CV agendadas (delay lote Sienge)
+  if (schedulerOn('ENABLE_BOLETO_WINDOW')) boletoWindowScheduler.start(); // 1min: retoma emissões que chegaram fora da janela 08h-20h
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
   if (schedulerOn('ENABLE_REPORT_PUBLIC_EXPIRY')) reportPublicExpiryScheduler.start(); // links públicos de relatórios: aviso D-3 + revoga vencidos (08:00)
   if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
