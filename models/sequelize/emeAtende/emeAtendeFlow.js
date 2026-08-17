@@ -17,6 +17,13 @@ export default (sequelize, DataTypes) => {
         system_prompt: { type: DataTypes.TEXT, allowNull: true },
         // contexto de negócio MANUAL (complementa o automático do CV/ficha)
         business_context: { type: DataTypes.TEXT, allowNull: true },
+        // regras de atendimento SÓ deste empreendimento - entram no prompt depois
+        // das gerais e prevalecem sobre elas. NÃO confundir com a associação
+        // `rules` (eme_atende_flow_rules), que é a SEGMENTAÇÃO de leads.
+        attendance_rules: { type: DataTypes.TEXT, allowNull: true },
+        // override parcial dos padrões gerais: só as chaves preenchidas valem
+        // (vazio = herda o geral). Mesmo formato de eme_atende_settings.standards.
+        standards: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
         // vínculo com o empreendimento do CV (cv_enterprises.idempreendimento):
         // o contexto é montado AO VIVO a cada resposta (dados básicos + ficha
         // comercial aprovada mais recente) - ficha mudou, a Eme muda junto.
