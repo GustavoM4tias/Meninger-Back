@@ -17,6 +17,7 @@ import EmeAtendeConversationEngine from '../services/emeAtende/EmeAtendeConversa
 import EmeAtendeContextBuilder from '../services/emeAtende/EmeAtendeContextBuilder.js';
 import { runChat } from '../services/emeAtende/emeAtendeGeminiChat.js';
 import { findUnsupported } from '../services/emeAtende/emeAtendeGuard.js';
+import { buildInstructions, mergeStandards, HARD_RULES } from '../services/emeAtende/emeAtendeRules.js';
 
 const router = express.Router();
 router.use(authenticate, requireAdmin);
@@ -61,6 +62,9 @@ router.delete('/api-keys/:id', wrap(async (req, res) => {
 
 // ── Flows ────────────────────────────────────────────────────────────────────
 const FLOW_FIELDS = ['name', 'active', 'is_default', 'system_prompt', 'business_context',
+    // attendance_rules/standards = regras de ATENDIMENTO deste empreendimento.
+    // Não confundir com a associação `rules` (segmentação de leads).
+    'attendance_rules', 'standards',
     'cv_enterprise_id', 'context_sources', 'images',
     'opener_template', 'opener_language', 'opener_variables', 'triggers', 'settings'];
 
@@ -143,6 +147,38 @@ router.get('/enterprises', wrap(async (req, res) => {
         attributes: ['idempreendimento', 'nome', 'cidade', 'estado', 'situacao_comercial_nome'],
         order: [['nome', 'ASC']],
     }));
+}));
+
+// ── Preview das REGRAS montadas em camadas ──────────────────────────────────
+// Mostra exatamente o bloco de instruções que vai pro modelo: persona → gerais
+// → padrões → específicas do empreendimento → inegociáveis. Aceita o estado
+// AINDA NÃO SALVO do editor, pra dar pra calibrar antes de gravar.
+router.post('/rules-preview', wrap(async (req, res) => {
+    const { flow_id, attendance_rules, standards, system_prompt, name } = req.body || {};
+    const saved = flow_id ? await db.EmeAtendeFlow.findByPk(flow_id) : null;
+    const cfg = await EmeAtendeSettingsService.getConfig();
+
+    const probe = {
+        name: name !== undefined ? name : (saved?.name || null),
+        system_prompt: system_prompt !== undefined ? system_prompt : (saved?.system_prompt || null),
+        attendance_rules: attendance_rules !== undefined ? attendance_rules : (saved?.attendance_rules || null),
+        standards: standards !== undefined ? standards : (saved?.standards || {}),
+    };
+
+    const effective = mergeStandards(cfg.standards, probe.standards);
+    const instructions = buildInstructions({
+        globalPersona: cfg.global_persona,
+        globalRules: cfg.global_rules,
+        flow: probe,
+        standards: effective,
+    });
+
+    res.json({
+        instructions,                       // o que a IA lê, já montado
+        hard_rules: HARD_RULES,             // piso fixo, sempre por último
+        effective_standards: effective,     // geral + override do empreendimento
+        inherits_persona: !probe.system_prompt,
+    });
 }));
 
 // ── Preview do contexto automático (CV + ficha comercial, ao vivo) ───────────

@@ -21,6 +21,15 @@ export default (sequelize, DataTypes) => {
         // teto de respostas de IA por conversa (anti-loop / custo)
         max_ai_messages: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
 
+        // ── Regras de atendimento (camada GERAL, vale pra todo fluxo) ────────
+        // Editáveis na tela; o fluxo do empreendimento complementa/sobrescreve.
+        // O piso de segurança (HARD_RULES) fica no código de propósito.
+        global_persona: { type: DataTypes.TEXT, allowNull: true },
+        global_rules:   { type: DataTypes.TEXT, allowNull: true },
+        // Padrões estruturados: { max_sentences, questions_per_message, emoji,
+        // formality, always_collect[], never_discuss[] } - ver emeAtendeRules.js
+        standards:      { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
+
         // ── Modo teste (número fake) ─────────────────────────────────────────
         // Com test_mode=true a Eme Atende SÓ atende os números de test_phones —
         // qualquer outro externo segue na auto-resposta do Office. É como se
