@@ -16,6 +16,7 @@ import EmeAtendeFlowService from '../services/emeAtende/EmeAtendeFlowService.js'
 import EmeAtendeConversationEngine from '../services/emeAtende/EmeAtendeConversationEngine.js';
 import EmeAtendeContextBuilder from '../services/emeAtende/EmeAtendeContextBuilder.js';
 import { runChat } from '../services/emeAtende/emeAtendeGeminiChat.js';
+import { findUnsupported } from '../services/emeAtende/emeAtendeGuard.js';
 
 const router = express.Router();
 router.use(authenticate, requireAdmin);
@@ -248,7 +249,9 @@ router.post('/test/ai', wrap(async (req, res) => {
         campaign: null,
         empreendimento: req.body?.empreendimento || null,
     };
-    const systemPrompt = `${await EmeAtendeConversationEngine.buildSystemPrompt(flow, fakeLead)}\n(Modo sandbox de teste - nenhuma mensagem é enviada.)`;
+    const { systemPrompt: basePrompt, contextText } =
+        await EmeAtendeConversationEngine.buildPromptParts(flow, fakeLead);
+    const systemPrompt = `${basePrompt}\n(Modo sandbox de teste - nenhuma mensagem é enviada.)`;
     const hasImages = EmeAtendeConversationEngine.validImages(flow).length > 0;
 
     const result = await runChat({
@@ -260,7 +263,23 @@ router.post('/test/ai', wrap(async (req, res) => {
             : EmeAtendeConversationEngine.FUNCTION_DECLARATIONS,
         onTool: async () => ({ ok: true, info: 'sandbox - ação simulada' }),
     });
-    res.json({ reply: result.text, tool_calls: result.toolCalls });
+    // Mesma conferência do atendimento real, mas aqui só REPORTA (não reescreve):
+    // o objetivo do sandbox é você ver o que a trava pegaria antes de ligar.
+    const cfg = await EmeAtendeSettingsService.getConfig();
+    const suspicious = findUnsupported(result.text, contextText, cfg.validation_level);
+
+    res.json({
+        reply: result.text,
+        tool_calls: result.toolCalls,
+        validation: {
+            level: cfg.validation_level,
+            ok: suspicious.length === 0,
+            suspicious,
+            note: suspicious.length
+                ? 'No atendimento real a Eme reescreveria a resposta sem esses valores; se insistisse, mandaria a mensagem de "vou confirmar e retorno".'
+                : null,
+        },
+    });
 }));
 
 export default router;

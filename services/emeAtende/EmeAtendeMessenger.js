@@ -5,7 +5,13 @@
 
 import db from '../../models/sequelize/index.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
+import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
 import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
+
+// Janela de serviço da Cloud API: 24h desde a última mensagem do lead, com
+// margem pra não disparar com ela fechando em trânsito (erro 131047).
+const WINDOW_MS = 24 * 60 * 60 * 1000;
+const SAFETY_MS = 5 * 60 * 1000;
 
 async function logEvent(lead_id, conversation_id, type, detail = {}) {
     try { await db.EmeAtendeEvent.create({ lead_id, conversation_id, type, detail }); }
@@ -29,6 +35,50 @@ async function persistOut({ conversation, type, body, wamid = null, status, erro
     return msg;
 }
 
+/**
+ * Trava de janela de 24h. Texto e mídia livres só valem enquanto a janela de
+ * serviço está aberta; fora dela a Meta recusa com 131047 e a mensagem some.
+ * Antes disso o erro só aparecia como linha `failed` sem explicação.
+ *
+ * Não há fallback pra template aqui de propósito: mandar template de
+ * reengajamento é mensagem PAGA e decisão de produto, não de runtime.
+ *
+ * @returns {Promise<object|null>} linha persistida quando BLOQUEOU, null quando pode enviar.
+ */
+async function guardWindow(conversation, type, body) {
+    try {
+        // A fonte primária é a PRÓPRIA conversa: o inbound do lead é gravado em
+        // eme_atende_messages, não em whatsapp_messages — então o
+        // WhatsAppWindowService sozinho diria "fechada" sempre. Ele entra só
+        // como segunda fonte, pro caso do lead ter escrito antes de virar lead
+        // (aí o inbound ficou do lado do Office).
+        let lastInbound = conversation.last_inbound_at ? new Date(conversation.last_inbound_at) : null;
+        const office = await WhatsAppWindowService.getServiceWindow(conversation.phone).catch(() => null);
+        if (office?.lastInboundAt) {
+            const officeAt = new Date(office.lastInboundAt);
+            if (!lastInbound || officeAt > lastInbound) lastInbound = officeAt;
+        }
+
+        const elapsed = lastInbound ? Date.now() - lastInbound.getTime() : Infinity;
+        if (elapsed < WINDOW_MS - SAFETY_MS) return null;
+
+        const detail = lastInbound
+            ? `última mensagem do lead em ${lastInbound.toISOString()}`
+            : 'nenhuma mensagem do lead registrada';
+        console.warn(`[eme-atende/messenger] janela de 24h FECHADA pra ${conversation.phone} — envio cancelado (${detail}).`);
+        return persistOut({
+            conversation, type, body,
+            status: 'skipped',
+            error: `Janela de 24h fechada (${detail}). Só template aprovado alcança o lead agora.`,
+        });
+    } catch (err) {
+        // Falha ao consultar a janela não pode bloquear o atendimento: segue e
+        // deixa a Meta decidir (o erro real fica registrado no envio).
+        console.warn('[eme-atende/messenger] checagem de janela falhou, seguindo:', err?.message);
+        return null;
+    }
+}
+
 /** Texto livre - só dentro da janela de 24h após msg do lead. */
 async function sendText({ conversation, body }) {
     const cfg = await EmeAtendeSettingsService.getConfig();
@@ -36,6 +86,8 @@ async function sendText({ conversation, body }) {
         console.log(`[eme-atende/messenger] DRY_RUN text → ${conversation.phone}: "${String(body).slice(0, 120)}"`);
         return persistOut({ conversation, type: 'text', body, status: 'dry_run' });
     }
+    const win = await guardWindow(conversation, 'text', body);
+    if (win) return win;
     try {
         const { id } = await WhatsAppService.sendText({ to: conversation.phone, body });
         return persistOut({ conversation, type: 'text', body, wamid: id, status: 'sent' });
@@ -53,6 +105,8 @@ async function sendImage({ conversation, url, caption = null, label = null }) {
         console.log(`[eme-atende/messenger] DRY_RUN image → ${conversation.phone}: ${body}`);
         return persistOut({ conversation, type: 'image', body, status: 'dry_run' });
     }
+    const win = await guardWindow(conversation, 'image', body);
+    if (win) return win;
     try {
         const { id } = await WhatsAppService.sendImage({ to: conversation.phone, link: url, caption });
         return persistOut({ conversation, type: 'image', body, wamid: id, status: 'sent' });
