@@ -7,8 +7,9 @@
 //   - messages  → por REMETENTE: user interno (telefone do perfil, ou o
 //                 whatsapp_phone legado, casando por DDD + assinante) → Office
 //                 (fluxo de alertas/SIM intacto);
-//                 qualquer outro → Eme Atende (que substitui a auto-resposta de
-//                 "canal só de saída" pelo atendimento IA).
+//                 externo que JÁ É lead da Eme Atende → atendimento IA;
+//                 externo desconhecido → Office (auto-resposta de canal só de
+//                 saída). Ver emeAtendeAudience.js — é a trava de contato frio.
 //   - statuses  → pelo DONO do wamid: se whatsapp_messages conhece → Office;
 //                 senão → Eme Atende (eme_atende_messages). Evita warn de wamid desconhecido
 //                 dos dois lados.
@@ -19,6 +20,7 @@
 
 import db from '../../models/sequelize/index.js';
 import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
+import EmeAtendeAudience from './emeAtendeAudience.js';
 import { findUserByPhone } from '../whatsapp/whatsappPhone.js';
 
 async function isInternalUser(fromPhone) {
@@ -76,14 +78,22 @@ async function route(payload) {
                 if (!eme.length) delete emeAtendeValue.statuses;
             }
 
-            // messages → remetente interno vs externo
+            // messages → interno, lead conhecido, ou nenhum dos dois
             if (Array.isArray(value.messages)) {
                 const off = [];
                 const eme = [];
                 for (const m of value.messages) {
                     const from = m?.from || value.contacts?.[0]?.wa_id || null;
-                    if (await isInternalUser(from)) off.push(m);
-                    else eme.push(m);
+                    if (await isInternalUser(from)) { off.push(m); continue; }
+                    // Externo: só vai pra Eme Atende se for lead conhecido (ou
+                    // estiver na lista de teste). Contato frio segue no Office e
+                    // recebe a auto-resposta de canal só de saída.
+                    const { handle, reason } = await EmeAtendeAudience.shouldHandle(from);
+                    if (handle) eme.push(m);
+                    else {
+                        console.log(`[eme-atende/router] ${from} fica no Office — ${reason}`);
+                        off.push(m);
+                    }
                 }
                 officeValue.messages = off;
                 emeAtendeValue.messages = eme;

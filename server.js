@@ -39,6 +39,7 @@ import officeChatRoutes from './routes/officeChatRoutes.js';
 import officeBrainRoutes from './routes/officeBrainRoutes.js';
 import whatsappAutomationRoutes from './routes/whatsappAutomationRoutes.js';
 import emeAtendeRoutes from './routes/emeAtendeRoutes.js';
+import emeAtendeSweepScheduler from './scheduler/emeAtendeSweepScheduler.js';
 import emeAtendePublicRoutes from './routes/emeAtendePublicRoutes.js';
 import { ensureEmeAtendeSeed } from './services/emeAtende/emeAtendeSeed.js';
 import academyChatRoutes from './routes/academyChatRoutes.js';
@@ -556,6 +557,10 @@ async function startBackgroundServices() {
     if (v === 'false') return false;    // opt-out explícito (vale inclusive em prod)
     return IS_PROD && onByDefaultInProd; // sem flag: comportamento histórico só em produção
   };
+
+  // Rede de segurança do debounce da Eme Atende. Pode subir sempre: o próprio
+  // tick não faz nada enquanto eme_atende_settings.active for false.
+  emeAtendeSweepScheduler.start();
 
   // Crons opt-in (já eram OFF por padrão em qualquer ambiente):
   if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') contractValidatorScheduler.start();

@@ -20,6 +20,19 @@ export default (sequelize, DataTypes) => {
         debounce_seconds: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 8 },
         // teto de respostas de IA por conversa (anti-loop / custo)
         max_ai_messages: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
+
+        // ── Modo teste (número fake) ─────────────────────────────────────────
+        // Com test_mode=true a Eme Atende SÓ atende os números de test_phones —
+        // qualquer outro externo segue na auto-resposta do Office. É como se
+        // testa em produção sem risco de atender cliente de verdade.
+        test_mode:   { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        test_phones: { type: DataTypes.JSONB,   allowNull: false, defaultValue: [] },
+
+        // Rigor da checagem anti-alucinação sobre a resposta da IA:
+        //   off         - só as regras do prompt
+        //   money_dates - valores em dinheiro, percentuais e datas/prazos (padrão)
+        //   strict      - qualquer número que não esteja no contexto
+        validation_level: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'money_dates' },
     }, {
         sequelize,
         modelName: 'EmeAtendeSetting',

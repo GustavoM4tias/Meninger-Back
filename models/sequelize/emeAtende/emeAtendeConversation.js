@@ -14,6 +14,14 @@ export default (sequelize, DataTypes) => {
         last_inbound_at: { type: DataTypes.DATE, allowNull: true },  // janela de 24h
         last_outbound_at: { type: DataTypes.DATE, allowNull: true },
         ai_messages_count: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+
+        // ── Debounce persistente ─────────────────────────────────────────────
+        // ai_due_at = quando a rodada de IA deve rodar (gravado no inbound).
+        // O timer em memória é só o caminho rápido; quem garante o disparo é o
+        // sweeper, e quem impede DUAS réplicas de responderem o mesmo lead é o
+        // UPDATE condicional que zera ai_due_at (mesmo lock do AlertEngine).
+        ai_due_at:     { type: DataTypes.DATE, allowNull: true },
+        ai_claimed_at: { type: DataTypes.DATE, allowNull: true },
         lead_id: { type: DataTypes.INTEGER, allowNull: true },
         flow_id: { type: DataTypes.INTEGER, allowNull: true },
     }, {

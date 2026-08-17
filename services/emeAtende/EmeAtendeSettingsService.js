@@ -21,6 +21,9 @@ async function getConfig() {
         dry_run: !!row.dry_run,
         debounce_seconds: row.debounce_seconds ?? 8,
         max_ai_messages: row.max_ai_messages ?? 30,
+        test_mode: !!row.test_mode,
+        test_phones: Array.isArray(row.test_phones) ? row.test_phones : [],
+        validation_level: row.validation_level || 'money_dates',
     };
     _cache = { at: now, cfg };
     return cfg;
@@ -30,8 +33,16 @@ async function updateConfig(payload = {}) {
     let row = await db.EmeAtendeSetting.findByPk(1);
     if (!row) row = await db.EmeAtendeSetting.create({ id: 1 });
     const update = {};
-    for (const k of ['active', 'dry_run', 'debounce_seconds', 'max_ai_messages']) {
+    for (const k of ['active', 'dry_run', 'debounce_seconds', 'max_ai_messages',
+                     'test_mode', 'validation_level']) {
         if (payload[k] !== undefined) update[k] = payload[k];
+    }
+    if (payload.test_phones !== undefined) {
+        // aceita array ou texto com um número por linha/vírgula
+        const raw = Array.isArray(payload.test_phones)
+            ? payload.test_phones
+            : String(payload.test_phones || '').split(/[\n,;]+/);
+        update.test_phones = raw.map(p => String(p || '').trim()).filter(Boolean);
     }
     await row.update(update);
     invalidate();
