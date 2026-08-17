@@ -119,6 +119,12 @@ export default (sequelize, DataTypes) => {
             allowNull: false,
             comment: 'True depois que o scheduler retomou este registro (idempotência).',
         },
+        emissao_tentativas: {
+            type: DataTypes.INTEGER,
+            defaultValue: 0,
+            allowNull: false,
+            comment: 'Quantas vezes a emissão foi reagendada por falha transitória do portal (login/seleção de empresa). Não conta o adiamento inicial da janela.',
+        },
 
         // ── Re-trigger / ignorar / baixa+reemitir ────────────────────────────
         // Quando o CV dispara o webhook novamente pra mesma reserva (típico

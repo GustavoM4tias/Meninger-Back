@@ -5,6 +5,41 @@ import { createBoleto } from '../modules/ecocobranca/createBoleto.js';
 import { baixarTitulo } from '../modules/ecocobranca/consultaBaixaTitulo.js';
 import { log, success, error } from '../core/logger.js';
 
+// ── Retry de login ────────────────────────────────────────────────────────────
+// O portal da Caixa recusa autenticação fora do horário comercial: das 31
+// falhas "Login Ecobrança falhou" desde 01/07/2026, ZERO aconteceram entre 08h
+// e 19h. Fora isso o portal também dá blip pontual durante o dia.
+//
+// Repetir o LOGIN é seguro: até `selectCompany` nada foi escrito no banco.
+// Depois disso não se repete nada automaticamente — uma emissão repetida viraria
+// boleto em duplicidade. Por isso todo erro sai carimbado com `ecoFase`, e só
+// 'login'/'select' são considerados seguros para reagendar lá em cima.
+const LOGIN_TENTATIVAS = 3;
+const LOGIN_BACKOFF_MS = [5000, 15000];
+
+/** Credenciais erradas não se resolvem repetindo — e insistir bloqueia a conta. */
+function isCredencialInvalida(err) {
+    return /credenciais ecobran/i.test(err?.message || '');
+}
+
+async function loginComRetry(credentials) {
+    let ultimoErro;
+    for (let tentativa = 1; tentativa <= LOGIN_TENTATIVAS; tentativa++) {
+        try {
+            return await ecoLogin(credentials);
+        } catch (err) {
+            ultimoErro = err;
+            if (isCredencialInvalida(err)) throw err;
+            if (tentativa === LOGIN_TENTATIVAS) break;
+            const espera = LOGIN_BACKOFF_MS[tentativa - 1] ?? 15000;
+            log('ECO_SERVICE', `Login falhou (tentativa ${tentativa}/${LOGIN_TENTATIVAS}): ${err.message} — nova tentativa em ${espera / 1000}s.`);
+            await new Promise(r => setTimeout(r, espera));
+        }
+    }
+    ultimoErro.message = `${ultimoErro.message} (após ${LOGIN_TENTATIVAS} tentativas de login)`;
+    throw ultimoErro;
+}
+
 /**
  * Executa a geração de boleto no Ecobrança Caixa via Playwright.
  *
@@ -41,18 +76,23 @@ export async function runEcoCobrancaBoleto(params = {}) {
 
     let browser;
     let pageAtual = null;
+    // Fase corrente — carimbada no erro pra quem chamou saber se é seguro
+    // reagendar (nada escrito ainda) ou se precisa de conferência humana.
+    let fase = 'login';
     try {
-        const loginResult = await ecoLogin(credentials);
+        const loginResult = await loginComRetry(credentials);
         browser = loginResult.browser;
         let { page } = loginResult;
         pageAtual = page;
 
+        fase = 'select';
         page = await selectCompany(page, cnpj_empresa);
         pageAtual = page;
 
         // ── Baixa prévia (reemissão por mudança de condições) ────────────────
         let baixaPrevia = null;
         if (baixaPreviaNossoNumero) {
+            fase = 'baixa';
             log('ECO_SERVICE', `Baixa prévia solicitada — nosso número ${baixaPreviaNossoNumero}`);
             baixaPrevia = await baixarTitulo(page, baixaPreviaNossoNumero);
             if (!baixaPrevia.found) {
@@ -82,12 +122,18 @@ export async function runEcoCobrancaBoleto(params = {}) {
             page = await openInclusaoTitulo(page);
         }
 
+        fase = 'emissao';
         const { buffer: boletoBuffer, nossoNumero, seuNumero } = await createBoleto(page, dadosBoleto);
 
         success('ECO_SERVICE', 'Boleto gerado com sucesso.');
         return { success: true, boletoBuffer, nossoNumero, seuNumero, baixaPrevia };
     } catch (err) {
-        error('ECO_SERVICE', `Falha na automação: ${err.message}`);
+        // `ecoFase` diz até onde o fluxo chegou. 'login'/'select' = nada foi
+        // escrito no banco, então quem chamou pode reagendar com segurança.
+        // 'baixa'/'emissao' = pode ter mexido em título; nunca repetir sozinho.
+        err.ecoFase = fase;
+        err.ecoSeguroRepetir = (fase === 'login' || fase === 'select') && !isCredencialInvalida(err);
+        error('ECO_SERVICE', `Falha na automação (fase ${fase}): ${err.message}`);
         throw err;
     } finally {
         // Sair ANTES de fechar. A sessão do Ecobrança é por usuário: fechar o

@@ -8,7 +8,7 @@ import { sendBoletoToTitular } from './BoletoNotifyService.js';
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { computeSituacaoTarget } from '../../lib/cvLoteTiming.js';
-import { dentroDaJanela, proximaAbertura, descreverJanela, formatarAgendamento } from '../../lib/boletoJanela.js';
+import { dentroDaJanela, proximaAbertura, ajustarParaJanela, descreverJanela, formatarAgendamento } from '../../lib/boletoJanela.js';
 import { Op } from 'sequelize';
 
 // Tempo máximo de espera no lock Ecobrança antes de desistir (em ms).
@@ -17,6 +17,20 @@ import { Op } from 'sequelize';
 // scheduler de check (que dura ~30s normalmente).
 const ECO_LOCK_MAX_WAIT_MS = 4 * 60 * 1000;
 const ECO_LOCK_POLL_MS = 5000;
+
+// ── Retry de falha transitória do portal ──────────────────────────────────────
+// O Ecobrança recusa login fora do horário comercial e dá blip pontual durante
+// o dia. Quando a falha acontece ANTES de qualquer escrita no banco (fases
+// 'login'/'select', sinalizadas por `err.ecoSeguroRepetir`), em vez de reprovar
+// a reserva reagendamos a emissão e o boletoWindowScheduler tenta de novo.
+//
+// O backoff cresce porque as quedas do portal costumam durar: 15 min pega o
+// blip, 45 min e 2h pegam instabilidade mais longa. Se o horário calculado cair
+// fora da janela, ele é empurrado pra próxima abertura.
+//
+// Esgotadas as tentativas, vira erro de verdade - alguém precisa olhar.
+const RETRY_BACKOFF_MIN = [15, 45, 120];
+const MAX_REAGENDAMENTOS = RETRY_BACKOFF_MIN.length;
 
 /**
  * Calcula o próximo target sem persistir nada — usado pra preview na mensagem
@@ -938,10 +952,13 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         const ecoOwner = `emit:hist=${history.id}:reserva=${idreserva}:${new Date().toISOString()}`;
         const lockAcquired = await acquireEcoLockWithWait(ecoOwner, 5);
         if (!lockAcquired) {
-            throw new Error(
-                'Lock do Ecobrança ocupado por mais de 4 min (outro processo em andamento). '
-                + 'O CV deve reagendar o webhook automaticamente — aguarde o próximo ciclo.'
+            const errLock = new Error(
+                'Lock do Ecobrança ocupado por mais de 4 min (outro processo em andamento).'
             );
+            // Nada foi escrito no banco — dá pra tentar de novo mais tarde.
+            errLock.ecoFase = 'lock';
+            errLock.ecoSeguroRepetir = true;
+            throw errLock;
         }
 
         let boletoBuffer, nossoNumero, seuNumero, baixaPrevia;
@@ -1221,13 +1238,63 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
     } catch (err) {
         console.error(`[BOLETO] Erro no processamento da reserva ${idreserva}:`, err.message);
 
+        // ── Falha transitória do portal: reagenda em vez de reprovar ──────────
+        // Só entra aqui quando o Ecobrança quebrou ANTES de escrever qualquer
+        // coisa (login, seleção de empresa, lock ocupado). Falha durante baixa
+        // ou emissão NUNCA é repetida sozinha - risco de boleto em duplicidade.
+        const tentativasFeitas = Number(history.emissao_tentativas || 0);
+        if (err.ecoSeguroRepetir && tentativasFeitas < MAX_REAGENDAMENTOS) {
+            const minutos = RETRY_BACKOFF_MIN[tentativasFeitas];
+            const alvo = ajustarParaJanela(settings, new Date(Date.now() + minutos * 60 * 1000));
+            const proxima = tentativasFeitas + 1;
+            const quandoLabel = formatarAgendamento(alvo);
+
+            console.warn(
+                `[BOLETO] Reserva ${idreserva}: falha transitória do Ecobrança na fase "${err.ecoFase}" `
+                + `(${err.message}). Reagendando pra ${quandoLabel} (tentativa ${proxima}/${MAX_REAGENDAMENTOS}).`
+            );
+
+            const msgRetry = [
+                '🕒 Emissão adiada - o portal da Caixa não respondeu.',
+                '',
+                `Motivo: ${err.message}`,
+                '',
+                `Nova tentativa automática em ${quandoLabel} (tentativa ${proxima} de ${MAX_REAGENDAMENTOS}).`,
+                'Nenhum boleto foi registrado no banco nesta tentativa.',
+                '',
+                'A reserva PERMANECE na situação atual - nenhuma mudança de etapa foi feita.',
+            ].join('\n');
+            const msgRetryOk = pushWarn(await sendCvMessage(idreserva, msgRetry), 'cv_mensagem');
+
+            await history.update({
+                status: 'queued',
+                emissao_agendada_para: alvo,
+                emissao_agendada_processada: false,
+                emissao_tentativas: proxima,
+                error_message: `Portal Ecobrança indisponível (${err.ecoFase}): ${err.message} - nova tentativa em ${quandoLabel} (${proxima}/${MAX_REAGENDAMENTOS}).`,
+                cv_mensagem_enviada: msgRetryOk,
+                warnings: warnings.length ? warnings : null,
+            }).catch(() => {});
+            await EventLogger.log({
+                historyId: history.id, idreserva,
+                type: 'emission_retry_scheduled', severity: 'warning',
+                message: `Falha transitória do portal (${err.ecoFase}) - nova tentativa em ${quandoLabel} (${proxima}/${MAX_REAGENDAMENTOS}).`,
+                data: { fase: err.ecoFase, erro: err.message, agendadoPara: alvo, tentativa: proxima, maxTentativas: MAX_REAGENDAMENTOS },
+            });
+            return;
+        }
+
+        const esgotou = err.ecoSeguroRepetir && tentativasFeitas >= MAX_REAGENDAMENTOS;
         const msgErro = `❌ Falha na emissão do boleto:\n${err.message}`
+            + (esgotou ? `\n\nJá foram ${MAX_REAGENDAMENTOS} tentativas automáticas sem sucesso - o portal segue indisponível para esta reserva.` : '')
             + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
         const msgOk = pushWarn(await sendCvMessage(idreserva, msgErro), 'cv_mensagem');
 
         await history.update({
             status: 'error',
-            error_message: err.message,
+            error_message: esgotou
+                ? `${err.message} (esgotadas ${MAX_REAGENDAMENTOS} tentativas automáticas)`
+                : err.message,
             cv_mensagem_enviada: msgOk,
             warnings: warnings.length ? warnings : null,
         }).catch(() => {});
