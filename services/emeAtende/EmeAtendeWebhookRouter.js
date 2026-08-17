@@ -4,8 +4,9 @@
 // e leads externos (Eme Atende). O webhook da Meta é um só, então este router decide
 // o destino de cada evento:
 //
-//   - messages  → por REMETENTE: user interno (users.whatsapp_phone casa por
-//                 sufixo 9→8 dígitos) → Office (fluxo de alertas/SIM intacto);
+//   - messages  → por REMETENTE: user interno (telefone do perfil, ou o
+//                 whatsapp_phone legado, casando por DDD + assinante) → Office
+//                 (fluxo de alertas/SIM intacto);
 //                 qualquer outro → Eme Atende (que substitui a auto-resposta de
 //                 "canal só de saída" pelo atendimento IA).
 //   - statuses  → pelo DONO do wamid: se whatsapp_messages conhece → Office;
@@ -16,21 +17,14 @@
 // Gate: eme_atende_settings.active=false (default) → TUDO pro Office, comportamento
 // 100% idêntico ao atual. Qualquer erro aqui → fail-open pro Office.
 
-import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
-import { phoneSuffix, samePhone } from './emeAtendePhone.js';
+import { findUserByPhone } from '../whatsapp/whatsappPhone.js';
 
 async function isInternalUser(fromPhone) {
-    const suffix = phoneSuffix(fromPhone);
-    if (!suffix) return false;
-    // Sufixo de 8 no SQL só pré-filtra candidatos; a decisão é samePhone
-    // (DDD + assinante) — sufixo puro colide entre DDDs diferentes.
-    const candidates = await db.User.findAll({
-        where: { whatsapp_phone: { [Op.like]: `%${suffix}` } },
-        attributes: ['id', 'whatsapp_phone'],
-    });
-    return candidates.some(u => samePhone(u.whatsapp_phone, fromPhone));
+    // Olha o telefone do PERFIL e o whatsapp_phone legado. O sufixo no SQL só
+    // pré-filtra; quem decide é samePhone (DDD + assinante). Ver whatsappPhone.js.
+    return !!(await findUserByPhone(fromPhone, { attributes: ['id'] }));
 }
 
 async function officeOwnsWamid(wamid) {

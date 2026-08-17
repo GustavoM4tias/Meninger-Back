@@ -25,6 +25,7 @@ import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
 import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
+import { resolveUserPhone, USER_PHONE_ATTRS } from '../whatsapp/whatsappPhone.js';
 
 const { Notification, NotificationPreference, User, WhatsappMessage } = db;
 
@@ -34,14 +35,14 @@ const { Notification, NotificationPreference, User, WhatsappMessage } = db;
 
 /**
  * Resolve { users:[id], positions:[label], emails:[external] } em duas listas:
- *  - internalUsers: [{ id, email, username, whatsapp_phone, whatsapp_consent_at, whatsapp_consent_revoked_at }]
+ *  - internalUsers: [{ id, email, username, phone, whatsapp_phone }]
  *  - externalEmails: [string]
  */
 async function resolveRecipients({ users = [], positions = [], emails = [] } = {}) {
     const userMap = new Map();
     const externalSet = new Set();
 
-    const userAttrs = ['id', 'email', 'username', 'whatsapp_phone', 'whatsapp_consent_at', 'whatsapp_consent_revoked_at'];
+    const userAttrs = ['id', 'email', 'username', ...USER_PHONE_ATTRS];
 
     if (Array.isArray(users) && users.length) {
         const rows = await User.findAll({
@@ -105,16 +106,9 @@ function effectivePref(stored, defaults, channels) {
 // WhatsApp
 // ───────────────────────────────────────────────────────────────────────────────
 
-function userHasActiveConsent(u) {
-    if (!u?.whatsapp_phone) return false;
-    if (!u?.whatsapp_consent_at) return false;
-    if (u?.whatsapp_consent_revoked_at) {
-        const consent = new Date(u.whatsapp_consent_at).getTime();
-        const revoked = new Date(u.whatsapp_consent_revoked_at).getTime();
-        if (revoked > consent) return false;
-    }
-    return true;
-}
+// Não existe mais opt-in: estar no Office já é o consentimento (mesmo critério de
+// e-mail e sino). O único requisito é ter telefone no perfil. Ver
+// services/whatsapp/whatsappPhone.js.
 
 function pickVariables(spec, ctx) {
     if (!Array.isArray(spec?.variables)) return [];
@@ -127,6 +121,11 @@ function pickVariables(spec, ctx) {
 async function dispatchWhatsApp({ user, type, title, body, link, notificationId, whatsappSpec, ctx }) {
     if (!whatsappSpec) return null;
 
+    // Telefone do perfil (fallback no whatsapp_phone legado). Sem número não há
+    // o que enviar — o painel de cobertura em /settings/whatsapp lista esses casos.
+    const phone = resolveUserPhone(user);
+    if (!phone) return null;
+
     const cfg = await WhatsAppConfigService.getConfig({ withSecrets: false });
     const variables = pickVariables(whatsappSpec, ctx);
 
@@ -135,7 +134,7 @@ async function dispatchWhatsApp({ user, type, title, body, link, notificationId,
         direction: 'out',
         notification_id: notificationId || null,
         user_id: user.id,
-        to_phone: user.whatsapp_phone,
+        to_phone: phone,
         type: 'template',
         template_name: whatsappSpec.template,
         template_language: whatsappSpec.language || 'pt_BR',
@@ -152,11 +151,11 @@ async function dispatchWhatsApp({ user, type, title, body, link, notificationId,
     // GRATUITO em vez de template pago. Mesmo conteúdo; qualquer falha aqui cai
     // no fluxo de template abaixo (comportamento histórico intacto).
     try {
-        const win = await WhatsAppWindowService.getServiceWindow(user.whatsapp_phone);
+        const win = await WhatsAppWindowService.getServiceWindow(phone);
         if (win.open) {
             let freeBody = title + (body ? `\n${body}` : '');
             if (link && /^https?:\/\//i.test(link)) freeBody += `\n${link}`;
-            const { id } = await WhatsAppService.sendText({ to: user.whatsapp_phone, body: freeBody });
+            const { id } = await WhatsAppService.sendText({ to: phone, body: freeBody });
             return WhatsappMessage.create({
                 ...baseMsg,
                 type: 'text',
@@ -193,7 +192,7 @@ async function dispatchWhatsApp({ user, type, title, body, link, notificationId,
 
     try {
         const { id } = await WhatsAppService.sendTemplate({
-            to: user.whatsapp_phone,
+            to: phone,
             templateName: whatsappSpec.template,
             language: whatsappSpec.language || 'pt_BR',
             variables,
@@ -280,7 +279,7 @@ async function notify({
                         importance,
                         channel_inapp: true,
                         channel_email: pref.email && !!emailType,
-                        channel_whatsapp: pref.whatsapp && !!whatsappSpec && userHasActiveConsent(u),
+                        channel_whatsapp: pref.whatsapp && !!whatsappSpec && !!resolveUserPhone(u),
                         expires_at: expiresAt,
                     });
                     inappCreated++;
@@ -298,8 +297,8 @@ async function notify({
             }
 
             // 3) whatsapp (envia individual — template + variáveis por user)
-            const hasConsent = userHasActiveConsent(u);
-            if (pref.whatsapp && whatsappSpec && hasConsent) {
+            const hasPhone = !!resolveUserPhone(u);
+            if (pref.whatsapp && whatsappSpec && hasPhone) {
                 const ctx = { ...wppContext, userName: u.username || '', email: u.email || '' };
                 try {
                     const msg = await dispatchWhatsApp({
@@ -321,14 +320,7 @@ async function notify({
                 if (whatsappSpec) {
                     const reasons = [];
                     if (!pref.whatsapp) reasons.push('preferência whatsapp OFF');
-                    if (!hasConsent) {
-                        if (!u.whatsapp_phone) reasons.push('sem whatsapp_phone');
-                        else if (!u.whatsapp_consent_at) reasons.push('sem whatsapp_consent_at (opt-in)');
-                        else if (u.whatsapp_consent_revoked_at &&
-                            new Date(u.whatsapp_consent_revoked_at) > new Date(u.whatsapp_consent_at)) {
-                            reasons.push('opt-in revogado');
-                        }
-                    }
+                    if (!hasPhone) reasons.push('sem telefone no perfil');
                     console.log(
                         `[notify ${type}] whatsapp pulado para user ${u.id} (${u.username}): ${reasons.join(', ')}`
                     );

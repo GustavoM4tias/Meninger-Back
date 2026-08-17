@@ -23,6 +23,7 @@ import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
 import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
 import AlertEngine from './AlertEngine.js';
+import { resolveUserPhone, USER_PHONE_ATTRS } from '../whatsapp/whatsappPhone.js';
 
 const { AlertShare, AlertRule, AlertTriggerLog, User, WhatsappMessage } = db;
 
@@ -31,13 +32,7 @@ const SHARE_LANG = 'pt_BR';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function hasActiveConsent(u) {
-    if (!u?.whatsapp_phone) return false;
-    if (!u?.whatsapp_consent_at) return false;
-    if (u?.whatsapp_consent_revoked_at &&
-        new Date(u.whatsapp_consent_revoked_at) > new Date(u.whatsapp_consent_at)) return false;
-    return true;
-}
+// Sem opt-in desde 2026-08-17: basta ter telefone no perfil (whatsappPhone.js).
 
 const DOW = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 
@@ -71,17 +66,15 @@ export function describeCron(cron) {
     return String(cron);
 }
 
-const PUBLIC_USER_ATTRS = [
-    'id', 'username', 'email', 'whatsapp_phone',
-    'whatsapp_consent_at', 'whatsapp_consent_revoked_at',
-];
+const PUBLIC_USER_ATTRS = ['id', 'username', 'email', ...USER_PHONE_ATTRS];
 
 /**
  * Envia o template de convite via WhatsApp e retorna o wamid (ou null se não saiu).
  * Mirror do AlertEngine.sendInitialAlert, simplificado pra um único template.
  */
 async function sendShareInvite({ share, toUser, fromUser, rule }) {
-    if (!hasActiveConsent(toUser)) return null;
+    const toPhone = resolveUserPhone(toUser);
+    if (!toPhone) return null;
 
     const automation = await WhatsAppAutomationService.getByKey('alert_share').catch(() => null);
     if (automation && automation.enabled === false) return null;
@@ -106,7 +99,7 @@ async function sendShareInvite({ share, toUser, fromUser, rule }) {
     const baseMsg = {
         direction: 'out',
         user_id: toUser.id,
-        to_phone: toUser.whatsapp_phone,
+        to_phone: toPhone,
         type: 'template',
         template_name: templateName,
         template_language: lang,
@@ -136,7 +129,7 @@ async function sendShareInvite({ share, toUser, fromUser, rule }) {
 
     try {
         const { id: wamid } = await WhatsAppService.sendTemplate({
-            to: toUser.whatsapp_phone, templateName, language: lang, variables,
+            to: toPhone, templateName, language: lang, variables,
         });
         await WhatsappMessage.create({ ...baseMsg, status: 'sent', meta_message_id: wamid, sent_at: new Date() });
         return wamid;
