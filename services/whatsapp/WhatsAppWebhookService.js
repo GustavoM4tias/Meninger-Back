@@ -16,8 +16,9 @@ import db from '../../models/sequelize/index.js';
 import WhatsAppConfigService from './WhatsAppConfigService.js';
 import WhatsAppService from './WhatsAppService.js';
 import AlertReplyHandler from '../alerts/AlertReplyHandler.js';
+import { findUserByPhone } from './whatsappPhone.js';
 
-const { WhatsappMessage, User } = db;
+const { WhatsappMessage } = db;
 
 // Texto de auto-resposta para clientes externos (não-users) que respondem
 // no número do sistema. Único objetivo: deixar claro que este é um canal de
@@ -126,13 +127,11 @@ async function handleIncomingMessage(m, fromPhone) {
         default: body = m[type]?.caption || null;
     }
 
-    // Tenta amarrar a um user pelo telefone (últimos 9 dígitos = celular sem DDI)
+    // Amarra a um user interno pelo telefone. O match é por DDD + assinante nas
+    // DUAS colunas (perfil e whatsapp_phone legado) — ver whatsappPhone.js.
     let userId = null;
     if (fromPhone) {
-        const u = await User.findOne({
-            where: { whatsapp_phone: { [Op.like]: `%${fromPhone.slice(-9)}` } },
-            attributes: ['id'],
-        });
+        const u = await findUserByPhone(fromPhone, { attributes: ['id'] });
         userId = u?.id || null;
     }
 

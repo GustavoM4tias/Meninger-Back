@@ -35,6 +35,7 @@ import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
 import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
+import { resolveUserPhone, USER_PHONE_ATTRS } from '../whatsapp/whatsappPhone.js';
 import AlertReportService from './AlertReportService.js';
 import { toolToRoute } from './toolToRoute.js';
 
@@ -113,8 +114,8 @@ function whatsappToHtml(text) {
 async function fire(ruleId, { force = false } = {}) {
     const rule = await AlertRule.findByPk(ruleId, {
         include: [{ model: User, as: 'owner', attributes: [
-            'id', 'username', 'email', 'role', 'city', 'position', 'whatsapp_phone',
-            'whatsapp_consent_at', 'whatsapp_consent_revoked_at', 'daily_alert_limit',
+            'id', 'username', 'email', 'role', 'city', 'position',
+            ...USER_PHONE_ATTRS, 'daily_alert_limit',
         ] }],
     });
     if (!rule) return;
@@ -281,11 +282,12 @@ async function pickApprovedTemplate() {
 }
 
 async function sendInitialAlert({ rule, owner, title, preview, report }) {
-    if (!owner.whatsapp_phone) return null;
-    const consented = !!owner.whatsapp_consent_at &&
-        (!owner.whatsapp_consent_revoked_at ||
-            new Date(owner.whatsapp_consent_at) > new Date(owner.whatsapp_consent_revoked_at));
-    if (!consented) return null;
+    // Número do perfil — sem opt-in desde 2026-08-17. Sem telefone, sem alerta.
+    const phone = resolveUserPhone(owner);
+    if (!phone) {
+        console.warn(`[AlertEngine] owner ${owner.id} (${owner.username}) sem telefone no perfil — alerta não enviado.`);
+        return null;
+    }
 
     const cfg = await WhatsAppConfigService.getConfig({ withSecrets: false });
     if (!cfg?.has_access_token || !cfg?.phone_number_id) {
@@ -300,7 +302,7 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
         const m = await WhatsappMessage.create({
             direction: 'out',
             user_id: owner.id,
-            to_phone: owner.whatsapp_phone,
+            to_phone: phone,
             type: 'template',
             template_name: ALERT_TEMPLATES[0].name,
             template_language: ALERT_TEMPLATE_LANG,
@@ -323,7 +325,7 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
     const baseMsg = {
         direction: 'out',
         user_id: owner.id,
-        to_phone: owner.whatsapp_phone,
+        to_phone: phone,
         type: 'template',
         template_name: chosen.name,
         template_language: ALERT_TEMPLATE_LANG,
@@ -334,7 +336,7 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
     // Dry-run
     if (!cfg.active || cfg.dry_run) {
         const m = await WhatsappMessage.create({ ...baseMsg, status: 'dry_run' });
-        await createPendingReply({ rule, owner, log_id: null, report, wamid: null });
+        await createPendingReply({ rule, owner, phone, log_id: null, report, wamid: null });
         return m.id;
     }
 
@@ -342,7 +344,7 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
 
     try {
         const { id: wamid } = await WhatsAppService.sendTemplate({
-            to: owner.whatsapp_phone,
+            to: phone,
             templateName: chosen.name,
             language: ALERT_TEMPLATE_LANG,
             variables,
@@ -353,7 +355,7 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
             meta_message_id: wamid,
             sent_at: new Date(),
         });
-        await createPendingReply({ rule, owner, log_id: null, report, wamid });
+        await createPendingReply({ rule, owner, phone, log_id: null, report, wamid });
         return m.id;
     } catch (err) {
         const m = await WhatsappMessage.create({
@@ -367,13 +369,13 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
     }
 }
 
-async function createPendingReply({ rule, owner, log_id, report, wamid }) {
+async function createPendingReply({ rule, owner, phone, log_id, report, wamid }) {
     const expiresAt = new Date(Date.now() + REPLY_WINDOW_HOURS * 60 * 60 * 1000);
     return AlertPendingReply.create({
         alert_rule_id: rule.id,
         log_id,
         user_id: owner.id,
-        phone: owner.whatsapp_phone,
+        phone,
         rule_name: rule.name,
         meta_message_id: wamid || null,
         state: 'awaiting_reply',

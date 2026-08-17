@@ -18,6 +18,7 @@ import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
 import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
 import svc from './marketingApprovalService.js';
+import { resolveUserPhone } from '../whatsapp/whatsappPhone.js';
 
 const { User, WhatsappMessage, MarketingApprovalWaMessage, MarketingApprovalRequest } = db;
 
@@ -28,13 +29,7 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'https://office.menin.com.br';
 const requestLink = (id) => `${FRONTEND_URL}/aprovacoes/${id}`;
 const brl = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-function hasActiveConsent(u) {
-    if (!u?.whatsapp_phone) return false;
-    if (!u?.whatsapp_consent_at) return false;
-    if (u?.whatsapp_consent_revoked_at &&
-        new Date(u.whatsapp_consent_revoked_at) > new Date(u.whatsapp_consent_at)) return false;
-    return true;
-}
+// Sem opt-in desde 2026-08-17: basta ter telefone no perfil (whatsappPhone.js).
 
 const normalize = (text) => String(text || '').trim().toLowerCase()
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -120,12 +115,13 @@ export async function sendApprovalRequests(request) {
     ];
 
     for (const user of users) {
-        if (!hasActiveConsent(user)) continue;
+        const phone = resolveUserPhone(user);
+        if (!phone) continue;
 
         const baseMsg = {
             direction: 'out',
             user_id: user.id,
-            to_phone: user.whatsapp_phone,
+            to_phone: phone,
             type: 'template',
             template_name: templateName,
             template_language: lang,
@@ -149,14 +145,14 @@ export async function sendApprovalRequests(request) {
                 continue;
             }
             const { id: wamid } = await WhatsAppService.sendTemplate({
-                to: user.whatsapp_phone, templateName, language: lang, variables,
+                to: phone, templateName, language: lang, variables,
             });
             await WhatsappMessage.create({ ...baseMsg, status: 'sent', meta_message_id: wamid, sent_at: new Date() });
             if (wamid) {
                 await MarketingApprovalWaMessage.create({
                     request_id: request.id,
                     user_id: user.id,
-                    phone: user.whatsapp_phone,
+                    phone,
                     meta_message_id: wamid,
                     status: 'sent',
                 });

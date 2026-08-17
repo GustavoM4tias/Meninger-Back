@@ -105,7 +105,11 @@ export default (sequelize, DataTypes) => {
     show_in_organogram: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     phone: { type: DataTypes.STRING(20), allowNull: true },
 
-    // ── WhatsApp Business ─────────────────────────────────────────────────────
+    // ── WhatsApp Business (LEGADO — não usar em código novo) ──────────────────
+    // O opt-in foi removido em 2026-08-17: o número do WhatsApp é o `phone` do
+    // perfil. Estas colunas ficam só pra não perder o número de quem fez opt-in
+    // antes (lida como fallback em services/whatsapp/whatsappPhone.js e
+    // consolidada no boot por lib/ensureUserPhoneBackfill.js).
     whatsapp_phone:                { type: DataTypes.STRING(20),  allowNull: true }, // E.164 ex: +5511999999999
     whatsapp_consent_at:           { type: DataTypes.DATE,        allowNull: true },
     whatsapp_consent_revoked_at:   { type: DataTypes.DATE,        allowNull: true },

@@ -19,8 +19,8 @@ import {
     listMessages, stats,
 } from '../controllers/whatsapp/whatsappMessageController.js';
 import {
-    getOptStatus, optIn, optOut, getPublicInfo,
-} from '../controllers/whatsapp/whatsappOptController.js';
+    getPublicInfo, getCoverage,
+} from '../controllers/whatsapp/whatsappAudienceController.js';
 
 const router = express.Router();
 
@@ -47,9 +47,8 @@ router.get('/messages/stats',     authenticate, requireAdmin, stats);
 // ── Info pública do número do sistema (qualquer user autenticado) ───────
 router.get('/info',               authenticate, getPublicInfo);
 
-// ── Opt-in / opt-out (qualquer usuário autenticado) ─────────────────────
-router.get('/opt',                authenticate, getOptStatus);
-router.post('/opt-in',            authenticate, optIn);
-router.post('/opt-out',           authenticate, optOut);
+// ── Cobertura do canal: quem está sem telefone e não recebe (admin) ─────
+// O opt-in foi removido em 2026-08-17 — estar no Office já autoriza o canal.
+router.get('/coverage',           authenticate, requireAdmin, getCoverage);
 
 export default router;
