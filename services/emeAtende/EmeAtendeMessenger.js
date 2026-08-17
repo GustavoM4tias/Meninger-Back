@@ -7,6 +7,7 @@ import db from '../../models/sequelize/index.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
 import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
+import { OPENER_VAR_FALLBACKS } from './emeAtendeOpenerTemplates.js';
 
 // Janela de serviço da Cloud API: 24h desde a última mensagem do lead, com
 // margem pra não disparar com ela fechando em trânsito (erro 131047).
@@ -141,11 +142,22 @@ async function sendOpener({ lead, conversation, flow }) {
         console.warn('[eme-atende/messenger] validação de template pulada:', err?.message);
     }
 
+    // Campo vazio do lead não pode virar "-": a primeira mensagem chegaria como
+    // "Olá, -!". Cada variável conhecida tem um texto neutro que encaixa na frase.
     const fields = Array.isArray(flow.opener_variables) ? flow.opener_variables : [];
+    const missing = [];
     const variables = fields.map(f => {
         const v = lead[f] !== undefined && lead[f] !== null ? lead[f] : lead.payload?.[f];
-        return v === undefined || v === null || v === '' ? '-' : String(v);
+        if (v === undefined || v === null || v === '') {
+            missing.push(f);
+            return OPENER_VAR_FALLBACKS[f] || 'tudo bem';
+        }
+        return String(v);
     });
+    if (missing.length) {
+        console.warn(`[eme-atende/messenger] lead ${lead.id} sem ${missing.join(', ')} — abertura usou texto neutro.`);
+        await logEvent(lead.id, conversation.id, 'opener_missing_vars', { fields: missing });
+    }
 
     const body = `[template:${flow.opener_template}] vars=${JSON.stringify(variables)}`;
     const cfg = await EmeAtendeSettingsService.getConfig();
