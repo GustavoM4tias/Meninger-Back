@@ -3,15 +3,31 @@
 import db from '../../models/sequelize/index.js';
 import WhatsAppTemplateService from '../../services/whatsapp/WhatsAppTemplateService.js';
 import WhatsAppService from '../../services/whatsapp/WhatsAppService.js';
+import {
+    describeTemplates, findRegistryEntry, FEATURES, AUDIENCES,
+} from '../../services/whatsapp/whatsappTemplateRegistry.js';
 
 const { WhatsappTemplate } = db;
 
-/** GET /api/whatsapp/templates */
+/**
+ * GET /api/whatsapp/templates
+ *
+ * Além da lista crua sincronizada da Meta (`items`), devolve o CATÁLOGO cruzado
+ * com o registro do código (`catalog`): cada template com destino, funcionalidade,
+ * gatilho e variáveis; o que o código espera e a Meta não tem (`missing`); e o que
+ * existe na Meta sem nenhum fluxo usando (`orphans`).
+ */
 export const listTemplates = async (req, res) => {
     try {
         const { status } = req.query;
         const items = await WhatsAppTemplateService.listLocal({ status: status || undefined });
-        return res.json({ items });
+
+        // Cruzamento sempre com a lista COMPLETA — filtrar por status aqui
+        // faria templates aparecerem como "ausentes" só porque foram filtrados.
+        const all = status ? await WhatsAppTemplateService.listLocal({}) : items;
+        const { items: catalog, missing, orphans } = describeTemplates(all);
+
+        return res.json({ items, catalog, missing, orphans, features: FEATURES, audiences: AUDIENCES });
     } catch (err) {
         console.error('[whatsapp/templates/list]', err);
         return res.status(500).json({ error: 'Falha ao listar templates.' });
@@ -63,6 +79,22 @@ export const createTemplate = async (req, res) => {
 export const deleteTemplate = async (req, res) => {
     try {
         const { name } = req.params;
+
+        // Trava anti-tiro-no-pé: template que um fluxo crítico usa (boleto,
+        // alerta) só sai com confirmação explícita. Excluir na Meta é definitivo
+        // e o estrago só aparecia depois, quando a mensagem não saía.
+        const entry = findRegistryEntry(name);
+        if (entry?.critical && String(req.query.force) !== 'true') {
+            return res.status(409).json({
+                ok: false,
+                error: `"${name}" é usado por ${entry.purpose.toLowerCase()} `
+                    + `Excluir na Meta é definitivo e quebra esse fluxo. `
+                    + `Se tem certeza, repita com force=true.`,
+                code: 'TEMPLATE_IN_USE',
+                usedBy: { feature: entry.feature, source: entry.source },
+            });
+        }
+
         await WhatsAppService.deleteTemplate({ name });
         await WhatsAppTemplateService.syncFromMeta().catch(() => null);
         return res.json({ ok: true });
