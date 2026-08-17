@@ -87,8 +87,26 @@ export async function updateSettings(req, res) {
             'situacao_sucesso_id', 'situacao_erro_id',
             'situacao_pago_id', 'situacao_baixado_id', 'tolerancia_dias_uteis',
             'delay_situacao_sucesso_min', 'max_dias_vencimento', 'valor_maximo',
+            'janela_ativa', 'janela_inicio_hora', 'janela_fim_hora',
             'active',
         ];
+
+        // Janela de funcionamento: horas cheias, início antes do fim. Config
+        // inválida faria a emissão ser adiada pra sempre — barra aqui.
+        if (req.body.janela_inicio_hora !== undefined || req.body.janela_fim_hora !== undefined) {
+            const atual = await db.BoletoSettings.findByPk(1);
+            const inicio = Number(req.body.janela_inicio_hora ?? atual?.janela_inicio_hora ?? 8);
+            const fim = Number(req.body.janela_fim_hora ?? atual?.janela_fim_hora ?? 20);
+            if (!Number.isInteger(inicio) || inicio < 0 || inicio > 23) {
+                return res.status(400).json({ error: 'janela_inicio_hora deve ser uma hora cheia entre 0 e 23.' });
+            }
+            if (!Number.isInteger(fim) || fim < 1 || fim > 24) {
+                return res.status(400).json({ error: 'janela_fim_hora deve ser uma hora cheia entre 1 e 24.' });
+            }
+            if (inicio >= fim) {
+                return res.status(400).json({ error: 'A hora de início da janela deve ser menor que a de fim.' });
+            }
+        }
 
         // Teto de valor: aceita vazio (= sem teto). Preenchido, precisa ser
         // número positivo — um teto zerado/negativo barraria toda emissão.
@@ -405,6 +423,7 @@ export async function getHistoryStats(req, res) {
             processing: { qty: 0, valor: 0 },
             errors: { qty: 0, valor: 0 },       // status='error' (todas as tentativas)
             skipped: { qty: 0, valor: 0 },      // status='skipped' (sem série de Ato)
+            queued: { qty: 0, valor: 0 },       // status='queued' (fora da janela, aguardando abertura)
             paid: { qty: 0, valor: 0 },         // via final + paid
             pending: { qty: 0, valor: 0 },      // via final + pending
             cancelled: { qty: 0, valor: 0 },    // via final + cancelled (baixado sem reemissão)
@@ -426,6 +445,9 @@ export async function getHistoryStats(req, res) {
             } else if (r.status === 'processing') {
                 stats.processing.qty += qty;
                 stats.processing.valor += valor;
+            } else if (r.status === 'queued') {
+                stats.queued.qty += qty;
+                stats.queued.valor += valor;
             }
         }
 
@@ -766,7 +788,10 @@ export async function retryHistoryItem(req, res) {
 
         res.status(200).json({ retrying: true, idreserva: item.idreserva });
 
-        processBoletoWebhook({ idreserva: Number(item.idreserva), idtransacao: item.idtransacao || null })
+        // `forcarAgora`: o admin clicou pra tentar AGORA. A janela de
+        // funcionamento existe pra conter o disparo automático de madrugada,
+        // não pra bloquear uma ação deliberada com gente acompanhando.
+        processBoletoWebhook({ idreserva: Number(item.idreserva), idtransacao: item.idtransacao || null, forcarAgora: true })
             .catch(err => console.error('[BOLETO_RETRY] Erro no re-disparo:', err.message));
     } catch (err) {
         return res.status(500).json({ error: err.message });
@@ -791,7 +816,9 @@ export async function regenerateHistoryItem(req, res) {
 
         res.status(200).json({ regenerating: true, idreserva: item.idreserva });
 
-        processBoletoWebhook({ idreserva: Number(item.idreserva), idtransacao: item.idtransacao || null, manual: true })
+        // `forcarAgora`: geração interna é ação deliberada do admin — mesma
+        // lógica do retry, a janela não se aplica.
+        processBoletoWebhook({ idreserva: Number(item.idreserva), idtransacao: item.idtransacao || null, manual: true, forcarAgora: true })
             .catch(err => console.error('[BOLETO_REGEN] Erro na geração interna:', err.message));
     } catch (err) {
         return res.status(500).json({ error: err.message });

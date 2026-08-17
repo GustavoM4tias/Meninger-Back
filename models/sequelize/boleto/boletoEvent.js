@@ -18,6 +18,8 @@
 //   baixa_requested   Baixa por devolução iniciada
 //   baixa_confirmed   Baixa confirmada pelo Ecobrança
 //   baixa_failed      Baixa falhou (com motivo no message)
+//   emission_deferred        Acionamento fora da janela — emissão agendada
+//   emission_window_released Janela abriu — emissão agendada retomada
 //   error             Erro genérico
 
 export default (sequelize, DataTypes) => {

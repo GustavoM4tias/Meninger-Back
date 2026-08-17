@@ -48,8 +48,10 @@ export default (sequelize, DataTypes) => {
         // (sem série de Ato). Não é falha técnica — fluxo deliberadamente pulado
         // sem mexer na situação CV. Valor adicionado ao tipo enum via
         // ensureBoletoSchema (ALTER TYPE ... ADD VALUE).
+        // 'queued' = acionamento chegou fora da janela de funcionamento; a
+        // emissão está agendada pra próxima abertura (ver emissao_agendada_para).
         status: {
-            type: DataTypes.ENUM('processing', 'success', 'error', 'skipped'),
+            type: DataTypes.ENUM('processing', 'success', 'error', 'skipped', 'queued'),
             defaultValue: 'processing',
             allowNull: false,
         },
@@ -100,6 +102,22 @@ export default (sequelize, DataTypes) => {
             defaultValue: false,
             allowNull: false,
             comment: 'True após o scheduler ter aplicado a situação (idempotência).',
+        },
+
+        // ── Emissão adiada pela janela de funcionamento ───────────────────────
+        // Acionamento fora do horário (padrão 08:00-20:00 de Brasília) não é
+        // processado na hora: o registro nasce 'queued' e o
+        // boletoWindowScheduler retoma ESTE MESMO registro na abertura.
+        emissao_agendada_para: {
+            type: DataTypes.DATE,
+            allowNull: true,
+            comment: 'Timestamp UTC da próxima abertura da janela, quando a emissão será retomada.',
+        },
+        emissao_agendada_processada: {
+            type: DataTypes.BOOLEAN,
+            defaultValue: false,
+            allowNull: false,
+            comment: 'True depois que o scheduler retomou este registro (idempotência).',
         },
 
         // ── Re-trigger / ignorar / baixa+reemitir ────────────────────────────
