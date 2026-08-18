@@ -31,6 +31,17 @@ async function ensureGlobalRules() {
 async function ensureDefaultOpener() {
     const flow = await db.EmeAtendeFlow.findOne({ where: { is_default: true } });
     if (!flow || flow.opener_template) return;
+
+    // Só amarra template que a Meta JÁ APROVOU. Apontar pro que não existe (ou
+    // está pendente) deixaria o fluxo com uma abertura que falha calada no
+    // primeiro lead - o Messenger recusa e loga opener_failed.
+    const tpl = await db.WhatsappTemplate.findOne({
+        where: { name: DEFAULT_OPENER.template, language: DEFAULT_OPENER.language, status: 'APPROVED' },
+    }).catch(() => null);
+    if (!tpl) {
+        console.log(`[eme-atende/seed] abertura "${DEFAULT_OPENER.template}" ainda não aprovada na Meta - fluxo default segue sem opener.`);
+        return;
+    }
     await flow.update({
         opener_template: DEFAULT_OPENER.template,
         opener_language: DEFAULT_OPENER.language,
