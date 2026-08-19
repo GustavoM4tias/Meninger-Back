@@ -25,7 +25,7 @@ const CAMPOS_OBSERVADOS = [
     'nome', 'cidade', 'status', 'perfil', 'descricao', 'sobre',
     'area', 'quartos', 'vagas', 'terreno', 'obra', 'endereco', 'book',
 ];
-const LISTAS_OBSERVADAS = ['diferenciais', 'comodidades', 'pontos', 'images'];
+const LISTAS_OBSERVADAS = ['diferenciais', 'comodidades', 'pontos', 'images', 'stand'];
 
 /** O que mudou entre dois snapshots, em nome de campo. */
 function diffSnapshots(antes, depois) {
