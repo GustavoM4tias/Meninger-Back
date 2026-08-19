@@ -88,11 +88,24 @@ export async function getLeads(req, res) {
       return res.status(400).json({ error: 'Data final não pode ser menor que a inicial.' });
     }
 
-    const whereClauses = [`l.data_cad BETWEEN :start AND :end`];
+    // Busca por id (deep link ?idlead=). Quando vem id explícito a janela de
+    // datas NÃO se aplica: o link chega de outra tela (ex.: selo "Lead" na
+    // listagem do Faturamento) e o lead costuma ser mais velho que o mês
+    // corrente, que é o padrão da tela. Sem isso o link abriria vazio.
+    const idleadsArr = String(req.query.idlead || req.query.idleads || '')
+      .split(',')
+      .map((s) => parseInt(s.trim(), 10))
+      .filter(Number.isFinite);
+    const hasIdFilter = idleadsArr.length > 0;
+
+    const whereClauses = hasIdFilter
+      ? [`l.idlead IN (:idleads_arr)`]
+      : [`l.data_cad BETWEEN :start AND :end`];
     const replacements = {
       start: start.format('YYYY-MM-DD 00:00:00'),
       end: end.format('YYYY-MM-DD 23:59:59'),
     };
+    if (hasIdFilter) replacements.idleads_arr = idleadsArr;
 
     // filtros simples
     const ilikeSingles = {

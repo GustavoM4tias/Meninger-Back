@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
-import { getContracts, listEnterprises, listCompanies, clearCache } from '../controllers/sienge/contractSalesController.js';
+import { getContracts, listEnterprises, listCompanies,
+    listCities, clearCache } from '../controllers/sienge/contractSalesController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
 import requireRoutePermission from '../middlewares/requireRoutePermission.js';
@@ -37,6 +38,7 @@ import {
     exportCsv as inadimplenciaExport,
 } from '../controllers/sienge/inadimplenciaController.js';
 import { listCefEnterprises, searchCef } from '../controllers/sienge/cefConsultaController.js';
+import { RELATORIO_SCREENS } from '../lib/relatorioScreens.js';
 
 
 const router = express.Router();
@@ -51,10 +53,14 @@ const upload = multer({
 
 // GET /api/contracts?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&situation=Emitido|Autorizado|Cancelado&enterpriseName=texto
 // Alçada: telas que consomem o dashboard de contratos.
-const CONTRACT_SCREENS = ['/comercial/faturamento', '/comercial/sales-projection', '/financeiro/consulta-cef', '/validator'];
+// Cada relatório comercial é uma tela com alçada própria e todas consomem
+// contratos — por isso a lista inteira, e não só o Faturamento.
+const CONTRACT_SCREENS = [...RELATORIO_SCREENS, '/financeiro/consulta-cef', '/validator'];
 router.get('/contracts', authenticate, requireRoutePermission(CONTRACT_SCREENS), getContracts);
 router.get('/contracts/enterprises', authenticate, requireRoutePermission(CONTRACT_SCREENS), listEnterprises);
 router.get('/contracts/companies', authenticate, requireRoutePermission(CONTRACT_SCREENS), listCompanies);
+// Cidades do filtro — derivadas dos empreendimentos do escopo do usuário.
+router.get('/contracts/cities', authenticate, requireRoutePermission(CONTRACT_SCREENS), listCities);
 // Limpar cache de empreendimentos: operação de manutenção, só admin.
 router.post('/contracts/cache/clear', authenticate, requireAdmin, clearCache);
 

@@ -120,7 +120,7 @@ registerTool({
             period: { type: 'string', description: 'Mês no formato YYYY-MM (ex: 2026-01). Padrão: mês atual.' },
         },
     },
-    requiredPermissions: ['/comercial/faturamento'],
+    requiredPermissions: ['/comercial/relatorios/faturamento'],
     contexts: ['OFFICE'],
     async handler(user, args) {
         const period = PERIOD_RE.test(String(args?.period || '')) ? args.period : defaultPeriod();
@@ -173,7 +173,7 @@ registerTool({
                     subtitle: `${lines.length} venda(s) · ${fmtBRL(net)}`,
                     labels: sorted.slice(0, 12).map(([k]) => k),
                     data: sorted.slice(0, 12).map(([, v]) => Math.round(v.net)),
-                    message: `Mês ${period} CONSOLIDADO (fechamento v${closing.version} em ${new Date(closing.consolidated_at).toLocaleDateString('pt-BR')}${closing.consolidated_by_name ? ` por ${closing.consolidated_by_name}` : ''}). Números OFICIAIS e congelados: ${lines.length} venda(s), VGV ${fmtBRL(net)} (VGV+DC ${fmtBRL(gross)}).${distratadas ? ` ${distratadas} venda(s) foram distratadas depois, mas CONTAM no período (regra oficial).` : ''}${openDivs ? ` ATENÇÃO: há ${openDivs} divergência(s) aberta(s) detectada(s) nos dados de origem após o fechamento — mencione isso e aponte o menu Consolidação do Faturamento (/comercial/faturamento, admin).` : ''}${scoped ? ' Valores já filtrados pelo escopo de acesso do usuário.' : ''} Responda com base SOMENTE nestes dados.`,
+                    message: `Mês ${period} CONSOLIDADO (fechamento v${closing.version} em ${new Date(closing.consolidated_at).toLocaleDateString('pt-BR')}${closing.consolidated_by_name ? ` por ${closing.consolidated_by_name}` : ''}). Números OFICIAIS e congelados: ${lines.length} venda(s), VGV ${fmtBRL(net)} (VGV+DC ${fmtBRL(gross)}).${distratadas ? ` ${distratadas} venda(s) foram distratadas depois, mas CONTAM no período (regra oficial).` : ''}${openDivs ? ` ATENÇÃO: há ${openDivs} divergência(s) aberta(s) detectada(s) nos dados de origem após o fechamento — mencione isso e aponte o menu Consolidação do Faturamento (/comercial/relatorios/faturamento, admin).` : ''}${scoped ? ' Valores já filtrados pelo escopo de acesso do usuário.' : ''} Responda com base SOMENTE nestes dados.`,
                 },
                 resultCount: lines.length,
                 filtersApplied: { period },
@@ -196,7 +196,7 @@ registerTool({
                 subtitle: `${partial.count} venda(s) · ${fmtBRL(partial.vgv_net)} · NÃO consolidado`,
                 labels: partial.by_enterprise.slice(0, 12).map(e => e.name),
                 data: partial.by_enterprise.slice(0, 12).map(e => Math.round(e.vgv_net)),
-                message: `O mês ${period} NÃO está consolidado. AVISE ISSO PRIMEIRO, com destaque: os números abaixo são PARCIAIS e APROXIMADOS (cálculo direto dos contratos, sem as regras finas de composição/comissão do dashboard) e PODEM MUDAR até o fechamento oficial. Parcial: ${partial.count} venda(s), VGV ~${fmtBRL(partial.vgv_net)}. Para o número oficial, um admin consolida o mês no menu Consolidação do Faturamento (/comercial/faturamento).`,
+                message: `O mês ${period} NÃO está consolidado. AVISE ISSO PRIMEIRO, com destaque: os números abaixo são PARCIAIS e APROXIMADOS (cálculo direto dos contratos, sem as regras finas de composição/comissão do dashboard) e PODEM MUDAR até o fechamento oficial. Parcial: ${partial.count} venda(s), VGV ~${fmtBRL(partial.vgv_net)}. Para o número oficial, um admin consolida o mês no menu Consolidação do Faturamento (/comercial/relatorios/faturamento).`,
             },
             resultCount: partial.count,
             filtersApplied: { period },

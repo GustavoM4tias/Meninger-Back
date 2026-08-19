@@ -27,6 +27,7 @@ import { fetchGroupProjections } from '../controllers/cv/workflowGroupQueries.js
 import PriceTableSyncService from '../services/bulkData/cv/PriceTableSyncService.js';
 import RealtorSyncService from '../services/bulkData/cv/RealtorSyncService.js';
 import CorrespondentSyncService from '../services/bulkData/cv/CorrespondentSyncService.js';
+import { RELATORIO_SCREENS } from '../lib/relatorioScreens.js';
 
 const router = express.Router();
 const cvLeads = new bulkDataController();
@@ -39,8 +40,8 @@ const cvPrecadastros = new PrecadastrosSyncController();
 // Cada endpoint exige que o usuário tenha AO MENOS UMA das telas que o
 // consomem. Admin tem bypass. Endpoints de sync manual são admin-only (o cron
 // roda em processo pelos schedulers).
-const WORKFLOW_SCREENS = ['/comercial/workflow/groups', '/comercial/sales-projection', '/comercial/faturamento', '/validator'];
-const ENTERPRISE_SCREENS = ['/comercial/buildings', '/comercial/conditions', '/comercial/projections', '/comercial/sales-projection', '/comercial/faturamento', '/comercial/reservas-report', '/comercial/precadastros', '/marketing/plano-eventos'];
+const WORKFLOW_SCREENS = ['/comercial/workflow/groups', ...RELATORIO_SCREENS, '/validator'];
+const ENTERPRISE_SCREENS = ['/comercial/buildings', '/comercial/conditions', '/comercial/projections', ...RELATORIO_SCREENS, '/comercial/reservas-report', '/comercial/precadastros', '/marketing/plano-eventos'];
 
 router.get('/repasses', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasses);
 router.get('/repasse-workflow', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasseWorkflow);

@@ -2,6 +2,7 @@
 import dayjs from 'dayjs'
 import db from '../../models/sequelize/index.js'
 import { visibleErpIds } from '../../services/permissions/accessScopeService.js'
+import contractsCache from '../../services/sienge/contractsQueryCache.js'
 import {
   effectiveFiDateSql,
   fiDateInRangeSql,
@@ -26,10 +27,19 @@ export async function getContracts(req, res) {
       enterpriseId,
       enterpriseIds,
       companyId,
-      companyIds
+      companyIds,
+      cities
     } = req.query
 
     const isDetail = String(view).toLowerCase() === 'detail'
+
+    // Visão RANKING: usada pelos relatórios de Leads / Imobiliárias / Corretores.
+    // Precisa de quem vendeu e do lead de captação, mas NÃO do pacote inteiro do
+    // CV (condições, mensagens, documentos, unidade_json, histórico de status).
+    // Sem esse recorte a mesma resposta saía com ~2,3 MB para um mês; com ele
+    // fica na casa das centenas de KB.
+    const isRanking = String(view).toLowerCase() === 'ranking'
+    const comLead = isDetail || isRanking
 
     const enterpriseIdNumRaw =
       enterpriseId != null && enterpriseId !== '' ? Number(enterpriseId) : null
@@ -127,6 +137,52 @@ export async function getContracts(req, res) {
     }
     const whereScopeClause = isAdmin ? '' : ` AND sc.enterprise_id IN (:scopeErpIds)`
 
+    // ── Filtro por cidade ─────────────────────────────────────────────────────
+    // A cidade do empreendimento mora em `enterprises.city`, casada com o CC do
+    // contrato por erp_cost_center_id (mesma resolução do ec_resolved abaixo).
+    //
+    // SEGURANÇA: é filtro ADITIVO, nunca de visibilidade. Entra em AND com o
+    // escopo, então não existe ?cities= que devolva empreendimento fora dos
+    // grants - no máximo devolve menos. Um não-admin que peça uma cidade que não
+    // enxerga recebe lista vazia, e não os dados dela.
+    //
+    // Comparação sem acento e sem pontuação nos dois lados: "MARILIA" tem que
+    // casar com "Marília" (mesmo tratamento das telas de lead).
+    const citiesArr = typeof cities === 'string'
+      ? cities.split(',').map((s) => s.trim()).filter(Boolean)
+      : []
+    const hasCities = citiesArr.length > 0
+
+    const whereCityClause = hasCities ? ` AND EXISTS (
+      SELECT 1 FROM enterprises ec_f
+      WHERE ec_f.active = true
+        AND ec_f.erp_cost_center_id IS NOT NULL
+        AND ec_f.erp_cost_center_id::text = sc.enterprise_id::text
+        AND unaccent(upper(regexp_replace(COALESCE(ec_f.city, ''), '[^A-Za-z0-9]+', ' ', 'g')))
+            IN (:citiesNorm)
+    )` : ''
+
+    // ── Cache ────────────────────────────────────────────────────────────────
+    // Só aqui, depois do escopo resolvido: a chave leva os grants de quem
+    // perguntou, então ninguém recebe recorte de outro. A resposta é a mesma
+    // para todo mundo com o mesmo filtro e o mesmo escopo.
+    const cacheKey = contractsCache.buildKey({
+      scopeErpIds,
+      view: isDetail ? 'detail' : (isRanking ? 'ranking' : 'dashboard'),
+      start: start.format('YYYY-MM-DD'),
+      end: end.format('YYYY-MM-DD'),
+      situation: sit,
+      names: nameList,
+      enterpriseId: enterpriseIdNum ?? '',
+      enterpriseIds: enterpriseIdsArr,
+      companyId: companyIdSafe ?? '',
+      companyIds: companyIdsArr,
+      cities: citiesArr,
+    })
+
+    const emCache = contractsCache.get(cacheKey)
+    if (emCache) return res.json(emCache)
+
     // ── Co-titulares (associates) ─────────────────────────────────────────────
     // Bloco caro: normaliza nome (unaccent + regex) de cada cliente do contrato
     // para descartar o titular e cônjuges repetidos. Só o modal de detalhe usa
@@ -219,10 +275,114 @@ export async function getContracts(req, res) {
 
     const reservaExpr = isDetail
       ? `to_jsonb(res)`
-      : `jsonb_build_object(
-          'idreserva',      to_jsonb(res) -> 'idreserva',
-          'status_repasse', to_jsonb(res) -> 'status_repasse'
-        )`
+      : isRanking
+        ? `jsonb_build_object(
+            'idreserva',      res.idreserva,
+            'status_reserva', res.status_reserva,
+            'status_repasse', res.status_repasse,
+            'empreendimento', res.empreendimento,
+            'etapa',          res.etapa,
+            'bloco',          res.bloco,
+            'unidade',        res.unidade,
+            'data_venda',     res.data_venda,
+            'titular',        jsonb_build_object('nome', res.titular ->> 'nome'),
+            'corretor',       jsonb_build_object(
+                                'corretor',    res.corretor ->> 'corretor',
+                                'imobiliaria', res.corretor ->> 'imobiliaria'),
+            'imobiliaria',    jsonb_build_object('nome', res.imobiliaria ->> 'nome')
+          )`
+        : `jsonb_build_object(
+            'idreserva',      to_jsonb(res) -> 'idreserva',
+            'status_repasse', to_jsonb(res) -> 'status_repasse'
+          )`
+
+    // ── Lead de captação ──────────────────────────────────────────────────────
+    // "Veio de lead nosso" = a reserva tem lead associado cuja origem NÃO é
+    // painel interno (Painel Corretor/Gestor/Imobiliária). É a mesma regra da
+    // tela de Leads (ORIGENS_EXCLUIDAS no leadsStore / origem_excluir no
+    // controller de leads): lead cadastrado no painel é trabalho do parceiro,
+    // não captação. Origem nula continua contando como nossa, igual lá.
+    //
+    // First touch: entre os leads elegíveis da reserva vale o de data_cad mais
+    // antiga. O bloco só entra na visão de detalhe (é ela que abre a listagem
+    // de clientes); o dashboard não paga esse custo.
+    const leadFinalCte = comLead ? `,
+
+lead_final AS (
+  SELECT
+    rf.contract_id,
+    lv.idlead,
+    lv.nome,
+    lv.origem,
+    lv.midia_principal,
+    lv.situacao_nome,
+    lv.data_cad,
+    lv.telefone,
+    lv.email,
+    lv.cidade,
+    lv.imobiliaria,
+    lv.corretor,
+    il.id            AS inbound_lead_id,
+    il.channel       AS inbound_channel,
+    il.utm_source,
+    il.utm_campaign,
+    mc.name          AS meta_campaign_name,
+    ma.name          AS meta_ad_name
+  FROM rp_final rf
+  JOIN LATERAL (
+    SELECT l2.*
+    FROM reservas rs
+    JOIN LATERAL jsonb_array_elements(COALESCE(rs.leads_associados, '[]'::jsonb)) la ON true
+    JOIN leads l2 ON l2.idlead = NULLIF(la ->> 'idlead', '')::int
+    WHERE rs.idreserva = rf.idreserva
+      AND (l2.origem IS NULL OR l2.origem NOT ILIKE 'Painel %')
+    ORDER BY l2.data_cad ASC NULLS LAST
+    LIMIT 1
+  ) lv ON true
+  -- Campanha/anúncio só entram quando a captação é a que CRIOU esse lead no CV
+  -- (created_at colado no data_cad). A mesma pessoa preenchendo o formulário de
+  -- novo meses depois (reentrada) também carrega cv_idlead, e sem esse recorte
+  -- a venda apareceria com a campanha de uma captação POSTERIOR a ela.
+  LEFT JOIN LATERAL (
+    SELECT il2.*
+    FROM inbound_leads il2
+    WHERE il2.cv_idlead = lv.idlead::text
+      AND il2.created_at <= lv.data_cad + interval '2 days'
+    ORDER BY il2.created_at ASC
+    LIMIT 1
+  ) il ON true
+  LEFT JOIN meta_campaigns mc ON mc.id = il.meta_campaign_id
+  LEFT JOIN meta_ads ma       ON ma.id = il.meta_ad_id
+  WHERE rf.idreserva IS NOT NULL
+)` : ''
+
+    const leadExpr = comLead ? `CASE
+    WHEN lf.idlead IS NOT NULL THEN jsonb_build_object(
+      'idlead',          lf.idlead,
+      'nome',            lf.nome,
+      'origem',          lf.origem,
+      'midia_principal', lf.midia_principal,
+      'situacao_nome',   lf.situacao_nome,
+      'data_cad',        lf.data_cad,
+      'telefone',        lf.telefone,
+      'email',           lf.email,
+      'cidade',          lf.cidade,
+      'imobiliaria',     lf.imobiliaria,
+      'corretor',        lf.corretor,
+      'inbound_lead_id', lf.inbound_lead_id,
+      'channel',         lf.inbound_channel,
+      'utm_source',      lf.utm_source,
+      'utm_campaign',    lf.utm_campaign,
+      'campanha',        lf.meta_campaign_name,
+      'anuncio',         lf.meta_ad_name
+    )
+    ELSE NULL
+  END` : `NULL::jsonb`
+
+    const leadJoin = comLead ? `
+LEFT JOIN lead_final lf
+  ON lf.contract_id = p.contract_id
+` : ''
 
     const sql = `
 WITH base AS (
@@ -245,6 +405,7 @@ WITH base AS (
     ${whereEnterpriseIdsClause}
     ${whereCompanyIdClause}
     ${whereCompanyIdsClause}
+    ${whereCityClause}
 ),
 
 pivots AS (
@@ -423,7 +584,7 @@ rp_final AS (
     ON ru.codigointerno_unidade::text = p.unit_id::text
   LEFT JOIN rp_fallback_per_contract rf
     ON rf.contract_id = p.contract_id
-)
+)${leadFinalCte}
 
 SELECT
   p.contract_id,
@@ -457,7 +618,9 @@ SELECT
   CASE
     WHEN res.idreserva IS NOT NULL THEN ${reservaExpr}
     ELSE NULL
-  END AS reserva
+  END AS reserva,
+
+  ${leadExpr} AS lead_captacao
 
 FROM pivots p
 LEFT JOIN ec_resolved ec
@@ -468,7 +631,7 @@ LEFT JOIN rp_final rf
 
 LEFT JOIN reservas res
   ON res.idreserva = rf.idreserva
-
+${leadJoin}
 ORDER BY p.financial_institution_date, p.contract_id;
 `
     // A visibilidade por escopo já foi aplicada na CTE base (whereScopeClause);
@@ -499,6 +662,14 @@ ORDER BY p.financial_institution_date, p.contract_id;
       replacements.companyIds = companyIdsArr
     }
 
+    if (hasCities) {
+      // Normaliza do lado do parâmetro igual ao SQL faz na coluna.
+      replacements.citiesNorm = citiesArr.map((c) =>
+        c.normalize('NFD').replace(/[̀-ͯ]/g, '')
+          .toUpperCase().replace(/[^A-Za-z0-9]+/g, ' ').trim()
+      )
+    }
+
     nameList.forEach((val, i) => {
       replacements[`name${i}`] = val
     })
@@ -513,7 +684,10 @@ ORDER BY p.financial_institution_date, p.contract_id;
     // usa para o selo — do mesmo jeito que o selo de distrato.
     await applyAdjustmentsToRows(results)
 
-    return res.json({ count: results.length, results })
+    const payload = { count: results.length, results }
+    contractsCache.set(cacheKey, payload)
+
+    return res.json(payload)
   } catch (err) {
     console.error(err)
     return res.status(500).json({ error: 'Erro ao buscar contratos.' })
@@ -643,5 +817,48 @@ export async function listCompanies(req, res) {
   } catch (err) {
     console.error('[listCompanies]', err)
     return res.status(500).json({ error: 'Erro ao listar empresas.' })
+  }
+}
+
+/**
+ * GET /sienge/contracts/cities
+ * Cidades disponíveis para o filtro, SEMPRE dentro do escopo de acesso.
+ *
+ * A lista é derivada dos empreendimentos que o usuário enxerga - nunca da
+ * tabela inteira. Assim o próprio seletor já não oferece cidade que a pessoa
+ * não poderia consultar, e mesmo que ofereça (cache velho no navegador) o
+ * filtro do getContracts entra em AND com o escopo e não devolve nada de fora.
+ */
+export async function listCities(req, res) {
+  try {
+    const erpIds = await visibleErpIds(req.user)
+    const isAdmin = erpIds === null
+
+    // fail-closed: escopo vazio → lista vazia
+    if (!isAdmin && !erpIds.length) {
+      return res.json({ count: 0, results: [] })
+    }
+
+    const sql = `
+      SELECT DISTINCT ec.city AS city
+      FROM enterprises ec
+      WHERE ec.active = true
+        AND ec.city IS NOT NULL
+        AND btrim(ec.city) <> ''
+        AND ec.erp_cost_center_id IS NOT NULL
+        ${isAdmin ? '' : 'AND ec.erp_cost_center_id IN (:erpIds)'}
+      ORDER BY ec.city
+    `
+
+    const rows = await db.sequelize.query(sql, {
+      replacements: isAdmin ? {} : { erpIds },
+      type: db.Sequelize.QueryTypes.SELECT
+    })
+
+    const results = rows.map((r) => r.city).filter(Boolean)
+    return res.json({ count: results.length, results })
+  } catch (err) {
+    console.error('[listCities]', err)
+    return res.status(500).json({ error: 'Erro ao listar cidades.' })
   }
 }

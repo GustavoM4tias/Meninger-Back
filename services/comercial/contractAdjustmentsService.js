@@ -515,7 +515,7 @@ export async function checkAdjustmentDrift({ notify = true } = {}) {
                     adjustment_ids: novos.map((n) => n.row.id),
                     contract_ids: novos.map((n) => String(n.row.contract_id))
                 },
-                link: '/comercial/faturamento',
+                link: '/comercial/relatorios/faturamento',
                 importance: 8
             });
             notified = novos.length;
