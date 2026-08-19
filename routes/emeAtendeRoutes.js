@@ -88,7 +88,7 @@ router.post('/flows', wrap(async (req, res) => {
     EmeAtendeFlowService.invalidate();
     // Vinculou ao site? puxa o conteúdo agora - esperar o scheduler da
     // madrugada deixaria o fluxo sem contexto no dia da configuração.
-    if (row.site_slug) await EmeAtendeSiteSyncService.syncFlows({ flowId: row.id }).catch(() => null);
+    if (row.site_slug) await EmeAtendeSiteSyncService.syncFlows({ flowId: row.id, trigger: 'vinculo' }).catch(() => null);
     res.status(201).json(await row.reload());
 }));
 
@@ -102,7 +102,7 @@ router.put('/flows/:id', wrap(async (req, res) => {
     EmeAtendeFlowService.invalidate();
     // Só re-sincroniza quando o vínculo mudou: salvar o fluxo por outro
     // motivo não precisa bater no site.
-    if (slugMudou && row.site_slug) await EmeAtendeSiteSyncService.syncFlows({ flowId: row.id }).catch(() => null);
+    if (slugMudou && row.site_slug) await EmeAtendeSiteSyncService.syncFlows({ flowId: row.id, trigger: 'vinculo' }).catch(() => null);
     res.json(await row.reload());
 }));
 
@@ -181,9 +181,14 @@ router.get('/site/enterprises', wrap(async (req, res) => {
 // Força o sync agora (o automático é 1x/dia). flow_id opcional = só um fluxo.
 router.post('/site/sync', wrap(async (req, res) => {
     const flowId = req.body?.flow_id ? Number(req.body.flow_id) : null;
-    const out = await EmeAtendeSiteSyncService.syncFlows({ flowId });
+    const out = await EmeAtendeSiteSyncService.syncFlows({ flowId, trigger: 'manual' });
     EmeAtendeFlowService.invalidate();
     res.status(out.error ? 502 : 200).json(out);
+}));
+
+// Histórico das leituras do site: quando rodou, o que mudou, o que falhou.
+router.get('/site/syncs', wrap(async (req, res) => {
+    res.json(await EmeAtendeSiteSyncService.history({ limit: req.query.limit }));
 }));
 
 // ── Preview das REGRAS montadas em camadas ──────────────────────────────────

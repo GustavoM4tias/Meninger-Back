@@ -193,6 +193,7 @@ import EmeAtendeLeadDefine         from './emeAtende/emeAtendeLead.js';
 import EmeAtendeConversationDefine from './emeAtende/emeAtendeConversation.js';
 import EmeAtendeMessageDefine      from './emeAtende/emeAtendeMessage.js';
 import EmeAtendeEventDefine        from './emeAtende/emeAtendeEvent.js';
+import EmeAtendeSiteSyncDefine    from './emeAtende/emeAtendeSiteSync.js';
 
 // Alertas (gerenciados via Eme AI)
 import AlertRuleDefine         from './alerts/alertRule.js';
@@ -466,6 +467,7 @@ db.EmeAtendeLead         = EmeAtendeLeadDefine(sequelize, DataTypes);
 db.EmeAtendeConversation = EmeAtendeConversationDefine(sequelize, DataTypes);
 db.EmeAtendeMessage      = EmeAtendeMessageDefine(sequelize, DataTypes);
 db.EmeAtendeEvent        = EmeAtendeEventDefine(sequelize, DataTypes);
+db.EmeAtendeSiteSync     = EmeAtendeSiteSyncDefine(sequelize, DataTypes);
 
 db.EmeAtendeFlow.hasMany(db.EmeAtendeFlowRule, { foreignKey: 'flow_id', as: 'rules' });
 db.EmeAtendeFlowRule.belongsTo(db.EmeAtendeFlow, { foreignKey: 'flow_id', as: 'flow' });
