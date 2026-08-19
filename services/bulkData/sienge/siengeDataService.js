@@ -1,6 +1,7 @@
 // services/sienge/siengeDataService.js
 import apiSienge from '../../../lib/apiSienge.js';
 import db from '../../../models/sequelize/index.js';
+import contractsCache from '../../sienge/contractsQueryCache.js';
 
 const { SalesContract } = db;
 
@@ -184,6 +185,10 @@ export default class SiengeService {
         for (let i = 0; i < batch.length; i += CHUNK) {
             await Promise.all(batch.slice(i, i + CHUNK).map(raw => this.upsertOne(raw)));
         }
+        // Contrato gravado invalida a resposta cacheada do faturamento. Fica no
+        // serviço (e não no controller) para valer também para o scheduler, que
+        // é quem sincroniza no dia a dia.
+        if (batch.length) contractsCache.invalidate('sync de contratos');
     }
 
     async upsertOne(raw) {

@@ -1,5 +1,6 @@
 // controllers/hiddenDashboardController.js
 import db from '../models/sequelize/index.js';
+import contractsCache from '../services/sienge/contractsQueryCache.js';
 
 const { HiddenDashboardEnterprise } = db;
 
@@ -28,6 +29,8 @@ export async function listHiddenEnterprises(req, res) {
 // CC deixava a operação lenta — em lote é uma request só.
 export async function addHiddenEnterprise(req, res) {
     try {
+        // Ocultar/restaurar muda quem entra no dashboard.
+        contractsCache.invalidate('empreendimento oculto');
         if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Acesso negado.' });
 
         const isBulk = Array.isArray(req.body?.items);
@@ -69,6 +72,8 @@ export async function addHiddenEnterprise(req, res) {
 // Restaura vários de uma vez (ex.: "Restaurar todos" de uma empresa).
 export async function restoreHiddenEnterprises(req, res) {
     try {
+        // Ocultar/restaurar muda quem entra no dashboard.
+        contractsCache.invalidate('empreendimento oculto');
         if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Acesso negado.' });
 
         const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
@@ -86,6 +91,8 @@ export async function restoreHiddenEnterprises(req, res) {
 
 export async function removeHiddenEnterprise(req, res) {
     try {
+        // Ocultar/restaurar muda quem entra no dashboard.
+        contractsCache.invalidate('empreendimento oculto');
         if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Acesso negado.' });
 
         const idInt = Number(req.params.id);
