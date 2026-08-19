@@ -241,6 +241,9 @@ async function notify({
         console.warn(`[notify] tipo "${type}" não está no catálogo. Crie em notificationTypes.js para aparecer nas preferências.`);
     }
     const defaults  = catalog?.defaults  || { inapp: true, email: true, whatsapp: false };
+    // push:false no catálogo mantém o tipo no sino mas fora do aparelho — ver
+    // o Bolão, que num jogo de Copa vibraria o celular de todo mundo a cada gol.
+    const pushHabilitado = catalog?.push !== false;
     const emailType = catalog?.emailType || null;
     const whatsappSpec = catalog?.whatsapp || null;
 
@@ -297,7 +300,7 @@ async function notify({
             // Sem preferência própria de propósito: o opt-in é a permissão que
             // o usuário deu no navegador. Sem aparelho inscrito, não faz nada.
             // Nunca lança: notificação não pode derrubar a ação que a originou.
-            if (pref.inapp) {
+            if (pref.inapp && pushHabilitado) {
                 try {
                     const r = await PushService.sendToUser(u.id, {
                         title,

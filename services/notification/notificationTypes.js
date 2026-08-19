@@ -8,6 +8,9 @@
 // - whatsapp:     { template, language, category, variables: [chaveDoData] } ou null
 // - defaults:     defaults de canal quando o usuário ainda não tem preferência salva
 // - userOptional: se 'false', a preferência é forçada (ex.: códigos de auth sempre por email)
+// - push:         'false' mantém o tipo no sino mas NÃO manda push pro aparelho
+//                 (padrão: manda). Use para o que é frequente demais para vibrar
+//                 o celular de todo mundo.
 //
 // Para criar uma notificação nova, basta adicionar uma linha aqui e
 // chamar NotificationService.notify({ type: 'foo.bar', ... }).
@@ -398,6 +401,10 @@ export const NOTIFICATION_CATALOG = {
     // ── Bolão da Copa ───────────────────────────────────────────────────────────
     // emailType null por ora (só in-app). Para ligar e-mail, criar o template
     // .hbs correspondente e apontar emailType aqui.
+    //
+    // push:false em TODOS: num jogo de Copa isso vibraria o celular da empresa
+    // inteira a cada gol. No sino é diversão; no aparelho é interrupção. Quem
+    // quiser acompanhar ao vivo abre a tela do bolão.
     [NotificationType.BOLAO_LOCKED]: {
         label: 'Bolão: palpites travados',
         group: 'Bolão',
@@ -406,6 +413,7 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
+        push: false,
     },
     [NotificationType.BOLAO_PREMATCH]: {
         label: 'Bolão: jogo começando',
@@ -415,6 +423,7 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
+        push: false,
     },
     [NotificationType.BOLAO_GOAL]: {
         label: 'Bolão: gol',
@@ -424,6 +433,7 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
+        push: false,
     },
     [NotificationType.BOLAO_FULLTIME]: {
         label: 'Bolão: fim de jogo',
@@ -433,6 +443,7 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
+        push: false,
     },
 
     // ── Mural de Avisos / Comunicados ───────────────────────────────────────────
