@@ -84,7 +84,10 @@ async function route(payload) {
                 const eme = [];
                 for (const m of value.messages) {
                     const from = m?.from || value.contacts?.[0]?.wa_id || null;
-                    if (await isInternalUser(from)) { off.push(m); continue; }
+                    // Número em teste ganha do check de interno: sem isso quem
+                    // administra a Eme não consegue testar com o próprio celular.
+                    const emTeste = await EmeAtendeAudience.isTestOverride(from);
+                    if (!emTeste && await isInternalUser(from)) { off.push(m); continue; }
                     // Externo: só vai pra Eme Atende se for lead conhecido (ou
                     // estiver na lista de teste). Contato frio segue no Office e
                     // recebe a auto-resposta de canal só de saída.
