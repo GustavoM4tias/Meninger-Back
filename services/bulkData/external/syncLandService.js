@@ -13,6 +13,7 @@
 import db from '../../../models/sequelize/index.js';
 import { fetchAllObstit } from './landService.js';
 import { chooseLandValue } from './obstitParse.js';
+import contractsCache from '../../sienge/contractsQueryCache.js';
 
 async function getLandSyncEnterpriseIds() {
     const rows = await db.LandSyncEnterprise.findAll({
@@ -81,6 +82,8 @@ async function applyForCostCenter(enterpriseId, parsedMap, counters) {
         { bind: binds }
     );
     counters.updated += meta?.rowCount ?? 0;
+    // Valor de terreno entra no VGV: resposta cacheada deixa de valer.
+    if (meta?.rowCount) contractsCache.invalidate('valor de terreno');
 }
 
 export async function syncObstitToLandValue({ log = console.log } = {}) {

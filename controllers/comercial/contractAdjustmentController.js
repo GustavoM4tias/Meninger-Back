@@ -14,6 +14,7 @@ import {
     checkAdjustmentsOfContract
 } from '../../services/comercial/contractAdjustmentsService.js';
 import { checkDivergences } from '../../services/comercial/salesClosingService.js';
+import contractsCache from '../../services/sienge/contractsQueryCache.js';
 
 const { ContractAdjustment } = db;
 
@@ -281,6 +282,9 @@ function buildPayload(type, raw = {}) {
  */
 export async function createContractAdjustment(req, res) {
     try {
+        // O ajuste muda a data ou a série do contrato: a resposta cacheada
+        // do faturamento deixa de valer.
+        contractsCache.invalidate('ajuste contabil');
         if (!isAdmin(req)) return res.status(403).json({ error: 'Acesso negado.' });
 
         const { contract_id, type, target_index, target_code, reason } = req.body || {};
@@ -374,6 +378,9 @@ export async function createContractAdjustment(req, res) {
  */
 export async function updateContractAdjustment(req, res) {
     try {
+        // O ajuste muda a data ou a série do contrato: a resposta cacheada
+        // do faturamento deixa de valer.
+        contractsCache.invalidate('ajuste contabil');
         if (!isAdmin(req)) return res.status(403).json({ error: 'Acesso negado.' });
 
         const idInt = Number(req.params.id);
@@ -447,6 +454,9 @@ export async function runAdjustmentCheck(req, res) {
  */
 export async function reviewContractAdjustment(req, res) {
     try {
+        // O ajuste muda a data ou a série do contrato: a resposta cacheada
+        // do faturamento deixa de valer.
+        contractsCache.invalidate('ajuste contabil');
         if (!isAdmin(req)) return res.status(403).json({ error: 'Acesso negado.' });
 
         const idInt = Number(req.params.id);
@@ -477,6 +487,9 @@ export async function reviewContractAdjustment(req, res) {
  */
 export async function removeContractAdjustment(req, res) {
     try {
+        // O ajuste muda a data ou a série do contrato: a resposta cacheada
+        // do faturamento deixa de valer.
+        contractsCache.invalidate('ajuste contabil');
         if (!isAdmin(req)) return res.status(403).json({ error: 'Acesso negado.' });
 
         const idInt = Number(req.params.id);
