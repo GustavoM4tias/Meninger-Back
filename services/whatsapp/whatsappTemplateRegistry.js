@@ -195,9 +195,10 @@ export const TEMPLATE_REGISTRY = [
         purpose: 'Primeira mensagem ao lead novo, abrindo a conversa com a Eme.',
         trigger: 'Entrada do lead na base da Eme Atende (intake por API).',
         variables: [],
+        categoryIntended: 'UTILITY',
         source: 'services/emeAtende/emeAtendeOpenerTemplates.js',
         managedBy: 'codigo', autoProvisioned: true, critical: false,
-        note: 'Submetido à Meta em 2026-08-19. Sem variável de propósito - lead de formulário chega sem nome ou com lixo no campo. Sem botão e sem rodapé de opt-out: opt-out declarado é sinal de marketing pro classificador, e o PARAR continua valendo pelo OPTOUT_RE do engine.',
+        note: 'Submetido como UTILITY em 2026-08-19 e RECLASSIFICADO pela Meta para MARKETING na aprovação - abordar quem preencheu formulário é marketing pela régua deles. Sem variável de propósito - lead de formulário chega sem nome ou com lixo no campo. Sem botão e sem rodapé de opt-out: opt-out declarado é sinal de marketing pro classificador, e o PARAR continua valendo pelo OPTOUT_RE do engine.',
     },
     {
         name: 'eme_atende_opener_empreendimento_v3', language: 'pt_BR',
@@ -205,9 +206,10 @@ export const TEMPLATE_REGISTRY = [
         purpose: 'Abertura citando o empreendimento de interesse do lead.',
         trigger: 'Mesma entrada, em fluxo cujo lead traz empreendimento.',
         variables: ['Empreendimento de interesse'],
+        categoryIntended: 'UTILITY',
         source: 'services/emeAtende/emeAtendeOpenerTemplates.js',
         managedBy: 'codigo', autoProvisioned: true, critical: false,
-        note: 'Submetido à Meta em 2026-08-19. Lead sem empreendimento não quebra: o Messenger troca pela abertura sem variável (OPENER_FALLBACK_TEMPLATES) quando ela estiver APPROVED.',
+        note: 'Submetido como UTILITY em 2026-08-19 e RECLASSIFICADO pela Meta para MARKETING na aprovação. Lead sem empreendimento não quebra: o Messenger troca pela abertura sem variável (OPENER_FALLBACK_TEMPLATES) quando ela estiver APPROVED.',
     },
 
     // ── Boleto (único que fala com CLIENTE) ──────────────────────────────────
@@ -261,7 +263,12 @@ export function describeTemplates(metaTemplates = []) {
             metaId: meta?.id || null,
             bodyText: meta?.body_text || null,
             variablesCount: meta?.variables_count ?? entry.variables?.length ?? 0,
-            category: meta?.category || 'UTILITY',
+            // Categoria REAL da Meta. Nunca assumir um default: ela reclassifica
+            // na aprovação, e mostrar "UTILITY" chutado esconde justamente o que
+            // muda o custo da conversa (marketing custa ~9x).
+            category: meta?.category ? String(meta.category).toUpperCase() : null,
+            categoryReclassified: !!(entry.categoryIntended && meta?.category
+                && String(meta.category).toUpperCase() !== entry.categoryIntended),
             // Descasamento entre o que o código manda e o que a Meta espera —
             // causa clássica de VARIABLES_MISMATCH em produção.
             variablesMismatch: !!meta
