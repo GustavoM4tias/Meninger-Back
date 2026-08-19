@@ -11,7 +11,8 @@ import * as ctrl from '../controllers/comercial/salesClosingController.js';
 
 const router = express.Router();
 router.use(authenticate);
-router.use(requireRoutePermission(['/comercial/faturamento']));
+// Fechamento é operado de dentro do relatório de Faturamento.
+router.use(requireRoutePermission(['/comercial/relatorios/faturamento']));
 
 router.get('/', ctrl.list);
 router.get('/:period', ctrl.getOne);

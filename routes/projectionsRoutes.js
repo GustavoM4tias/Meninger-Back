@@ -3,13 +3,14 @@ import express from 'express';
 import * as ctrl from '../controllers/projectionController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireRoutePermission from '../middlewares/requireRoutePermission.js';
+import { RELATORIO_SCREENS } from '../lib/relatorioScreens.js';
 
 const router = express.Router();
 
 router.use(authenticate);
 
 // Telas que LEEM projeção (dashboards) × tela que EDITA (editor).
-const READ_SCREENS = ['/comercial/projections', '/comercial/sales-projection', '/comercial/faturamento'];
+const READ_SCREENS = ['/comercial/projections', ...RELATORIO_SCREENS];
 const EDIT_SCREEN = ['/comercial/projections'];
 
 // rotas específicas SEM :id primeiro
