@@ -342,6 +342,17 @@ async function buildSystemPrompt(flow, lead) {
     return systemPrompt;
 }
 
+/** Linha de mídia → descrição neutra, sem marcador nem URL. */
+function mediaResumo(row) {
+    if (row.type !== 'image' && row.type !== 'document') return null;
+    const m = String(row.body || '').match(/^\[(imagem|documento)(?::\s*([^\]]+))?\]/);
+    if (!m) return null;
+    const rotulo = (m[2] || '').trim();
+    return m[1] === 'documento'
+        ? '(enviei o material em PDF ao lead)'
+        : `(enviei ao lead a imagem${rotulo ? `: ${rotulo}` : ''})`;
+}
+
 async function buildHistory(conversationId) {
     // DESC + reverse: as 40 mensagens mais RECENTES em ordem cronológica
     // (ASC + limit pegava as 40 mais antigas em conversas longas).
@@ -357,7 +368,11 @@ async function buildHistory(conversationId) {
     const turns = [];
     for (const r of rows) {
         const role = r.direction === 'in' ? 'user' : 'model';
-        const text = r.body || '';
+        // Mídia é persistida como "[imagem: X] https://…" - formato NOSSO, de log.
+        // Devolver isso ao modelo como fala dele ensinava o padrão errado: ele
+        // passou a ESCREVER o marcador com link em vez de chamar a ferramenta, e o
+        // lead recebia um link solto (ou nada) achando que era foto.
+        const text = mediaResumo(r) || r.body || '';
         if (!text) continue;
         const last = turns[turns.length - 1];
         if (last && last.role === role) last.parts[0].text += `\n${text}`;
@@ -466,7 +481,16 @@ async function fireAI(conversationId) {
                 ...(book ? [DOC_TOOL] : []),
             ],
             onTool: async ({ name, args }) => {
-                if (name === 'marcar_qualificado') { actions.qualified = args?.resumo || ''; return { ok: true, info: 'Lead marcado como qualificado. Continue a conversa normalmente.' }; }
+                if (name === 'marcar_qualificado') {
+                    actions.qualified = args?.resumo || '';
+                    // Segunda chamada na mesma conversa: o modelo repetia "vou
+                    // registrar / combinado?" a cada turno. O registro é atualizado,
+                    // mas ele é avisado pra não anunciar de novo.
+                    if (lead?.status === 'qualified') {
+                        return { ok: true, info: 'Este lead JÁ estava registrado - resumo atualizado. NÃO avise o lead de novo nem peça confirmação; siga a conversa.' };
+                    }
+                    return { ok: true, info: 'Lead registrado. Avise UMA vez, em uma frase, e siga a conversa.' };
+                }
                 if (name === 'encerrar_conversa') { actions.close = args?.motivo || ''; return { ok: true, info: 'Encerramento registrado. Escreva uma despedida curta e educada.' }; }
                 if (name === 'enviar_imagem') {
                     const img = findImage(images, args?.label);
