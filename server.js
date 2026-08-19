@@ -44,6 +44,7 @@ import emeAtendePublicRoutes from './routes/emeAtendePublicRoutes.js';
 import { ensureEmeAtendeSeed } from './services/emeAtende/emeAtendeSeed.js';
 import academyChatRoutes from './routes/academyChatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
+import pushRoutes from './routes/pushRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
 import marketingPublicRoutes from './routes/marketingPublicRoutes.js';
@@ -129,6 +130,7 @@ import { ensureAccessModelColumns } from './lib/ensureAccessModelColumns.js';
 import { ensureRoutePolicySchema } from './lib/ensureRoutePolicySchema.js';
 import { ensureEventPlanSchema } from './lib/ensureEventPlanSchema.js';
 import { ensureOrgDefaultsSchema } from './lib/ensureOrgDefaultsSchema.js';
+import { ensureVapidKeys } from './lib/ensureVapidKeys.js';
 import { ensureUserEmailNormalization } from './lib/ensureUserEmailNormalization.js';
 import { ensureBrazilCitiesSeed } from './lib/ensureBrazilCitiesSeed.js';
 import { registerApp as registerIntegrityApp, runIntegrityCheck } from './security/integrityCheck.js';
@@ -268,6 +270,7 @@ app.use('/api/eme-atende/public', emeAtendePublicRoutes); // intake de leads (X-
 app.use('/api/eme-atende', emeAtendeRoutes);              // admin (JWT + admin)
 app.use('/api/academy-chat', academyChatRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/push', pushRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/marketing', marketingRoutes);
@@ -512,6 +515,9 @@ async function syncModelsAndPatches(fingerprint) {
     // departamento e precisa dos departamentos padrão já no banco (antes,
     // departamento novo só ganhava perfil no boot seguinte).
     ['DepartmentDefaultProfiles', seedDepartmentDefaultProfiles],
+    // Chaves VAPID do push. Gera no primeiro boot e nunca mais mexe —
+    // trocar a chave derrubaria todas as inscricoes ativas.
+    ['VapidKeys', ensureVapidKeys],
   ];
 
   for (const [name, fn] of patches) {
