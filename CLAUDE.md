@@ -51,9 +51,34 @@ Spec completa: `_estudo/acessos/README.md` e `_estudo/acessos/MIGRACAO_ESCOPO.md
 - `route_policies` — telas travadas como somente-admin pela tela de Alçadas.
 - Rótulos p/ telas não-admin: GET /api/org/enterprise-labels (escopado).
 
+## TUDO CONFIGURÁVEL (regra de produto, vale para toda feature nova)
+
+Nada de solução bloqueada em código. Regra de negócio que a operação pode
+querer mudar - prazo, teto, percentual, horário, situação do CV, destinatário,
+texto - nasce em tabela de settings do módulo e com campo na tela. Constante em
+código só serve como FALLBACK de quando não há valor configurado, nunca como a
+regra em si.
+
+- Valor novo: coluna em `<modulo>_settings` (+ `lib/ensure*.js`), entrada no
+  `allowed` do controller de settings COM validação, e input na tela. Os três,
+  sempre - config que existe no banco e não aparece na tela não existe.
+- Override por recorte (empreendimento, cidade, departamento) quando fizer
+  sentido: cascata `regra específica -> setting geral -> fallback do código`, e a
+  mensagem de erro diz qual nível decidiu. Ver o `max_dias_vencimento` do Boleto.
+- **O painel sempre ganha do código.** Mudar um default NÃO é mudar o valor de
+  quem já configurou. Patch de dados que TROCA valor já gravado vai por
+  `applyOnce` (`lib/schemaPatchMarks.js`), que roda uma vez só - repetido a cada
+  boot, ele desfaria a escolha feita na tela. `UPDATE ... WHERE campo IS NULL`
+  (preencher vazio) pode ficar nos ensure* normais.
+- Gestão é sempre por tela: nada de script manual, nem de pedir "roda esse SQL".
+
 ## Convenções
 
 - Renomeou rota de tela no front? Adicionar em `lib/ensurePermissionRouteRenames.js`.
+- REMOVEU uma tela (ou decidiu que ninguém deve tê-la)? Adicionar em
+  `lib/ensurePermissionRouteRetirement.js` E tirar da matriz de
+  `lib/ensureSignupApprovalSchema.js` — só o primeiro faz a rota voltar no boot
+  seguinte para todo perfil com `routes_customized = false`.
 - Cidade/cargo de usuário: usar as FKs `users.position_id`/`users.city_id`
   (strings `position`/`city` são legado mantido por compat).
 - Commits: Conventional Commits pt-BR, SEMPRE por lista explícita de arquivos
