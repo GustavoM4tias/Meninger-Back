@@ -1,7 +1,7 @@
 // scheduler/boletoWindowScheduler.js
 //
 // Cron a cada 1 min. Retoma as emissões que ficaram agendadas por terem
-// chegado fora da janela de funcionamento (padrão 08:00-20:00 de Brasília,
+// chegado fora da janela de funcionamento (padrão 06:00-23:00 de Brasília,
 // configurável na tela do Boleto Caixa).
 //
 // Pega registros de boleto_history com `status='queued'`,

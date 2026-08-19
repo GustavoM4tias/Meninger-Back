@@ -107,7 +107,8 @@ export default (sequelize, DataTypes) => {
         // ── Janela de funcionamento (horário de Brasília) ──────────────────────
         // Acionamentos recebidos fora da janela não são processados na hora: a
         // emissão fica agendada pra próxima abertura (ver lib/boletoJanela.js e
-        // scheduler/boletoWindowScheduler.js).
+        // scheduler/boletoWindowScheduler.js). Padrão 06:00-23:00 desde
+        // 19/08/2026 (era 08:00-20:00) — só a madrugada fica de fora.
         janela_ativa: {
             type: DataTypes.BOOLEAN,
             allowNull: false,
@@ -117,13 +118,13 @@ export default (sequelize, DataTypes) => {
         janela_inicio_hora: {
             type: DataTypes.INTEGER,
             allowNull: true,
-            defaultValue: 8,
+            defaultValue: 6,
             comment: 'Hora cheia de abertura da janela, no fuso de Brasília (0-23).',
         },
         janela_fim_hora: {
             type: DataTypes.INTEGER,
             allowNull: true,
-            defaultValue: 20,
+            defaultValue: 23,
             comment: 'Hora cheia de fechamento da janela, no fuso de Brasília (1-24). Janela aberta em [início, fim).',
         },
 

@@ -465,7 +465,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         // Acionamento de madrugada virava erro em série (11/08/2026: 8 reservas
         // do RESIDENCIAL DOS ANJOS entre 23:33 e 23:40). Em vez de tentar e
         // falhar, o registro nasce 'queued' e o `boletoWindowScheduler` retoma
-        // ESTE MESMO registro na abertura (08:00 por padrão).
+        // ESTE MESMO registro na abertura (06:00 por padrão).
         //
         // Deliberado: NÃO mexe na situação CV. A reserva fica onde está, o lote
         // do Sienge segue seu curso e a emissão acontece de manhã. Também não
