@@ -7,7 +7,7 @@ import db from '../../models/sequelize/index.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
 import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
-import { OPENER_VAR_FALLBACKS } from './emeAtendeOpenerTemplates.js';
+import { OPENER_FALLBACK_TEMPLATES, OPENER_VAR_FALLBACKS } from './emeAtendeOpenerTemplates.js';
 
 // Janela de serviço da Cloud API: 24h desde a última mensagem do lead, com
 // margem pra não disparar com ela fechando em trânsito (erro 131047).
@@ -127,14 +127,20 @@ async function sendOpener({ lead, conversation, flow }) {
         return null;
     }
 
+    const language = flow.opener_language || 'pt_BR';
+
     // valida contra o cache local de templates (sync na tela do WhatsApp)
+    const approved = async (name) => {
+        const tpl = await db.WhatsappTemplate.findOne({ where: { name, language } });
+        return { known: !!tpl, ok: !tpl || String(tpl.status).toUpperCase() === 'APPROVED', status: tpl?.status };
+    };
+
+    let templateName = flow.opener_template;
     try {
-        const tpl = await db.WhatsappTemplate.findOne({
-            where: { name: flow.opener_template, language: flow.opener_language || 'pt_BR' },
-        });
-        if (tpl && String(tpl.status).toUpperCase() !== 'APPROVED') {
+        const { ok, status } = await approved(templateName);
+        if (!ok) {
             await logEvent(lead.id, conversation.id, 'opener_failed', {
-                template: flow.opener_template, reason: `template status ${tpl.status} (não APPROVED)`,
+                template: templateName, reason: `template status ${status} (não APPROVED)`,
             });
             return null;
         }
@@ -143,10 +149,11 @@ async function sendOpener({ lead, conversation, flow }) {
     }
 
     // Campo vazio do lead não pode virar "-": a primeira mensagem chegaria como
-    // "Olá, -!". Cada variável conhecida tem um texto neutro que encaixa na frase.
+    // "interesse no -". Antes de recorrer a texto neutro no meio da frase, troca
+    // o template inteiro pelo equivalente SEM variável - só serve se aprovado.
     const fields = Array.isArray(flow.opener_variables) ? flow.opener_variables : [];
     const missing = [];
-    const variables = fields.map(f => {
+    let variables = fields.map(f => {
         const v = lead[f] !== undefined && lead[f] !== null ? lead[f] : lead.payload?.[f];
         if (v === undefined || v === null || v === '') {
             missing.push(f);
@@ -155,32 +162,44 @@ async function sendOpener({ lead, conversation, flow }) {
         return String(v);
     });
     if (missing.length) {
-        console.warn(`[eme-atende/messenger] lead ${lead.id} sem ${missing.join(', ')} — abertura usou texto neutro.`);
-        await logEvent(lead.id, conversation.id, 'opener_missing_vars', { fields: missing });
+        const alt = OPENER_FALLBACK_TEMPLATES[templateName];
+        let swapped = false;
+        if (alt) {
+            try {
+                const { known, ok } = await approved(alt);
+                if (known && ok) { templateName = alt; variables = []; swapped = true; }
+            } catch (err) {
+                console.warn('[eme-atende/messenger] substituto de abertura não checado:', err?.message);
+            }
+        }
+        console.warn(`[eme-atende/messenger] lead ${lead.id} sem ${missing.join(', ')} — abertura ${swapped ? `trocada por ${templateName}` : 'usou texto neutro'}.`);
+        await logEvent(lead.id, conversation.id, 'opener_missing_vars', {
+            fields: missing, fallback_template: swapped ? templateName : null,
+        });
     }
 
-    const body = `[template:${flow.opener_template}] vars=${JSON.stringify(variables)}`;
+    const body = `[template:${templateName}] vars=${JSON.stringify(variables)}`;
     const cfg = await EmeAtendeSettingsService.getConfig();
     if (!cfg.active || cfg.dry_run) {
         console.log(`[eme-atende/messenger] DRY_RUN opener → ${conversation.phone}: ${body}`);
         const msg = await persistOut({ conversation, type: 'template', body, status: 'dry_run' });
-        await logEvent(lead.id, conversation.id, 'opener_sent', { dry_run: true, template: flow.opener_template, variables });
+        await logEvent(lead.id, conversation.id, 'opener_sent', { dry_run: true, template: templateName, variables });
         return msg;
     }
     try {
         const { id } = await WhatsAppService.sendTemplate({
             to: conversation.phone,
-            templateName: flow.opener_template,
-            language: flow.opener_language || 'pt_BR',
+            templateName,
+            language,
             variables,
         });
         const msg = await persistOut({ conversation, type: 'template', body, wamid: id, status: 'sent' });
-        await logEvent(lead.id, conversation.id, 'opener_sent', { template: flow.opener_template, variables, wamid: id });
+        await logEvent(lead.id, conversation.id, 'opener_sent', { template: templateName, variables, wamid: id });
         return msg;
     } catch (err) {
         console.error(`[eme-atende/messenger] opener falhou pra ${conversation.phone}:`, err?.message);
         const msg = await persistOut({ conversation, type: 'template', body, status: 'failed', error: err?.message });
-        await logEvent(lead.id, conversation.id, 'opener_failed', { template: flow.opener_template, error: err?.message });
+        await logEvent(lead.id, conversation.id, 'opener_failed', { template: templateName, error: err?.message });
         return msg;
     }
 }

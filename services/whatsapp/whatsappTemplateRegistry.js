@@ -190,32 +190,24 @@ export const TEMPLATE_REGISTRY = [
 
     // ── Eme Atende (fala com LEAD) ───────────────────────────────────────────
     {
-        name: 'eme_atende_opener_v2', language: 'pt_BR',
+        name: 'eme_atende_opener_v3', language: 'pt_BR',
         feature: 'emeAtende', audience: 'cliente',
         purpose: 'Primeira mensagem ao lead novo, abrindo a conversa com a Eme.',
         trigger: 'Entrada do lead na base da Eme Atende (intake por API).',
-        variables: ['Nome do lead'],
-        buttons: [
-            { text: 'Continuar atendimento', does: 'Abre a janela de 24h e a IA assume a conversa.' },
-            { text: 'Não quero contato', does: 'Também abre a janela; a IA responde e encerra sem insistir.' },
-        ],
+        variables: [],
         source: 'services/emeAtende/emeAtendeOpenerTemplates.js',
         managedBy: 'codigo', autoProvisioned: true, critical: false,
-        note: 'RASCUNHO em revisão: não é enviado à Meta enquanto estiver draft. Escrito para tentar UTILITY (confirma o contato que a pessoa fez, sem oferta). A Meta decide pela copy e pode reclassificar para MARKETING.',
+        note: 'Submetido à Meta em 2026-08-19. Sem variável de propósito - lead de formulário chega sem nome ou com lixo no campo. Sem botão e sem rodapé de opt-out: opt-out declarado é sinal de marketing pro classificador, e o PARAR continua valendo pelo OPTOUT_RE do engine.',
     },
     {
-        name: 'eme_atende_opener_empreendimento_v2', language: 'pt_BR',
+        name: 'eme_atende_opener_empreendimento_v3', language: 'pt_BR',
         feature: 'emeAtende', audience: 'cliente',
         purpose: 'Abertura citando o empreendimento de interesse do lead.',
-        trigger: 'Mesma entrada, em fluxo cujo lead sempre traz empreendimento.',
-        variables: ['Nome do lead', 'Empreendimento de interesse'],
-        buttons: [
-            { text: 'Continuar atendimento', does: 'Abre a janela de 24h e a IA assume a conversa.' },
-            { text: 'Não quero contato', does: 'Também abre a janela; a IA responde e encerra sem insistir.' },
-        ],
+        trigger: 'Mesma entrada, em fluxo cujo lead traz empreendimento.',
+        variables: ['Empreendimento de interesse'],
         source: 'services/emeAtende/emeAtendeOpenerTemplates.js',
         managedBy: 'codigo', autoProvisioned: true, critical: false,
-        note: 'RASCUNHO em revisão. Só use em fluxo onde o lead SEMPRE tem empreendimento — sem o dado a mensagem sai com o texto de fallback.',
+        note: 'Submetido à Meta em 2026-08-19. Lead sem empreendimento não quebra: o Messenger troca pela abertura sem variável (OPENER_FALLBACK_TEMPLATES) quando ela estiver APPROVED.',
     },
 
     // ── Boleto (único que fala com CLIENTE) ──────────────────────────────────
