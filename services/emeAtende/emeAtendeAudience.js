@@ -23,6 +23,24 @@ export function isTestPhone(phone, testPhones = []) {
 }
 
 /**
+ * Modo teste tem precedência sobre "é usuário interno".
+ *
+ * O roteador manda usuário do Office pro fluxo interno ANTES de olhar público-
+ * alvo - correto no dia a dia, mas inviabilizava o teste: quem administra a Eme
+ * é funcionário, e o número dele nunca chegaria na IA. Com test_mode ligado, o
+ * número que está na lista vai pra Eme Atende mesmo sendo interno.
+ *
+ * Custo consciente: enquanto o modo teste estiver ligado, as mensagens DESSE
+ * número não caem no fluxo interno do Office (alertas, SIM). É o que se espera
+ * de um número em teste, e some quando o modo teste é desligado.
+ */
+export async function isTestOverride(phone) {
+    if (!phone) return false;
+    const cfg = await EmeAtendeSettingsService.getConfig();
+    return !!(cfg.active && cfg.test_mode && isTestPhone(phone, cfg.test_phones));
+}
+
+/**
  * Lead conhecido = existe em eme_atende_leads e NÃO fez opt-out.
  * Opt-out é definitivo: quem pediu pra parar volta pra auto-resposta do Office,
  * nunca pro atendimento.
@@ -60,4 +78,4 @@ export async function shouldHandle(phone) {
     return { handle: false, reason: 'não é lead da Eme Atende (contato frio)' };
 }
 
-export default { shouldHandle, findKnownLead, isTestPhone };
+export default { shouldHandle, findKnownLead, isTestPhone, isTestOverride };
