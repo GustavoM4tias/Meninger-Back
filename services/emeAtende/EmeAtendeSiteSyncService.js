@@ -68,7 +68,7 @@ async function syncFlows({ flowId = null, trigger = 'scheduler' } = {}) {
 
     let all;
     try {
-        all = await fetchEnterprises(cfg.site_url);
+        all = await fetchEnterprises(cfg.site_url, cfg.site_source);
     } catch (err) {
         // Falha de rede/formato NÃO apaga o snapshot: registra o erro em cada
         // fluxo e deixa o conteúdo anterior valendo.

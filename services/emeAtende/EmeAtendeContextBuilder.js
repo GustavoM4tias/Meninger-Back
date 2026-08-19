@@ -11,6 +11,7 @@
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { buildSiteContext } from './emeAtendeSiteSource.js';
+import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
 
 const DEFAULT_SOURCES = { basic: true, delivery: true, negotiation: true, subsidy: true, benefits: true, campaigns: true };
 
@@ -122,7 +123,7 @@ async function buildContext(flow) {
             };
         }
         return {
-            text: buildSiteContext(snap),
+            text: buildSiteContext(snap, (await EmeAtendeSettingsService.getConfig()).site_source),
             meta: {
                 linked: true, source: 'site', slug: flow.site_slug,
                 enterprise: snap.nome,

@@ -26,6 +26,12 @@ export default (sequelize, DataTypes) => {
         // plataforma atual - trocar aqui não exige deploy.
         site_url: { type: DataTypes.STRING(255), allowNull: true },
 
+        // COMO o site é lido: variável global, coleção, de-para de campos,
+        // grupos de imagem e blocos do contexto. Vazio = padrão do código
+        // (DEFAULT_SITE_SOURCE). Fica no banco porque isto muda quando o site
+        // muda de versão, e mudar não pode exigir deploy.
+        site_source: { type: DataTypes.JSONB, allowNull: true },
+
         // ── Regras de atendimento (camada GERAL, vale pra todo fluxo) ────────
         // Editáveis na tela; o fluxo do empreendimento complementa/sobrescreve.
         // O piso de segurança (HARD_RULES) fica no código de propósito.
