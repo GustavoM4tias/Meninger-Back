@@ -105,11 +105,11 @@ async function navigateViaMenu(page, servlet, param, { expectedUrlPart = null, l
     return url;
 }
 
-async function safeReadEvaluate(page, fn, { maxRetries = 2, settleMs = 800 } = {}) {
+async function safeReadEvaluate(page, fn, { maxRetries = 2, settleMs = 800, arg = undefined } = {}) {
     let lastErr;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
-            return await page.evaluate(fn);
+            return await page.evaluate(fn, arg);
         } catch (err) {
             lastErr = err;
             const msg = err?.message || '';
@@ -121,6 +121,88 @@ async function safeReadEvaluate(page, fn, { maxRetries = 2, settleMs = 800 } = {
         }
     }
     throw lastErr;
+}
+
+// ── Abertura da tela de baixa pelo menu ───────────────────────────────────────
+//
+// `page.goto('/baixa_titulo')` é flaky pelo mesmo motivo do /consulta_titulo:
+// o JSP legado às vezes devolve a tela sem os campos, ou joga na home pública
+// da CAIXA — o que aparecia como "Baixa prévia falhou" e abortava a reemissão.
+//
+// Diferente da consulta (cujo `enviaLink('ConsultaTituloServlet','2')` foi lido
+// do HTML do menu), o par servlet/param da baixa não estava documentado. Em vez
+// de chutar, DESCOBRIMOS em tempo de execução: varremos os links do menu atrás
+// do `enviaLink(...)` cujo rótulo fala em baixa de título. Se o menu mudar de
+// nome, o `page.goto` continua como último recurso — a tela nunca fica
+// inacessível por causa desta função.
+// Regex de verdade (não string) pra não haver escape duplo: só o `.source`
+// atravessa pro browser, onde vira `new RegExp(src, 'i')`.
+const PADROES_MENU_BAIXA = [
+    /baixa\s+(de\s+)?t[ií]tulo/,  // "Baixa de Título" — o rótulo esperado
+    /^baixa\b/,                   // "Baixa", "Baixa Operacional"
+];
+
+// O menu é o mesmo em toda sessão, então descobrir uma vez por processo basta.
+// Zerado quando o link encontrado não leva a /baixa_titulo (menu mudou).
+let menuBaixaCache = null;
+
+/**
+ * Procura no menu o `enviaLink('Servlet','param')` cujo rótulo casa com o
+ * padrão. Devolve `{ servlet, param, texto }` ou null.
+ */
+async function descobrirLinkMenu(page, padraoFonte) {
+    return safeReadEvaluate(page, (src) => {
+        const re = new RegExp(src, 'i');
+        const anchors = Array.from(document.querySelectorAll('a[href], a[onclick]'));
+        for (const a of anchors) {
+            const acao = `${a.getAttribute('href') || ''} ${a.getAttribute('onclick') || ''}`;
+            const m = acao.match(/enviaLink\(\s*['"]([^'"]+)['"]\s*,\s*['"]?([^'")]+?)['"]?\s*\)/);
+            if (!m) continue;
+            const texto = (a.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!texto || !re.test(texto)) continue;
+            return { servlet: m[1], param: String(m[2]).trim(), texto };
+        }
+        return null;
+    }, { arg: padraoFonte, maxRetries: 1 });
+}
+
+/**
+ * Deixa a página em /baixa_titulo. Tenta o menu primeiro; cai pro `page.goto`
+ * quando não há sessão autenticada (sem `enviaLink`), quando o menu não expõe
+ * o link, ou quando o link não levou à tela esperada.
+ *
+ * @returns {Promise<'menu'|'goto'>} caminho efetivamente usado (só pra log).
+ */
+async function abrirTelaBaixa(page, label = 'ECO_BAIXA') {
+    const temEnviaLink = await page
+        .evaluate(() => typeof window.enviaLink === 'function')
+        .catch(() => false);
+
+    if (temEnviaLink) {
+        let alvo = menuBaixaCache;
+        if (!alvo) {
+            for (const padrao of PADROES_MENU_BAIXA) {
+                alvo = await descobrirLinkMenu(page, padrao.source).catch(() => null);
+                if (alvo) break;
+            }
+            if (alvo) {
+                menuBaixaCache = alvo;
+                log(label, `Link de baixa no menu: enviaLink('${alvo.servlet}', '${alvo.param}') — "${alvo.texto}"`);
+            } else {
+                log(label, 'Nenhum link de baixa encontrado no menu — usando URL direta.');
+            }
+        }
+
+        if (alvo) {
+            await navigateViaMenu(page, alvo.servlet, alvo.param, { expectedUrlPart: '/baixa_titulo', label });
+            if (page.url().toLowerCase().includes('/baixa_titulo')) return 'menu';
+            log(label, `enviaLink('${alvo.servlet}', '${alvo.param}') não levou a /baixa_titulo (URL ${page.url()}) — caindo pra URL direta.`);
+            menuBaixaCache = null; // link errado: não insiste nas próximas chamadas
+        }
+    }
+
+    await page.goto(BAIXA_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    return 'goto';
 }
 
 /**
@@ -285,10 +367,10 @@ async function buscarTitulo(page, nossoNumero, opts = {}) {
     const { cnpj_empresa = null, _isRetry = false } = opts;
     const ecoNumero = withEcoPrefix(nossoNumero);
     log('ECO_BAIXA', `Abrindo /baixa_titulo — busca por "${ecoNumero}" (nosso número ${nossoNumero} → padded p/ ${ECO_NOSSO_NUMERO_TOTAL_LENGTH} dígitos com prefixo "${ECO_CARTEIRA_PREFIX}")${_isRetry ? ' [retry após selectCompany]' : ''}...`);
-    await page.goto(BAIXA_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const viaBaixa = await abrirTelaBaixa(page);
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 
-    log('ECO_BAIXA', `URL após goto: ${page.url()}`);
+    log('ECO_BAIXA', `URL após abrir a tela (via ${viaBaixa}): ${page.url()}`);
 
     // Aguarda o input do nosso número — auto-retry com selectCompany se a sessão
     // tiver sido perdida (mesmo padrão do consultarTituloDetalhado).

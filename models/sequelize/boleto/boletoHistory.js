@@ -105,7 +105,7 @@ export default (sequelize, DataTypes) => {
         },
 
         // ── Emissão adiada pela janela de funcionamento ───────────────────────
-        // Acionamento fora do horário (padrão 08:00-20:00 de Brasília) não é
+        // Acionamento fora do horário (padrão 06:00-23:00 de Brasília) não é
         // processado na hora: o registro nasce 'queued' e o
         // boletoWindowScheduler retoma ESTE MESMO registro na abertura.
         emissao_agendada_para: {
