@@ -21,6 +21,11 @@ export default (sequelize, DataTypes) => {
         // teto de respostas de IA por conversa (anti-loop / custo)
         max_ai_messages: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
 
+        // URL base do site institucional lido pelo EmeAtendeSiteSource. Fica em
+        // config (e não hardcoded) porque o domínio muda quando o site sair da
+        // plataforma atual - trocar aqui não exige deploy.
+        site_url: { type: DataTypes.STRING(255), allowNull: true },
+
         // ── Regras de atendimento (camada GERAL, vale pra todo fluxo) ────────
         // Editáveis na tela; o fluxo do empreendimento complementa/sobrescreve.
         // O piso de segurança (HARD_RULES) fica no código de propósito.

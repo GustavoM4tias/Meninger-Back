@@ -32,6 +32,17 @@ export default (sequelize, DataTypes) => {
         // { basic, delivery, negotiation, subsidy, benefits, campaigns }
         // Comissão NUNCA entra (informação interna).
         context_sources: { type: DataTypes.JSONB, allowNull: true, defaultValue: { basic: true, delivery: true, negotiation: true, subsidy: true, benefits: true, campaigns: true } },
+        // ── Vínculo com o SITE institucional (fonte preferida hoje) ──────────
+        // site_slug identifica o empreendimento na coleção do site. O conteúdo
+        // NÃO é lido ao vivo na conversa: um scheduler diário grava aqui o
+        // snapshot já normalizado, então site fora do ar não deixa o lead sem
+        // contexto e a rodada de IA não paga latência de rede.
+        site_slug: { type: DataTypes.STRING(160), allowNull: true },
+        site_snapshot: { type: DataTypes.JSONB, allowNull: true },
+        site_synced_at: { type: DataTypes.DATE, allowNull: true },
+        // Último erro do sync (null quando o último rodou limpo). Serve pra tela
+        // mostrar "o snapshot é de ontem porque hoje falhou", em vez de sumir.
+        site_sync_error: { type: DataTypes.TEXT, allowNull: true },
         // imagens que a Eme pode enviar na conversa (tool enviar_imagem):
         // [{ label: 'planta 2 quartos', url: 'https://...' }] - URL precisa ser pública
         images: { type: DataTypes.JSONB, allowNull: true, defaultValue: [] },
