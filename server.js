@@ -449,6 +449,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['EmeAtendeConversation', db.EmeAtendeConversation],
     ['EmeAtendeMessage', db.EmeAtendeMessage],
     ['EmeAtendeEvent', db.EmeAtendeEvent],
+    ['EmeAtendeSiteSync', db.EmeAtendeSiteSync],
     // Cancelamento de Reservas CV × Sienge (módulo novo em evolução)
     ['ReservaCancelSettings', db.ReservaCancelSettings],
     ['ReservaCancelHistory', db.ReservaCancelHistory],
