@@ -521,5 +521,5 @@ async function fireAI(conversationId) {
 export default {
     handleWebhookPayload, fireAI, sweepDueRounds,
     buildSystemPrompt, buildPromptParts, validImages,
-    FUNCTION_DECLARATIONS, IMAGE_TOOL,
+    FUNCTION_DECLARATIONS, IMAGE_TOOL, DOC_TOOL, flowBook,
 };

@@ -330,15 +330,20 @@ router.post('/test/ai', wrap(async (req, res) => {
     const { systemPrompt: basePrompt, contextText } =
         await EmeAtendeConversationEngine.buildPromptParts(flow, fakeLead);
     const systemPrompt = `${basePrompt}\n(Modo sandbox de teste - nenhuma mensagem é enviada.)`;
+    // Mesmas ferramentas do atendimento real: sandbox que declara menos tools
+    // testa um comportamento que não existe.
     const hasImages = EmeAtendeConversationEngine.validImages(flow).length > 0;
+    const hasBook = !!EmeAtendeConversationEngine.flowBook(flow);
 
     const result = await runChat({
         systemPrompt,
         history: history.map(h => ({ role: h.role, parts: [{ text: h.text }] })),
         userMessage: String(message),
-        functionDeclarations: hasImages
-            ? [...EmeAtendeConversationEngine.FUNCTION_DECLARATIONS, EmeAtendeConversationEngine.IMAGE_TOOL]
-            : EmeAtendeConversationEngine.FUNCTION_DECLARATIONS,
+        functionDeclarations: [
+            ...EmeAtendeConversationEngine.FUNCTION_DECLARATIONS,
+            ...(hasImages ? [EmeAtendeConversationEngine.IMAGE_TOOL] : []),
+            ...(hasBook ? [EmeAtendeConversationEngine.DOC_TOOL] : []),
+        ],
         onTool: async () => ({ ok: true, info: 'sandbox - ação simulada' }),
     });
     // Mesma conferência do atendimento real, mas aqui só REPORTA (não reescreve):
