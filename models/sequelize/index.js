@@ -171,6 +171,8 @@ import EmeGeneratedReportDismissalDefine   from './emeReports/generatedReportDis
 // Notificações
 import NotificationDefine from './notification.js';
 import NotificationPreferenceDefine from './notificationPreference.js';
+import PushSubscriptionDefine from './pushSubscription.js';
+import PushVapidKeyDefine from './pushVapidKey.js';
 
 // WhatsApp Business
 import WhatsappConfigDefine from './whatsapp/whatsappConfig.js';
@@ -442,6 +444,8 @@ db.EmeGeneratedReportDismissal   = EmeGeneratedReportDismissalDefine(sequelize, 
 // Notificações
 db.Notification           = NotificationDefine(sequelize, DataTypes);
 db.NotificationPreference = NotificationPreferenceDefine(sequelize, DataTypes);
+db.PushSubscription       = PushSubscriptionDefine(sequelize, DataTypes);
+db.PushVapidKey           = PushVapidKeyDefine(sequelize, DataTypes);
 
 // WhatsApp Business
 db.WhatsappConfig   = WhatsappConfigDefine(sequelize, DataTypes);

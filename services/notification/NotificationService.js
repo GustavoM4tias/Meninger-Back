@@ -21,6 +21,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { sendEmail } from '../../email/email.service.js';
 import { getCatalogEntry, NotificationType } from './notificationTypes.js';
+import PushService from './PushService.js';
 import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
@@ -247,6 +248,7 @@ async function notify({
 
     let inappCreated = 0;
     let whatsappQueued = 0;
+    let pushSent = 0;
     const emailRecipients = new Set();
     const wppContext = { ...(data || {}), ...(emailData || {}), ...(whatsappData || {}) };
 
@@ -289,6 +291,25 @@ async function notify({
                 }
             } else {
                 console.log(`[notify ${type}] in-app pulado pra user ${u.id} — pref.inapp=false (bypass=${bypassPrefs})`);
+            }
+
+            // 1b) push nativo (celular / desktop) — espelha o in-app.
+            // Sem preferência própria de propósito: o opt-in é a permissão que
+            // o usuário deu no navegador. Sem aparelho inscrito, não faz nada.
+            // Nunca lança: notificação não pode derrubar a ação que a originou.
+            if (pref.inapp) {
+                try {
+                    const r = await PushService.sendToUser(u.id, {
+                        title,
+                        body,
+                        link,
+                        tag: type,
+                        notificationId: createdNotif?.id || null,
+                    });
+                    pushSent += r.sent;
+                } catch (err) {
+                    console.warn(`[notify ${type}] push falhou para user ${u.id}:`, err?.message || err);
+                }
             }
 
             // 2) e-mail (acumula pra envio em lote)
@@ -347,7 +368,7 @@ async function notify({
         }
     }
 
-    return { inappCreated, emailsSent, whatsappQueued };
+    return { inappCreated, emailsSent, whatsappQueued, pushSent };
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
