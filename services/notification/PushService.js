@@ -177,6 +177,20 @@ export async function removeSubscription(userId, endpoint) {
     return PushSubscription.destroy({ where: { user_id: userId, endpoint } });
 }
 
+/**
+ * Remove um aparelho pelo id.
+ *
+ * O `user_id` no where não é redundante: sem ele, um id chutado apagaria a
+ * inscrição de outra pessoa.
+ *
+ * Existe porque a limpeza automática (404/410 no envio) só acontece na próxima
+ * tentativa de push. Quem desinstala o app hoje continua vendo o aparelho na
+ * lista até lá, e não tem como tirar.
+ */
+export async function removeDevice(userId, id) {
+    return PushSubscription.destroy({ where: { id, user_id: userId } });
+}
+
 export async function listForUser(userId) {
     return PushSubscription.findAll({
         where: { user_id: userId },
@@ -239,4 +253,4 @@ export async function sendToUser(userId, { title, body, link, tag, notificationI
     return { sent, removed };
 }
 
-export default { getVapidKeys, resetVapidCache, saveSubscription, removeSubscription, listForUser, sendToUser };
+export default { getVapidKeys, resetVapidCache, saveSubscription, removeSubscription, removeDevice, listForUser, sendToUser };
