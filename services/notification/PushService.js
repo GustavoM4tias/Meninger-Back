@@ -79,7 +79,17 @@ export async function getVapidKeys() {
  * (o que invalidaria as inscrições já feitas com o primeiro).
  */
 async function ensureKeyRow(subject) {
-    const existing = await PushVapidKey.findOne({ order: [['id', 'ASC']] });
+    // A LEITURA vem primeiro e é ela que quebra quando a tabela não existe —
+    // não o create. Sem este try a exceção escapava daqui e nunca chegava na
+    // recuperação lá embaixo, então a auto-criação não acontecia.
+    let existing = null;
+    try {
+        existing = await PushVapidKey.findOne({ order: [['id', 'ASC']] });
+    } catch (err) {
+        if (!tabelaFaltando(err)) throw err;
+        await PushVapidKey.sync();
+        console.log('🔔 [VAPID] tabela push_vapid_keys criada sob demanda.');
+    }
     if (existing) return existing;
 
     const { publicKey, privateKey } = webpush.generateVAPIDKeys();
