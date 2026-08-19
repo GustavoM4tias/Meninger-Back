@@ -6,6 +6,7 @@ import {
     subscribe,
     unsubscribe,
     listDevices,
+    removeDevice,
     test,
 } from '../controllers/pushController.js';
 
@@ -15,6 +16,7 @@ router.get('/vapid-key', authenticate, vapidKey);
 router.get('/devices', authenticate, listDevices);
 router.post('/subscribe', authenticate, subscribe);
 router.post('/unsubscribe', authenticate, unsubscribe);
+router.delete('/devices/:id', authenticate, removeDevice);
 router.post('/test', authenticate, test);
 
 export default router;

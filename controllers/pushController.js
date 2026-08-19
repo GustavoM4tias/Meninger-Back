@@ -51,6 +51,17 @@ export async function listDevices(req, res) {
     }
 }
 
+export async function removeDevice(req, res) {
+    try {
+        const removed = await PushService.removeDevice(req.user.id, Number(req.params.id));
+        if (!removed) return res.status(404).json({ message: 'Aparelho não encontrado.' });
+        return res.json({ ok: true });
+    } catch (err) {
+        console.error('[push] removeDevice:', err?.message || err);
+        return res.status(500).json({ message: 'Falha ao remover o aparelho.' });
+    }
+}
+
 /** Dispara um push de teste para o próprio usuário — usado na tela /instalar. */
 export async function test(req, res) {
     try {
