@@ -21,6 +21,13 @@ const { PushSubscription, PushVapidKey } = db;
 
 let cachedKeys = null;
 
+/** A fase de schema roda em segundo plano e pode ter sido pulada. Se a tabela
+ *  ainda não existe, cria e refaz a operação uma vez. sync() sem alter só cria
+ *  o que falta, então é seguro chamar em produção. */
+function tabelaFaltando(err) {
+    return /does not exist|no such table/i.test(String(err?.message || ''));
+}
+
 /**
  * Chaves VAPID. Env manda; sem env, usa a linha gerada no boot pelo
  * lib/ensureVapidKeys.js. Retorna null quando não há chave — aí o push
@@ -41,7 +48,7 @@ export async function getVapidKeys() {
     }
 
     try {
-        const row = await PushVapidKey.findOne({ order: [['id', 'ASC']] });
+        const row = await ensureKeyRow(subject);
         if (row) {
             cachedKeys = {
                 publicKey: row.public_key,
@@ -51,11 +58,52 @@ export async function getVapidKeys() {
             return cachedKeys;
         }
     } catch (err) {
-        console.warn('[push] não consegui ler as chaves VAPID:', err?.message || err);
+        console.error('[push] não consegui obter as chaves VAPID:', err?.message || err);
     }
 
     cachedKeys = null;
     return null;
+}
+
+/**
+ * Devolve a linha das chaves, gerando na hora se ainda não existir.
+ *
+ * A geração TAMBÉM acontece no boot (lib/ensureVapidKeys.js), mas não dá para
+ * depender só disso: o gate de schema pula a fase de patches quando nada mudou,
+ * a fase roda em segundo plano depois do listen, e um patch anterior que falhe
+ * impede os seguintes. Qualquer um desses cenários deixaria o push morto sem
+ * ninguém perceber. Aqui a chave nasce na primeira vez que alguém precisa dela.
+ *
+ * Idempotente: id fixo 1, então uma corrida entre dois requests dá violação de
+ * chave e o perdedor relê a linha do vencedor, em vez de criar um segundo par
+ * (o que invalidaria as inscrições já feitas com o primeiro).
+ */
+async function ensureKeyRow(subject) {
+    const existing = await PushVapidKey.findOne({ order: [['id', 'ASC']] });
+    if (existing) return existing;
+
+    const { publicKey, privateKey } = webpush.generateVAPIDKeys();
+    const payload = { id: 1, public_key: publicKey, private_key: privateKey, subject };
+
+    try {
+        const row = await PushVapidKey.create(payload);
+        console.log('🔔 [VAPID] par de chaves gerado sob demanda e gravado.');
+        return row;
+    } catch (err) {
+        // Tabela ainda não existe (fase de schema pulada ou em andamento):
+        // cria e tenta de novo. sync() sem alter só cria o que falta.
+        if (tabelaFaltando(err)) {
+            await PushVapidKey.sync();
+            const row = await PushVapidKey.create(payload);
+            console.log('🔔 [VAPID] tabela criada e par de chaves gravado sob demanda.');
+            return row;
+        }
+
+        // Corrida com outro request: relê a linha que o vencedor criou.
+        const again = await PushVapidKey.findOne({ order: [['id', 'ASC']] });
+        if (again) return again;
+        throw err;
+    }
 }
 
 /** Invalida o cache — usado pelo ensureVapidKeys logo após gerar o par. */
@@ -81,7 +129,16 @@ export async function saveSubscription(userId, { subscription, userAgent, standa
         throw err;
     }
 
-    const existing = await PushSubscription.findOne({ where: { endpoint } });
+    let existing;
+    try {
+        existing = await PushSubscription.findOne({ where: { endpoint } });
+    } catch (err) {
+        if (!tabelaFaltando(err)) throw err;
+        await PushSubscription.sync();
+        console.log('🔔 [push] tabela push_subscriptions criada sob demanda.');
+        existing = null;
+    }
+
     if (existing) {
         // Endpoint pode migrar de dono (aparelho compartilhado, troca de login).
         await existing.update({
