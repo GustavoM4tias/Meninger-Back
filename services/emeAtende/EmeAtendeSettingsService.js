@@ -27,6 +27,8 @@ async function getConfig() {
         validation_level: row.validation_level || 'money_dates',
         // vazio = o EmeAtendeSiteSource cai no env/padrão
         site_url: row.site_url || '',
+        // null = usa o padrão do código; a tela edita uma cópia disto
+        site_source: row.site_source || null,
         // camada GERAL de regras (o fluxo do empreendimento complementa)
         global_persona: row.global_persona || '',
         global_rules: row.global_rules || '',
@@ -42,7 +44,7 @@ async function updateConfig(payload = {}) {
     const update = {};
     for (const k of ['active', 'dry_run', 'debounce_seconds', 'max_ai_messages',
                      'test_mode', 'validation_level', 'global_persona', 'global_rules',
-                     'site_url']) {
+                     'site_url', 'site_source']) {
         if (payload[k] !== undefined) update[k] = payload[k];
     }
     if (payload.standards !== undefined) {

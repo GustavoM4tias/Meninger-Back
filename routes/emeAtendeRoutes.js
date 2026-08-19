@@ -19,7 +19,7 @@ import { runChat } from '../services/emeAtende/emeAtendeGeminiChat.js';
 import { findUnsupported } from '../services/emeAtende/emeAtendeGuard.js';
 import { buildInstructions, mergeStandards, HARD_RULES } from '../services/emeAtende/emeAtendeRules.js';
 import EmeAtendeSiteSyncService from '../services/emeAtende/EmeAtendeSiteSyncService.js';
-import { fetchEnterprises } from '../services/emeAtende/emeAtendeSiteSource.js';
+import { fetchSite, resolveSource, resolveSiteUrl, buildSiteContext } from '../services/emeAtende/emeAtendeSiteSource.js';
 
 const router = express.Router();
 router.use(authenticate, requireAdmin);
@@ -168,7 +168,7 @@ router.get('/enterprises', wrap(async (req, res) => {
 router.get('/site/enterprises', wrap(async (req, res) => {
     const cfg = await EmeAtendeSettingsService.getConfig();
     try {
-        const all = await fetchEnterprises(cfg.site_url);
+        const { enterprises: all } = await fetchSite(cfg.site_url, cfg.site_source);
         res.json(all.map(e => ({
             slug: e.slug, nome: e.nome, cidade: e.cidade, status: e.status, perfil: e.perfil,
             imagens: e.images.length, book: !!e.book,
@@ -184,6 +184,39 @@ router.post('/site/sync', wrap(async (req, res) => {
     const out = await EmeAtendeSiteSyncService.syncFlows({ flowId, trigger: 'manual' });
     EmeAtendeFlowService.invalidate();
     res.status(out.error ? 502 : 200).json(out);
+}));
+
+// Configuração EFETIVA da leitura do site (salva no banco mesclada com o
+// padrão do código). A tela edita isto e grava em settings.site_source.
+router.get('/site/source', wrap(async (req, res) => {
+    const cfg = await EmeAtendeSettingsService.getConfig();
+    res.json({ site_url: resolveSiteUrl(cfg.site_url), source: resolveSource(cfg.site_source) });
+}));
+
+// Testa uma configuração AINDA NÃO SALVA contra o site de verdade: devolve os
+// campos que a plataforma declara, quantos empreendimentos leu, um exemplo
+// normalizado e o contexto que a IA leria. É o que torna a config editável
+// sem chute - dá pra ver o resultado antes de gravar.
+router.post('/site/preview', wrap(async (req, res) => {
+    const cfg = await EmeAtendeSettingsService.getConfig();
+    const url = req.body?.site_url || cfg.site_url;
+    const source = resolveSource(req.body?.source ?? cfg.site_source);
+    try {
+        const { enterprises, camposDoSite } = await fetchSite(url, source);
+        const escolhido = req.body?.slug
+            ? enterprises.find(e => e.slug === req.body.slug)
+            : enterprises[0];
+        res.json({
+            url: resolveSiteUrl(url),
+            campos_do_site: camposDoSite,
+            total: enterprises.length,
+            slugs: enterprises.map(e => ({ slug: e.slug, nome: e.nome })),
+            exemplo: escolhido || null,
+            contexto: escolhido ? buildSiteContext(escolhido, source) : "",
+        });
+    } catch (err) {
+        res.status(502).json({ error: err.message });
+    }
 }));
 
 // Histórico das leituras do site: quando rodou, o que mudou, o que falhou.
