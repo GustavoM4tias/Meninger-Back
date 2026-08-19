@@ -55,18 +55,24 @@ export async function runChat({ systemPrompt, history = [], userMessage, functio
             while (rounds++ < MAX_TOOL_ROUNDS) {
                 const parts = result.response?.candidates?.[0]?.content?.parts || [];
                 const text = parts.filter(p => p.text).map(p => p.text).join('').trim();
-                const fc = parts.find(p => p.functionCall)?.functionCall;
-                if (!fc) return { text, toolCalls };
+                // TODAS as chamadas da rodada, não só a primeira. O Gemini emite
+                // function calls em paralelo ("manda as 3 fotos") e pegar só
+                // parts.find() descartava o resto EM SILÊNCIO: o modelo dizia que ia
+                // enviar em sequência e chegava uma mídia só.
+                const fcs = parts.filter(p => p.functionCall).map(p => p.functionCall);
+                if (!fcs.length) return { text, toolCalls };
 
-                toolCalls.push({ name: fc.name, args: fc.args || {} });
-                let toolResult = { ok: true };
-                if (typeof onTool === 'function') {
-                    try { toolResult = (await onTool(fc)) || { ok: true }; }
-                    catch (err) { toolResult = { ok: false, error: err?.message }; }
+                const responses = [];
+                for (const fc of fcs) {
+                    toolCalls.push({ name: fc.name, args: fc.args || {} });
+                    let toolResult = { ok: true };
+                    if (typeof onTool === 'function') {
+                        try { toolResult = (await onTool(fc)) || { ok: true }; }
+                        catch (err) { toolResult = { ok: false, error: err?.message }; }
+                    }
+                    responses.push({ functionResponse: { name: fc.name, response: toolResult } });
                 }
-                result = await chat.sendMessage([
-                    { functionResponse: { name: fc.name, response: toolResult } },
-                ]);
+                result = await chat.sendMessage(responses);
             }
             const parts = result.response?.candidates?.[0]?.content?.parts || [];
             let text = parts.filter(p => p.text).map(p => p.text).join('').trim();
