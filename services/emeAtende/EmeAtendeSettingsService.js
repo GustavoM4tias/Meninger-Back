@@ -25,6 +25,8 @@ async function getConfig() {
         test_mode: !!row.test_mode,
         test_phones: Array.isArray(row.test_phones) ? row.test_phones : [],
         validation_level: row.validation_level || 'money_dates',
+        // vazio = o EmeAtendeSiteSource cai no env/padrão
+        site_url: row.site_url || '',
         // camada GERAL de regras (o fluxo do empreendimento complementa)
         global_persona: row.global_persona || '',
         global_rules: row.global_rules || '',
@@ -39,7 +41,8 @@ async function updateConfig(payload = {}) {
     if (!row) row = await db.EmeAtendeSetting.create({ id: 1 });
     const update = {};
     for (const k of ['active', 'dry_run', 'debounce_seconds', 'max_ai_messages',
-                     'test_mode', 'validation_level', 'global_persona', 'global_rules']) {
+                     'test_mode', 'validation_level', 'global_persona', 'global_rules',
+                     'site_url']) {
         if (payload[k] !== undefined) update[k] = payload[k];
     }
     if (payload.standards !== undefined) {

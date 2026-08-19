@@ -118,6 +118,31 @@ async function sendImage({ conversation, url, caption = null, label = null }) {
 }
 
 /**
+ * Documento (hoje: o book em PDF do empreendimento, vindo do site).
+ * Mesma regra da imagem: a Meta BAIXA o arquivo pela URL, então ela precisa ser
+ * pública. Link do SharePoint ou de storage privado falha do lado deles.
+ */
+async function sendDocument({ conversation, url, filename = null, caption = null, label = null }) {
+    const body = `[documento${label ? `: ${label}` : ''}] ${url}`;
+    const cfg = await EmeAtendeSettingsService.getConfig();
+    if (!cfg.active || cfg.dry_run) {
+        console.log(`[eme-atende/messenger] DRY_RUN documento → ${conversation.phone}: ${body}`);
+        return persistOut({ conversation, type: 'document', body, status: 'dry_run' });
+    }
+    const win = await guardWindow(conversation, 'document', body);
+    if (win) return win;
+    try {
+        const { id } = await WhatsAppService.sendDocument({
+            to: conversation.phone, link: url, filename: filename || 'material.pdf', caption,
+        });
+        return persistOut({ conversation, type: 'document', body, wamid: id, status: 'sent' });
+    } catch (err) {
+        console.error(`[eme-atende/messenger] documento falhou pra ${conversation.phone}:`, err?.message);
+        return persistOut({ conversation, type: 'document', body, status: 'failed', error: err?.message });
+    }
+}
+
+/**
  * Abertura de conversa: template aprovado (validado no cache whatsapp_templates
  * do Office - mesma WABA), variáveis vindas dos campos do lead.
  */
@@ -204,4 +229,4 @@ async function sendOpener({ lead, conversation, flow }) {
     }
 }
 
-export default { sendText, sendImage, sendOpener, logEvent };
+export default { sendText, sendImage, sendDocument, sendOpener, logEvent };

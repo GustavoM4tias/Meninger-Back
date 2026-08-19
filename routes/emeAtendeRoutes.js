@@ -18,6 +18,8 @@ import EmeAtendeContextBuilder from '../services/emeAtende/EmeAtendeContextBuild
 import { runChat } from '../services/emeAtende/emeAtendeGeminiChat.js';
 import { findUnsupported } from '../services/emeAtende/emeAtendeGuard.js';
 import { buildInstructions, mergeStandards, HARD_RULES } from '../services/emeAtende/emeAtendeRules.js';
+import EmeAtendeSiteSyncService from '../services/emeAtende/EmeAtendeSiteSyncService.js';
+import { fetchEnterprises } from '../services/emeAtende/emeAtendeSiteSource.js';
 
 const router = express.Router();
 router.use(authenticate, requireAdmin);
@@ -66,6 +68,9 @@ const FLOW_FIELDS = ['name', 'active', 'is_default', 'system_prompt', 'business_
     // Não confundir com a associação `rules` (segmentação de leads).
     'attendance_rules', 'standards',
     'cv_enterprise_id', 'context_sources', 'images',
+    // site_slug é o único campo do site que a tela grava: snapshot,
+    // site_synced_at e site_sync_error são escritos pelo sync, nunca pelo cliente.
+    'site_slug',
     'opener_template', 'opener_language', 'opener_variables', 'triggers', 'settings'];
 
 router.get('/flows', wrap(async (req, res) => {
@@ -81,7 +86,10 @@ router.post('/flows', wrap(async (req, res) => {
     if (data.is_default) await db.EmeAtendeFlow.update({ is_default: false }, { where: {} });
     const row = await db.EmeAtendeFlow.create(data);
     EmeAtendeFlowService.invalidate();
-    res.status(201).json(row);
+    // Vinculou ao site? puxa o conteúdo agora - esperar o scheduler da
+    // madrugada deixaria o fluxo sem contexto no dia da configuração.
+    if (row.site_slug) await EmeAtendeSiteSyncService.syncFlows({ flowId: row.id }).catch(() => null);
+    res.status(201).json(await row.reload());
 }));
 
 router.put('/flows/:id', wrap(async (req, res) => {
@@ -89,9 +97,13 @@ router.put('/flows/:id', wrap(async (req, res) => {
     if (!row) return res.status(404).json({ error: 'não encontrado' });
     const data = Object.fromEntries(Object.entries(req.body || {}).filter(([k]) => FLOW_FIELDS.includes(k)));
     if (data.is_default) await db.EmeAtendeFlow.update({ is_default: false }, { where: { id: { [Op.ne]: row.id } } });
+    const slugMudou = data.site_slug !== undefined && data.site_slug !== row.site_slug;
     await row.update(data);
     EmeAtendeFlowService.invalidate();
-    res.json(row);
+    // Só re-sincroniza quando o vínculo mudou: salvar o fluxo por outro
+    // motivo não precisa bater no site.
+    if (slugMudou && row.site_slug) await EmeAtendeSiteSyncService.syncFlows({ flowId: row.id }).catch(() => null);
+    res.json(await row.reload());
 }));
 
 router.delete('/flows/:id', wrap(async (req, res) => {
@@ -147,6 +159,31 @@ router.get('/enterprises', wrap(async (req, res) => {
         attributes: ['idempreendimento', 'nome', 'cidade', 'estado', 'situacao_comercial_nome'],
         order: [['nome', 'ASC']],
     }));
+}));
+
+// ── Empreendimentos do SITE institucional ───────────────────────────────────
+// Lista ao vivo (uma requisição traz o site inteiro) pro Select do editor de
+// fluxo. Erro aqui é 502 com a mensagem real: "não consegui ler o site" é
+// informação útil pro admin, silêncio não é.
+router.get('/site/enterprises', wrap(async (req, res) => {
+    const cfg = await EmeAtendeSettingsService.getConfig();
+    try {
+        const all = await fetchEnterprises(cfg.site_url);
+        res.json(all.map(e => ({
+            slug: e.slug, nome: e.nome, cidade: e.cidade, status: e.status, perfil: e.perfil,
+            imagens: e.images.length, book: !!e.book,
+        })));
+    } catch (err) {
+        res.status(502).json({ error: `falha lendo o site: ${err.message}` });
+    }
+}));
+
+// Força o sync agora (o automático é 1x/dia). flow_id opcional = só um fluxo.
+router.post('/site/sync', wrap(async (req, res) => {
+    const flowId = req.body?.flow_id ? Number(req.body.flow_id) : null;
+    const out = await EmeAtendeSiteSyncService.syncFlows({ flowId });
+    EmeAtendeFlowService.invalidate();
+    res.status(out.error ? 502 : 200).json(out);
 }));
 
 // ── Preview das REGRAS montadas em camadas ──────────────────────────────────

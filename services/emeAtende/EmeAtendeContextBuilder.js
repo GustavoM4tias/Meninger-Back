@@ -10,6 +10,7 @@
 
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
+import { buildSiteContext } from './emeAtendeSiteSource.js';
 
 const DEFAULT_SOURCES = { basic: true, delivery: true, negotiation: true, subsidy: true, benefits: true, campaigns: true };
 
@@ -104,11 +105,38 @@ function buildCampaigns(campaigns) {
  * @returns {Promise<{text: string, meta: object}>} text = '' quando sem vínculo
  */
 async function buildContext(flow) {
+    // ── Fonte SITE (preferida) ───────────────────────────────────────────────
+    // Vem do snapshot gravado pelo sync diário, não de requisição na hora: a
+    // conversa não pode depender de o site responder. Tem precedência sobre o
+    // CV porque o texto do site é escrito pro cliente e não carrega condição
+    // comercial - ver emeAtendeSiteSource.js.
+    if (flow?.site_slug) {
+        const snap = flow.site_snapshot;
+        if (!snap?.nome) {
+            return {
+                text: '',
+                meta: {
+                    linked: true, source: 'site', slug: flow.site_slug,
+                    error: flow.site_sync_error || 'sem snapshot do site (sync ainda não rodou)',
+                },
+            };
+        }
+        return {
+            text: buildSiteContext(snap),
+            meta: {
+                linked: true, source: 'site', slug: flow.site_slug,
+                enterprise: snap.nome,
+                synced_at: flow.site_synced_at,
+                sync_error: flow.site_sync_error || null,
+            },
+        };
+    }
+
     const entId = flow?.cv_enterprise_id;
     if (!entId) return { text: '', meta: { linked: false } };
 
     const sources = { ...DEFAULT_SOURCES, ...(flow.context_sources || {}) };
-    const meta = { linked: true, enterprise: null, ficha_month: null, ficha_status: null };
+    const meta = { linked: true, source: 'cv', enterprise: null, ficha_month: null, ficha_status: null };
     const parts = [];
 
     try {

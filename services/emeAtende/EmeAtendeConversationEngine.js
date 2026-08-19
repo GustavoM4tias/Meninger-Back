@@ -49,6 +49,13 @@ const FUNCTION_DECLARATIONS = [
     },
 ];
 
+// Tool só declarada quando o empreendimento tem book publicado no site.
+const DOC_TOOL = {
+    name: 'enviar_documento',
+    description: 'Envia ao lead o BOOK DIGITAL (PDF) do empreendimento. Use quando o lead pedir material, book, folder ou mais detalhes por escrito. Não use para plantas ou fotos - para isso existe enviar_imagem.',
+    parameters: { type: 'object', properties: {}, required: [] },
+};
+
 // Tool só declarada quando o fluxo tem imagens cadastradas.
 const IMAGE_TOOL = {
     name: 'enviar_imagem',
@@ -60,8 +67,33 @@ const IMAGE_TOOL = {
     },
 };
 
+/**
+ * Imagens que a Eme pode enviar: as cadastradas à mão no fluxo MAIS as do
+ * snapshot do site (galeria, plantas, obra), que já vêm legendadas pela
+ * plataforma. Label duplicado fica com a versão manual - quem editou na mão
+ * teve a intenção de sobrescrever.
+ */
 function validImages(flow) {
-    return (Array.isArray(flow?.images) ? flow.images : []).filter(i => i?.url && i?.label);
+    const manual = (Array.isArray(flow?.images) ? flow.images : []).filter(i => i?.url && i?.label);
+    const doSite = (Array.isArray(flow?.site_snapshot?.images) ? flow.site_snapshot.images : [])
+        .filter(i => i?.url && i?.label);
+    const vistos = new Set(manual.map(i => String(i.label).toLowerCase()));
+    return [...manual, ...doSite.filter(i => !vistos.has(String(i.label).toLowerCase()))];
+}
+
+/** "Residencial Três Marias" → "Residencial-Tres-Marias" (nome de arquivo). */
+function slugArquivo(nome) {
+    return String(nome || 'material')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'material';
+}
+
+/** Book em PDF do empreendimento, quando o site publica um. */
+function flowBook(flow) {
+    const url = flow?.site_snapshot?.book;
+    if (!url) return null;
+    return { url, nome: flow.site_snapshot?.nome || 'empreendimento' };
 }
 
 function findImage(images, label) {
@@ -294,9 +326,13 @@ async function buildPromptParts(flow, lead) {
     const imageBlock = images.length
         ? `\n\nIMAGENS DISPONÍVEIS (envie com a ferramenta enviar_imagem quando o lead pedir fotos/plantas ou quando ajudar a resposta; use o label exato):\n${images.map(i => `- "${i.label}"`).join('\n')}`
         : '';
+    const book = flowBook(flow);
+    const docBlock = book
+        ? '\n\nMATERIAL DISPONÍVEL: o book digital em PDF deste empreendimento pode ser enviado com a ferramenta enviar_documento.'
+        : '';
     const leadInfo = `\n\nDADOS DO LEAD: nome=${lead?.name || 'desconhecido'}; origem=${lead?.source || '-'}; campanha=${lead?.campaign || '-'}; empreendimento de interesse=${lead?.empreendimento || '-'}.`;
     return {
-        systemPrompt: `${instructions}${context}${imageBlock}${leadInfo}\n${HARD_RULES}`,
+        systemPrompt: `${instructions}${context}${imageBlock}${docBlock}${leadInfo}\n${HARD_RULES}`,
         contextText: contextText || '',
     };
 }
@@ -416,6 +452,7 @@ async function fireAI(conversationId) {
 
     const actions = { qualified: null, close: null };
     const images = validImages(flow);
+    const book = flowBook(flow);
     const { systemPrompt, contextText } = await buildPromptParts(flow, lead);
     let result;
     try {
@@ -423,7 +460,11 @@ async function fireAI(conversationId) {
             systemPrompt,
             history,
             userMessage,
-            functionDeclarations: images.length ? [...FUNCTION_DECLARATIONS, IMAGE_TOOL] : FUNCTION_DECLARATIONS,
+            functionDeclarations: [
+                ...FUNCTION_DECLARATIONS,
+                ...(images.length ? [IMAGE_TOOL] : []),
+                ...(book ? [DOC_TOOL] : []),
+            ],
             onTool: async ({ name, args }) => {
                 if (name === 'marcar_qualificado') { actions.qualified = args?.resumo || ''; return { ok: true, info: 'Lead marcado como qualificado. Continue a conversa normalmente.' }; }
                 if (name === 'encerrar_conversa') { actions.close = args?.motivo || ''; return { ok: true, info: 'Encerramento registrado. Escreva uma despedida curta e educada.' }; }
@@ -433,6 +474,17 @@ async function fireAI(conversationId) {
                     const sent = await EmeAtendeMessenger.sendImage({ conversation, url: img.url, label: img.label });
                     await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'image_sent', { label: img.label, status: sent?.status });
                     return { ok: true, info: `Imagem "${img.label}" enviada ao lead. Continue a resposta em texto SEM repetir o link.` };
+                }
+                if (name === 'enviar_documento') {
+                    if (!book) return { ok: false, error: 'este empreendimento não tem book digital.' };
+                    // Nome do arquivo sem acento nem símbolo: é o que o lead vê
+                    // no WhatsApp, e acento em filename já deu problema no envio.
+                    const nomeArquivo = `${slugArquivo(book.nome)}.pdf`;
+                    const sent = await EmeAtendeMessenger.sendDocument({
+                        conversation, url: book.url, filename: nomeArquivo, label: `book ${book.nome}`,
+                    });
+                    await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'document_sent', { url: book.url, status: sent?.status });
+                    return { ok: true, info: 'Book enviado ao lead. Continue a resposta em texto SEM repetir o link.' };
                 }
                 return { ok: false, error: 'tool desconhecida' };
             },
