@@ -2,6 +2,8 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
+import requireRoutePermission from '../middlewares/requireRoutePermission.js';
+import { requireHistoryInScope } from '../services/boleto/boletoScope.js';
 import {
     receiveWebhook,
     simulateWebhook,
@@ -29,6 +31,14 @@ import {
 
 const router = express.Router();
 
+// Alçada da tela: histórico, filtros e reprocessamento são DELEGÁVEIS por
+// alçada (a aba Configurações some para quem não é admin, e as rotas de
+// configuração abaixo continuam exigindo admin). O histórico ainda passa pelo
+// escopo de empreendimentos do usuário — ver services/boleto/boletoScope.js.
+const BOLETO_SCREEN = '/financeiro/boleto-caixa';
+const operar = [authenticate, requireRoutePermission([BOLETO_SCREEN])];
+const operarItem = [...operar, requireHistoryInScope];
+
 // ── Webhook público (chamado pelo CV, sem autenticação interna) ────────────────
 router.post('/webhook', receiveWebhook);
 
@@ -49,18 +59,21 @@ router.delete('/comission-rules/:id', authenticate, requireAdmin, deleteComissio
 router.get('/whatsapp-template', authenticate, requireAdmin, getWhatsappTemplateStatus);
 router.post('/whatsapp-template/sync', authenticate, requireAdmin, createBoletoWhatsappTemplate);
 
-// ── Histórico — tela /financeiro/boleto-caixa é admin-only ───────────────────
-router.get('/history', authenticate, requireAdmin, listHistory);
-router.get('/history-stats', authenticate, requireAdmin, getHistoryStats);
-router.get('/history-facets', authenticate, requireAdmin, getHistoryFacets);
-router.get('/history/:id', authenticate, requireAdmin, getHistoryItem);
-router.get('/history/:id/events', authenticate, requireAdmin, listHistoryEvents);
-router.get('/history/:id/reserva-timeline', authenticate, requireAdmin, listReservaTimeline);
-router.post('/history/:id/retry', authenticate, requireAdmin, retryHistoryItem);
-router.post('/history/:id/regenerate', authenticate, requireAdmin, regenerateHistoryItem);
-router.post('/history/:id/mark-cancelled', authenticate, requireAdmin, markHistoryCancelled);
-router.get('/history/:id/titular-contact', authenticate, requireAdmin, getTitularContact);
-router.post('/history/:id/resend', authenticate, requireAdmin, resendBoletoToTitular);
-router.post('/history/:id/check-payment', authenticate, requireAdmin, checkPaymentNow);
+// ── Histórico e reprocessamento — alçada da tela ─────────────────────────────
+// Leituras e ações de operação (reprocessar, regerar, reenviar, conferir
+// pagamento) acompanham a alçada; o recorte por empreendimento é aplicado
+// dentro do controller (listagens) e pelo requireHistoryInScope (item a item).
+router.get('/history', ...operar, listHistory);
+router.get('/history-stats', ...operar, getHistoryStats);
+router.get('/history-facets', ...operar, getHistoryFacets);
+router.get('/history/:id', ...operarItem, getHistoryItem);
+router.get('/history/:id/events', ...operarItem, listHistoryEvents);
+router.get('/history/:id/reserva-timeline', ...operarItem, listReservaTimeline);
+router.post('/history/:id/retry', ...operarItem, retryHistoryItem);
+router.post('/history/:id/regenerate', ...operarItem, regenerateHistoryItem);
+router.post('/history/:id/mark-cancelled', ...operarItem, markHistoryCancelled);
+router.get('/history/:id/titular-contact', ...operarItem, getTitularContact);
+router.post('/history/:id/resend', ...operarItem, resendBoletoToTitular);
+router.post('/history/:id/check-payment', ...operarItem, checkPaymentNow);
 
 export default router;

@@ -18,6 +18,13 @@ import {
     applyCvIdsToWhere,
     fetchCvEtapaFacets,
 } from '../../lib/cvEtapaLookup.js';
+// Recorte por empreendimento do usuário (a tela deixou de ser admin-only).
+import {
+    allowedEnterpriseNames,
+    applyEnterpriseScope,
+    enterpriseScopeSql,
+} from '../../services/boleto/boletoScope.js';
+import { JANELA_PADRAO } from '../../lib/boletoJanela.js';
 
 // ── Webhook ───────────────────────────────────────────────────────────────────
 
@@ -95,8 +102,8 @@ export async function updateSettings(req, res) {
         // inválida faria a emissão ser adiada pra sempre — barra aqui.
         if (req.body.janela_inicio_hora !== undefined || req.body.janela_fim_hora !== undefined) {
             const atual = await db.BoletoSettings.findByPk(1);
-            const inicio = Number(req.body.janela_inicio_hora ?? atual?.janela_inicio_hora ?? 8);
-            const fim = Number(req.body.janela_fim_hora ?? atual?.janela_fim_hora ?? 20);
+            const inicio = Number(req.body.janela_inicio_hora ?? atual?.janela_inicio_hora ?? JANELA_PADRAO.inicio);
+            const fim = Number(req.body.janela_fim_hora ?? atual?.janela_fim_hora ?? JANELA_PADRAO.fim);
             if (!Number.isInteger(inicio) || inicio < 0 || inicio > 23) {
                 return res.status(400).json({ error: 'janela_inicio_hora deve ser uma hora cheia entre 0 e 23.' });
             }
@@ -259,6 +266,9 @@ export async function listHistory(req, res) {
             cvRepasse: req.query.cvRepasse,
         });
         applyCvIdsToWhere(where, cvIds, Op);
+        // Recorte de dados: admin vê tudo; os demais, só os empreendimentos
+        // liberados nas Alçadas (sem grant = nenhuma linha).
+        applyEnterpriseScope(where, await allowedEnterpriseNames(req.user), Op);
 
         const offset = (Number(page) - 1) * Number(limit);
 
@@ -401,6 +411,9 @@ export async function getHistoryStats(req, res) {
             cvRepasse: req.query.cvRepasse,
         });
         applyCvIdsToWhere(where, cvIds, Op);
+        // Recorte de dados: admin vê tudo; os demais, só os empreendimentos
+        // liberados nas Alçadas (sem grant = nenhuma linha).
+        applyEnterpriseScope(where, await allowedEnterpriseNames(req.user), Op);
 
         // 1 query: agrupa por status de emissão + pagamento e soma valor.
         // Sequelize aggregations: fazemos via raw findAll com group.
@@ -523,18 +536,30 @@ export async function getHistoryStats(req, res) {
 export async function getHistoryFacets(req, res) {
     try {
         const { Sequelize } = db;
-        const [empreendimentos] = await db.sequelize.query(`
+        // Mesmo recorte da listagem: as facetas só oferecem o que o usuário
+        // pode ver (senão o filtro mostraria empreendimento sem nenhuma linha).
+        const scope = enterpriseScopeSql(await allowedEnterpriseNames(req.user));
+        const scoped = (sql) => db.sequelize.query(sql, {
+            replacements: scope.replacements, type: Sequelize.QueryTypes.SELECT,
+        });
+
+        const empreendimentos = await scoped(`
             SELECT empreendimento AS name, COUNT(*)::int AS qty
               FROM boleto_history
              WHERE empreendimento IS NOT NULL AND empreendimento <> ''
+                   ${scope.sql}
           GROUP BY empreendimento
           ORDER BY empreendimento ASC
         `);
-        const [statusCounts] = await db.sequelize.query(`
-            SELECT status, COUNT(*)::int AS qty FROM boleto_history GROUP BY status
+        const statusCounts = await scoped(`
+            SELECT status, COUNT(*)::int AS qty FROM boleto_history
+             WHERE 1 = 1 ${scope.sql}
+          GROUP BY status
         `);
-        const [paymentCounts] = await db.sequelize.query(`
-            SELECT payment_status, COUNT(*)::int AS qty FROM boleto_history GROUP BY payment_status
+        const paymentCounts = await scoped(`
+            SELECT payment_status, COUNT(*)::int AS qty FROM boleto_history
+             WHERE 1 = 1 ${scope.sql}
+          GROUP BY payment_status
         `);
 
         // Etapas CV presentes entre as reservas do histórico — alimentam os
