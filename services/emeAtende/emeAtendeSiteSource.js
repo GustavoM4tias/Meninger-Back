@@ -40,6 +40,10 @@ const FETCH_TIMEOUT_MS = 20000;
 export const DEFAULT_SITE_SOURCE = {
     variavel_global: 'window.__SITE__',
     colecao: 'empreendimentos',
+    // Ponto de vendas físico, ligado ao empreendimento pelo slug. Sem isto a Eme
+    // respondia "não temos stand" a quem pedia pra visitar - e o stand existia.
+    colecao_stands: 'stands',
+    campos_stand: { nome: 'nome', endereco: 'endereco', cidade: 'cidade', horario: 'horario', telefone: 'telefone', empreendimento: 'empreendimento' },
     campos: {
         slug: 'slug', nome: 'nome', cidade: 'cidade', status: 'status', perfil: 'perfil',
         descricao: 'descricao', sobre: 'sobre', area: 'area', quartos: 'quartos',
@@ -63,6 +67,7 @@ export const DEFAULT_SITE_SOURCE = {
         { chave: 'diferenciais', titulo: 'DIFERENCIAIS', ativo: true },
         { chave: 'comodidades', titulo: 'COMODIDADES', ativo: true },
         { chave: 'pontos', titulo: 'POR PERTO', ativo: true },
+        { chave: 'stand', titulo: 'PONTO DE VENDAS', ativo: true },
         { chave: 'material', titulo: 'MATERIAL', ativo: true },
     ],
     // Fecha o contexto. É a frase que segura a Eme longe de preço - editável,
@@ -79,6 +84,7 @@ export function resolveSource(saved = null) {
         ...DEFAULT_SITE_SOURCE,
         ...c,
         campos: { ...DEFAULT_SITE_SOURCE.campos, ...(c.campos || {}) },
+        campos_stand: { ...DEFAULT_SITE_SOURCE.campos_stand, ...(c.campos_stand || {}) },
         listas: { ...DEFAULT_SITE_SOURCE.listas, ...(c.listas || {}) },
         imagens: Array.isArray(c.imagens) && c.imagens.length ? c.imagens : DEFAULT_SITE_SOURCE.imagens,
         blocos: Array.isArray(c.blocos) && c.blocos.length ? c.blocos : DEFAULT_SITE_SOURCE.blocos,
@@ -231,8 +237,30 @@ export async function fetchSite(siteUrl = null, cfg = null) {
         throw new Error(`coleção "${src.colecao}" não existe no site. Disponíveis: ${existentes}`);
     }
 
+    // Stands: coleção separada, ligada ao empreendimento pelo slug.
+    const stands = new Map();
+    const colStands = (site.collections || []).find(c => c.key === src.colecao_stands)
+        || (site.collections || []).find(c => c.id === `col-${src.colecao_stands}`);
+    for (const item of (colStands?.items || [])) {
+        const v = item?.values || {};
+        const alvo = v[src.campos_stand.empreendimento];
+        if (!alvo) continue;
+        stands.set(String(alvo), {
+            nome: v[src.campos_stand.nome] || null,
+            endereco: v[src.campos_stand.endereco] || null,
+            cidade: v[src.campos_stand.cidade] || null,
+            horario: v[src.campos_stand.horario] || null,
+            telefone: v[src.campos_stand.telefone] || null,
+        });
+    }
+
+    const enterprises = (col.items || [])
+        .map(i => normalizeEnterprise(i, src))
+        .filter(e => e.slug && e.nome)
+        .map(e => ({ ...e, stand: stands.get(e.slug) || null }));
+
     return {
-        enterprises: (col.items || []).map(i => normalizeEnterprise(i, src)).filter(e => e.slug && e.nome),
+        enterprises,
         camposDoSite: (col.fields || []).map(f => ({ key: f.key || f.id, label: f.label || f.key || f.id })),
     };
 }
@@ -294,6 +322,18 @@ export function buildSiteContext(snap, cfg = null) {
             case 'pontos':
                 if (snap.pontos?.length) {
                     out.push(`${bloco.titulo}\n${snap.pontos.map(p => `- ${p.nome}${p.tempo ? `: ${p.tempo}` : ''}`).join('\n')}`);
+                }
+                break;
+            case 'stand':
+                if (snap.stand?.nome) {
+                    const linhas = [
+                        `${bloco.titulo}: ${snap.stand.nome}`,
+                        snap.stand.endereco ? `- Endereço: ${snap.stand.endereco}` : null,
+                        snap.stand.cidade ? `- Cidade: ${snap.stand.cidade}` : null,
+                        snap.stand.horario ? `- Horário: ${snap.stand.horario}` : null,
+                        snap.stand.telefone ? `- Telefone: ${snap.stand.telefone}` : null,
+                    ].filter(Boolean);
+                    out.push(linhas.join(String.fromCharCode(10)));
                 }
                 break;
             case 'material':
