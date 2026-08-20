@@ -19,6 +19,40 @@ async function logEvent(lead_id, conversation_id, type, detail = {}) {
     catch (err) { console.error('[eme-atende/event]', err?.message); }
 }
 
+/**
+ * Erro do envio em texto ÚTIL. "Falha no envio" sozinho não diz nada: sem
+ * código e sem detalhe da Meta, uma mensagem que não chegou ao lead vira
+ * investigação impossível depois.
+ */
+function descreveErro(err) {
+    const partes = [err?.message || String(err)];
+    if (err?.status) partes.push(`HTTP ${err.status}`);
+    if (err?.code) partes.push(`code ${err.code}`);
+    if (err?.details) {
+        try { partes.push(JSON.stringify(err.details).slice(0, 400)); } catch { /* ignora */ }
+    }
+    return partes.join(' | ');
+}
+
+/**
+ * Envio com UMA retentativa. Falha de rede e 5xx da Meta acontecem, e hoje
+ * uma delas simplesmente sumia: a resposta virava linha `failed` no banco e o
+ * lead ficava sem resposta nenhuma, sem ninguém saber.
+ * 4xx não é retentado - erro de permissão ou payload não melhora repetindo.
+ */
+async function comRetry(acao) {
+    try {
+        return await acao();
+    } catch (err) {
+        const status = err?.status;
+        const vaiRepetir = !status || status >= 500 || status === 429;
+        if (!vaiRepetir) throw err;
+        console.warn('[eme-atende/messenger] envio falhou, tentando de novo em 2s:', descreveErro(err));
+        await new Promise(r => setTimeout(r, 2000));
+        return acao();
+    }
+}
+
 async function persistOut({ conversation, type, body, wamid = null, status, error = null, raw = null }) {
     const msg = await db.EmeAtendeMessage.create({
         conversation_id: conversation.id,
@@ -88,33 +122,13 @@ async function guardWindow(conversation, type, body) {
 // Nada de imitar a velocidade real de digitação: 250 caracteres a 4 char/s são
 // 60s de espera, e ninguém espera um minuto por uma resposta de WhatsApp. A
 // escala é sugestiva e o teto é curto.
-const TYPING_MS_POR_CHAR = 28;
+const TYPING_MS_POR_CHAR = 22;
 const TYPING_MIN_MS = 1200;
-const TYPING_MAX_MS = 7000;
+const TYPING_MAX_MS = 4500;
 
 export function typingDelay(text) {
     const n = String(text || '').length;
     return Math.min(TYPING_MAX_MS, Math.max(TYPING_MIN_MS, Math.round(n * TYPING_MS_POR_CHAR)));
-}
-
-/**
- * Só liga o "digitando…", sem esperar. Chamado no INSTANTE em que o lead
- * escreve: o debounce junta mensagens picadas por alguns segundos, e nesse
- * intervalo o cliente ficava olhando pro nada. O indicador some sozinho em
- * ~25s, então ele cobre a espera normal sem prometer nada que não se cumpra.
- */
-async function showTyping(conversation) {
-    try {
-        const cfg = await EmeAtendeSettingsService.getConfig();
-        if (!cfg.active || cfg.dry_run || cfg.typing_simulado === false) return;
-        const inbound = await db.EmeAtendeMessage.findOne({
-            where: { conversation_id: conversation.id, direction: 'in' },
-            order: [['id', 'DESC']],
-        });
-        if (inbound?.wamid) await WhatsAppService.sendTypingIndicator({ messageId: inbound.wamid });
-    } catch (err) {
-        console.warn('[eme-atende/messenger] indicador imediato falhou:', err?.message);
-    }
 }
 
 /**
@@ -148,11 +162,11 @@ async function sendText({ conversation, body, typing = true }) {
     if (win) return win;
     if (typing && cfg.typing_simulado !== false) await simulateTyping(conversation, body);
     try {
-        const { id } = await WhatsAppService.sendText({ to: conversation.phone, body });
+        const { id } = await comRetry(() => WhatsAppService.sendText({ to: conversation.phone, body }));
         return persistOut({ conversation, type: 'text', body, wamid: id, status: 'sent' });
     } catch (err) {
-        console.error(`[eme-atende/messenger] envio falhou pra ${conversation.phone}:`, err?.message);
-        return persistOut({ conversation, type: 'text', body, status: 'failed', error: err?.message });
+        console.error(`[eme-atende/messenger] envio falhou pra ${conversation.phone}:`, descreveErro(err));
+        return persistOut({ conversation, type: 'text', body, status: 'failed', error: descreveErro(err) });
     }
 }
 
@@ -167,11 +181,11 @@ async function sendImage({ conversation, url, caption = null, label = null }) {
     const win = await guardWindow(conversation, 'image', body);
     if (win) return win;
     try {
-        const { id } = await WhatsAppService.sendImage({ to: conversation.phone, link: url, caption });
+        const { id } = await comRetry(() => WhatsAppService.sendImage({ to: conversation.phone, link: url, caption }));
         return persistOut({ conversation, type: 'image', body, wamid: id, status: 'sent' });
     } catch (err) {
-        console.error(`[eme-atende/messenger] imagem falhou pra ${conversation.phone}:`, err?.message);
-        return persistOut({ conversation, type: 'image', body, status: 'failed', error: err?.message });
+        console.error(`[eme-atende/messenger] imagem falhou pra ${conversation.phone}:`, descreveErro(err));
+        return persistOut({ conversation, type: 'image', body, status: 'failed', error: descreveErro(err) });
     }
 }
 
@@ -287,4 +301,4 @@ async function sendOpener({ lead, conversation, flow }) {
     }
 }
 
-export default { sendText, sendImage, sendDocument, sendOpener, logEvent, typingDelay, showTyping };
+export default { sendText, sendImage, sendDocument, sendOpener, logEvent, typingDelay };
