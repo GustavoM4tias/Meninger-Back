@@ -60,7 +60,20 @@ export async function runChat({ systemPrompt, history = [], userMessage, functio
                 // parts.find() descartava o resto EM SILÊNCIO: o modelo dizia que ia
                 // enviar em sequência e chegava uma mídia só.
                 const fcs = parts.filter(p => p.functionCall).map(p => p.functionCall);
-                if (!fcs.length) return { text, toolCalls };
+                if (!fcs.length) {
+                    // Rodada que só chamou ferramenta e não escreveu nada: o lead
+                    // recebia 3 fotos surgindo do nada, sem uma palavra. Pede a
+                    // frase de acompanhamento em vez de mandar mídia muda.
+                    if (!text && toolCalls.length) {
+                        const comp = await chat.sendMessage(
+                            'Escreva agora, em uma ou duas frases curtas, a mensagem que acompanha o que você acabou de enviar. '
+                            + 'Não chame nenhuma ferramenta.');
+                        const partesComp = comp.response?.candidates?.[0]?.content?.parts || [];
+                        const textoComp = partesComp.filter(p => p.text).map(p => p.text).join('').trim();
+                        if (textoComp) return { text: textoComp, toolCalls };
+                    }
+                    return { text, toolCalls };
+                }
 
                 const responses = [];
                 for (const fc of fcs) {
