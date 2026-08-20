@@ -469,6 +469,65 @@ function pickRow(row, columns) {
   return out;
 }
 
+// ── Recorte PÚBLICO das linhas ───────────────────────────────────────────────
+//
+// No link público (sem login) a lista de registros não pode virar a base de
+// clientes da casa: CPF, e-mail, telefone, valor e origem ficam de fora. Sobra
+// o que identifica o registro sem expor a pessoa - id do CV, nome e situação -
+// mais o link para abrir o registro no CV, que exige login lá.
+// Vale para o drill-down E para o Excel, que percorrem as mesmas linhas.
+
+const CV_GESTOR = 'https://menin.cvcrm.com.br/gestor';
+
+const PUBLIC_ID_FIELDS = ['idprecadastro', 'idreserva', 'idlead', 'idrepasse', 'idimobiliaria', 'idempreendimento', 'id'];
+const PUBLIC_NAME_FIELDS = ['nome_cliente', 'nome_titular', 'titular_nome', 'nome', 'cliente', 'titulo', 'label'];
+const PUBLIC_STATUS_FIELDS = ['situacao_nome', 'situacao', 'status_reserva', 'status_repasse', 'etapa_nome', 'status', 'bucket'];
+
+// Link do registro no CV: o pré-cadastro já traz `link` pronto do CV; as demais
+// etapas montam pela rota do gestor a partir do id.
+function cvUrlDaLinha(row) {
+  const link = typeof row?.link === 'string' && /^https?:\/\//i.test(row.link) ? row.link : null;
+  if (link) return link;
+  if (row?.idreserva) return `${CV_GESTOR}/comercial/reservas/${row.idreserva}/administrar`;
+  if (row?.idlead) return `${CV_GESTOR}/comercial/leads/${row.idlead}/administrar?lido=true`;
+  if (row?.idrepasse) return `${CV_GESTOR}/financeiro/repasses/${row.idrepasse}/administrar`;
+  if (row?.idimobiliaria) return `${CV_GESTOR}/cadastros/imobiliarias/${row.idimobiliaria}/editar`;
+  return null;
+}
+
+function primeiroCampo(rows, candidatos) {
+  return candidatos.find((k) => rows.some((r) => r?.[k] !== undefined && r?.[k] !== null && r?.[k] !== '')) || null;
+}
+
+// Devolve { columns, project } ou null quando a consulta não tem nada seguro
+// para mostrar (fail-closed: sem campo conhecido, o público não vê a lista).
+function publicProjection(rows) {
+  const idKey = primeiroCampo(rows, PUBLIC_ID_FIELDS);
+  const nomeKey = primeiroCampo(rows, PUBLIC_NAME_FIELDS);
+  const statusKey = primeiroCampo(rows, PUBLIC_STATUS_FIELDS);
+  const temLink = rows.some((r) => cvUrlDaLinha(r));
+  const columns = [];
+  if (idKey) columns.push({ key: 'cv_id', label: 'ID no CV' });
+  if (nomeKey) columns.push({ key: 'nome', label: 'Nome' });
+  if (statusKey) columns.push({ key: 'situacao', label: 'Situação' });
+  if (temLink) columns.push({ key: 'cv_url', label: 'Registro', type: 'link', linkLabel: 'Abrir no CV' });
+  if (!idKey && !nomeKey && !statusKey) return null;
+  const project = (r) => ({
+    ...(idKey ? { cv_id: r?.[idKey] ?? null } : {}),
+    ...(nomeKey ? { nome: r?.[nomeKey] ?? null } : {}),
+    ...(statusKey ? { situacao: r?.[statusKey] ?? null } : {}),
+    ...(temLink ? { cv_url: cvUrlDaLinha(r) } : {}),
+  });
+  return { columns, project };
+}
+
+// Colunas + projeção de uma listagem, conforme quem está pedindo.
+function colunasPara(rows, publicSafe) {
+  if (publicSafe) return publicProjection(rows);
+  const columns = scalarColumns(rows);
+  return { columns, project: (r) => pickRow(r, columns) };
+}
+
 // Linhas CRUAS de um dataset. Se o autor pediu o retorno já agrupado
 // (base_args.group_by), reexecuta sem os args de forma para obter os registros.
 async function rawDatasetRows(dataset, args, user, reportId) {
@@ -525,7 +584,7 @@ function resolveDrillField(rows, groupBy, granDeclarada) {
   return candidato ? { field: candidato, gran: granDeclarada || null } : null;
 }
 
-export async function runReportDrill({ report, user, rawFilterValues, blockId, label }) {
+export async function runReportDrill({ report, user, rawFilterValues, blockId, label, publicSafe = false }) {
   const spec = report.spec || {};
   const filters = Array.isArray(spec.filters) ? spec.filters : [];
   const datasets = Array.isArray(spec.datasets) ? spec.datasets : [];
@@ -569,7 +628,11 @@ export async function runReportDrill({ report, user, rawFilterValues, blockId, l
     });
   }
 
-  const columns = scalarColumns(matched.length ? matched : rows);
+  const projecao = colunasPara(matched.length ? matched : rows, publicSafe);
+  if (!projecao) {
+    return { ok: false, error: 'Este link não mostra a lista de registros desta consulta.' };
+  }
+  const { columns, project } = projecao;
   return {
     ok: true,
     label: semCategoria ? dataset.label : target,
@@ -582,7 +645,7 @@ export async function runReportDrill({ report, user, rawFilterValues, blockId, l
     total: matched.length,
     truncated: matched.length > MAX_DRILL_ROWS,
     columns,
-    rows: matched.slice(0, MAX_DRILL_ROWS).map((r) => pickRow(r, columns)),
+    rows: matched.slice(0, MAX_DRILL_ROWS).map(project),
   };
 }
 
@@ -602,7 +665,7 @@ export function chaveDeFonte(tool, args = {}) {
   return `${tool}|${ordenado.join('&')}`;
 }
 
-export async function runReportExport({ report, user, rawFilterValues, datasetIds }) {
+export async function runReportExport({ report, user, rawFilterValues, datasetIds, publicSafe = false }) {
   const spec = report.spec || {};
   const filters = Array.isArray(spec.filters) ? spec.filters : [];
   let datasets = Array.isArray(spec.datasets) ? spec.datasets : [];
@@ -642,14 +705,19 @@ export async function runReportExport({ report, user, rawFilterValues, datasetId
         continue;
       }
       if (rows?.length) {
-        const columns = scalarColumns(rows);
+        const projecao = colunasPara(rows, publicSafe);
+        if (!projecao) {
+          datasetErrors.push({ id: dataset.id, label: dataset.label, error: 'Registros não disponíveis neste link.' });
+          continue;
+        }
+        const { columns, project } = projecao;
         sheets.push({
           id: dataset.id,
           label: dataset.label,
           columns,
           total: rows.length,
           truncated: rows.length > MAX_EXPORT_ROWS,
-          rows: rows.slice(0, MAX_EXPORT_ROWS).map((r) => pickRow(r, columns)),
+          rows: rows.slice(0, MAX_EXPORT_ROWS).map(project),
         });
       } else if (Array.isArray(result?.labels) && Array.isArray(result?.data)) {
         // Tool que só devolve o agrupado: exporta os pares label/valor

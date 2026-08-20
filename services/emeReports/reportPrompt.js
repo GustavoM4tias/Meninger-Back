@@ -105,8 +105,15 @@ REGRAS DO INTERATIVO:
   não abre os registros ao clique, enquanto os gráficos ao lado mudam — a tela
   passa a mostrar dois períodos ao mesmo tempo.
 - TODO bloco com bind TAMBÉM precisa das props preenchidas com os números reais
-  desta conversa: elas são o retrato usado no primeiro render, no export e no
-  link público (visitante de link público NÃO filtra nada).
+  desta conversa: elas são o retrato usado no primeiro render e no export.
+- O link público também filtra, abre registros e exporta (rodando com as alçadas
+  de quem gerou o link), mas a lista de registros sai recortada lá: só id do CV,
+  nome, situação e o link do registro. Não prometa CPF/valor no link público.
+- Filtro de EMPREENDIMENTO é obrigatório em painel comercial: quando as tools do
+  relatório aceitam o argumento \`empreendimento\` (leads, pré-cadastros, reservas,
+  repasses), declare o filtro e coloque a key no \`accepts\` de TODOS os datasets.
+  Use type "select" com options_from apontando para um dataset em format "list"
+  (campo \`empreendimento\` nas reservas, \`empreendimento_nome\` nos pré-cadastros).
 - Números citados em narrative/insight NÃO mudam com filtro. Em relatório
   interativo, escreva análises sobre a visão geral e deixe claro ("na visão
   geral do período..."), ou evite citar números filtráveis no texto.
@@ -132,18 +139,19 @@ Exemplo compacto (painel administrativo de imobiliária):
 {
   "filters": [
     { "key": "imob", "label": "Imobiliária", "type": "select", "arg": "imobiliaria", "options_from": { "dataset": "reservas-lista", "field": "imobiliaria_nome" } },
+    { "key": "empreendimento", "label": "Empreendimento", "type": "select", "arg": "empreendimento", "options_from": { "dataset": "reservas-lista", "field": "empreendimento" } },
     { "key": "corretor", "label": "Corretor", "type": "text", "arg": "corretor" },
     { "key": "cliente", "label": "Cliente", "type": "text", "arg": "nome" },
     { "key": "periodo", "label": "Período", "type": "date-range" }
   ],
   "datasets": [
-    { "id": "leads-mes", "tool": "query_leads", "base_args": { "group_by": "mes" }, "accepts": ["imob", "corretor", "periodo"] },
-    { "id": "pastas-kpis", "tool": "query_precadastros", "base_args": {}, "accepts": ["imob", "corretor", "cliente", "periodo"] },
-    { "id": "pastas-situacao", "tool": "query_precadastros", "base_args": { "group_by": "situacao" }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
-    { "id": "reservas-situacao", "tool": "query_reservas", "base_args": { "group_by": "situacao" }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
-    { "id": "repasses-etapa", "tool": "query_repasses", "base_args": { "group_by": "etapa" }, "accepts": ["imob", "corretor", "periodo"] },
-    { "id": "repasses-lista", "tool": "query_repasses", "base_args": { "format": "list", "limit": 200 }, "accepts": ["imob", "corretor", "cliente", "periodo"] },
-    { "id": "reservas-lista", "tool": "query_reservas", "base_args": { "format": "list", "limit": 100 }, "accepts": ["imob", "corretor", "cliente", "periodo"] }
+    { "id": "leads-mes", "tool": "query_leads", "base_args": { "group_by": "mes" }, "accepts": ["imob", "empreendimento", "corretor", "periodo"] },
+    { "id": "pastas-kpis", "tool": "query_precadastros", "base_args": {}, "accepts": ["imob", "empreendimento", "corretor", "cliente", "periodo"] },
+    { "id": "pastas-situacao", "tool": "query_precadastros", "base_args": { "group_by": "situacao" }, "accepts": ["imob", "empreendimento", "corretor", "cliente", "periodo"] },
+    { "id": "reservas-situacao", "tool": "query_reservas", "base_args": { "group_by": "situacao" }, "accepts": ["imob", "empreendimento", "corretor", "cliente", "periodo"] },
+    { "id": "repasses-etapa", "tool": "query_repasses", "base_args": { "group_by": "etapa" }, "accepts": ["imob", "empreendimento", "corretor", "periodo"] },
+    { "id": "repasses-lista", "tool": "query_repasses", "base_args": { "format": "list", "limit": 200 }, "accepts": ["imob", "empreendimento", "corretor", "cliente", "periodo"] },
+    { "id": "reservas-lista", "tool": "query_reservas", "base_args": { "format": "list", "limit": 100 }, "accepts": ["imob", "empreendimento", "corretor", "cliente", "periodo"] }
   ],
   "ops": [{ "action": "upsert", "block": {
     "id": "s1-kpis", "type": "stat-row",

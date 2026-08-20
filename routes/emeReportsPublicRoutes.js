@@ -150,6 +150,9 @@ router.post('/:token/data/drill', rateLimitData, async (req, res) => {
       rawFilterValues: req.body?.filters,
       blockId: String(req.body?.block_id || ''),
       label: String(req.body?.label ?? ''),
+      // Sem login, a lista sai recortada: id do CV, nome, situação e o link
+      // para abrir o registro no CV. Nada de CPF, e-mail, telefone ou valor.
+      publicSafe: true,
     });
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.json(result);
@@ -170,6 +173,7 @@ router.post('/:token/data/export', rateLimitData, async (req, res) => {
       user: loaded.actor,
       rawFilterValues: req.body?.filters,
       datasetIds: Array.isArray(req.body?.datasets) ? req.body.datasets.slice(0, 20) : null,
+      publicSafe: true, // mesma planilha recortada do drill
     });
     if (!result.ok) return res.status(400).json({ error: result.error });
     // Exportação anônima entra na trilha de acessos (sem contar como visita).
