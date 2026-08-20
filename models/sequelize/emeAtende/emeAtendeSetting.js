@@ -21,6 +21,10 @@ export default (sequelize, DataTypes) => {
         // teto de respostas de IA por conversa (anti-loop / custo)
         max_ai_messages: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
 
+        // "digitando…" antes de cada resposta, com espera proporcional ao texto.
+        // Ligado por padrão: resposta instantânea entrega que é robô.
+        typing_simulado: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+
         // URL base do site institucional lido pelo EmeAtendeSiteSource. Fica em
         // config (e não hardcoded) porque o domínio muda quando o site sair da
         // plataforma atual - trocar aqui não exige deploy.

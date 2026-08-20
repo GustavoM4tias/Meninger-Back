@@ -80,8 +80,45 @@ async function guardWindow(conversation, type, body) {
     }
 }
 
+// ── "digitando…" ────────────────────────────────────────────────────────────
+// Resposta instantânea entrega que é robô. O indicador da Cloud API some sozinho
+// em ~25s ou quando a mensagem sai, então o tempo de digitação é a ESPERA que a
+// gente faz antes de enviar - proporcional ao tamanho do texto.
+//
+// Nada de imitar a velocidade real de digitação: 250 caracteres a 4 char/s são
+// 60s de espera, e ninguém espera um minuto por uma resposta de WhatsApp. A
+// escala é sugestiva e o teto é curto.
+const TYPING_MS_POR_CHAR = 28;
+const TYPING_MIN_MS = 1200;
+const TYPING_MAX_MS = 7000;
+
+export function typingDelay(text) {
+    const n = String(text || '').length;
+    return Math.min(TYPING_MAX_MS, Math.max(TYPING_MIN_MS, Math.round(n * TYPING_MS_POR_CHAR)));
+}
+
+/**
+ * Mostra "digitando…" e espera. Precisa do wamid de uma mensagem QUE O LEAD
+ * mandou - a Cloud API pendura o indicador no "marcar como lida". Sem inbound
+ * registrado, apenas espera (a pausa humaniza mesmo sem o indicador).
+ */
+async function simulateTyping(conversation, text) {
+    const espera = typingDelay(text);
+    try {
+        const inbound = await db.EmeAtendeMessage.findOne({
+            where: { conversation_id: conversation.id, direction: 'in' },
+            order: [['id', 'DESC']],
+        });
+        if (inbound?.wamid) await WhatsAppService.sendTypingIndicator({ messageId: inbound.wamid });
+    } catch (err) {
+        // Indicador é enfeite: se falhar, a mensagem tem que sair do mesmo jeito.
+        console.warn('[eme-atende/messenger] indicador de digitação falhou:', err?.message);
+    }
+    await new Promise(r => setTimeout(r, espera));
+}
+
 /** Texto livre - só dentro da janela de 24h após msg do lead. */
-async function sendText({ conversation, body }) {
+async function sendText({ conversation, body, typing = true }) {
     const cfg = await EmeAtendeSettingsService.getConfig();
     if (!cfg.active || cfg.dry_run) {
         console.log(`[eme-atende/messenger] DRY_RUN text → ${conversation.phone}: "${String(body).slice(0, 120)}"`);
@@ -89,6 +126,7 @@ async function sendText({ conversation, body }) {
     }
     const win = await guardWindow(conversation, 'text', body);
     if (win) return win;
+    if (typing && cfg.typing_simulado !== false) await simulateTyping(conversation, body);
     try {
         const { id } = await WhatsAppService.sendText({ to: conversation.phone, body });
         return persistOut({ conversation, type: 'text', body, wamid: id, status: 'sent' });
@@ -229,4 +267,4 @@ async function sendOpener({ lead, conversation, flow }) {
     }
 }
 
-export default { sendText, sendImage, sendDocument, sendOpener, logEvent };
+export default { sendText, sendImage, sendDocument, sendOpener, logEvent, typingDelay };

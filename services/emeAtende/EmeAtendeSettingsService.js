@@ -22,6 +22,7 @@ async function getConfig() {
         dry_run: !!row.dry_run,
         debounce_seconds: row.debounce_seconds ?? 8,
         max_ai_messages: row.max_ai_messages ?? 30,
+        typing_simulado: row.typing_simulado !== false,
         test_mode: !!row.test_mode,
         test_phones: Array.isArray(row.test_phones) ? row.test_phones : [],
         validation_level: row.validation_level || 'money_dates',
@@ -44,7 +45,7 @@ async function updateConfig(payload = {}) {
     const update = {};
     for (const k of ['active', 'dry_run', 'debounce_seconds', 'max_ai_messages',
                      'test_mode', 'validation_level', 'global_persona', 'global_rules',
-                     'site_url', 'site_source']) {
+                     'site_url', 'site_source', 'typing_simulado']) {
         if (payload[k] !== undefined) update[k] = payload[k];
     }
     if (payload.standards !== undefined) {
