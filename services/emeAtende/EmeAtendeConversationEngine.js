@@ -222,6 +222,29 @@ async function handleStatusUpdate(s) {
     await row.update(update);
 }
 
+/**
+ * Mensagem não-textual → aviso EXPLÍCITO de que a Eme não consegue consumir
+ * aquilo.
+ *
+ * O marcador seco antigo ("[audio]", "[image]") chegava ao modelo como se fosse
+ * a fala do lead, e ele respondia ADIVINHANDO o conteúdo: para uma foto qualquer
+ * ele emendou "Gostou? A cozinha já vem com mármore sintético". O lead manda um
+ * áudio de trinta segundos e recebe resposta sobre outra coisa.
+ *
+ * Nada é baixado nem transcrito aqui de propósito: mídia não é lida, é
+ * ANUNCIADA. A legenda, quando existe, é texto de verdade e entra junto.
+ */
+const AVISO_MIDIA = {
+    audio: 'enviou um áudio, e você não consegue ouvir áudio',
+    voice: 'enviou um áudio, e você não consegue ouvir áudio',
+    image: 'enviou uma imagem, e você não consegue ver imagens',
+    sticker: 'enviou uma figurinha, e você não consegue vê-la',
+    video: 'enviou um vídeo, e você não consegue assisti-lo',
+    document: 'enviou um arquivo, e você não consegue abri-lo',
+    contacts: 'compartilhou um contato',
+    unknown: 'enviou algo que você não consegue abrir',
+};
+
 function extractBody(m) {
     switch (m.type) {
         case 'text': return m.text?.body || '';
@@ -230,7 +253,19 @@ function extractBody(m) {
             return m.interactive?.button_reply?.title
                 || m.interactive?.list_reply?.title
                 || JSON.stringify(m.interactive);
-        default: return m[m.type]?.caption || `[${m.type}]`;
+        case 'location': {
+            const l = m.location || {};
+            const onde = [l.name, l.address].filter(Boolean).join(' - ')
+                || [l.latitude, l.longitude].filter(v => v != null).join(', ');
+            return `(o lead compartilhou a localização${onde ? `: ${onde}` : ''})`;
+        }
+        default: {
+            const legenda = m[m.type]?.caption || '';
+            const aviso = AVISO_MIDIA[m.type] || AVISO_MIDIA.unknown;
+            return legenda
+                ? `(o lead ${aviso}. Legenda que ele escreveu: "${legenda}")`
+                : `(o lead ${aviso} - peça para ele escrever o que precisa, sem adivinhar o conteúdo)`;
+        }
     }
 }
 
@@ -604,4 +639,5 @@ export default {
     FUNCTION_DECLARATIONS, IMAGE_TOOL, DOC_TOOL, flowBook,
     // exposto só para teste do corte de mensagens pendentes
     __buildHistory: buildHistory,
+    __extractBody: extractBody,
 };
