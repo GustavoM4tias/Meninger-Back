@@ -94,7 +94,7 @@ registerTool({
             status: { type: 'string', enum: ['active', 'done', 'archived', 'draft'], description: 'Filtra a listagem por status do checklist. Padrão: active.' },
         },
     },
-    requiredPermissions: [],
+    requiredPermissions: [SCREEN],
     contexts: ['OFFICE'],
     async handler(user, args) {
         const isAdmin = user.role === 'admin';
@@ -176,7 +176,7 @@ registerTool({
             apenas_pendentes: { type: 'boolean', description: 'true = esconde as concluídas/canceladas. Padrão: false (traz tudo).' },
         },
     },
-    requiredPermissions: [],
+    requiredPermissions: [SCREEN],
     contexts: ['OFFICE'],
     async handler(user, args) {
         let targetId = Number(user.id);
@@ -228,7 +228,7 @@ registerTool({
             confirmar: { type: 'boolean', description: 'false/omesso = apenas PREVIEW do que vai mudar (peça confirmação ao usuário). true = grava de fato (só após o usuário confirmar).' },
         },
     },
-    requiredPermissions: [],
+    requiredPermissions: [SCREEN],
     contexts: ['OFFICE'],
     async handler(user, args) {
         const taskId = Number(args?.task_id);

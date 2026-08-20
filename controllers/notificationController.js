@@ -1,6 +1,7 @@
 // api/controllers/notificationController.js
 import NotificationService from '../services/notification/NotificationService.js';
-import { listCatalog } from '../services/notification/notificationTypes.js';
+import { listCatalog, isTypeVisibleTo } from '../services/notification/notificationTypes.js';
+import { getEffectiveRoutes } from '../services/permissions/permissionAccessService.js';
 
 /**
  * GET /api/notifications?unread=1&limit=30&offset=0
@@ -86,22 +87,32 @@ export const getPreferences = async (req, res) => {
         const stored = await NotificationService.getPreferences(userId);
         const storedMap = new Map(stored.map(s => [s.type, s]));
 
-        const catalog = listCatalog().map(meta => {
-            const saved = storedMap.get(meta.type);
-            return {
-                type: meta.type,
-                label: meta.label,
-                group: meta.group,
-                description: meta.description,
-                hasEmail: !!meta.emailType,
-                hasWhatsapp: !!meta.whatsapp,
-                userOptional: meta.userOptional !== false,
-                inapp:    saved ? saved.inapp    : meta.defaults.inapp,
-                email:    saved ? saved.email    : meta.defaults.email,
-                whatsapp: saved ? saved.whatsapp : !!meta.defaults.whatsapp,
-                isCustom: !!saved,
-            };
-        });
+        // A lista só oferece o que faz sentido para ESTE usuário: aviso preso a
+        // uma tela que ele não tem vira ajuste que nunca teria efeito. Admin vê
+        // o catálogo inteiro. (Isto não muda entrega — ver notificationTypes.js.)
+        const isAdmin = req.user.role === 'admin';
+        const routes = new Set(
+            isAdmin ? [] : (await getEffectiveRoutes(userId)).map(r => String(r).toLowerCase())
+        );
+
+        const catalog = listCatalog()
+            .filter(meta => isTypeVisibleTo(meta.type, { isAdmin, routes }))
+            .map(meta => {
+                const saved = storedMap.get(meta.type);
+                return {
+                    type: meta.type,
+                    label: meta.label,
+                    group: meta.group,
+                    description: meta.description,
+                    hasEmail: !!meta.emailType,
+                    hasWhatsapp: !!meta.whatsapp,
+                    userOptional: meta.userOptional !== false,
+                    inapp:    saved ? saved.inapp    : meta.defaults.inapp,
+                    email:    saved ? saved.email    : meta.defaults.email,
+                    whatsapp: saved ? saved.whatsapp : !!meta.defaults.whatsapp,
+                    isCustom: !!saved,
+                };
+            });
 
         return res.json({ preferences: catalog });
     } catch (err) {

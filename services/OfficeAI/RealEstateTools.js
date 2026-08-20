@@ -129,7 +129,7 @@ registerTool({
             situacao: { type: 'string', enum: ['ativas', 'inativas', 'todas'], description: 'Padrão: "ativas".' },
         },
     },
-    requiredPermissions: [],
+    requiredPermissions: [SCREEN],
     contexts: ['OFFICE'],
     async handler(user, args) {
         const situacao = ['ativas', 'inativas', 'todas'].includes(args?.situacao) ? args.situacao : 'ativas';
@@ -184,7 +184,7 @@ registerTool({
             busca: { type: 'string', description: 'Nome/label da imobiliária ou CNPJ para localizar um cadastro específico.' },
         },
     },
-    requiredPermissions: [],
+    requiredPermissions: [SCREEN],
     contexts: ['OFFICE'],
     async handler(user, args) {
         const status = ['pendentes', 'convites', 'erros', 'concluidos', 'todos'].includes(args?.status) ? args.status : 'pendentes';

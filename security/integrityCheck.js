@@ -7,7 +7,12 @@
 //
 //   1. Toda rota /api/* tem autenticação (exceto allowlist pública explícita).
 //   2. Rotas /api/admin/* têm requireAdmin (exceto allowlist).
-//   3. Rotas de DADOS têm requireRoutePermission ou requireAdmin (exceto allowlist).
+//   3. TODA rota autenticada tem requireRoutePermission ou requireAdmin — ou
+//      uma linha em NO_SCREEN_PERMISSION dizendo por que é pessoal/livre.
+//      (fail-closed desde 2026-08-19; antes só 14 prefixos eram cobrados)
+//   3b. Ações de tela (lib/screenCapabilities.js): toda ação declarada tem
+//      alguma rota de API que a exige — senão o botão some da tela e a API
+//      continua aberta.
 //   4. Tools da Eme: todas registradas com permissão declarada; tools legadas
 //      todas mapeadas no LEGACY_TOOL_ROUTES (fail-closed cobre o resto).
 //   4b. Telas travadas como "somente admin" na tela de Alçadas (route_policies):
@@ -27,6 +32,7 @@
 import db from '../models/sequelize/index.js';
 import { getRegisteredTools } from '../services/OfficeAI/ToolRegistry.js';
 import { listRoutePolicies, normalizeRoute } from '../services/permissions/routePolicyService.js';
+import { SCREEN_CAPABILITIES } from '../lib/screenCapabilities.js';
 
 let _app = null;
 export function registerApp(app) { _app = app; }
@@ -53,25 +59,54 @@ const PUBLIC_PREFIXES = [
     '/api/cv/banners',           // banners exibidos na TELA DE LOGIN (pré-autenticação; sem dado de negócio)
 ];
 
-// Rotas de dados que por decisão NÃO têm alçada de tela (motivo ao lado):
-const DATA_ALLOWLIST = [
-    '/api/sienge/contracts/sync/status', // status de sync, sem dado de negócio
-    '/api/cv/banners',                   // banners de campanha exibidos na home
-    '/api/mcmv/ai-query',                // consumida pela Eme (function calling), tabela pública MCMV
-    '/api/event-plans/settings',         // admin-only no controller (config do Plano de Eventos)
-    '/api/event-plans/auth-profiles',    // admin-only no controller (perfis de alçada)
-    '/api/event-plans/permissions',      // devolve só o que o PRÓPRIO solicitante pode fazer
-    '/api/event-plans/users',            // admin-only no controller (monta os perfis de alçada)
+// Rotas autenticadas que NÃO carregam alçada de tela por decisão de desenho.
+// Cada entrada precisa de motivo — é aqui que se declara "isto é pessoal/livre",
+// e o que não estiver aqui nem tiver requireRoutePermission/requireAdmin ACENDE.
+//
+// A regra era o contrário até 2026-08-19: só uma lista curta de prefixos era
+// cobrada (DATA_PREFIXES), então 43 dos 57 prefixos montados NUNCA eram
+// checados — módulo novo nascia sem alçada e ninguém acusava. Agora o padrão é
+// fail-closed: toda rota autenticada precisa de alçada, de admin, ou de uma
+// linha aqui explicando por quê.
+const NO_SCREEN_PERMISSION = [
+    // Sessão e identidade do próprio usuário
+    ['/api/auth', 'fluxo de autenticação/sessão'],
+    ['/api/permissions/me', 'as próprias alçadas do solicitante'],
+    ['/api/favorite', 'favoritos pessoais do usuário'],
+    ['/api/notifications', 'caixa de notificações PESSOAL (cada um vê a sua)'],
+    ['/api/push', 'assinatura de push do dispositivo do próprio usuário'],
+    ['/api/alerts', 'alertas PESSOAIS (tela /settings/alerts é permissionManaged:false)'],
+    ['/api/support', 'reportar problema — qualquer um abre; a leitura é admin'],
+    ['/api/uploads', 'upload genérico de anexo do próprio usuário'],
+    ['/api/report-exports', 'POST registra a PRÓPRIA exportação; o GET da trilha já é admin'],
+    // Telas declaradas como sempre livres no navRegistry
+    ['/api/comunicados', 'Mural de Avisos é permissionManaged:false (broadcast interno)'],
+    ['/api/bolao', 'bolão interno, sem dado de negócio'],
+    ['/api/academy', 'Academy é permissionManaged:false (KB/Trilhas abertas)'],
+    ['/api/academy-chat', 'assistente do Academy, mesmo escopo do módulo'],
+    // Microsoft: cada handler usa o token DELEGADO do próprio usuário, então o
+    // que ele enxerga já é o que a conta Microsoft dele enxerga.
+    ['/api/microsoft', 'Graph com o token delegado do próprio usuário'],
+    // A Eme não é porta de entrada: cada tool declara requiredPermissions e o
+    // ToolRegistry recusa a que o usuário não tem (fail-closed).
+    ['/api/office-chat', 'alçada é validada tool a tool no ToolRegistry'],
+    ['/api/reports', 'Relatórios da Eme: tela livre; builder e escrita já exigem admin'],
+    // Casos pontuais herdados
+    ['/api/sienge/contracts/sync/status', 'status de sync, sem dado de negócio'],
+    ['/api/cv/banners', 'banners de campanha exibidos na home'],
+    ['/api/mcmv/ai-query', 'consumida pela Eme (function calling), tabela pública MCMV'],
+    ['/api/event-plans/settings', 'admin-only no controller (config do Plano de Eventos)'],
+    ['/api/event-plans/auth-profiles', 'admin-only no controller (perfis de alçada)'],
+    ['/api/event-plans/permissions', 'devolve só o que o PRÓPRIO solicitante pode fazer'],
+    ['/api/event-plans/users', 'admin-only no controller (monta os perfis de alçada)'],
 ];
 
-// Prefixos que são DADOS de negócio e exigem requireRoutePermission/requireAdmin:
-const DATA_PREFIXES = [
-    '/api/expenses', '/api/sienge', '/api/cv', '/api/conditions',
-    '/api/projections', '/api/dept-spending', '/api/events',
-    '/api/checklists', '/api/sales-stands', '/api/bucket-upload',
-    '/api/realestate', '/api/ai', '/api/org',
-    '/api/correspondents', '/api/event-plans',
-];
+// Lacunas CONHECIDAS, com decisão pendente. Saem como WARN (não fail) para não
+// pintar a tela de vermelho permanente, mas continuam visíveis até resolver.
+// Tirar daqui = ou ganhou alçada, ou virou linha em NO_SCREEN_PERMISSION.
+// (Vazio desde 2026-08-19: a única pendência era /api/marketing-approvals, e o
+// módulo de Aprovações foi removido inteiro.)
+const PENDING_SCREEN_PERMISSION = [];
 
 // ── Introspecção do router ───────────────────────────────────────────────────
 
@@ -92,6 +127,8 @@ function middlewareNames(routeLayer) {
     return (routeLayer.route?.stack || []).map(l => ({
         name: l.handle?.name || '<anonymous>',
         isRoutePermission: !!l.handle?._isRoutePermission,
+        isAdminGate: !!l.handle?._isAdminGate,
+        capability: l.handle?._capability || null,
         requiredRoutes: l.handle?._requiredRoutes || null,
     }));
 }
@@ -117,6 +154,7 @@ export function collectRoutes(app = _app) {
                 inherited = [...inherited, {
                     name: layer.handle?.name || '<anonymous>',
                     isRoutePermission: !!layer.handle?._isRoutePermission,
+                    isAdminGate: !!layer.handle?._isAdminGate,
                     requiredRoutes: layer.handle?._requiredRoutes || null,
                     viaUse: true,
                     usePrefix: prefix + layerPrefix(layer),
@@ -134,7 +172,8 @@ function hasAuth(r) {
 }
 function hasAdmin(r) {
     return r.middlewares.some(m =>
-        ((m.name === 'requireAdmin' || m.name === 'adminOnly') && (!m.viaUse || r.path.startsWith(m.usePrefix || ''))));
+        ((m.name === 'requireAdmin' || m.name === 'adminOnly' || m.isAdminGate)
+            && (!m.viaUse || r.path.startsWith(m.usePrefix || ''))));
 }
 function hasRoutePermission(r) {
     return r.middlewares.some(m =>
@@ -142,6 +181,16 @@ function hasRoutePermission(r) {
 }
 function inList(path, list) {
     return list.some(p => path === p || path.startsWith(p + '/') || path.startsWith(p));
+}
+/** Motivo declarado para a rota ficar sem alçada, ou null. Casa o prefixo mais específico. */
+function matchReason(path, pairs) {
+    let best = null;
+    for (const [prefix, reason] of pairs) {
+        if (path === prefix || path.startsWith(prefix + '/') || path.startsWith(prefix)) {
+            if (!best || prefix.length > best.prefix.length) best = { prefix, reason };
+        }
+    }
+    return best?.reason || null;
 }
 
 // ── Checks ───────────────────────────────────────────────────────────────────
@@ -151,6 +200,7 @@ async function checkRoutes(app) {
     const noAuth = [];
     const adminExposed = [];
     const dataNoPermission = [];
+    const dataPending = [];
 
     for (const r of routes) {
         const key = `${r.methods.join(',')} ${r.path}`;
@@ -168,9 +218,14 @@ async function checkRoutes(app) {
             continue;
         }
 
-        if (inList(r.path, DATA_PREFIXES) && !inList(r.path, DATA_ALLOWLIST)) {
-            if (!hasRoutePermission(r) && !hasAdmin(r)) dataNoPermission.push(key);
-        }
+        // Fail-closed: rota autenticada sem alçada e sem admin só passa se
+        // estiver declarada como pessoal/livre (com motivo).
+        if (hasRoutePermission(r) || hasAdmin(r)) continue;
+        const declared = matchReason(r.path, NO_SCREEN_PERMISSION);
+        if (declared) continue;
+        const pending = matchReason(r.path, PENDING_SCREEN_PERMISSION);
+        if (pending) { dataPending.push(`${key} — ${pending}`); continue; }
+        dataNoPermission.push(key);
     }
 
     return [
@@ -188,11 +243,60 @@ async function checkRoutes(app) {
         },
         {
             id: 'routes-permission', name: 'Rotas de dados com alçada (requireRoutePermission)',
-            status: dataNoPermission.length ? 'fail' : 'ok',
-            details: dataNoPermission,
-            summary: dataNoPermission.length ? `${dataNoPermission.length} rota(s) de dados sem alçada` : 'todas as rotas de dados com alçada',
+            status: dataNoPermission.length ? 'fail' : (dataPending.length ? 'warn' : 'ok'),
+            details: [
+                ...dataNoPermission,
+                ...dataPending.map(d => `pendente de decisão: ${d}`),
+            ],
+            summary: dataNoPermission.length
+                ? `${dataNoPermission.length} rota(s) autenticada(s) sem alçada nem admin fora da allowlist`
+                : (dataPending.length
+                    ? `${dataPending.length} rota(s) com lacuna conhecida aguardando decisão`
+                    : 'todas as rotas autenticadas com alçada, admin ou motivo declarado'),
         },
     ];
+}
+
+/**
+ * Capacidades declaradas x cobradas.
+ *
+ * Ação que existe em lib/screenCapabilities.js mas nenhuma rota exige é um
+ * botão escondido sem tranca atrás: a tela some, a API continua aberta. Sai
+ * como warn porque existe caso legítimo (ação puramente visual, sem endpoint
+ * próprio) — mas tem que ser uma decisão consciente, não esquecimento.
+ */
+async function checkCapabilities(app) {
+    const declared = [];
+    for (const [route, actions] of Object.entries(SCREEN_CAPABILITIES)) {
+        for (const [action, rule] of Object.entries(actions)) declared.push({ route, action, rule });
+    }
+
+    const enforced = new Set();   // (rota::ação) cobrada por requireCapability
+    const screenGated = new Set(); // telas cobradas por qualquer gate de alçada
+    for (const r of collectRoutes(app)) {
+        for (const m of r.middlewares) {
+            if (m.capability) enforced.add(`${m.capability.route}::${m.capability.action}`);
+            for (const req of (m.requiredRoutes || [])) screenGated.add(String(req).toLowerCase());
+        }
+    }
+
+    // Ação com regra 'screen' também está cumprida quando a TELA é exigida por
+    // requireRoutePermission (é o mesmo gate, escrito do jeito antigo). O que
+    // não pode passar em branco é ação 'admin' declarada e nunca cobrada: aí a
+    // tela esconde o botão e a API fica aberta.
+    const semRota = declared
+        .filter(d => !enforced.has(`${d.route}::${d.action}`))
+        .filter(d => !(d.rule === 'screen' && screenGated.has(d.route.toLowerCase())))
+        .map(d => `${d.route} → "${d.action}" (${d.rule}) declarada e nenhuma rota de API a exige`);
+
+    return [{
+        id: 'screen-capabilities', name: 'Ações de tela declaradas x cobradas na API',
+        status: semRota.length ? 'warn' : 'ok',
+        details: semRota,
+        summary: semRota.length
+            ? `${semRota.length} ação(ões) sem enforcement na API`
+            : `${declared.length} ações em ${Object.keys(SCREEN_CAPABILITIES).length} tela(s), todas cobradas`,
+    }];
 }
 
 async function checkEmeTools() {
@@ -379,6 +483,7 @@ export async function runIntegrityCheck({ app = _app } = {}) {
     });
 
     if (app) checks.push(...await checkRoutes(app));
+    if (app) checks.push(...await checkCapabilities(app));
     else checks.push({ id: 'routes', name: 'Varredura de rotas', status: 'warn', details: [], summary: 'app não registrado (registerApp)' });
 
     checks.push(...await checkEmeTools());

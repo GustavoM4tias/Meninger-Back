@@ -58,7 +58,6 @@ import emeReportsRoutes from './routes/emeReportsRoutes.js';
 import emeReportsPublicRoutes from './routes/emeReportsPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
 import marketingRoutes from './routes/marketingRoutes.js';
-import marketingApprovalRoutes from './routes/marketingApprovalRoutes.js';
 import salesStandRoutes from './routes/salesStandRoutes.js';
 import salesClosingRoutes from './routes/salesClosingRoutes.js';
 import metaAppRoutes from './routes/metaAppRoutes.js';
@@ -114,7 +113,6 @@ import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
-import { ensureMarketingApprovalWhatsappTemplates } from './lib/ensureMarketingApprovalWhatsappTemplates.js';
 import { ensureEmeAtendeOpenerTemplates } from './lib/ensureEmeAtendeOpenerTemplates.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
@@ -124,6 +122,8 @@ import { ensureFaturamentoRulesSchema } from './lib/ensureFaturamentoRulesSchema
 import { ensureProjectionLinkSchema } from './lib/ensureProjectionLinkSchema.js';
 import { ensureEmeAuditSchema } from './lib/ensureEmeAuditSchema.js';
 import { ensurePermissionRouteRenames } from './lib/ensurePermissionRouteRenames.js';
+import { ensurePermissionProfileConsolidation } from './lib/ensurePermissionProfileConsolidation.js';
+import { ensurePermissionRouteRetirement } from './lib/ensurePermissionRouteRetirement.js';
 import { ensureSignupApprovalColumns, seedDepartmentDefaultProfiles } from './lib/ensureSignupApprovalSchema.js';
 import { ensureLegacyDrops } from './lib/ensureLegacyDrops.js';
 import { ensureAccessModelSchema } from './lib/ensureAccessModelSchema.js';
@@ -275,7 +275,6 @@ app.use('/api/push', pushRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/marketing', marketingRoutes);
-app.use('/api/marketing-approvals', marketingApprovalRoutes);
 app.use('/api/sales-stands', salesStandRoutes);
 app.use('/api/sales-closings', salesClosingRoutes);
 app.use('/api/bolao', bolaoRoutes);
@@ -455,12 +454,6 @@ async function syncModelsAndPatches(fingerprint) {
     ['ReservaCancelHistory', db.ReservaCancelHistory],
     ['ReservaCancelEvent', db.ReservaCancelEvent],
     // Aprovações de Marketing (módulo novo em evolução)
-    ['MarketingApprovalRequest', db.MarketingApprovalRequest],
-    ['MarketingApprovalAuthProfile', db.MarketingApprovalAuthProfile],
-    ['MarketingApprovalDecision', db.MarketingApprovalDecision],
-    ['MarketingApprovalAttachment', db.MarketingApprovalAttachment],
-    ['MarketingApprovalWaMessage', db.MarketingApprovalWaMessage],
-    ['MarketingApprovalSettings', db.MarketingApprovalSettings],
     // Stand de Vendas (módulo novo em evolução)
     ['SalesStandModel', db.SalesStandModel],
     ['SalesStand', db.SalesStand],
@@ -517,6 +510,12 @@ async function syncModelsAndPatches(fingerprint) {
     // departamento e precisa dos departamentos padrão já no banco (antes,
     // departamento novo só ganhava perfil no boot seguinte).
     ['DepartmentDefaultProfiles', seedDepartmentDefaultProfiles],
+    // Consolidação dos perfis avulsos nos perfis padrão. DEPOIS do seed acima:
+    // o destino da consolidação é justamente o perfil padrão do departamento.
+    ['PermissionProfileConsolidation', ensurePermissionProfileConsolidation],
+    // Aposentadoria de rotas: DEPOIS da consolidação (que pode empurrar rota do
+    // perfil antigo para routes_extra) e depois do seed de perfis padrão.
+    ['PermissionRouteRetirement', ensurePermissionRouteRetirement],
     // Chaves VAPID do push. Gera no primeiro boot e nunca mais mexe —
     // trocar a chave derrubaria todas as inscricoes ativas.
     ['VapidKeys', ensureVapidKeys],
@@ -551,8 +550,6 @@ async function startBackgroundServices() {
       console.warn('⚠️  ensureBoletoWhatsappTemplate falhou:', err.message));
   ensureChecklistWhatsappTemplates().catch(err =>
       console.warn('⚠️  ensureChecklistWhatsappTemplates falhou:', err.message));
-  ensureMarketingApprovalWhatsappTemplates().catch(err =>
-      console.warn('⚠️  ensureMarketingApprovalWhatsappTemplates falhou:', err.message));
   // Abertura da Eme Atende: precisa estar APPROVED antes de ligar o atendimento.
   ensureEmeAtendeOpenerTemplates().catch(err =>
       console.warn('⚠️  ensureEmeAtendeOpenerTemplates falhou:', err.message));
@@ -629,7 +626,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase
   if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
   if (schedulerOn('ENABLE_BOLETO_SITUACAO_APPLY')) boletoSituacaoApplyScheduler.start(); // 1min: aplica situações CV agendadas (delay lote Sienge)
-  if (schedulerOn('ENABLE_BOLETO_WINDOW')) boletoWindowScheduler.start(); // 1min: retoma emissões que chegaram fora da janela 08h-20h
+  if (schedulerOn('ENABLE_BOLETO_WINDOW')) boletoWindowScheduler.start(); // 1min: retoma emissões que chegaram fora da janela 06h-23h
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
   if (schedulerOn('ENABLE_REPORT_PUBLIC_EXPIRY')) reportPublicExpiryScheduler.start(); // links públicos de relatórios: aviso D-3 + revoga vencidos (08:00)
   if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)

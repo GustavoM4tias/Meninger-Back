@@ -1,5 +1,5 @@
 // controllers/marketing/salesStandController.js
-// Camada fina sobre o salesStandService (padrão do marketingApprovalController).
+// Camada fina sobre o salesStandService.
 import svc from '../../services/marketing/salesStandService.js';
 
 function fail(res, err, fallback = 'Erro interno.') {

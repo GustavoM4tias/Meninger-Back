@@ -8,6 +8,8 @@ import {
     applyCvIdsToWhere,
     fetchCvEtapaFacets,
 } from '../../lib/cvEtapaLookup.js';
+// Recorte por empreendimento do usuário (a tela deixou de ser admin-only).
+import { scopeCvIdsFor, applyCvScope } from '../../services/reservaCancel/reservaCancelScope.js';
 
 // ── Webhook (público — chamado pelo CV no cancelamento da reserva) ────────────
 
@@ -118,10 +120,14 @@ function statusArrFromQuery(query) {
     return arr.length ? arr : null;
 }
 
-function buildHistoryWhere(query, { skipStatus = false } = {}) {
+function buildHistoryWhere(query, { skipStatus = false, scopeCvIds = null } = {}) {
     const { Op } = db.Sequelize;
     const { idreserva, empreendimento, dateFrom, dateTo, q } = query;
     const where = {};
+
+    // Recorte de dados: admin vê tudo; os demais, só os empreendimentos
+    // liberados nas Alçadas (sem grant = nenhuma linha).
+    applyCvScope(where, scopeCvIds, Op);
 
     const statusArr = skipStatus ? null : statusArrFromQuery(query);
     if (statusArr) {
@@ -195,9 +201,9 @@ function sortRows(list, { key, dir }) {
  * resolvida voltava a aparecer ao filtrar "Pendência" por causa de uma
  * tentativa antiga.
  */
-async function casosAtuaisPorReserva(query) {
+async function casosAtuaisPorReserva(query, scopeCvIds = null) {
     const { Op } = db.Sequelize;
-    const scopeWhere = buildHistoryWhere(query, { skipStatus: true });
+    const scopeWhere = buildHistoryWhere(query, { skipStatus: true, scopeCvIds });
     const cvIds = await resolveCvEtapaFilter({ cvSituacao: query.cvSituacao, cvRepasse: query.cvRepasse });
     applyCvIdsToWhere(scopeWhere, cvIds, Op);
 
@@ -212,8 +218,10 @@ async function casosAtuaisPorReserva(query) {
 
     // Caso atual = MAX(id) por reserva SEM o recorte de datas, pra refletir o
     // estado de agora mesmo que a última ocorrência esteja fora do período.
+    const atuaisWhere = { idreserva: { [Op.in]: [...casosPorReserva.keys()] } };
+    applyCvScope(atuaisWhere, scopeCvIds, Op);
     const atuais = await db.ReservaCancelHistory.findAll({
-        where: { idreserva: { [Op.in]: [...casosPorReserva.keys()] } },
+        where: atuaisWhere,
         attributes: [[db.Sequelize.fn('MAX', db.Sequelize.col('id')), 'max_id']],
         group: ['idreserva'],
         raw: true,
@@ -242,15 +250,17 @@ export async function listHistory(req, res) {
         // a listar 1 linha por ocorrência.
         const agrupar = String(req.query.groupByReserva ?? 'true') !== 'false';
 
+        const scopeCvIds = await scopeCvIdsFor(req.user);
+
         let rows;
         let total;
         if (agrupar) {
-            const todos = sortRows(await casosAtuaisPorReserva(req.query), sort);
+            const todos = sortRows(await casosAtuaisPorReserva(req.query, scopeCvIds), sort);
             total = todos.length;
             rows = todos.slice(offset, offset + limit);
         } else {
             const { Op } = db.Sequelize;
-            const where = buildHistoryWhere(req.query);
+            const where = buildHistoryWhere(req.query, { scopeCvIds });
             const cvIds = await resolveCvEtapaFilter({ cvSituacao: req.query.cvSituacao, cvRepasse: req.query.cvRepasse });
             applyCvIdsToWhere(where, cvIds, Op);
             const order = sort.key === 'id'
@@ -275,17 +285,18 @@ export async function getHistoryStats(req, res) {
     try {
         const agrupar = String(req.query.groupByReserva ?? 'true') !== 'false';
         const byStatus = {};
+        const scopeCvIds = await scopeCvIdsFor(req.user);
 
         if (agrupar) {
             // KPIs contam RESERVAS (pelo status do caso atual), pra bater com a
             // lista agrupada. Ignora o filtro de status: os chips são o filtro.
-            const atuais = await casosAtuaisPorReserva({ ...req.query, status: '' });
+            const atuais = await casosAtuaisPorReserva({ ...req.query, status: '' }, scopeCvIds);
             for (const r of atuais) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
             return res.json({ byStatus, grouped: true });
         }
 
         const { Op } = db.Sequelize;
-        const where = buildHistoryWhere({ ...req.query, status: '' });
+        const where = buildHistoryWhere({ ...req.query, status: '' }, { scopeCvIds });
         const cvIds = await resolveCvEtapaFilter({ cvSituacao: req.query.cvSituacao, cvRepasse: req.query.cvRepasse });
         applyCvIdsToWhere(where, cvIds, Op);
         const rows = await db.ReservaCancelHistory.findAll({
@@ -303,9 +314,13 @@ export async function getHistoryStats(req, res) {
 
 export async function getHistoryFacets(req, res) {
     try {
+        // Mesmo recorte da listagem: as facetas só oferecem o que o usuário pode
+        // ver (senão o filtro mostraria empreendimento sem nenhuma linha).
+        const facetWhere = { empreendimento: { [db.Sequelize.Op.ne]: null } };
+        applyCvScope(facetWhere, await scopeCvIdsFor(req.user), db.Sequelize.Op);
         const rows = await db.ReservaCancelHistory.findAll({
             attributes: [[db.Sequelize.fn('DISTINCT', db.Sequelize.col('empreendimento')), 'empreendimento']],
-            where: { empreendimento: { [db.Sequelize.Op.ne]: null } },
+            where: facetWhere,
             raw: true,
         });
         const empreendimentos = rows.map(r => r.empreendimento).filter(Boolean).sort((a, b) => a.localeCompare(b, 'pt-BR'));

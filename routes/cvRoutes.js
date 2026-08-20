@@ -1,5 +1,6 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
+import requireCapability from '../middlewares/requireCapability.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
 import requireRoutePermission from '../middlewares/requireRoutePermission.js';
 import db from '../models/sequelize/index.js';
@@ -40,6 +41,9 @@ const cvPrecadastros = new PrecadastrosSyncController();
 // Cada endpoint exige que o usuário tenha AO MENOS UMA das telas que o
 // consomem. Admin tem bypass. Endpoints de sync manual são admin-only (o cron
 // roda em processo pelos schedulers).
+// Ação `sync` da tela de Empreendimentos (lib/screenCapabilities.js).
+const sincronizarTabelas = requireCapability('/comercial/buildings', 'sync');
+
 const WORKFLOW_SCREENS = ['/comercial/workflow/groups', ...RELATORIO_SCREENS, '/validator'];
 const ENTERPRISE_SCREENS = ['/comercial/buildings', '/comercial/conditions', '/comercial/projections', ...RELATORIO_SCREENS, '/comercial/reservas-report', '/comercial/precadastros', '/marketing/plano-eventos'];
 
@@ -101,7 +105,7 @@ router.get('/workflow-grupos/segments', authenticate, requireRoutePermission(WOR
 router.get('/workflow-grupos/:id/projecoes', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchGroupProjections);
 
 // ─── Sync extras ──────────────────────────────────────────────────────────────
-router.post('/price-tables/sync', authenticate, requireAdmin, async (req, res) => {
+router.post('/price-tables/sync', authenticate, sincronizarTabelas, async (req, res) => {
     try {
         const svc = new PriceTableSyncService();
         await svc.syncAll();
@@ -111,7 +115,7 @@ router.post('/price-tables/sync', authenticate, requireAdmin, async (req, res) =
     }
 });
 
-router.post('/price-tables/sync/:idempreendimento', authenticate, requireAdmin, async (req, res) => {
+router.post('/price-tables/sync/:idempreendimento', authenticate, sincronizarTabelas, async (req, res) => {
     try {
         const svc = new PriceTableSyncService();
         const n = await svc.syncForEnterprise(Number(req.params.idempreendimento));
@@ -122,7 +126,7 @@ router.post('/price-tables/sync/:idempreendimento', authenticate, requireAdmin, 
 });
 
 // Debug: inspeciona resposta bruta do CV + o que está no banco
-router.get('/price-tables/debug/:idempreendimento', authenticate, requireAdmin, async (req, res) => {
+router.get('/price-tables/debug/:idempreendimento', authenticate, sincronizarTabelas, async (req, res) => {
     const eid = Number(req.params.idempreendimento);
     try {
         const apiCv = (await import('../lib/apiCv.js')).default;

@@ -49,8 +49,6 @@ export const NotificationType = {
     META_CAMPAIGNS_TOKEN_EXPIRING: 'meta.campaigns.token_expiring',
 
     // Marketing — Aprovações (tickets p/ diretoria)
-    MARKETING_APPROVAL_REQUESTED: 'marketing.approval.requested',
-    MARKETING_APPROVAL_DECIDED:   'marketing.approval.decided',
 
     // Comercial — Fechamento de vendas
     SALES_CLOSING_DIVERGENCE: 'sales.closing.divergence',
@@ -573,35 +571,6 @@ export const NOTIFICATION_CATALOG = {
         userOptional: false,
     },
 
-    // ── Aprovações (tickets p/ diretoria; ferramenta geral, ex-Marketing) ──────
-    // As chaves marketing.approval.* são MANTIDAS: prefs de usuário e notificações
-    // antigas já persistidas referenciam esses códigos.
-    [NotificationType.MARKETING_APPROVAL_REQUESTED]: {
-        label: 'Solicitação aguardando sua aprovação',
-        group: 'Aprovações',
-        description: 'Quando uma solicitação entra em um perfil de autorização seu.',
-        emailType: 'generic.notification',
-        // WhatsApp deste tipo é enviado pelo marketingApprovalWhatsApp.js (template
-        // com botões + rastreio de wamid p/ aprovar pela resposta) — não pelo canal genérico.
-        whatsapp: null,
-        defaults: { inapp: true, email: true, whatsapp: false },
-        userOptional: true,
-    },
-    [NotificationType.MARKETING_APPROVAL_DECIDED]: {
-        label: 'Resultado da sua solicitação de aprovação',
-        group: 'Aprovações',
-        description: 'Quando sua solicitação é aprovada, aprovada com ressalva ou reprovada.',
-        emailType: 'generic.notification',
-        whatsapp: {
-            template: 'approval_decided_v1',
-            language: 'pt_BR',
-            category: 'UTILITY',
-            variables: ['protocol', 'resultLabel', 'note'],
-        },
-        // Resultado direcionado ao solicitante: sempre chega.
-        defaults: { inapp: true, email: true, whatsapp: true },
-        userOptional: false,
-    },
 
     // ── Administração — cadastro de usuários ───────────────────────────────────
     [NotificationType.USER_SIGNUP_PENDING]: {
@@ -621,4 +590,70 @@ export function getCatalogEntry(type) {
 
 export function listCatalog() {
     return Object.entries(NOTIFICATION_CATALOG).map(([type, meta]) => ({ type, ...meta }));
+}
+
+// ── Telas que sustentam cada tipo ────────────────────────────────────────────
+//
+// Serve para a tela de PREFERÊNCIAS (/settings/notifications) não oferecer
+// ajuste de aviso que o usuário nunca vai receber — quem não tem Checklists não
+// precisa escolher canal para "tarefa atribuída". Basta UMA das telas.
+//
+// Tipo fora deste mapa é PESSOAL ou de tela livre (suporte, alertas, mural,
+// bolão, Academy, relatórios compartilhados) e aparece para todo mundo.
+//
+// ATENÇÃO: isto NÃO decide entrega. O envio continua sendo por destinatário
+// (quem é responsável pela tarefa recebe, tendo a tela ou não) — mexer nisso
+// silenciaria aviso de quem precisa agir.
+const SCREENS_BY_TYPE = {
+    [NotificationType.EVENT_CREATED]:  ['/marketing/events'],
+    [NotificationType.EVENT_REMINDER]: ['/marketing/events'],
+
+    [NotificationType.CONDITION_AUTHORIZATION_REQUESTED]: ['/comercial/conditions'],
+
+    [NotificationType.LEAD_DISPATCH_FAILED]:  ['/meta', '/marketing/leads'],
+    [NotificationType.LEAD_WEBHOOK_REJECTED]: ['/meta', '/marketing/leads'],
+    [NotificationType.LEAD_BINDING_MISSING]:  ['/meta', '/marketing/leads'],
+    [NotificationType.META_CAMPAIGNS_TOKEN_EXPIRING]: ['/meta'],
+
+    [NotificationType.SALES_CLOSING_DIVERGENCE]:  ['/comercial/relatorios/faturamento'],
+    [NotificationType.CONTRACT_ADJUSTMENT_DRIFT]: ['/comercial/relatorios/faturamento'],
+
+    [NotificationType.EVENT_PLAN_OPENED]:         ['/marketing/plano-eventos'],
+    [NotificationType.EVENT_PLAN_CHASE]:          ['/marketing/plano-eventos'],
+    [NotificationType.EVENT_PLAN_SUBMITTED]:      ['/marketing/plano-eventos'],
+    [NotificationType.EVENT_PLAN_STAGE_DECIDED]:  ['/marketing/plano-eventos'],
+    [NotificationType.EVENT_PLAN_RETURNED]:       ['/marketing/plano-eventos'],
+    [NotificationType.EVENT_PLAN_CLOSED]:         ['/marketing/plano-eventos'],
+    [NotificationType.EVENT_PLAN_AUTO_SUBMITTED]: ['/marketing/plano-eventos'],
+    [NotificationType.EVENT_PLAN_EMPTY]:          ['/marketing/plano-eventos'],
+
+    [NotificationType.CHECKLIST_TASK_ASSIGNED]:      ['/checklists'],
+    [NotificationType.CHECKLIST_TASK_DUE_SOON]:      ['/checklists'],
+    [NotificationType.CHECKLIST_TASK_OVERDUE]:       ['/checklists'],
+    [NotificationType.CHECKLIST_TASK_NUDGE]:         ['/checklists'],
+    [NotificationType.CHECKLIST_TASK_COMMENT]:       ['/checklists'],
+    [NotificationType.CHECKLIST_TASK_COMPLETED]:     ['/checklists'],
+    [NotificationType.CHECKLIST_APPROVAL_REQUESTED]: ['/checklists'],
+    [NotificationType.CHECKLIST_APPROVAL_DECIDED]:   ['/checklists'],
+};
+
+// Tipos que só fazem sentido para administrador (ninguém mais é destinatário).
+const ADMIN_ONLY_TYPES = new Set([NotificationType.USER_SIGNUP_PENDING]);
+
+/** Telas exigidas por um tipo (array vazio = todo mundo vê). */
+export function screensForType(type) {
+    return SCREENS_BY_TYPE[type] || [];
+}
+
+/**
+ * O tipo deve aparecer nas preferências deste usuário?
+ * @param {string} type
+ * @param {{ isAdmin: boolean, routes: Set<string> }} ctx rotas em minúsculas
+ */
+export function isTypeVisibleTo(type, { isAdmin, routes }) {
+    if (isAdmin) return true;
+    if (ADMIN_ONLY_TYPES.has(type)) return false;
+    const screens = screensForType(type);
+    if (!screens.length) return true;
+    return screens.some(r => routes.has(String(r).toLowerCase()));
 }

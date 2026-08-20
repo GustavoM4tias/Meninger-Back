@@ -15,6 +15,7 @@ import { getEffectiveRoutes } from '../services/permissions/permissionAccessServ
 import {
     getAdminOnlyRoutes, listRoutePolicies, setRoutePolicy, normalizeRoute,
 } from '../services/permissions/routePolicyService.js';
+import { capabilitiesFor } from '../services/permissions/capabilityService.js';
 
 // Apenas usuários do Office (não Academy/CVCRM)
 const OFFICE_PROVIDERS = ['INTERNAL', 'MICROSOFT'];
@@ -28,11 +29,15 @@ export async function getMyPermissions(req, res) {
         // Vai para todo mundo porque o front precisa esconder no menu e barrar no
         // guard de rota — as rotas efetivas abaixo já vêm sem elas.
         const adminOnlyRoutes = [...await getAdminOnlyRoutes()];
+        // capabilities: o que o usuário pode FAZER dentro de cada tela
+        // (lib/screenCapabilities.js). Vai calculado do servidor de propósito —
+        // o front só consulta, então não tem como se conceder ação nenhuma.
+        const capabilities = await capabilitiesFor(req.user);
         if (req.user.role === 'admin') {
-            return res.json({ isAdmin: true, routes: null, adminOnlyRoutes });
+            return res.json({ isAdmin: true, routes: null, adminOnlyRoutes, capabilities });
         }
         const routes = await getEffectiveRoutes(req.user.id);
-        return res.json({ isAdmin: false, routes, adminOnlyRoutes });
+        return res.json({ isAdmin: false, routes, adminOnlyRoutes, capabilities });
     } catch (err) {
         console.error('[Permissions] getMyPermissions error:', err);
         return res.status(500).json({ message: err.message });
