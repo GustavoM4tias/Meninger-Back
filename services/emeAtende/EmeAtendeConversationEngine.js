@@ -22,6 +22,8 @@ import { runChat, hasGeminiKey } from './emeAtendeGeminiChat.js';
 import { normalizePhone, phoneSuffix, samePhone } from './emeAtendePhone.js';
 import { findUnsupported, rewriteInstruction, SAFE_FALLBACK } from './emeAtendeGuard.js';
 import { HARD_RULES, mergeStandards, buildInstructions } from './emeAtendeRules.js';
+import EmeAtendeLeadService from './EmeAtendeLeadService.js';
+import Scoring from './emeAtendeLeadScoring.js';
 
 // Tentativas de reescrita antes de desistir e mandar o fail-safe.
 const MAX_REWRITE_ATTEMPTS = 2;
@@ -50,12 +52,36 @@ function pediuOptOut(body) {
 
 const FUNCTION_DECLARATIONS = [
     {
-        name: 'marcar_qualificado',
-        description: 'Marca o lead como qualificado (lead quente: demonstrou interesse real, tem perfil de compra). A conversa continua normalmente depois.',
+        name: 'registrar_qualificacao',
+        description: 'Registra o que o lead DECLAROU sobre a compra. CHAME SEMPRE que a pessoa revelar qualquer um destes sinais, mesmo que a conversa continue depois - pode chamar várias vezes, os dados se complementam. Exemplos do que dispara: "quero sair do aluguel esse ano" (momento_compra), "nome sujo", "negativado", "SPC" (restricao_nome=sim), "fiz simulação e aprovou" (aprovacao_credito), "tenho FGTS" (usa_fgts=sim), "já tenho uma casa" (possui_imovel=sim), "ganho X" (renda_declarada), "sem pressa", "ano que vem" (momento_compra), "quero visitar" (interesse_visita). Registre também o que é ruim para a venda - o dado negativo vale tanto quanto o positivo. Preencha SÓ o que a pessoa disse; nunca deduza.',
         parameters: {
             type: 'object',
-            properties: { resumo: { type: 'string', description: 'Resumo do interesse: o que procura, orçamento, urgência' } },
+            properties: {
+                resumo: { type: 'string', description: 'Resumo em uma frase do que o lead procura e do momento dele' },
+                momento_compra: { type: 'string', enum: ["imediato","ate_3_meses","ate_6_meses","ate_12_meses","sem_prazo","nao_informado"], description: 'Quando pretende comprar, se disse' },
+                finalidade: { type: 'string', enum: ["moradia","investimento","familiar","nao_informado"] },
+                aprovacao_credito: { type: 'string', enum: ["aprovada","pre_aprovada","em_analise","nao_iniciada","reprovada","nao_informado"], description: 'Situação do financiamento SEGUNDO O LEAD. Você não avalia crédito.' },
+                restricao_nome: { type: 'string', enum: ['sim', 'nao', 'nao_informado'], description: 'Só se a pessoa mencionar' },
+                possui_imovel: { type: 'string', enum: ['sim', 'nao', 'nao_informado'] },
+                entrada_disponivel: { type: 'string', enum: ['sim', 'nao', 'nao_informado'] },
+                usa_fgts: { type: 'string', enum: ['sim', 'nao', 'nao_informado'] },
+                renda_declarada: { type: 'number', description: 'Renda mensal em reais, só se a pessoa informar espontaneamente' },
+                objecao_principal: { type: 'string', description: 'O que mais trava a decisão dela, em poucas palavras' },
+                interesse_visita: { type: 'boolean', description: 'true se ela quer conhecer o stand ou o empreendimento' },
+            },
             required: ['resumo'],
+        },
+    },
+    {
+        name: 'registrar_perda',
+        description: 'Registra por que este lead não vai adiante AGORA. O motivo define se e quando a equipe volta a procurá-lo. Guia: nome sujo/negativado/SPC = restricao_credito; juntando dinheiro ou esperando FGTS = aguardando_recurso; "só olhando", "sem pressa", "ano que vem" = so_pesquisando; achou caro = preco_alto; renda baixa demais = renda_insuficiente; quer imóvel pronto = quer_pronto; já comprou = ja_comprou; sumiu = nao_responde. Chame sempre que a conversa terminar sem avanço, junto de encerrar_conversa.',
+        parameters: {
+            type: 'object',
+            properties: {
+                motivo: { type: 'string', enum: ["sem_interesse","so_pesquisando","preco_alto","renda_insuficiente","restricao_credito","aguardando_recurso","prazo_entrega","quer_pronto","localizacao","quer_outro_produto","possui_imovel","ja_comprou","contato_invalido","nao_responde","outro"] },
+                observacao: { type: 'string', description: 'Detalhe curto do que ele falou' },
+            },
+            required: ['motivo'],
         },
     },
     {
@@ -356,6 +382,9 @@ async function handleIncomingMessage(m, fromPhone, profileName) {
     // 4) IA com debounce
     const cfg = await EmeAtendeSettingsService.getConfig();
     const debounce = flow?.settings?.debounce_seconds ?? cfg.debounce_seconds ?? 8;
+    // Cada mensagem do lead mexe no funil: estágio avança pra engajado e a
+    // temperatura é recalculada (ela decai com o tempo, então precisa de toque).
+    await EmeAtendeLeadService.registrarInteracao({ lead, conversation });
     await scheduleAI(conversation, debounce);
 }
 
@@ -548,7 +577,7 @@ async function fireAI(conversationId) {
     // gerando resposta repetida no próximo tick do sweeper.
     await conversation.update({ last_answered_message_id: pendentes[pendentes.length - 1].id });
 
-    const actions = { qualified: null, close: null, optOut: false };
+    const actions = { qualified: null, close: null, optOut: false, perda: null };
     const images = validImages(flow);
     const book = flowBook(flow);
     const { systemPrompt, contextText } = await buildPromptParts(flow, lead);
@@ -564,15 +593,29 @@ async function fireAI(conversationId) {
                 ...(book ? [DOC_TOOL] : []),
             ],
             onTool: async ({ name, args }) => {
-                if (name === 'marcar_qualificado') {
+                if (name === 'registrar_qualificacao') {
+                    const jaEra = lead?.status === 'qualified';
+                    const r = await EmeAtendeLeadService.registrarQualificacao({
+                        lead, conversation,
+                        resumo: args?.resumo || '',
+                        dados: args || {},
+                        interesseVisita: !!args?.interesse_visita,
+                    });
                     actions.qualified = args?.resumo || '';
-                    // Segunda chamada na mesma conversa: o modelo repetia "vou
-                    // registrar / combinado?" a cada turno. O registro é atualizado,
-                    // mas ele é avisado pra não anunciar de novo.
-                    if (lead?.status === 'qualified') {
-                        return { ok: true, info: 'Este lead JÁ estava registrado - resumo atualizado. NÃO avise o lead de novo nem peça confirmação; siga a conversa.' };
-                    }
-                    return { ok: true, info: 'Lead registrado. Avise UMA vez, em uma frase, e siga a conversa.' };
+                    // Score, temperatura e chance NÃO voltam pro modelo de
+                    // propósito: se ele soubesse que o lead está "quente", passaria
+                    // a tratar a pessoa pela nota em vez de pela conversa.
+                    if (!r.ok) return { ok: false, error: 'não consegui registrar agora' };
+                    return { ok: true, info: jaEra
+                        ? 'Já registrado antes - dados atualizados. NÃO avise o lead de novo nem peça confirmação; siga a conversa.'
+                        : 'Lead registrado. Avise UMA vez, em uma frase, e siga a conversa.' };
+                }
+                if (name === 'registrar_perda') {
+                    const r = await EmeAtendeLeadService.registrarPerda({
+                        lead, conversation, motivo: args?.motivo, observacao: args?.observacao,
+                    });
+                    actions.perda = r.ok ? r.motivo : null;
+                    return { ok: true, info: 'Motivo registrado. Não comente isso com o lead - apenas siga a despedida, sem julgar o caso dele.' };
                 }
                 if (name === 'encerrar_conversa') {
                     actions.close = args?.motivo || '';
@@ -608,10 +651,8 @@ async function fireAI(conversationId) {
         return;
     }
 
-    if (actions.qualified !== null) {
-        await lead?.update({ status: 'qualified', qualified_summary: actions.qualified });
-        await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'qualified', { resumo: actions.qualified });
-    }
+    // A gravação da qualificação acontece dentro da própria tool
+    // (EmeAtendeLeadService), que também recalcula score, temperatura e chance.
 
     // envia o texto final (antes de encerrar por close), depois de conferir
     // que a IA não inventou valor nenhum
@@ -628,7 +669,13 @@ async function fireAI(conversationId) {
         await conversation.update({ state: 'closed' });
         // opt_out é DEFINITIVO: o lead sai da audiência (emeAtendeAudience ignora
         // quem está opted_out), então nunca mais é abordado por campanha nenhuma.
-        await lead?.update({ status: actions.optOut ? 'opted_out' : 'closed' });
+        if (actions.optOut) {
+            await EmeAtendeLeadService.registrarPerda({ lead, conversation, motivo: 'opt_out' });
+        } else if (!actions.perda) {
+            // Encerrou sem dizer por quê: registra como sem interesse pra não
+            // deixar lead morto sem motivo nem data de volta.
+            await EmeAtendeLeadService.registrarPerda({ lead, conversation, motivo: 'sem_interesse', observacao: actions.close });
+        }
         await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'conversation_closed', { reason: actions.close, by: 'ai' });
     }
 }
