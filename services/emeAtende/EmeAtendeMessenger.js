@@ -98,6 +98,26 @@ export function typingDelay(text) {
 }
 
 /**
+ * Só liga o "digitando…", sem esperar. Chamado no INSTANTE em que o lead
+ * escreve: o debounce junta mensagens picadas por alguns segundos, e nesse
+ * intervalo o cliente ficava olhando pro nada. O indicador some sozinho em
+ * ~25s, então ele cobre a espera normal sem prometer nada que não se cumpra.
+ */
+async function showTyping(conversation) {
+    try {
+        const cfg = await EmeAtendeSettingsService.getConfig();
+        if (!cfg.active || cfg.dry_run || cfg.typing_simulado === false) return;
+        const inbound = await db.EmeAtendeMessage.findOne({
+            where: { conversation_id: conversation.id, direction: 'in' },
+            order: [['id', 'DESC']],
+        });
+        if (inbound?.wamid) await WhatsAppService.sendTypingIndicator({ messageId: inbound.wamid });
+    } catch (err) {
+        console.warn('[eme-atende/messenger] indicador imediato falhou:', err?.message);
+    }
+}
+
+/**
  * Mostra "digitando…" e espera. Precisa do wamid de uma mensagem QUE O LEAD
  * mandou - a Cloud API pendura o indicador no "marcar como lida". Sem inbound
  * registrado, apenas espera (a pausa humaniza mesmo sem o indicador).
@@ -267,4 +287,4 @@ async function sendOpener({ lead, conversation, flow }) {
     }
 }
 
-export default { sendText, sendImage, sendDocument, sendOpener, logEvent, typingDelay };
+export default { sendText, sendImage, sendDocument, sendOpener, logEvent, typingDelay, showTyping };
