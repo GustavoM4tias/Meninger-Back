@@ -12,6 +12,16 @@ const toIntOrNull = (v) => {
     return isNaN(n) ? null : n;
 };
 
+// A ETAPA da reserva no CV mora em `situacao->>'situacao'`. A chave `nome` NAO
+// existe nesse bloco - medido em 2026-08-20: 0 de 7.925 linhas tem `nome`,
+// 7.925 tem `situacao`. `status_reserva` guarda o mesmo texto denormalizado e
+// cobre 100% das linhas, entao entra como rede.
+//
+// Ler `->>'nome'` nao devolvia "sem etapa": devolvia NULL, e NULL num ILIKE
+// derruba a linha inteira. Era por isso que o filtro de Situacao e o
+// only_active voltavam vazios em vez de voltarem tudo.
+const ETAPA_SQL = `COALESCE(r.situacao->>'situacao', r.status_reserva)`;
+
 // helper: ILIKE com CSV
 function addIlikeCsv(whereClauses, replacements, paramName, column, rawVal) {
     if (!rawVal) return;
@@ -75,7 +85,7 @@ export const listReservasReport = async (req, res) => {
         addIlikeCsv(whereClauses, replacements, 'unidade',        'r.unidade',        unidade);
         addIlikeCsv(whereClauses, replacements, 'tipovenda',      'r.tipovenda',      tipovenda);
         addIlikeCsv(whereClauses, replacements, 'status_repasse', 'r.status_repasse', status_repasse);
-        addIlikeCsv(whereClauses, replacements, 'situacao',       `r.situacao->>'nome'`, situacao);
+        addIlikeCsv(whereClauses, replacements, 'situacao',       ETAPA_SQL, situacao);
         addIlikeCsv(whereClauses, replacements, 'imobiliaria',    `r.imobiliaria->>'nome'`, imobiliaria);
         addIlikeCsv(whereClauses, replacements, 'corretor',       `r.corretor->>'nome'`,    corretor);
         addIlikeCsv(whereClauses, replacements, 'empresa_correspondente',
@@ -84,8 +94,8 @@ export const listReservasReport = async (req, res) => {
         if (String(only_active) === 'true') {
             // Em curso: não vendida E não distratada/cancelada
             whereClauses.push(`(r.vendida IS NULL OR r.vendida <> 'S')
-                AND r.situacao->>'nome' NOT ILIKE '%distrato%'
-                AND r.situacao->>'nome' NOT ILIKE '%cancelad%'`);
+                AND COALESCE(${ETAPA_SQL}, '') NOT ILIKE '%distrato%'
+                AND COALESCE(${ETAPA_SQL}, '') NOT ILIKE '%cancelad%'`);
         }
         if (String(only_vendida) === 'true') {
             whereClauses.push(`r.vendida = 'S'`);
@@ -190,8 +200,8 @@ export const listReservasReport = async (req, res) => {
             EXTRACT(EPOCH FROM (COALESCE(r.data_venda, r.data_contrato, NOW()) - r.data_reserva))/86400 AS dias_em_reserva,
             CASE
               WHEN r.vendida = 'S' THEN 'vendida'
-              WHEN r.situacao->>'nome' ILIKE '%distrato%'   THEN 'distratada'
-              WHEN r.situacao->>'nome' ILIKE '%cancelad%'   THEN 'cancelada'
+              WHEN ${ETAPA_SQL} ILIKE '%distrato%'   THEN 'distratada'
+              WHEN ${ETAPA_SQL} ILIKE '%cancelad%'   THEN 'cancelada'
               WHEN r.status_repasse IS NOT NULL AND r.status_repasse <> '' THEN 'em_repasse'
               ELSE 'ativa'
             END AS estado_geral,
