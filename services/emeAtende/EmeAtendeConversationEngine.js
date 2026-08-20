@@ -26,7 +26,27 @@ import { HARD_RULES, mergeStandards, buildInstructions } from './emeAtendeRules.
 // Tentativas de reescrita antes de desistir e mandar o fail-safe.
 const MAX_REWRITE_ATTEMPTS = 2;
 
+// Opt-out determinístico, ANTES da IA. Duas camadas:
+//   1. a palavra sozinha (o que o rodapé do template ensina)
+//   2. frases inequívocas de "para de me mandar" - o lead real não digita PARAR,
+//      ele escreve "não quero mais receber nada". Sem isto, esse pedido só
+//      fechava a conversa e a pessoa voltava a ser abordada na campanha seguinte.
+// Pedido ambíguo ("não quero mais foto") NÃO entra aqui de propósito: quem
+// resolve nuance é a IA, com opt_out=true no encerrar_conversa.
 const OPTOUT_RE = /^\s*(parar|sair|stop|cancelar|descadastrar)\s*[.!]*\s*$/i;
+const OPTOUT_FRASE_RE = new RegExp(
+    '(?:n[ãa]o (?:quero|desejo)(?: mais)? (?:receber|ser contatad[oa]|ser contactad[oa])'
+    + '[^.!?]{0,25}(?:mensage|nada|contato|nenhum|nad[ao])'
+    + '|me (?:tire|tira|remova|remove|retire) (?:da|dessa|desta) lista'
+    + '|pare de (?:me )?(?:mandar|enviar|encher)'
+    + '|descadastr|sair da lista|n[ãa]o me (?:mande|envie|mandem|enviem) mais)',
+    'i');
+
+/** O lead pediu para não ser mais contatado? */
+function pediuOptOut(body) {
+    const t = String(body || '');
+    return OPTOUT_RE.test(t) || OPTOUT_FRASE_RE.test(t);
+}
 
 const FUNCTION_DECLARATIONS = [
     {
@@ -40,10 +60,16 @@ const FUNCTION_DECLARATIONS = [
     },
     {
         name: 'encerrar_conversa',
-        description: 'Encerra a conversa educadamente. Use quando o lead disser que não tem interesse ou pedir para não ser mais contatado nesta conversa.',
+        description: 'Encerra a conversa educadamente. Use quando o lead disser que não tem interesse agora, ou quando pedir para não receber mais mensagens (neste caso passe opt_out=true).',
         parameters: {
             type: 'object',
-            properties: { motivo: { type: 'string', description: 'Motivo curto do encerramento' } },
+            properties: {
+                motivo: { type: 'string', description: 'Motivo curto do encerramento' },
+                opt_out: {
+                    type: 'boolean',
+                    description: 'true SOMENTE quando a pessoa pede para não receber mais mensagens/contato. Isso a remove definitivamente da base - não use para quem apenas não tem interesse neste momento.',
+                },
+            },
             required: ['motivo'],
         },
     },
@@ -261,7 +287,7 @@ async function handleIncomingMessage(m, fromPhone, profileName) {
     console.log(`[eme-atende/engine] inbound conv=${conversation.id} from=${fromPhone} body="${String(body).slice(0, 120)}"`);
 
     // 1) opt-out definitivo
-    if (OPTOUT_RE.test(body || '')) {
+    if (pediuOptOut(body)) {
         await lead?.update({ status: 'opted_out' });
         await conversation.update({ state: 'closed' });
         await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'opted_out', { body });
@@ -487,7 +513,7 @@ async function fireAI(conversationId) {
     // gerando resposta repetida no próximo tick do sweeper.
     await conversation.update({ last_answered_message_id: pendentes[pendentes.length - 1].id });
 
-    const actions = { qualified: null, close: null };
+    const actions = { qualified: null, close: null, optOut: false };
     const images = validImages(flow);
     const book = flowBook(flow);
     const { systemPrompt, contextText } = await buildPromptParts(flow, lead);
@@ -513,7 +539,13 @@ async function fireAI(conversationId) {
                     }
                     return { ok: true, info: 'Lead registrado. Avise UMA vez, em uma frase, e siga a conversa.' };
                 }
-                if (name === 'encerrar_conversa') { actions.close = args?.motivo || ''; return { ok: true, info: 'Encerramento registrado. Escreva uma despedida curta e educada.' }; }
+                if (name === 'encerrar_conversa') {
+                    actions.close = args?.motivo || '';
+                    actions.optOut = !!args?.opt_out;
+                    return { ok: true, info: actions.optOut
+                        ? 'Registrado: o lead não receberá mais mensagens. Despeça-se em uma frase, confirmando que ele não será mais contatado.'
+                        : 'Encerramento registrado. Escreva uma despedida curta e educada.' };
+                }
                 if (name === 'enviar_imagem') {
                     const img = findImage(images, args?.label);
                     if (!img) return { ok: false, error: `imagem "${args?.label}" não encontrada - use um label da lista.` };
@@ -559,7 +591,9 @@ async function fireAI(conversationId) {
 
     if (actions.close !== null) {
         await conversation.update({ state: 'closed' });
-        await lead?.update({ status: 'closed' });
+        // opt_out é DEFINITIVO: o lead sai da audiência (emeAtendeAudience ignora
+        // quem está opted_out), então nunca mais é abordado por campanha nenhuma.
+        await lead?.update({ status: actions.optOut ? 'opted_out' : 'closed' });
         await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'conversation_closed', { reason: actions.close, by: 'ai' });
     }
 }
