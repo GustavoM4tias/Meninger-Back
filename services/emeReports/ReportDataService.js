@@ -588,7 +588,8 @@ export async function runReportDrill({ report, user, rawFilterValues, blockId, l
 
 // ── Export: dados do relatório em linhas, para planilha ──────────────────────
 // Mesmo caminho de segurança do /data: tools rodam com o usuário leitor e os
-// filtros escolhidos por ele. O link público NUNCA chega aqui.
+// filtros escolhidos por ele. Pelo link público o "leitor" é o DONO do
+// relatório (ReportService.publicActor), nunca um usuário anônimo sem alçada.
 
 // Identidade da FONTE de uma consulta na exportação: tool + argumentos que
 // sobram depois de tirar o que só muda a forma do retorno (o mesmo descarte que
