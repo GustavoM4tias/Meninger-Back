@@ -19,6 +19,7 @@ import { runChat } from '../services/emeAtende/emeAtendeGeminiChat.js';
 import { findUnsupported } from '../services/emeAtende/emeAtendeGuard.js';
 import { buildInstructions, mergeStandards, HARD_RULES } from '../services/emeAtende/emeAtendeRules.js';
 import EmeAtendeSiteSyncService from '../services/emeAtende/EmeAtendeSiteSyncService.js';
+import Scoring from '../services/emeAtende/emeAtendeLeadScoring.js';
 import { fetchSite, resolveSource, resolveSiteUrl, buildSiteContext } from '../services/emeAtende/emeAtendeSiteSource.js';
 
 const router = express.Router();
@@ -219,6 +220,34 @@ router.post('/site/preview', wrap(async (req, res) => {
     }
 }));
 
+// Vocabulário da gestão de lead (a tela monta filtros e rótulos com isto,
+// em vez de repetir as listas no front e sair do ar quando mudarem aqui).
+router.get('/leads/vocabulario', wrap(async (req, res) => {
+    res.json({
+        estagios: Scoring.ESTAGIOS,
+        temperaturas: ['quente', 'morno', 'frio', 'gelado'],
+        chances: ['alta', 'media', 'baixa', 'muito_baixa', 'nula'],
+        motivos_perda: Object.entries(Scoring.MOTIVOS_PERDA).map(([valor, m]) => ({
+            valor, rotulo: m.rotulo, reconversao: m.reconversao, dias: m.dias,
+        })),
+        pesos: Scoring.PESOS,
+    });
+}));
+
+// Panorama do funil: o que a tela mostra em cima da lista.
+router.get('/leads/panorama', wrap(async (req, res) => {
+    const [porTemp] = await db.sequelize.query(
+        `SELECT COALESCE(temperatura, 'sem_dado') AS chave, count(*)::int AS total FROM eme_atende_leads GROUP BY 1`);
+    const [porEstagio] = await db.sequelize.query(
+        'SELECT estagio AS chave, count(*)::int AS total FROM eme_atende_leads GROUP BY 1');
+    const [porMotivo] = await db.sequelize.query(
+        'SELECT motivo_perda AS chave, count(*)::int AS total FROM eme_atende_leads WHERE motivo_perda IS NOT NULL GROUP BY 1 ORDER BY 2 DESC');
+    const aRecontatar = await db.EmeAtendeLead.count({
+        where: { recontatar_em: { [Op.ne]: null, [Op.lte]: new Date() } },
+    });
+    res.json({ temperatura: porTemp, estagio: porEstagio, motivo_perda: porMotivo, a_recontatar: aRecontatar });
+}));
+
 // Histórico das leituras do site: quando rodou, o que mudou, o que falhou.
 router.get('/site/syncs', wrap(async (req, res) => {
     res.json(await EmeAtendeSiteSyncService.history({ limit: req.query.limit }));
@@ -274,6 +303,13 @@ router.post('/context-preview', wrap(async (req, res) => {
 router.get('/leads', wrap(async (req, res) => {
     const where = {};
     if (req.query.status) where.status = req.query.status;
+    if (req.query.temperatura) where.temperatura = req.query.temperatura;
+    if (req.query.estagio) where.estagio = req.query.estagio;
+    if (req.query.motivo_perda) where.motivo_perda = req.query.motivo_perda;
+    // Fila de retomada: quem foi perdido e já passou da data de voltar.
+    if (req.query.recontatar === 'true') {
+        where.recontatar_em = { [Op.ne]: null, [Op.lte]: new Date() };
+    }
     if (req.query.q) {
         where[Op.or] = [
             { name: { [Op.iLike]: `%${req.query.q}%` } },
@@ -285,7 +321,11 @@ router.get('/leads', wrap(async (req, res) => {
     const { rows, count } = await db.EmeAtendeLead.findAndCountAll({
         where,
         include: [{ model: db.EmeAtendeFlow, as: 'flow', attributes: ['id', 'name'] }],
-        order: [['id', 'DESC']],
+        // Prioridade comercial: quem está mais quente primeiro; empate pelo
+        // mais recente. Lista de lead ordenada por id não ajuda ninguém a vender.
+        order: req.query.ordem === 'recentes'
+            ? [['id', 'DESC']]
+            : [[db.Sequelize.literal('score DESC NULLS LAST')], ['ultima_interacao_em', 'DESC NULLS LAST'], ['id', 'DESC']],
         limit, offset,
     });
     res.json({ total: count, leads: rows });
