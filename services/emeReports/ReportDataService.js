@@ -486,7 +486,10 @@ const PUBLIC_STATUS_FIELDS = ['situacao_nome', 'situacao', 'status_reserva', 'st
 // Link do registro no CV: o pré-cadastro já traz `link` pronto do CV; as demais
 // etapas montam pela rota do gestor a partir do id.
 function cvUrlDaLinha(row) {
-  const link = typeof row?.link === 'string' && /^https?:\/\//i.test(row.link) ? row.link : null;
+  // O CV grava o link em http; a página é https, então sobe para https aqui.
+  const link = typeof row?.link === 'string' && /^https?:\/\//i.test(row.link)
+    ? row.link.replace(/^http:\/\//i, 'https://')
+    : null;
   if (link) return link;
   if (row?.idreserva) return `${CV_GESTOR}/comercial/reservas/${row.idreserva}/administrar`;
   if (row?.idlead) return `${CV_GESTOR}/comercial/leads/${row.idlead}/administrar?lido=true`;
