@@ -22,6 +22,28 @@ const toIntOrNull = (v) => {
 // only_active voltavam vazios em vez de voltarem tudo.
 const ETAPA_SQL = `COALESCE(r.situacao->>'situacao', r.status_reserva)`;
 
+// A SITUACAO DO REPASSE tem duas fontes. `reservas.status_repasse` e um espelho
+// que o sync copia do repasse; quando o repasse chega DEPOIS da ultima varredura
+// da reserva, o espelho fica nulo e a tela mostra "-" (foi o caso da reserva
+// 8263). A tabela `repasses` e a fonte de primeira mao e associa por idreserva.
+//
+// O espelho continua vencendo quando existe: e o valor que a tela ja mostra e
+// de onde saem os KPIs. O repasse so preenche o buraco. Medido em 2026-08-20:
+// 6.229 reservas tinham o espelho, 6.230 tem no repasse, 8 divergem entre si.
+const REPASSE_SQL = `COALESCE(r.status_repasse, rep.status_repasse)`;
+
+// Repasse mais recente da reserva. Alem da situacao, traz o `idrepasse`, que e
+// o que permite abrir a etapa do repasse no CV
+// (/gestor/financeiro/repasses/<id>/administrar).
+const REPASSE_JOIN = `
+          LEFT JOIN LATERAL (
+            SELECT rp.idrepasse, rp.status_repasse
+              FROM repasses rp
+             WHERE rp.idreserva = r.idreserva
+             ORDER BY rp.idrepasse DESC
+             LIMIT 1
+          ) rep ON TRUE`;
+
 // helper: ILIKE com CSV
 function addIlikeCsv(whereClauses, replacements, paramName, column, rawVal) {
     if (!rawVal) return;
@@ -84,7 +106,7 @@ export const listReservasReport = async (req, res) => {
         addIlikeCsv(whereClauses, replacements, 'bloco',          'r.bloco',          bloco);
         addIlikeCsv(whereClauses, replacements, 'unidade',        'r.unidade',        unidade);
         addIlikeCsv(whereClauses, replacements, 'tipovenda',      'r.tipovenda',      tipovenda);
-        addIlikeCsv(whereClauses, replacements, 'status_repasse', 'r.status_repasse', status_repasse);
+        addIlikeCsv(whereClauses, replacements, 'status_repasse', REPASSE_SQL, status_repasse);
         addIlikeCsv(whereClauses, replacements, 'situacao',       ETAPA_SQL, situacao);
         addIlikeCsv(whereClauses, replacements, 'imobiliaria',    `r.imobiliaria->>'nome'`, imobiliaria);
         addIlikeCsv(whereClauses, replacements, 'corretor',       `r.corretor->>'nome'`,    corretor);
@@ -187,7 +209,9 @@ export const listReservasReport = async (req, res) => {
             r.idreserva,
             r.documento,
             r.empreendimento, r.etapa, r.bloco, r.unidade,
-            r.status_reserva, r.status_repasse, r.idsituacao_repasse, r.data_status_repasse,
+            r.status_reserva, r.idsituacao_repasse, r.data_status_repasse,
+            ${REPASSE_SQL} AS status_repasse,
+            rep.idrepasse,
             r.idproposta_cv, r.idproposta_int,
             r.vendida, r.observacoes,
             r.data_reserva, r.data_contrato, r.data_venda,
@@ -202,7 +226,7 @@ export const listReservasReport = async (req, res) => {
               WHEN r.vendida = 'S' THEN 'vendida'
               WHEN ${ETAPA_SQL} ILIKE '%distrato%'   THEN 'distratada'
               WHEN ${ETAPA_SQL} ILIKE '%cancelad%'   THEN 'cancelada'
-              WHEN r.status_repasse IS NOT NULL AND r.status_repasse <> '' THEN 'em_repasse'
+              WHEN ${REPASSE_SQL} IS NOT NULL AND ${REPASSE_SQL} <> '' THEN 'em_repasse'
               ELSE 'ativa'
             END AS estado_geral,
             jsonb_array_length(COALESCE(r.leads_associados, '[]'::jsonb)) AS qtd_leads_associados,
@@ -212,7 +236,7 @@ export const listReservasReport = async (req, res) => {
                 LEFT JOIN leads l3 ON l3.idlead = NULLIF(la3->>'idlead','')::int
                 WHERE l3.origem IS NOT NULL
             ), ARRAY[]::text[]) AS lead_origens
-          FROM reservas r
+          FROM reservas r${REPASSE_JOIN}
           WHERE ${whereClauses.join(' AND ')}
           ORDER BY r.data_reserva DESC
         `;
