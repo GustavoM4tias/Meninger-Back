@@ -30,7 +30,6 @@ export const AUDIENCES = {
 // ── Funcionalidades ──────────────────────────────────────────────────────────
 export const FEATURES = {
     alertas:     { key: 'alertas',     label: 'Alertas da Eme',   icon: 'fas fa-bell',            screen: '/settings/alerts' },
-    aprovacoes:  { key: 'aprovacoes',  label: 'Aprovações',       icon: 'fas fa-file-signature',  screen: '/aprovacoes' },
     checklist:   { key: 'checklist',   label: 'Checklist',        icon: 'fas fa-list-check',      screen: '/tools/checklist' },
     eventos:     { key: 'eventos',     label: 'Eventos',          icon: 'fas fa-calendar-day',    screen: '/marketing/Events' },
     suporte:     { key: 'suporte',     label: 'Suporte',          icon: 'fas fa-headset',         screen: '/suporte' },
@@ -92,31 +91,6 @@ export const TEMPLATE_REGISTRY = [
         source: 'services/alerts/AlertShareService.js',
         managedBy: 'automacao', automationKey: 'alert_share',
         autoProvisioned: false, critical: false,
-    },
-
-    // ── Aprovações ───────────────────────────────────────────────────────────
-    {
-        name: 'approval_request_v1', language: 'pt_BR',
-        feature: 'aprovacoes', audience: 'interno',
-        purpose: 'Pede a decisão do aprovador direto no WhatsApp.',
-        trigger: 'Criação de uma solicitação, para cada membro dos perfis de alçada.',
-        variables: ['Protocolo', 'Tipo', 'Solicitante', 'Valor', 'Detalhe (CC/prazo)'],
-        buttons: [
-            { text: 'Aprovar', does: 'Registra a aprovação na hora, em nome do perfil da pessoa.' },
-            { text: 'Ver detalhes', does: 'Responde com o resumo e o link da página de decisão.' },
-        ],
-        source: 'services/marketing/marketingApprovalWhatsApp.js',
-        managedBy: 'automacao', automationKey: 'marketing_approval',
-        autoProvisioned: true, critical: false,
-    },
-    {
-        name: 'approval_decided_v1', language: 'pt_BR',
-        feature: 'aprovacoes', audience: 'interno',
-        purpose: 'Avisa o solicitante do resultado da sua solicitação.',
-        trigger: 'Catálogo de notificações (marketing.approval.decided).',
-        variables: ['Protocolo', 'Resultado', 'Observação'],
-        source: 'services/notification/notificationTypes.js',
-        managedBy: 'codigo', autoProvisioned: true, critical: false,
     },
 
     // ── Checklist ────────────────────────────────────────────────────────────

@@ -1,28 +1,36 @@
 // routes/conditionsRoutes.js
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
-import requireRoutePermission from '../middlewares/requireRoutePermission.js';
+import requireCapability from '../middlewares/requireCapability.js';
 import * as ctrl from '../controllers/comercial/enterpriseConditionController.js';
 import * as ds from '../controllers/comercial/docusignController.js';
 
 const router = express.Router();
 router.use(authenticate);
 
+// Ações da tela (lib/screenCapabilities.js): view segue a alçada de Fichas,
+// configure é admin. Quem pode EDITAR/AUTORIZAR uma ficha continua sendo regra
+// de negócio do módulo (GET /permissions abaixo), não capacidade de tela.
+const CONDITIONS_SCREEN = '/comercial/conditions';
+const configurar = requireCapability(CONDITIONS_SCREEN, 'configure');
+
 // ── Configurações (admin) ─────────────────────────────────────────────────────
-router.get('/settings', ctrl.getSettings);
-router.put('/settings', ctrl.updateSettings);
+// O gate era um if dentro do controller; agora está declarado na rota.
+router.get('/settings', configurar, ctrl.getSettings);
+router.put('/settings', configurar, ctrl.updateSettings);
 
 // ── Permissões do usuário atual (editar/autorizar) ────────────────────────────
 router.get('/permissions', ctrl.getMyPermissions);
 
 // ── Alçada: todas as rotas de DADOS abaixo exigem a tela de Fichas ────────────
-// (admin bypassa; /settings e /permissions acima ficam fora do gate — settings
-//  já é admin-only no controller e /permissions devolve só o próprio usuário)
-router.use(requireRoutePermission(['/comercial/conditions']));
+// (admin bypassa; /settings e /permissions acima ficam fora deste gate —
+//  settings já exige a ação `configure` e /permissions devolve só o próprio
+//  usuário)
+router.use(requireCapability(CONDITIONS_SCREEN, 'view'));
 
 // ── Listagem e criação ────────────────────────────────────────────────────────
 router.get('/', ctrl.listConditions);
-router.post('/', ctrl.createCondition);             // admin only (guard no controller)
+router.post('/', ctrl.createCondition);             // criação: regra de negócio do módulo (guard no controller)
 
 // ── Auxiliares (sem :id numérico — devem vir ANTES das rotas /:id) ────────────
 router.get('/correspondents', ctrl.listCorrespondents);
@@ -31,12 +39,12 @@ router.get('/office-users', ctrl.listOfficeUsers);
 router.get('/cost-report', ctrl.getCostReport);     // relatório consolidado Menin x cliente (gestão)
 
 // ── DocuSign: settings (admin) + assinatura por ficha ────────────────────────
-router.get('/docusign-settings', ds.getDocusignSettings);
-router.put('/docusign-settings', ds.updateDocusignSettings);
-router.get('/docusign/consent-url', ds.getDocusignConsentUrl);
-router.post('/docusign/test', ds.testDocusign);
-router.post('/docusign/oauth-url', ds.getDocusignOauthUrl);   // login "Conectar com DocuSign" (admin)
-router.post('/docusign/disconnect', ds.disconnectDocusign);   // limpa a sessão do login (admin)
+router.get('/docusign-settings', configurar, ds.getDocusignSettings);
+router.put('/docusign-settings', configurar, ds.updateDocusignSettings);
+router.get('/docusign/consent-url', configurar, ds.getDocusignConsentUrl);
+router.post('/docusign/test', configurar, ds.testDocusign);
+router.post('/docusign/oauth-url', configurar, ds.getDocusignOauthUrl);   // login "Conectar com DocuSign" (admin)
+router.post('/docusign/disconnect', configurar, ds.disconnectDocusign);   // limpa a sessão do login (admin)
 
 // ── Biblioteca de campanhas (modelos reutilizáveis) ──────────────────────────
 router.get('/campaign-templates', ctrl.listCampaignTemplates);

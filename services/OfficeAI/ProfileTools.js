@@ -16,7 +16,8 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
 import NotificationService from '../notification/NotificationService.js';
-import { listCatalog } from '../notification/notificationTypes.js';
+import { listCatalog, isTypeVisibleTo } from '../notification/notificationTypes.js';
+import { getEffectiveRoutes } from '../permissions/permissionAccessService.js';
 import { createShare, listIncoming, respond } from '../alerts/AlertShareService.js';
 
 const OFFICE_PROVIDERS = ['INTERNAL', 'MICROSOFT'];
@@ -24,24 +25,33 @@ const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toL
 
 // ─── Preferências de notificação ─────────────────────────────────────────────
 
-async function mergedPreferences(userId) {
+// Mesmo recorte da tela de preferências: a Eme não oferece ajustar aviso preso
+// a uma tela que o usuário não tem.
+async function mergedPreferences(user) {
+    const userId = user?.id ?? user;
+    const isAdmin = user?.role === 'admin';
     const stored = await NotificationService.getPreferences(userId);
     const storedMap = new Map(stored.map(s => [s.type, s]));
-    return listCatalog().map(meta => {
-        const saved = storedMap.get(meta.type);
-        return {
-            type: meta.type,
-            label: meta.label,
-            group: meta.group,
-            description: meta.description,
-            hasEmail: !!meta.emailType,
-            hasWhatsapp: !!meta.whatsapp,
-            userOptional: meta.userOptional !== false,
-            inapp: saved ? saved.inapp : meta.defaults.inapp,
-            email: saved ? saved.email : meta.defaults.email,
-            whatsapp: saved ? saved.whatsapp : !!meta.defaults.whatsapp,
-        };
-    });
+    const routes = new Set(
+        isAdmin ? [] : (await getEffectiveRoutes(userId)).map(r => String(r).toLowerCase())
+    );
+    return listCatalog()
+        .filter(meta => isTypeVisibleTo(meta.type, { isAdmin, routes }))
+        .map(meta => {
+            const saved = storedMap.get(meta.type);
+            return {
+                type: meta.type,
+                label: meta.label,
+                group: meta.group,
+                description: meta.description,
+                hasEmail: !!meta.emailType,
+                hasWhatsapp: !!meta.whatsapp,
+                userOptional: meta.userOptional !== false,
+                inapp: saved ? saved.inapp : meta.defaults.inapp,
+                email: saved ? saved.email : meta.defaults.email,
+                whatsapp: saved ? saved.whatsapp : !!meta.defaults.whatsapp,
+            };
+        });
 }
 
 function prefsPanel(prefs) {
@@ -68,7 +78,7 @@ registerTool({
     contexts: ['OFFICE'],
     async handler(user, args) {
         const acao = ['listar', 'ativar', 'desativar'].includes(args?.acao) ? args.acao : 'listar';
-        const prefs = await mergedPreferences(user.id);
+        const prefs = await mergedPreferences(user);
 
         if (acao === 'listar') {
             const grupos = [...new Set(prefs.map(p => p.group))];
@@ -115,7 +125,7 @@ registerTool({
             changed.push(`${p.label} → ${Object.entries(patch).map(([k, v]) => `${k}: ${v ? 'ligado' : 'desligado'}`).join(', ')}`);
         }
 
-        const updated = await mergedPreferences(user.id);
+        const updated = await mergedPreferences(user);
         return {
             result: {
                 ...prefsPanel(updated),

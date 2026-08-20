@@ -13,6 +13,17 @@ Spec completa: `_estudo/acessos/README.md` e `_estudo/acessos/MIGRACAO_ESCOPO.md
    `security/integrityCheck.js`.
 2. **Rota de tela admin → `requireAdmin`.** Rota de DADOS → `requireRoutePermission(['/rota-da-tela'])`
    (middleware que valida a alçada real no servidor; admin tem bypass).
+2b. **Tela DELEGADA com ação sensível dentro → CAPACIDADES.** Declare as ações
+   em `lib/screenCapabilities.js` (`'screen'` = tem a tela | `'admin'` = só
+   admin), use `requireCapability('/rota', 'acao')` na API e `useCan('/rota')`
+   na tela. NUNCA escreva `auth.hasRole('admin')` no componente: o front recebe
+   as capacidades prontas do `/permissions/me` e só consulta, então UI e API não
+   divergem. O validador cobra ação declarada sem enforcement.
+2c. **Como escolher no front** (varredura de 2026-08-20 deixou zero exceções):
+   tela delegável com ação de admin dentro → capacidade + `useCan`; tela 100%
+   admin (ou livre com um detalhe de admin) → `permissionStore.isAdmin`, que é a
+   fonte confirmada pelo servidor. NUNCA `authStore.user.role` e MUITO menos
+   `localStorage.getItem('role')` — dava para se promover a admin no navegador.
 3. **Escopo de dados SEMPRE via `services/permissions/accessScopeService.js`**
    (`getScope`/`visibleCvIds`/`visibleErpIds`/`visibleCities`/`isErpAllowed`).
    NUNCA filtrar por `user.city` na mão — o modo por cidade foi REMOVIDO

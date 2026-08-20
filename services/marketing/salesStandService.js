@@ -7,7 +7,7 @@
 // posterior é recorrente (manutenção — fase futura: % lançado como marketing).
 import db from '../../models/sequelize/index.js';
 import { siengeQuery } from '../../lib/siengeReadDb.js';
-import { listCostCenters } from './marketingApprovalService.js';
+import { listCostCenters } from './costCenterOptions.js';
 
 const plain = (r) => (r?.get ? r.get({ plain: true }) : r);
 const normIds = (arr) => (Array.isArray(arr) ? [...new Set(arr.map(Number).filter(Boolean))] : []);

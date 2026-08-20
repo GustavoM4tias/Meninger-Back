@@ -16,8 +16,6 @@ const CONTEXTS = {
     SUPPORT_ATTACHMENT: 'support_attachment',     // Anexos de tickets de suporte
     // ── Checklist ───────────────────────────────────────────────────────────────
     CHECKLIST_ATTACHMENT: 'checklist_attachment', // Anexos de tarefa do checklist
-    // ── Aprovações de Marketing ─────────────────────────────────────────────────
-    MARKETING_APPROVAL_ATTACHMENT: 'marketing_approval_attachment', // Anexos de solicitação
     // ── Plano de Eventos ────────────────────────────────────────────────────────
     EVENT_PLAN_QUOTE: 'event_plan_quote',         // Orçamento do item do evento proposto
     // ── To Do (Microsoft) ────────────────────────────────────────────────────────
@@ -148,26 +146,6 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
             return {
                 bucket: STORAGE_BUCKET,
                 path: `office/checklist/tasks/${referenceId}/${timestamp}-${originalName}`,
-                isPublic: true,
-            };
-
-        // ── Aprovações de Marketing: anexo de solicitação (orçamento, arte, proposta) ──
-        case CONTEXTS.MARKETING_APPROVAL_ATTACHMENT:
-            if (!userId) throw new Error('Usuário não autenticado');
-            if (![
-                'application/pdf',
-                'image/png', 'image/jpeg', 'image/webp', 'image/gif',
-                'application/msword',
-                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'application/vnd.ms-excel',
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            ].includes(file.mimetype)) {
-                throw new Error('Anexo de solicitação aceita PDF, imagem (PNG/JPG/WEBP/GIF) ou documento (DOC/DOCX/XLS/XLSX)');
-            }
-            return {
-                bucket: STORAGE_BUCKET,
-                // referenceId pode não existir na criação (form novo) → 'draft'
-                path: `office/marketing/approvals/${referenceId || 'draft'}/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 

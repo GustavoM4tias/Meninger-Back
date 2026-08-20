@@ -17,6 +17,9 @@ import dayjs from 'dayjs';
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
+import { allowedEnterpriseNames, applyEnterpriseScope } from '../boleto/boletoScope.js';
+
+const BOLETO_SCREEN = '/financeiro/boleto-caixa';
 import ExpenseService from '../expenseService.js';
 
 const expenseService = new ExpenseService();
@@ -253,7 +256,7 @@ function analisarMomentoPagamento(rows) {
 
 registerTool({
     name: 'query_boletos',
-    description: 'Consulta o histórico de BOLETOS CAIXA (ato) emitidos automaticamente a partir das reservas do CV — mesma fonte da tela /financeiro/boleto-caixa: quantos foram emitidos, com erro, pagos, aguardando pagamento ou cancelados; valores; boletos de uma reserva/titular/empreendimento. Use quando o usuário perguntar sobre boletos ("quantos boletos", "boletos pagos", "boleto da reserva X", "boletos com erro"). Com analise_momento_pagamento=true, devolve também QUANDO os clientes pagam em relação ao vencimento (antecipado, véspera, no dia, após), com distribuição por dia, por mês e por empreendimento — use pra perguntas de pontualidade ("quantos anteciparam", "pagam em dia?", "quantos dias antes"). Ferramenta restrita a administradores.',
+    description: 'Consulta o histórico de BOLETOS CAIXA (ato) emitidos automaticamente a partir das reservas do CV — mesma fonte da tela /financeiro/boleto-caixa: quantos foram emitidos, com erro, pagos, aguardando pagamento ou cancelados; valores; boletos de uma reserva/titular/empreendimento. Use quando o usuário perguntar sobre boletos ("quantos boletos", "boletos pagos", "boleto da reserva X", "boletos com erro"). Com analise_momento_pagamento=true, devolve também QUANDO os clientes pagam em relação ao vencimento (antecipado, véspera, no dia, após), com distribuição por dia, por mês e por empreendimento — use pra perguntas de pontualidade ("quantos anteciparam", "pagam em dia?", "quantos dias antes"). Só enxerga os empreendimentos liberados ao usuário.',
     parameters: {
         type: 'object',
         properties: {
@@ -266,7 +269,9 @@ registerTool({
             analise_momento_pagamento: { type: 'boolean', description: 'Se true, inclui a análise de QUANDO o cliente pagou em relação ao vencimento (antecipado/véspera/no dia/após), com médias, distribuição por dia, por mês e por empreendimento. Use pra perguntas de pontualidade e antecipação.' },
         },
     },
-    adminOnly: true,
+    // Mesma alçada e MESMO recorte da tela (2026-08-19): a tool nunca pode
+    // entregar por chat o que a tela não entrega.
+    requiredPermissions: [BOLETO_SCREEN],
     contexts: ['OFFICE'],
     async handler(user, args) {
         const { start, end } = resolvePeriod(args);
@@ -274,6 +279,7 @@ registerTool({
             created_at: { [Op.between]: [`${start} 00:00:00`, `${end} 23:59:59`] },
             ignorado: { [Op.or]: [false, null] },
         };
+        applyEnterpriseScope(where, await allowedEnterpriseNames(user), Op);
         if (['success', 'error', 'processing', 'skipped'].includes(args?.status)) where.status = args.status;
         if (['paid', 'pending', 'cancelled', 'error'].includes(args?.situacao_pagamento)) where.payment_status = args.situacao_pagamento;
         if (args?.empreendimento) where.empreendimento = { [Op.iLike]: `%${String(args.empreendimento).trim()}%` };

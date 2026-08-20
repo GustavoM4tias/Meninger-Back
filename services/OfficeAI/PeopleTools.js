@@ -94,7 +94,7 @@ registerTool({
             apenas: { type: 'string', enum: ['gestores', 'admins', 'todos'], description: '"gestores" = só quem lidera pessoas; "admins" = só administradores do sistema. Padrão: todos.' },
         },
     },
-    requiredPermissions: [],
+    requiredPermissions: ['/settings/organograma'],
     contexts: ['OFFICE'],
     async handler(user, args) {
         const { users } = await loadDirectory();

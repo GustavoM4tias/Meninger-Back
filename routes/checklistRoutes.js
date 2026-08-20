@@ -4,15 +4,18 @@ import express from 'express';
 import checklistController from '../controllers/checklist/checklistController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireInternal from '../middlewares/requireInternal.js';
-import requireAdmin from '../middlewares/requireAdmin.js';
-import requireRoutePermission from '../middlewares/requireRoutePermission.js';
+import requireCapability from '../middlewares/requireCapability.js';
 import uploadExcelSingle from '../middlewares/excelUploadMiddleware.js';
 
 const router = express.Router();
-// Alçada da tela de Checklists (admin bypassa no middleware); gates de
-// admin/ownership existentes continuam valendo por cima.
-const internal = [authenticate, requireInternal, requireRoutePermission(['/checklists'])];
-const admin = [authenticate, requireInternal, requireAdmin];
+// Ações da tela (regra em lib/screenCapabilities.js, a mesma que a tela lê):
+//   view   → alçada de /checklists: ler e participar (mexer na PRÓPRIA tarefa)
+//   manage → admin: montar o checklist, templates, status, cobrança, perfis
+// Os gates de propriedade do módulo (taskService.assertCanWriteTask) continuam
+// valendo por cima — capacidade não substitui regra de dono da tarefa.
+const CHECKLIST_SCREEN = '/checklists';
+const internal = [authenticate, requireInternal, requireCapability(CHECKLIST_SCREEN, 'view')];
+const admin = [authenticate, requireInternal, requireCapability(CHECKLIST_SCREEN, 'manage')];
 
 // ── Coleções específicas (antes de /:id) ──
 router.get('/dashboard', ...internal, checklistController.dashboard);

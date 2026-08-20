@@ -5,6 +5,7 @@ import { getContracts, listEnterprises, listCompanies,
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
 import requireRoutePermission from '../middlewares/requireRoutePermission.js';
+import requireCapability from '../middlewares/requireCapability.js';
 import bulkDataController from '../controllers/sienge/bulkDataController.js';
 import BillsController from '../controllers/sienge/billsController.js';
 import {
@@ -106,10 +107,15 @@ router.use('/launch-types', (req, res, next) => {
 router.use('/payment-flow', authenticate, requireRoutePermission(['/financeiro/paymentflow']));
 router.use('/launch-types', authenticate, requireRoutePermission(['/financeiro/paymentflow']));
 
+// Ação de configuração do Fluxo de Pagamento (lib/screenCapabilities.js).
+const configurarPaymentFlow = requireCapability('/financeiro/paymentflow', 'configure');
+
 // ── Tipos de Lançamento (dinâmicos, tabela launch_type_configs) ───────────────
+// Ler é de quem tem o Fluxo de Pagamento (gate do router.use acima); cadastrar
+// e editar é `configure` — era um if dentro do controller, agora está na rota.
 router.get('/launch-types', authenticate, listLaunchTypes);
-router.post('/launch-types', authenticate, createLaunchType);
-router.patch('/launch-types/:id', authenticate, updateLaunchType);
+router.post('/launch-types', authenticate, configurarPaymentFlow, createLaunchType);
+router.patch('/launch-types/:id', authenticate, configurarPaymentFlow, updateLaunchType);
 
 // ── Backup do banco Sienge (cron + log + pg_restore no Postgres Railway) ──────
 // Tela /settings/backup-sienge é admin-only; as rotas acompanham.
