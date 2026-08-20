@@ -295,9 +295,6 @@ async function handleIncomingMessage(m, fromPhone, profileName) {
     // 4) IA com debounce
     const cfg = await EmeAtendeSettingsService.getConfig();
     const debounce = flow?.settings?.debounce_seconds ?? cfg.debounce_seconds ?? 8;
-    // "digitando…" já: a resposta só sai depois do debounce, e o silêncio
-    // nesse intervalo é o que faz o lead perguntar "cadê?".
-    EmeAtendeMessenger.showTyping(conversation).catch(() => null);
     await scheduleAI(conversation, debounce);
 }
 
