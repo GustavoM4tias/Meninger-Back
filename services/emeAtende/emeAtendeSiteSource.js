@@ -254,10 +254,20 @@ export async function fetchSite(siteUrl = null, cfg = null) {
         });
     }
 
+    // O site publica o link como caminho relativo ("/empreendimentos/x"). Guardar
+    // assim é inútil pro atendimento: a Eme chegou a OFERECER o link e não teria
+    // o que mandar. Aqui vira endereço completo, pronto pra colar na conversa.
+    const absoluto = (caminho) => {
+        const c = String(caminho || '').trim();
+        if (!c) return null;
+        if (isUrl(c)) return c;
+        return `${base}${c.startsWith('/') ? '' : '/'}${c}`;
+    };
+
     const enterprises = (col.items || [])
         .map(i => normalizeEnterprise(i, src))
         .filter(e => e.slug && e.nome)
-        .map(e => ({ ...e, stand: stands.get(e.slug) || null }));
+        .map(e => ({ ...e, link: absoluto(e.link), stand: stands.get(e.slug) || null }));
 
     return {
         enterprises,
@@ -303,6 +313,7 @@ export function buildSiteContext(snap, cfg = null) {
                     snap.terreno ? `- Terreno: ${snap.terreno} m²` : null,
                     snap.obra ? `- Andamento da obra: ${snap.obra}%` : null,
                     snap.endereco ? `- Endereço: ${snap.endereco}` : null,
+                    snap.link ? `- Página no site (pode enviar ao lead): ${snap.link}` : null,
                 ].filter(Boolean);
                 out.push(linhas.join('\n'));
                 break;
