@@ -175,6 +175,18 @@ export const listPrecadastros = async (req, res) => {
               ELSE 'em_analise'
             END AS estado_geral,
             jsonb_array_length(COALESCE(p.leads_associados, '[]'::jsonb)) AS qtd_leads_associados,
+            -- Quantos dos leads associados foram CAPTADOS PELO OFFICE.
+            -- `leads_associados` traz qualquer lead do CV, inclusive o que o
+            -- corretor digitou lá dentro. A regra de lead do Office é outra: o
+            -- lead nasce em inbound_leads (Meta, formulário do site) e só ganha
+            -- `cv_idlead` quando o CV confirma a criação. É esse casamento que
+            -- diz "veio da nossa captação", e é ele que separa mídia paga de
+            -- cadastro manual no relatório de origem.
+            COALESCE((
+                SELECT COUNT(DISTINCT la4->>'idlead')
+                FROM jsonb_array_elements(COALESCE(p.leads_associados, '[]'::jsonb)) AS la4
+                JOIN inbound_leads il ON il.cv_idlead = NULLIF(la4->>'idlead','')
+            ), 0)::int AS qtd_leads_office,
             -- Array de origens dos leads associados (para classificar interno/externo no front)
             COALESCE((
                 SELECT ARRAY_AGG(DISTINCT l3.origem)
