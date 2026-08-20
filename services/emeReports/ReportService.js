@@ -432,17 +432,45 @@ export async function resolvePublicToken(token) {
   return report;
 }
 
-export async function logPublicAccess(report, req) {
+export async function logPublicAccess(report, req, { countView = true } = {}) {
   try {
     await db.EmeGeneratedReportPublicLog.create({
       reportId: report.id,
       ip: String(req.ip || '').slice(0, 64),
       userAgent: String(req.headers?.['user-agent'] || '').slice(0, 400),
     });
-    await report.increment('publicViews');
+    // Consulta/exportação feita DENTRO da página aberta não é visita nova: entra
+    // na trilha, mas não infla o contador de visualizações do painel.
+    if (countView) await report.increment('publicViews');
   } catch (err) {
     console.warn('[ReportService] logPublicAccess:', err?.message);
   }
+}
+
+// ── Ator das consultas do link público ───────────────────────────────────────
+//
+// O visitante é anônimo, mas o relatório interativo precisa de um usuário para
+// rodar as tools (a alçada mora no usuário). Quem responde é o DONO do
+// relatório: o link público devolve exatamente o recorte de dados que ele já
+// publicou no retrato congelado, nunca mais que isso.
+// Dono inativo/removido/pendente = sem ator, e o link serve só o snapshot.
+export async function publicActor(report) {
+  const owner = await db.User.findByPk(report.ownerId, {
+    attributes: ['id', 'role', 'position', 'city', 'auth_provider', 'status', 'username', 'email', 'approval_status'],
+  });
+  if (!owner) return null;
+  if (owner.status === false) return null;
+  if (owner.approval_status === 'incomplete' || owner.approval_status === 'pending') return null;
+  return {
+    id: owner.id,
+    role: owner.role,
+    position: owner.position,
+    city: owner.city || null,
+    auth_provider: owner.auth_provider,
+    name: owner.username,
+    username: owner.username,
+    email: owner.email,
+  };
 }
 
 // ── Scan de PII (gate da publicação pública) ─────────────────────────────────
@@ -489,8 +517,9 @@ export function publicExposureSummary(report) {
     blockCount: blocks.length,
     sections: blocks.filter((b) => b.type === 'section-header').map((b) => b.props?.title).filter(Boolean),
     dataSources: [...new Set([...toolNames, ...datasets.map((d) => d.label || d.tool)])],
-    // Relatório interativo: o link público serve o retrato congelado da
-    // publicação — visitante não filtra nem dispara consulta.
-    interactive: (report.spec?.filters || []).length > 0,
+    // Relatório interativo: no link público o visitante FILTRA, abre a lista de
+    // registros por trás de um número e exporta em Excel - tudo com as alçadas
+    // do dono do relatório. O modal precisa avisar isso antes de gerar o link.
+    interactive: (report.spec?.datasets || []).length > 0,
   };
 }

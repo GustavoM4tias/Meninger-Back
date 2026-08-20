@@ -314,8 +314,9 @@ router.post('/:id/data/drill', rateLimitData, async (req, res) => {
   }
 });
 
-// Dados em linhas para exportação (Excel no front). Só leitor autenticado com
-// acesso ao relatório; o link público continua servindo apenas o snapshot.
+// Dados em linhas para exportação (Excel no front), com as alçadas de quem
+// exporta. O link público tem a rota espelho em emeReportsPublicRoutes, que
+// roda com as alçadas do dono do relatório.
 router.post('/:id/data/export', rateLimitData, async (req, res) => {
   try {
     const loaded = await loadViewableSpec(req, res);
