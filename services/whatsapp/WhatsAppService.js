@@ -264,6 +264,37 @@ async function sendTemplate({ to, templateName, language = 'pt_BR', variables = 
  * Envia texto livre — só funciona dentro da janela de 24h após uma msg do user.
  * Útil para o futuro fluxo de atendimento.
  */
+/**
+ * "digitando…" no aparelho do cliente.
+ *
+ * A Cloud API não tem endpoint próprio: o indicador vai junto do "marcar como
+ * lida", e por isso EXIGE o wamid de uma mensagem que a pessoa mandou. Sem
+ * mensagem dela não há como exibir - é a forma da Meta impedir que uma empresa
+ * finja estar digitando pra quem nunca falou com ela.
+ *
+ * Some sozinho em ~25s ou assim que a mensagem sai, o que vier primeiro. Efeito
+ * colateral esperado: a mensagem do cliente fica marcada como lida.
+ */
+async function sendTypingIndicator({ messageId }) {
+    if (!messageId) throw new CloudApiError('messageId obrigatório', { code: 'NO_MESSAGE_ID' });
+    const { client, cfg } = await getAxiosClient();
+    try {
+        const { data } = await client.post(`/${cfg.phone_number_id}/messages`, {
+            messaging_product: 'whatsapp',
+            status: 'read',
+            message_id: messageId,
+            typing_indicator: { type: 'text' },
+        });
+        return { ok: true, raw: data };
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            apiErr?.message || err.message || 'Falha no indicador de digitação',
+            { status: err.response?.status, code: apiErr?.code, details: err.response?.data }
+        );
+    }
+}
+
 async function sendText({ to, body, previewUrl = false }) {
     const phone = normalizePhone(to);
     if (!phone) throw new CloudApiError('Telefone inválido', { code: 'BAD_PHONE' });
@@ -694,6 +725,7 @@ async function subscribeWaba() {
 export default {
     sendTemplate,
     sendText,
+    sendTypingIndicator,
     sendImage,
     sendDocument,
     fetchTemplates,
