@@ -15,6 +15,12 @@ export default (sequelize, DataTypes) => {
         last_outbound_at: { type: DataTypes.DATE, allowNull: true },
         ai_messages_count: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
 
+        // Última mensagem DO LEAD que já entrou numa rodada de IA. O corte do
+        // "o que ainda não respondi" é por aqui, não pela última linha da
+        // conversa: mensagem que chega ENQUANTO a rodada anterior roda ficava
+        // órfã (a última linha virava a resposta do bot) e era descartada.
+        last_answered_message_id: { type: DataTypes.INTEGER, allowNull: true },
+
         // ── Debounce persistente ─────────────────────────────────────────────
         // ai_due_at = quando a rodada de IA deve rodar (gravado no inbound).
         // O timer em memória é só o caminho rápido; quem garante o disparo é o

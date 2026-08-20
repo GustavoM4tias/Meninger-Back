@@ -353,7 +353,18 @@ function mediaResumo(row) {
         : `(enviei ao lead a imagem${rotulo ? `: ${rotulo}` : ''})`;
 }
 
-async function buildHistory(conversationId) {
+/**
+ * Histórico + o que o lead disse e ainda NÃO foi respondido.
+ *
+ * O corte é por `last_answered_message_id`, não pela última linha da conversa.
+ * Motivo (bug real, conv 9): o lead escreveu ENQUANTO a rodada anterior ainda
+ * rodava; quando a rodada dele disparou, a resposta anterior já estava gravada,
+ * a última linha era do bot, e a regra antiga ("só responde se a última for do
+ * lead") descartava a pergunta EM SILÊNCIO. Ele teve que repetir pra ser ouvido.
+ *
+ * @returns {{ turns: Array, pendentes: Array }} pendentes vazio = nada novo.
+ */
+async function buildHistory(conversationId, ultimaRespondida = 0) {
     // DESC + reverse: as 40 mensagens mais RECENTES em ordem cronológica
     // (ASC + limit pegava as 40 mais antigas em conversas longas).
     const rows = (await db.EmeAtendeMessage.findAll({
@@ -364,9 +375,14 @@ async function buildHistory(conversationId) {
         order: [['id', 'DESC']],
         limit: 40,
     })).reverse();
+
+    const pendentes = rows.filter(r => r.direction === 'in' && r.id > (ultimaRespondida || 0));
+    const idsPendentes = new Set(pendentes.map(r => r.id));
+
     // Gemini exige história alternada começando em 'user'. Junta blocos consecutivos.
     const turns = [];
     for (const r of rows) {
+        if (idsPendentes.has(r.id)) continue;   // essas viram a mensagem da vez
         const role = r.direction === 'in' ? 'user' : 'model';
         // Mídia é persistida como "[imagem: X] https://…" - formato NOSSO, de log.
         // Devolver isso ao modelo como fala dele ensinava o padrão errado: ele
@@ -379,7 +395,7 @@ async function buildHistory(conversationId) {
         else turns.push({ role, parts: [{ text }] });
     }
     while (turns.length && turns[0].role !== 'user') turns.shift();
-    return turns;
+    return { turns, pendentes };
 }
 
 /**
@@ -461,9 +477,15 @@ async function fireAI(conversationId) {
         return;
     }
 
-    const history = await buildHistory(conversation.id);
-    if (!history.length || history[history.length - 1].role !== 'user') return; // nada novo a responder
-    const userMessage = history.pop().parts[0].text;
+    const { turns: history, pendentes } = await buildHistory(
+        conversation.id, conversation.last_answered_message_id);
+    if (!pendentes.length) return;   // nada novo a responder
+    // Mensagens picadas ("a casa vem assim?" + "e com móveis?") viram um turno só.
+    const userMessage = pendentes.map(r => r.body).filter(Boolean).join('\n');
+    if (!userMessage.trim()) return;
+    // Marca ANTES da rodada: se a IA falhar no meio, a pergunta não fica presa
+    // gerando resposta repetida no próximo tick do sweeper.
+    await conversation.update({ last_answered_message_id: pendentes[pendentes.length - 1].id });
 
     const actions = { qualified: null, close: null };
     const images = validImages(flow);
@@ -546,4 +568,6 @@ export default {
     handleWebhookPayload, fireAI, sweepDueRounds,
     buildSystemPrompt, buildPromptParts, validImages,
     FUNCTION_DECLARATIONS, IMAGE_TOOL, DOC_TOOL, flowBook,
+    // exposto só para teste do corte de mensagens pendentes
+    __buildHistory: buildHistory,
 };
