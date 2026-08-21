@@ -15,8 +15,10 @@ async function claimDepartment(departmentId, profileId) {
 
 export async function getProfiles(req, res) {
   try {
+    // Inclui os INATIVOS. Esconder perfil inativo da tela que administra perfil
+    // é esconder justamente o que precisa de atenção: ele continua vinculado a
+    // gente e não concede nada. O `active` vai no payload e a tela rotula.
     const profiles = await db.PermissionProfile.findAll({
-      where: { active: true },
       order: [['name', 'ASC']],
     });
     return res.json(profiles);
