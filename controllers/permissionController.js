@@ -51,11 +51,19 @@ export async function getMyPermissions(req, res) {
 }
 
 // ─── GET /api/permissions ────────────────────────────────────────────────────
-// Lista usuários ativos com perfil, exceções e rotas efetivas. (admin only)
+// Lista TODOS os usuários com perfil, exceções e rotas efetivas. (admin only)
+//
+// Este endpoint tinha DOIS filtros que escondiam gente da tela que administra
+// gente, e escondia calado - a tela não tinha como saber que existia mais:
+//   1. `auth_provider IN (INTERNAL, MICROSOFT)` tirava todo usuário EXTERNO
+//   2. `status: true` tirava todo usuário INATIVO
+// Os dois viraram FILTRO na tela. Quem administra alçada precisa enxergar o
+// desativado (para conferir o que ele ainda carrega) e o externo (que vai
+// começar a acessar); o que muda é o corte padrão, não o que existe.
 export async function getAllPermissions(req, res) {
     try {
         const users = await db.User.findAll({
-            where: { status: true },
+            where: {},
             attributes: [
                 'id', 'username', 'email', 'role', 'status', 'permission_profile_id',
                 'auth_provider', 'external_kind', 'external_organization_id',
@@ -94,6 +102,9 @@ export async function getAllPermissions(req, res) {
             // `tipo` resolvido aqui para a tela não repetir a regra: é o mesmo
             // corte que separa quem é da casa de quem vem do CV.
             plain.tipo = EQUIPE_PROVIDERS.includes(plain.auth_provider) ? 'equipe' : 'externo';
+            // `status` é o eixo ativo/inativo (users.status, booleano). Vai junto
+            // para a tela filtrar sem precisar de outra chamada.
+            plain.ativo = plain.status !== false;
             return plain;
         });
         return res.json(out);
