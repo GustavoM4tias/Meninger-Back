@@ -483,8 +483,6 @@ Pode ser acessado pelo navegador ou pelo **aplicativo CVCRM: Corretor** (Android
 2. **Instale o app** e ative as **notificações push** - é assim que você fica sabendo na hora de movimentações nos seus atendimentos (lead respondido, reserva aprovada, documentação pendente).
 3. **Conheça a página inicial** - ela resume seus leads recentes, suas reservas em andamento e os avisos da incorporadora.
 
-> 📸 **Espaço para print/GIF** - capture a página inicial do Painel do Corretor na nossa instância e cole aqui (edite o artigo e insira a imagem em markdown).
-
 ## O caminho da venda no CV
 
 O fluxo padrão que você vai percorrer:
@@ -920,8 +918,6 @@ Se o Painel do Corretor é "onde se vende", o do Gestor é "onde a venda é admi
 
 Cada área tem um guia próprio nesta categoria.
 
-> 📸 **Espaço para print/GIF** - capture o menu principal do Painel do Gestor da nossa instância.
-
 ## Boas práticas Menin
 
 - Antes de mexer em **Configurações**, fale com a equipe comercial interna - mudanças de workflow afetam todos os empreendimentos.
@@ -970,8 +966,6 @@ O **Portal do Cliente** é a área que o **comprador** acessa depois da venda: o
 - **Documentos** - contrato e documentos da compra disponíveis para download.
 - **Andamento da obra** - evolução por etapa, com fotos/percentuais quando publicados.
 - **Atendimentos** - abertura e acompanhamento de solicitações (inclusive assistência técnica), que caem no módulo de Relacionamento do gestor.
-
-> 📸 **Espaço para print/GIF** - capture a home do Portal do Cliente da nossa instância (com dados de um cliente de teste).
 
 ## Boas práticas Menin
 
@@ -1857,8 +1851,6 @@ Aplica-se a todos os contratos **MCMV** em que o cliente se encontra na etapa de
 - Anexar o termo de confissão de dívida nos documentos da reserva, com o tipo definido como **"Confissão de Dívida"**.
 - Os documentos para validação devem sempre estar com o campo **"Pessoa"** definido como **"Titular"**.
 
-> 📸 **Espaço para print** - exemplo de como os documentos devem ficar anexados (insira a imagem ao editar o artigo).
-
 ### 3.2 Envio para análise automatizada
 
 - Após anexar ambos os documentos, alterar o Repasse para a etapa **"Análise Contratos"**.
@@ -1917,8 +1909,6 @@ Este procedimento aplica-se a **todos os contratos que assinaram o contrato de "
   - **Número de telefone** fora do padrão utilizado.
 - Para diferenciar um erro de uma reserva funcional, acesse a **Listagem** no campo de **Reservas** no CV CRM. Somente as reservas na etapa **"Envio Sienge"** podem apresentar esse erro, caracterizado pelo **triângulo com a exclamação**.
 - Ao abrir a reserva, o erro é informado logo na página inicial.
-
-> 📸 **Espaço para print** - capture a listagem de reservas destacando o ícone de erro e a tela da reserva com a mensagem (insira a imagem ao editar o artigo).
 
 ## 2. Responsabilidades
 
@@ -2107,8 +2097,6 @@ Após o lançamento do financeiro da unidade (valores de venda, recursos própri
 ## 4. Registro no sistema
 
 - Todos os lançamentos devem ser feitos diretamente no **módulo de Financeiro** do CV CRM.
-
-> 📸 **Espaço para print** - exemplo de como a série "Documentação" deve ser criada e vinculada (insira a imagem ao editar o artigo).
 
 ## 5. Responsabilidades
 
