@@ -79,6 +79,13 @@ export default (sequelize, DataTypes) => {
             comment: 'Dias úteis após vencimento (já considerando fim de semana/feriado) para baixar o boleto. 1 = boleto pago compensa em D+1 útil.',
         },
 
+        revalidacao_baixado_dias: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 5,
+            comment: 'Por quantos dias após a baixa o boleto continua sendo reconsultado no Ecobrança. O banco já devolveu "BAIXADO POR DEVOLUÇÃO" em título que dias depois constava LIQUIDADO no extrato; nessa janela a consulta é só leitura e o único desfecho é promover para pago. 0 desliga.',
+        },
+
         delay_situacao_sucesso_min: {
             type: DataTypes.INTEGER,
             allowNull: true,
