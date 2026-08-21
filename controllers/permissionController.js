@@ -264,8 +264,58 @@ export async function setGrants(req, res) {
     }
 }
 
+// `enterprises.city` é texto livre vindo do CV e do Sienge, então a mesma cidade
+// chega escrita de mais de um jeito ("Marilia" e "Marília", "Sao Paulo" e "São
+// Paulo"). Na tela isso virava DUAS entradas de cidade, cada uma com parte dos
+// empreendimentos - quem liberasse por uma delas deixava a outra metade de fora.
+//
+// A chave normalizada agrupa; o rótulo bonito vem do catálogo de municípios
+// (user_cities, semeado do IBGE) quando a cidade existe lá. Nada é reescrito no
+// banco: isto é leitura, e a limpeza do cadastro é decisão de quem administra.
+const chaveCidade = (c) => String(c || '').trim().toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+async function rotulosDeCidade(cidadesCruas) {
+    const chaves = [...new Set(cidadesCruas.map(chaveCidade).filter(Boolean))];
+    if (!chaves.length) return new Map();
+
+    // Uma consulta só: o catálogo tem 5.297 municípios e a lista de cidades em
+    // uso tem dezenas - cruzar linha a linha seria varredura à toa.
+    const rows = await db.sequelize.query(
+        `SELECT name, uf, unaccent(upper(TRIM(name))) AS chave
+           FROM user_cities
+          WHERE active = true AND unaccent(upper(TRIM(name))) IN (:chaves)`,
+        { replacements: { chaves }, type: db.Sequelize.QueryTypes.SELECT },
+    );
+
+    const oficial = new Map();
+    for (const r of rows) if (!oficial.has(r.chave)) oficial.set(r.chave, r.name);
+
+    // Sem município correspondente (distrito, ou erro de digitação no cadastro),
+    // vence a grafia mais repetida entre as que chegaram.
+    const frequencia = new Map();
+    for (const c of cidadesCruas) {
+        const k = chaveCidade(c);
+        if (!k) continue;
+        const porGrafia = frequencia.get(k) || new Map();
+        const g = String(c).trim();
+        porGrafia.set(g, (porGrafia.get(g) || 0) + 1);
+        frequencia.set(k, porGrafia);
+    }
+
+    const out = new Map();
+    for (const k of chaves) {
+        if (oficial.has(k)) { out.set(k, oficial.get(k)); continue; }
+        const porGrafia = frequencia.get(k) || new Map();
+        const melhor = [...porGrafia.entries()].sort((a, b) => b[1] - a[1])[0];
+        out.set(k, melhor ? melhor[0] : k);
+    }
+    return out;
+}
+
 // GET /api/permissions/enterprise-options — árvore Empresa → Empreendimentos
-// para a tela de Alçadas (admin only). Inclui cidade para o atalho "cidade inteira".
+// para a tela de Alçadas (admin only). Devolve a cidade normalizada (chave +
+// rótulo) para a tela agrupar sem depender da grafia.
 export async function getEnterpriseOptions(req, res) {
     try {
         const rows = await db.OrgEnterprise.findAll({
@@ -274,15 +324,24 @@ export async function getEnterpriseOptions(req, res) {
             include: [{ model: db.OrgCompany, as: 'company', attributes: ['id', 'name'] }],
             order: [['name', 'ASC']],
         });
-        return res.json(rows.map(r => ({
-            id: r.id,
-            name: r.name,
-            city: r.city,
-            uf: r.uf,
-            pairStatus: r.pair_status,
-            companyId: r.company_id,
-            companyName: r.company?.name || null,
-        })));
+
+        const rotulos = await rotulosDeCidade(rows.map(r => r.city));
+
+        return res.json(rows.map(r => {
+            const chave = chaveCidade(r.city);
+            return {
+                id: r.id,
+                name: r.name,
+                city: r.city,
+                // cityKey agrupa; cityLabel é o que se mostra
+                cityKey: chave || null,
+                cityLabel: chave ? (rotulos.get(chave) || String(r.city).trim()) : null,
+                uf: r.uf,
+                pairStatus: r.pair_status,
+                companyId: r.company_id,
+                companyName: r.company?.name || null,
+            };
+        }));
     } catch (err) {
         console.error('[Permissions] getEnterpriseOptions error:', err);
         return res.status(500).json({ message: err.message });
