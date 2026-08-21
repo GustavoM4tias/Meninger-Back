@@ -301,6 +301,21 @@ export async function listHistory(req, res) {
             const attemptsByReserva = new Map(grouped.map(g => [Number(g.idreserva), Number(g.attempts)]));
             const reservaIds = grouped.map(g => Number(g.idreserva));
 
+            // Reservas que já têm boleto emitido. A tentativa ATUAL de algumas
+            // delas é um erro (o CV redisparou o webhook depois da emissão e a
+            // retentativa falhou), mas isso não é problema pendente: o boleto
+            // existe, muitas vezes já pago. O `has_boleto` deixa a tela separar
+            // "erro que precisa de conserto" de "erro que já foi resolvido".
+            const comBoleto = reservaIds.length
+                ? await db.BoletoHistory.findAll({
+                    where: { idreserva: { [Op.in]: reservaIds }, status: 'success' },
+                    attributes: ['idreserva'],
+                    group: ['idreserva'],
+                    raw: true,
+                })
+                : [];
+            const reservasComBoleto = new Set(comBoleto.map(c => Number(c.idreserva)));
+
             // Tentativa atual = MAX(id) por reserva SEM filtro de data/status,
             // pra refletir o estado de agora mesmo que a última tentativa tenha
             // ficado fora do range de datas do escopo.
@@ -333,6 +348,7 @@ export async function listHistory(req, res) {
                 .map(r => {
                     const j = r.toJSON();
                     j.attempts_count = attemptsByReserva.get(Number(r.idreserva)) || 1;
+                    j.has_boleto = reservasComBoleto.has(Number(r.idreserva));
                     return j;
                 });
             sortRows(filtered);
@@ -416,26 +432,27 @@ export async function getHistoryStats(req, res) {
         // liberados nas Alçadas (sem grant = nenhuma linha).
         applyEnterpriseScope(where, await allowedEnterpriseNames(req.user), Op);
 
-        // 1 query: agrupa por status de emissão + pagamento e soma valor.
-        // Sequelize aggregations: fazemos via raw findAll com group.
-        const rows = await db.BoletoHistory.findAll({
-            where,
-            attributes: [
-                'status',
-                'payment_status',
-                [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'qty'],
-                [db.sequelize.fn('COALESCE', db.sequelize.fn('SUM', db.sequelize.col('valor')), 0), 'sum_valor'],
-            ],
-            group: ['status', 'payment_status'],
-            raw: true,
-        });
-
-        // Normaliza buckets — facilita o frontend não precisar buscar.
+        // TODO bucket conta RESERVA, nunca tentativa.
+        //
+        // Antes os buckets de emissão somavam todas as linhas de `boleto_history`.
+        // Como cada retentativa vira uma linha, "Com erro" mostrava 330 para 26
+        // reservas realmente sem boleto, e o valor batia em R$ 11,6 mi — dos
+        // quais R$ 11,09 mi eram UMA série absurda vinda do CV (reserva 7710),
+        // recusada pelo teto e recontada a cada nova tentativa. Número que não
+        // servia pra decidir nada.
+        //
+        // Agora vale a situação ATUAL de cada reserva:
+        //   - reserva com algum boleto emitido → conta em `emitidos`, e a via
+        //     final (o success mais recente) decide pago/pendente/baixado;
+        //   - reserva sem nenhum boleto emitido → conta UMA vez, no status da
+        //     última tentativa (error / skipped / processing / queued).
+        // Tentativa que falhou e depois virou boleto não aparece mais como erro:
+        // o erro já foi resolvido.
         const stats = {
-            total: { qty: 0, valor: 0 },
+            total: { qty: 0, valor: 0 },        // reservas distintas no recorte
             emitidos: { qty: 0, valor: 0 },     // via FINAL (success mais recente) por reserva
             processing: { qty: 0, valor: 0 },
-            errors: { qty: 0, valor: 0 },       // status='error' (todas as tentativas)
+            errors: { qty: 0, valor: 0 },       // reservas que HOJE estão sem boleto por erro
             skipped: { qty: 0, valor: 0 },      // status='skipped' (sem série de Ato)
             queued: { qty: 0, valor: 0 },       // status='queued' (fora da janela, aguardando abertura)
             paid: { qty: 0, valor: 0 },         // via final + paid
@@ -443,27 +460,6 @@ export async function getHistoryStats(req, res) {
             cancelled: { qty: 0, valor: 0 },    // via final + cancelled (baixado sem reemissão)
             checkErrors: { qty: 0, valor: 0 },  // via final + payment_status=error
         };
-
-        for (const r of rows) {
-            const qty = Number(r.qty) || 0;
-            const valor = Number(r.sum_valor) || 0;
-            stats.total.qty += qty;
-            stats.total.valor += valor;
-
-            if (r.status === 'error') {
-                stats.errors.qty += qty;
-                stats.errors.valor += valor;
-            } else if (r.status === 'skipped') {
-                stats.skipped.qty += qty;
-                stats.skipped.valor += valor;
-            } else if (r.status === 'processing') {
-                stats.processing.qty += qty;
-                stats.processing.valor += valor;
-            } else if (r.status === 'queued') {
-                stats.queued.qty += qty;
-                stats.queued.valor += valor;
-            }
-        }
 
         // Buckets de pagamento consideram só a VIA FINAL de cada reserva (o
         // success mais recente dentro do filtro): boleto baixado e substituído
@@ -474,6 +470,7 @@ export async function getHistoryStats(req, res) {
             ? String(status).split(',').map(s => s.trim()).filter(Boolean)
             : null;
         const includeSuccess = !statusArr || statusArr.includes('success');
+        const reservasComBoleto = new Set();
         if (includeSuccess) {
             const successWhere = { ...where, status: 'success' };
             const grouped = await db.BoletoHistory.findAll({
@@ -485,6 +482,7 @@ export async function getHistoryStats(req, res) {
                 group: ['idreserva'],
                 raw: true,
             });
+            grouped.forEach(g => reservasComBoleto.add(Number(g.idreserva)));
             const finalIds = grouped.map(g => Number(g.max_id));
             const finais = finalIds.length
                 ? await db.BoletoHistory.findAll({
@@ -513,6 +511,42 @@ export async function getHistoryStats(req, res) {
                 }
             }
         }
+
+        // Reservas que NÃO chegaram a ter boleto: uma linha por reserva, a
+        // última tentativa. Como essas reservas não têm nenhum success dentro
+        // do recorte, o MAX(id) geral já é o MAX(id) entre as não-success.
+        const ultimos = await db.BoletoHistory.findAll({
+            where,
+            attributes: [
+                'idreserva',
+                [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
+            ],
+            group: ['idreserva'],
+            raw: true,
+        });
+        const idsSemBoleto = ultimos
+            .filter(u => !reservasComBoleto.has(Number(u.idreserva)))
+            .map(u => Number(u.max_id));
+        const semBoleto = idsSemBoleto.length
+            ? await db.BoletoHistory.findAll({
+                where: { id: { [Op.in]: idsSemBoleto } },
+                attributes: ['status', 'valor'],
+                raw: true,
+            })
+            : [];
+        for (const r of semBoleto) {
+            const valor = Number(r.valor) || 0;
+            const bucket = { error: 'errors', skipped: 'skipped', processing: 'processing', queued: 'queued' }[r.status];
+            if (!bucket) continue;
+            stats[bucket].qty += 1;
+            stats[bucket].valor += valor;
+        }
+
+        // `total` é reserva, não linha: é o denominador honesto pra taxa de erro.
+        stats.total.qty = stats.emitidos.qty + stats.errors.qty + stats.skipped.qty
+            + stats.processing.qty + stats.queued.qty;
+        stats.total.valor = stats.emitidos.valor + stats.errors.valor + stats.skipped.valor
+            + stats.processing.valor + stats.queued.valor;
 
         // % do total de emitidos
         const pct = (n, d) => d > 0 ? Number(((n / d) * 100).toFixed(1)) : 0;
