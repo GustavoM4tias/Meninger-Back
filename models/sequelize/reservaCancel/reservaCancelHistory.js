@@ -8,6 +8,8 @@
 //   processing = em andamento
 //   success    = fluxo concluído (contrato excluído e/ou unidade disponibilizada)
 //   blocked    = validação barrou — NADA foi alterado; pendência p/ tratamento manual
+//   held       = freio de rajada — cancelamento em massa detectado; NADA foi
+//                alterado e NENHUM caso da rajada roda, até conferência humana
 //   skipped    = fluxo não se aplica (reserva não cancelada, automação desativada)
 //   ignored    = webhook duplicado — já havia processamento/sucesso p/ a reserva
 //   error      = falha técnica (API fora, delete não confirmado, etc.)
@@ -60,7 +62,7 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.STRING(20),
             allowNull: false,
             defaultValue: 'processing',
-            comment: 'processing | success | blocked | skipped | ignored | error',
+            comment: 'processing | success | blocked | held | skipped | ignored | error',
         },
         motivo: {
             type: DataTypes.TEXT,
