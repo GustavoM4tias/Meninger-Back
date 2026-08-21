@@ -835,7 +835,7 @@ async function executePrecadSummary(whereSql, replacements, context, start, end)
   return {
     type:    'precadastros_summary',
     source:  'precadastros',
-    title:   `Pré-cadastros — ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')}`,
+    title:   `Pré-cadastros - ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')}`,
     total,
     em_analise:           Number(row?.em_analise || 0),
     documentacao:         Number(row?.documentacao || 0),
