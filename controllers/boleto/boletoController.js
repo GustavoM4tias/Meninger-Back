@@ -14,6 +14,7 @@ import apiCv from '../../lib/apiCv.js';
 // módulo Cancelamento de Reservas (lib/cvEtapaLookup.js).
 import {
     fetchCvEtapaByReserva,
+    fetchReservasMortas,
     resolveCvEtapaFilter,
     applyCvIdsToWhere,
     fetchCvEtapaFacets,
@@ -93,7 +94,7 @@ export async function updateSettings(req, res) {
             'idserie_ra', 'cv_idtipo_documento',
             'situacao_sucesso_id', 'situacao_erro_id',
             'situacao_pago_id', 'situacao_baixado_id', 'tolerancia_dias_uteis',
-            'revalidacao_baixado_dias',
+            'revalidacao_baixado_dias', 'cv_situacoes_reserva_morta',
             'delay_situacao_sucesso_min', 'max_dias_vencimento', 'valor_maximo',
             'janela_ativa', 'janela_inicio_hora', 'janela_fim_hora',
             'active',
@@ -316,6 +317,14 @@ export async function listHistory(req, res) {
                 : [];
             const reservasComBoleto = new Set(comBoleto.map(c => Number(c.idreserva)));
 
+            // Reserva cancelada/vencida no CV: o boleto que ficou pelo caminho
+            // não tem conserto (o cliente desistiu), então não entra na fila de
+            // erro da tela. A flag deixa o recorte do cartão bater com a tabela.
+            const settingsMortas = await db.BoletoSettings.findByPk(1);
+            const reservasMortas = await fetchReservasMortas(
+                reservaIds, settingsMortas?.cv_situacoes_reserva_morta || [],
+            );
+
             // Tentativa atual = MAX(id) por reserva SEM filtro de data/status,
             // pra refletir o estado de agora mesmo que a última tentativa tenha
             // ficado fora do range de datas do escopo.
@@ -349,6 +358,7 @@ export async function listHistory(req, res) {
                     const j = r.toJSON();
                     j.attempts_count = attemptsByReserva.get(Number(r.idreserva)) || 1;
                     j.has_boleto = reservasComBoleto.has(Number(r.idreserva));
+                    j.reserva_morta = reservasMortas.has(Number(r.idreserva));
                     return j;
                 });
             sortRows(filtered);
@@ -453,6 +463,7 @@ export async function getHistoryStats(req, res) {
             emitidos: { qty: 0, valor: 0 },     // via FINAL (success mais recente) por reserva
             processing: { qty: 0, valor: 0 },
             errors: { qty: 0, valor: 0 },       // reservas que HOJE estão sem boleto por erro
+            dead: { qty: 0, valor: 0 },         // reserva morta no CV (cancelada/vencida) sem boleto
             skipped: { qty: 0, valor: 0 },      // status='skipped' (sem série de Ato)
             queued: { qty: 0, valor: 0 },       // status='queued' (fora da janela, aguardando abertura)
             paid: { qty: 0, valor: 0 },         // via final + paid
@@ -562,24 +573,42 @@ export async function getHistoryStats(req, res) {
         const atuais = idsAtuais.length
             ? await db.BoletoHistory.findAll({
                 where: { id: { [Op.in]: idsAtuais } },
-                attributes: ['status', 'valor'],
+                attributes: ['idreserva', 'status', 'valor'],
                 raw: true,
             })
             : [];
+
+        // Reserva cancelada/vencida no CV não é erro a resolver: o boleto ficou
+        // pelo caminho porque o cliente desistiu, e nenhuma retentativa muda
+        // isso. Sai do bucket de erro e passa a contar em `dead`, senão a fila
+        // de trabalho da tela mistura problema real com reserva morta há
+        // semanas. Quais situações contam vem das configurações do módulo.
+        const settingsMortas = await db.BoletoSettings.findByPk(1);
+        const reservasMortas = await fetchReservasMortas(
+            atuais.map(r => Number(r.idreserva)),
+            settingsMortas?.cv_situacoes_reserva_morta || [],
+        );
+
         for (const r of atuais) {
             // Agora sim o filtro de status entra: sobre a situação atual.
             if (statusArr && !statusArr.includes(r.status)) continue;
+            const valor = Number(r.valor) || 0;
+            if (r.status === 'error' && reservasMortas.has(Number(r.idreserva))) {
+                stats.dead.qty += 1;
+                stats.dead.valor += valor;
+                continue;
+            }
             const bucket = { error: 'errors', skipped: 'skipped', processing: 'processing', queued: 'queued' }[r.status];
             if (!bucket) continue;
             stats[bucket].qty += 1;
-            stats[bucket].valor += Number(r.valor) || 0;
+            stats[bucket].valor += valor;
         }
 
         // `total` é reserva, não linha: é o denominador honesto pra taxa de erro.
-        stats.total.qty = stats.emitidos.qty + stats.errors.qty + stats.skipped.qty
+        stats.total.qty = stats.emitidos.qty + stats.errors.qty + stats.dead.qty + stats.skipped.qty
             + stats.processing.qty + stats.queued.qty;
-        stats.total.valor = stats.emitidos.valor + stats.errors.valor + stats.skipped.valor
-            + stats.processing.valor + stats.queued.valor;
+        stats.total.valor = stats.emitidos.valor + stats.errors.valor + stats.dead.valor
+            + stats.skipped.valor + stats.processing.valor + stats.queued.valor;
 
         // % do total de emitidos
         const pct = (n, d) => d > 0 ? Number(((n / d) * 100).toFixed(1)) : 0;

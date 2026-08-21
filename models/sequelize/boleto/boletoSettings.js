@@ -42,6 +42,35 @@ export default (sequelize, DataTypes) => {
             },
         },
 
+        // ── Reserva morta: cancelada, distratada, vencida ─────────────────────
+        // IDs de situação do CV que significam "essa reserva não vai andar".
+        // Boleto que ficou pelo caminho nessas reservas não é trabalho pendente:
+        // o cartão "Com erro" contava reserva cancelada há semanas junto com
+        // erro de verdade, e não havia como resolver aquela linha - o cliente
+        // desistiu. Sai do erro e vira "Cancelada" na tela.
+        //
+        // Qual id significa o quê é dado do tenant, não constante: no CV da
+        // Menin hoje 4 = Cancelada e 11 = Vencida. O padrão cobre só a
+        // cancelada; incluir outras é decisão da tela.
+        cv_situacoes_reserva_morta: {
+            type: DataTypes.TEXT,
+            defaultValue: '[4]',
+            comment: 'IDs de situação CV que marcam reserva morta (JSON array). Ex: [4] ou [4,11]. Vazio desliga o bucket.',
+            get() {
+                const raw = this.getDataValue('cv_situacoes_reserva_morta');
+                let parsed;
+                try { parsed = JSON.parse(raw ?? '[4]'); } catch { return [4]; }
+                if (!Array.isArray(parsed)) parsed = [parsed];
+                const flat = parsed.flat(Infinity).map(Number).filter(n => Number.isFinite(n) && n > 0);
+                return Array.from(new Set(flat));
+            },
+            set(val) {
+                const raw = Array.isArray(val) ? val : (val == null ? [] : [val]);
+                const flat = raw.flat(Infinity).map(Number).filter(n => Number.isFinite(n) && n > 0);
+                this.setDataValue('cv_situacoes_reserva_morta', JSON.stringify(Array.from(new Set(flat))));
+            },
+        },
+
         // ── Configuração de anexo CV ───────────────────────────────────────────
         cv_idtipo_documento: {
             type: DataTypes.INTEGER,
