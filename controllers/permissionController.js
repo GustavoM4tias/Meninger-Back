@@ -11,11 +11,13 @@
 
 import { Op } from 'sequelize';
 import db from '../models/sequelize/index.js';
-import { getEffectiveRoutes } from '../services/permissions/permissionAccessService.js';
+import { getEffectiveRoutes, getEffectiveRoutesBulk } from '../services/permissions/permissionAccessService.js';
 import {
     getAdminOnlyRoutes, listRoutePolicies, setRoutePolicy, normalizeRoute,
 } from '../services/permissions/routePolicyService.js';
 import { capabilitiesFor } from '../services/permissions/capabilityService.js';
+import { SCREEN_CAPABILITIES } from '../lib/screenCapabilities.js';
+import { RETIRED_ROUTES, EXCLUSIVE_ROUTES } from '../lib/ensurePermissionRouteRetirement.js';
 
 // Apenas usuários do Office (não Academy/CVCRM)
 const OFFICE_PROVIDERS = ['INTERNAL', 'MICROSOFT'];
@@ -63,12 +65,30 @@ export async function getAllPermissions(req, res) {
             order: [['username', 'ASC']],
         });
 
-        const out = [];
-        for (const u of users) {
+        // Rotas efetivas em LOTE. Era um getEffectiveRoutes por usuario dentro do
+        // laco: 3 consultas x N usuarios, ~7s com 28 pessoas. O calculo e o
+        // mesmo; o que muda e a ida ao banco.
+        const naoAdmins = users.filter(u => u.role !== 'admin');
+        const efetivas = await getEffectiveRoutesBulk(
+            naoAdmins.map(u => u.id),
+            {
+                // ja vieram no SELECT acima - nao vale outra viagem ao banco
+                users: naoAdmins.map(u => ({ id: u.id, permission_profile_id: u.permission_profile_id })),
+                perms: naoAdmins
+                    .filter(u => u.permission)
+                    .map(u => ({
+                        userId: u.id,
+                        routes_extra: u.permission.routes_extra,
+                        routes_removed: u.permission.routes_removed,
+                    })),
+            },
+        );
+
+        const out = users.map(u => {
             const plain = u.toJSON();
-            plain.effectiveRoutes = plain.role === 'admin' ? null : await getEffectiveRoutes(plain.id);
-            out.push(plain);
-        }
+            plain.effectiveRoutes = plain.role === 'admin' ? null : (efetivas.get(plain.id) || []);
+            return plain;
+        });
         return res.json(out);
     } catch (err) {
         console.error('[Permissions] getAllPermissions error:', err);
@@ -258,6 +278,73 @@ export async function getEnterpriseOptions(req, res) {
         })));
     } catch (err) {
         console.error('[Permissions] getEnterpriseOptions error:', err);
+        return res.status(500).json({ message: err.message });
+    }
+}
+
+
+// ─── GET /api/permissions/capabilities ───────────────────────────────────────
+// Catalogo de ACOES por tela (lib/screenCapabilities.js). Ate aqui a regra so
+// saia do backend ja resolvida para UM usuario (/me); a tela de Alcadas nao
+// tinha como mostrar QUE acoes existem, e por isso continuava binaria
+// (tem/nao tem a tela) enquanto a API ja raciocinava por acao. (admin only)
+export async function getCapabilityCatalog(_req, res) {
+    try {
+        const screens = Object.entries(SCREEN_CAPABILITIES).map(([route, actions]) => ({
+            route,
+            actions: Object.entries(actions).map(([action, rule]) => ({ action, rule })),
+            // atalhos para a tela nao precisar recalcular
+            delegableActions: Object.entries(actions).filter(([, r]) => r === 'screen').map(([a]) => a),
+            adminActions: Object.entries(actions).filter(([, r]) => r === 'admin').map(([a]) => a),
+        })).sort((a, b) => a.route.localeCompare(b.route));
+
+        return res.json({
+            screens,
+            totalScreens: screens.length,
+            totalActions: screens.reduce((acc, s) => acc + s.actions.length, 0),
+        });
+    } catch (err) {
+        console.error('[Permissions] getCapabilityCatalog error:', err);
+        return res.status(500).json({ message: err.message });
+    }
+}
+
+// ─── GET /api/permissions/grants ─────────────────────────────────────────────
+// TODOS os grants de uma vez, agrupados por sujeito. O endpoint por sujeito
+// continua existindo para o modal; este existe para a tela conseguir responder
+// "quem esta sem liberacao de dados" sem uma chamada por pessoa. (admin only)
+export async function getGrantsBulk(_req, res) {
+    try {
+        const rows = await db.EnterpriseGrant.findAll({
+            attributes: ['subject_type', 'subject_id', 'enterprise_id'], raw: true,
+        });
+        const user = {};
+        const profile = {};
+        for (const r of rows) {
+            const alvo = r.subject_type === 'profile' ? profile : user;
+            const key = String(r.subject_id);
+            (alvo[key] ||= []).push(Number(r.enterprise_id));
+        }
+        return res.json({ user, profile });
+    } catch (err) {
+        console.error('[Permissions] getGrantsBulk error:', err);
+        return res.status(500).json({ message: err.message });
+    }
+}
+
+// ─── GET /api/permissions/retired-routes ─────────────────────────────────────
+// Rotas que o boot tira de perfis e excecoes (ensurePermissionRouteRetirement).
+// A tela precisa disso para explicar por que uma alcada "sumiu sozinha" - sem
+// a lista, o admin religa a rota e ela some de novo no boot seguinte.
+// (admin only)
+export async function getRetiredRoutes(_req, res) {
+    try {
+        return res.json({
+            retired: RETIRED_ROUTES.map(([route, reason]) => ({ route, reason })),
+            exclusive: EXCLUSIVE_ROUTES.map(e => ({ route: e.route, profile: e.profile, reason: e.reason })),
+        });
+    } catch (err) {
+        console.error('[Permissions] getRetiredRoutes error:', err);
         return res.status(500).json({ message: err.message });
     }
 }
