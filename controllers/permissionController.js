@@ -19,8 +19,12 @@ import { capabilitiesFor } from '../services/permissions/capabilityService.js';
 import { SCREEN_CAPABILITIES } from '../lib/screenCapabilities.js';
 import { RETIRED_ROUTES, EXCLUSIVE_ROUTES } from '../lib/ensurePermissionRouteRetirement.js';
 
-// Apenas usuários do Office (não Academy/CVCRM)
-const OFFICE_PROVIDERS = ['INTERNAL', 'MICROSOFT'];
+// Equipe interna: quem entra pelo login do Office ou pela conta Microsoft.
+// Tudo que não é isto é EXTERNO (corretor, imobiliária, correspondente), que
+// entra pelo CV. A lista de alçadas mostra os dois desde 2026-08-20 - antes os
+// externos simplesmente não existiam para esta tela, e agora eles vão começar a
+// acessar. O tipo vai no payload para a tela poder filtrar e rotular.
+const EQUIPE_PROVIDERS = ['INTERNAL', 'MICROSOFT'];
 
 // ─── GET /api/permissions/me ─────────────────────────────────────────────────
 // Retorna as permissões efetivas do usuário autenticado (mesmo shape de antes:
@@ -51,11 +55,11 @@ export async function getMyPermissions(req, res) {
 export async function getAllPermissions(req, res) {
     try {
         const users = await db.User.findAll({
-            where: {
-                status: true,
-                auth_provider: { [Op.in]: OFFICE_PROVIDERS },
-            },
-            attributes: ['id', 'username', 'email', 'role', 'status', 'permission_profile_id'],
+            where: { status: true },
+            attributes: [
+                'id', 'username', 'email', 'role', 'status', 'permission_profile_id',
+                'auth_provider', 'external_kind', 'external_organization_id',
+            ],
             include: [{
                 model: db.UserPermission,
                 as: 'permission',
@@ -87,6 +91,9 @@ export async function getAllPermissions(req, res) {
         const out = users.map(u => {
             const plain = u.toJSON();
             plain.effectiveRoutes = plain.role === 'admin' ? null : (efetivas.get(plain.id) || []);
+            // `tipo` resolvido aqui para a tela não repetir a regra: é o mesmo
+            // corte que separa quem é da casa de quem vem do CV.
+            plain.tipo = EQUIPE_PROVIDERS.includes(plain.auth_provider) ? 'equipe' : 'externo';
             return plain;
         });
         return res.json(out);
