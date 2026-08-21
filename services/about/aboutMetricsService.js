@@ -106,7 +106,7 @@ async function collect() {
     const cancel = await safeQuery('cancelamentos', `
         SELECT COUNT(*)::int                                          AS casos,
                COUNT(*) FILTER (WHERE status = 'success')::int        AS sucesso,
-               COUNT(*) FILTER (WHERE status IN ('blocked','error'))::int AS conferencia_humana
+               COUNT(*) FILTER (WHERE status IN ('blocked','held','error'))::int AS conferencia_humana
         FROM reserva_cancel_history
         WHERE id IN (SELECT MAX(id) FROM reserva_cancel_history GROUP BY idreserva)
     `, { casos: 0, sucesso: 0, conferencia_humana: 0 });
