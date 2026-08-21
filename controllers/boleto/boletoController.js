@@ -309,7 +309,7 @@ export async function listHistory(req, res) {
             // "erro que precisa de conserto" de "erro que já foi resolvido".
             const comBoleto = reservaIds.length
                 ? await db.BoletoHistory.findAll({
-                    where: { idreserva: { [Op.in]: reservaIds }, status: 'success' },
+                    where: { idreserva: { [Op.in]: reservaIds }, status: 'success', ignorado: false },
                     attributes: ['idreserva'],
                     group: ['idreserva'],
                     raw: true,
@@ -328,9 +328,17 @@ export async function listHistory(req, res) {
             // Tentativa atual = MAX(id) por reserva SEM filtro de data/status,
             // pra refletir o estado de agora mesmo que a última tentativa tenha
             // ficado fora do range de datas do escopo.
+            //
+            // `ignorado` fica de fora: essa linha é espelho, não tentativa. Ela
+            // nasce quando o CV redispara o webhook e já existe boleto válido —
+            // o fluxo é pulado, e a linha guarda só o registro do acionamento,
+            // sem nosso número e com payment_status parado em `pending`. Sendo
+            // a linha de id mais alto, ela era eleita a "atual" e escondia o
+            // boleto de verdade: 10 reservas apareciam pendentes, sendo que 5
+            // já estavam pagas e 5 baixadas.
             const currents = reservaIds.length
                 ? await db.BoletoHistory.findAll({
-                    where: { idreserva: { [Op.in]: reservaIds } },
+                    where: { idreserva: { [Op.in]: reservaIds }, ignorado: false },
                     attributes: [
                         'idreserva',
                         [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
@@ -483,7 +491,9 @@ export async function getHistoryStats(req, res) {
         const includeSuccess = !statusArr || statusArr.includes('success');
         const reservasComBoleto = new Set();
         if (includeSuccess) {
-            const successWhere = { ...where, status: 'success' };
+            // `ignorado: false` pelo mesmo motivo da listagem: linha espelho de
+            // re-disparo do webhook não é a via final da reserva.
+            const successWhere = { ...where, status: 'success', ignorado: false };
             const grouped = await db.BoletoHistory.findAll({
                 where: successWhere,
                 attributes: [
@@ -548,7 +558,7 @@ export async function getHistoryStats(req, res) {
         // pra o recorte do cartão bater linha a linha com o que a tabela mostra.
         const comBoleto = reservaIds.length
             ? await db.BoletoHistory.findAll({
-                where: { idreserva: { [Op.in]: reservaIds }, status: 'success' },
+                where: { idreserva: { [Op.in]: reservaIds }, status: 'success', ignorado: false },
                 attributes: ['idreserva'],
                 group: ['idreserva'],
                 raw: true,
@@ -558,7 +568,7 @@ export async function getHistoryStats(req, res) {
 
         const currents = reservaIds.length
             ? await db.BoletoHistory.findAll({
-                where: { idreserva: { [Op.in]: reservaIds } },
+                where: { idreserva: { [Op.in]: reservaIds }, ignorado: false },
                 attributes: [
                     'idreserva',
                     [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
