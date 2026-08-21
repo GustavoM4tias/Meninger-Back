@@ -5,6 +5,7 @@ import {
     getMyPermissions, getAllPermissions, setUserPermissions,
     getGrants, setGrants, getEnterpriseOptions,
     getRoutePolicies, putRoutePolicy,
+    getCapabilityCatalog, getGrantsBulk, getRetiredRoutes,
 } from '../controllers/permissionController.js';
 import {
     getProfiles, createProfile, updateProfile, deleteProfile, resetProfileToDefault,
@@ -42,7 +43,18 @@ router.get('/department-visibility', authenticate, adminOnly, getRules);
 router.put('/department-visibility', authenticate, adminOnly, putRule);
 router.delete('/department-visibility', authenticate, adminOnly, deleteRule);
 
+// Catálogo de AÇÕES por tela (lib/screenCapabilities.js) — admin only.
+// É o que a aba "Telas" da Gestão de Alçadas lê para deixar de ser binária.
+router.get('/capabilities', authenticate, adminOnly, getCapabilityCatalog);
+
+// Rotas aposentadas pelo boot — admin only. A tela explica por que uma alçada
+// sai sozinha em vez de deixar o admin religar uma rota que some de novo.
+router.get('/retired-routes', authenticate, adminOnly, getRetiredRoutes);
+
 // Grants de empreendimento (dados) — admin only. Declarados ANTES de /:userId.
+// O plural sem sujeito devolve TODOS de uma vez (fila "sem liberação de dados");
+// o por-sujeito continua servindo o modal.
+router.get('/grants', authenticate, adminOnly, getGrantsBulk);
 router.get('/enterprise-options', authenticate, adminOnly, getEnterpriseOptions);
 router.get('/grants/:subjectType/:subjectId', authenticate, adminOnly, getGrants);
 router.put('/grants/:subjectType/:subjectId', authenticate, adminOnly, setGrants);
