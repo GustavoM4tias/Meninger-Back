@@ -93,6 +93,7 @@ export async function updateSettings(req, res) {
             'idserie_ra', 'cv_idtipo_documento',
             'situacao_sucesso_id', 'situacao_erro_id',
             'situacao_pago_id', 'situacao_baixado_id', 'tolerancia_dias_uteis',
+            'revalidacao_baixado_dias',
             'delay_situacao_sucesso_min', 'max_dias_vencimento', 'valor_maximo',
             'janela_ativa', 'janela_inicio_hora', 'janela_fim_hora',
             'active',

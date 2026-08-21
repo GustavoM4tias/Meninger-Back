@@ -23,6 +23,19 @@ import { Op } from 'sequelize';
 
 const { BoletoHistory, BoletoSettings } = db;
 
+// Situações do Ecobrança que significam "o cliente pagou".
+//
+// Além de LIQUIDADO, a consulta devolve "TITULO JA PAGO NO DIA DD/MM/AAAA"
+// quando o pagamento entrou mas o título ainda não migrou pra liquidado.
+// Enquanto só LIQUIDADO era reconhecido, esse boleto seguia `pending` e no dia
+// seguinte a consulta voltava "BAIXADO POR DEVOLUÇÃO" — o boleto pago acabava
+// marcado como cancelado (11 casos entre 09 e 13/08/2026).
+const RE_SITUACAO_PAGA = /LIQUIDAD|J[AÁ]\s*PAGO/i;
+
+export function isSituacaoPaga(situacao) {
+    return RE_SITUACAO_PAGA.test(String(situacao || ''));
+}
+
 function formatDateBr(isoOrDate) {
     if (!isoOrDate) return '-';
     const s = String(isoOrDate);
@@ -84,6 +97,10 @@ async function alterarSituacaoCvSafe(idreserva, idsituacao, historyId, tag) {
  * a baixa é abortada in-flight se o Ecobrança retornar situação != EM ABERTO.
  */
 function decidirAcao(boleto, toleranciaDiasUteis) {
+    // Boleto que já saiu de `pending` só entra na rodada pela janela de
+    // revalidação (ver `revalidacao_baixado_dias`). Ali a rodada é só de
+    // leitura — baixar de novo algo já baixado não faria nada além de ruído.
+    if (boleto.payment_status !== 'pending') return 'consultar';
     if (!boleto.vencimento) return 'consultar'; // sem venc → não tem como decidir baixa
     return podeConsultarHoje(boleto.vencimento, toleranciaDiasUteis) ? 'baixar' : 'consultar';
 }
@@ -136,6 +153,7 @@ export async function runDailyCheck({ idreservas = null } = {}) {
         return { skipped: true, reason: 'no_settings' };
     }
     const tolerancia = Number(settings.tolerancia_dias_uteis) || 1;
+    const revalidacaoDias = Math.max(0, Number(settings.revalidacao_baixado_dias ?? 5) || 0);
     const situacaoPagoId = settings.situacao_pago_id || 28;
     const situacaoBaixadoId = settings.situacao_baixado_id || 29;
 
@@ -144,14 +162,30 @@ export async function runDailyCheck({ idreservas = null } = {}) {
         return { skipped: true, reason: 'no_eco_credentials' };
     }
 
-    // 2) Boletos elegíveis: status='success' (emitidos), payment_status='pending',
-    //    com vencimento e nosso_numero válidos.
+    // 2) Boletos elegíveis: status='success' (emitidos), com vencimento e
+    //    nosso_numero válidos, em um de dois grupos:
+    //      a) payment_status='pending' — o fluxo normal.
+    //      b) payment_status='cancelled' há menos de `revalidacao_baixado_dias`
+    //         — janela de revalidação. O Ecobrança já devolveu "BAIXADO POR
+    //         DEVOLUÇÃO" pra título que dias depois aparecia LIQUIDADO no
+    //         extrato; como `cancelled` era terminal, a rodada nunca mais
+    //         olhava e o pagamento ficava invisível pro Office. Nessa janela a
+    //         rodada é só de leitura (ver decidirAcao) e o único desfecho
+    //         possível é promover pra `paid`.
     //    Permite filtrar por idreservas pra debug/reprocessamento manual.
+    const revalidarDesde = revalidacaoDias > 0
+        ? new Date(Date.now() - revalidacaoDias * 24 * 60 * 60 * 1000)
+        : null;
     const where = {
         status: 'success',
-        payment_status: 'pending',
         nosso_numero: { [Op.ne]: null },
         vencimento: { [Op.ne]: null },
+        [Op.or]: [
+            { payment_status: 'pending' },
+            ...(revalidarDesde
+                ? [{ payment_status: 'cancelled', cancelled_at: { [Op.gte]: revalidarDesde } }]
+                : []),
+        ],
     };
     if (Array.isArray(idreservas) && idreservas.length) {
         where.idreserva = idreservas;
@@ -166,7 +200,11 @@ export async function runDailyCheck({ idreservas = null } = {}) {
         return { skipped: false, processed: 0 };
     }
 
-    console.log(`[BOLETO_CHECK] ${boletos.length} boleto(s) pendentes pra verificar.`);
+    const emRevalidacao = boletos.filter(b => b.payment_status !== 'pending').length;
+    console.log(
+        `[BOLETO_CHECK] ${boletos.length} boleto(s) pra verificar `
+        + `(${boletos.length - emRevalidacao} pendente(s) + ${emRevalidacao} em revalidação de baixa, janela ${revalidacaoDias}d).`,
+    );
 
     // 3) Agrupa por CNPJ da empresa (busca via CV). Boletos sem CNPJ vão pro
     //    bucket "erro" e são registrados como falha de pré-condição.
@@ -243,11 +281,12 @@ export async function runDailyCheck({ idreservas = null } = {}) {
 
     const stats = {
         total: boletos.length,
+        em_revalidacao: emRevalidacao,
         sem_cnpj: semCnpj.length,
         consultados: results.filter(r => r.ok && r.acao === 'consultar').length,
         baixas_tentadas: results.filter(r => r.ok && r.acao === 'baixar').length,
         baixas_efetuadas: results.filter(r => r.ok && r.baixaConfirmada).length,
-        pagos: results.filter(r => r.ok && /LIQUIDAD/i.test(r.situacao || '')).length,
+        pagos: results.filter(r => r.ok && isSituacaoPaga(r.situacao)).length,
         falhas: results.filter(r => !r.ok).length,
     };
     console.log('[BOLETO_CHECK] Rodada concluída:', stats);
@@ -299,8 +338,8 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
         return;
     }
 
-    // ── LIQUIDADO ────────────────────────────────────────────────────────────
-    if (/LIQUIDAD/i.test(r.situacao || '')) {
+    // ── LIQUIDADO / "TITULO JA PAGO NO DIA ..." ──────────────────────────────
+    if (isSituacaoPaga(r.situacao)) {
         if (history.payment_status === 'paid') {
             // Já estava marcado — não faz nada, só atualiza last_checked.
             await history.update(baseUpdate);
@@ -308,13 +347,15 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
         }
         await EventLogger.log({
             historyId: history.id, idreserva: history.idreserva, type: 'paid',
-            severity: 'success', message: `Boleto LIQUIDADO no Ecobrança (Nosso Nº ${history.nosso_numero}).`,
+            severity: 'success', message: `Boleto pago no Ecobrança — situação "${r.situacao}" (Nosso Nº ${history.nosso_numero}).`,
             data: { situacao: r.situacao, dados: r.dados || null },
         });
+        const eraCancelado = history.payment_status === 'cancelled';
         await history.update({
             ...baseUpdate,
             payment_status: 'paid',
             paid_at: new Date(),
+            cancelled_at: null,
         });
         const msg = [
             '✅ Boleto pago!',
@@ -324,6 +365,10 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
             history.vencimento ? `📅 Vencimento: ${formatDateBr(history.vencimento)}` : null,
             `🏦 Situação no Ecobrança: ${r.situacao}`,
             '',
+            eraCancelado
+                ? 'Correção: este boleto havia sido marcado como baixado por devolução. O pagamento foi confirmado no Ecobrança e o aviso anterior fica sem efeito.'
+                : null,
+            eraCancelado ? '' : null,
             'Detecção automática pelo scheduler diário.',
         ].filter(Boolean).join('\n');
         await sendCvMessageSafe(history.idreserva, msg, history.id, 'pago');
@@ -337,7 +382,31 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
     // Não precisa baixar de novo — só registra e move pra cancelled.
     const sit = String(r.situacao || '').toUpperCase();
     const isJaBaixado = /BAIXAD[OA]|CANCELAD[OA]|DEVOLVID[OA]/i.test(sit);
-    if (isJaBaixado && history.payment_status !== 'cancelled') {
+
+    // Baixa NÃO desfaz pagamento já observado. O Ecobrança chega a devolver
+    // "BAIXADO POR DEVOLUÇÃO" pra título que já tinha aparecido como pago —
+    // sem esta guarda o `paid` virava `cancelled` e o cliente recebia aviso
+    // de boleto baixado depois de ter pago.
+    if (isJaBaixado && history.payment_status === 'paid') {
+        await EventLogger.log({
+            historyId: history.id, idreserva: history.idreserva,
+            type: 'payment_check', severity: 'warning',
+            message: `Ecobrança devolveu "${sit}" para boleto já marcado como PAGO — leitura registrada, pagamento mantido.`,
+            data: { situacao: sit, ignoradoPorPago: true },
+        });
+        await history.update(baseUpdate);
+        return;
+    }
+
+    // Já cancelado (inclusive nas releituras da janela de revalidação): só
+    // atualiza o last_checked. Repetir evento e mensagem no CV a cada rodada
+    // encheria a timeline da reserva de aviso duplicado.
+    if (isJaBaixado && history.payment_status === 'cancelled') {
+        await history.update(baseUpdate);
+        return;
+    }
+
+    if (isJaBaixado) {
         await EventLogger.log({
             historyId: history.id, idreserva: history.idreserva,
             type: 'baixa_confirmed', severity: 'warning',
@@ -527,7 +596,7 @@ export async function baixarBoletoPorCancelamento(idreserva, { motivo = 'cancela
     const sit = String(r.situacao || '').toUpperCase();
 
     // ── PAGO — não tem o que baixar; o cancelamento precisa tratar devolução ─
-    if (/LIQUIDAD/i.test(sit)) {
+    if (isSituacaoPaga(sit)) {
         await EventLogger.log({
             historyId: boleto.id, idreserva, type: 'paid',
             severity: 'warning',
