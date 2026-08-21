@@ -17,7 +17,15 @@ const HEADLESS = process.env.PLAYWRIGHT_HEADLESS !== 'false';
  * As configurações abaixo fazem o browser headless parecer um usuário real,
  * funcionando em qualquer servidor sem necessidade de proxy.
  */
-export async function createPage() {
+/**
+ * @param {object}  [opts]
+ * @param {object}  [opts.storageState] - Sessão salva (cookies + localStorage) no
+ *   formato do Playwright. Quando informada, o contexto nasce JÁ AUTENTICADO e o
+ *   fluxo pula a tela de login. Usado pelo Userede, cujo portal tem reCAPTCHA e
+ *   por isso não pode depender de logar a cada execução. Ver
+ *   services/userede/UseredeSessionService.js.
+ */
+export async function createPage({ storageState = null } = {}) {
     const browser = await chromium.launch({
         headless: HEADLESS,
         slowMo: HEADLESS ? 0 : 50,
@@ -49,6 +57,9 @@ export async function createPage() {
         timezoneId: 'America/Sao_Paulo',
         // Simula navegador com hardware gráfico
         colorScheme: 'light',
+        // Sessão previamente salva. Ausente = contexto limpo (comportamento
+        // histórico do Ecobrança, que loga a cada execução).
+        ...(storageState ? { storageState } : {}),
     });
 
     // ── Remove todas as marcas de automação antes de qualquer script da página ──
