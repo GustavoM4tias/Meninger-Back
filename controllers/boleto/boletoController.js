@@ -307,15 +307,18 @@ export async function listHistory(req, res) {
             // retentativa falhou), mas isso não é problema pendente: o boleto
             // existe, muitas vezes já pago. O `has_boleto` deixa a tela separar
             // "erro que precisa de conserto" de "erro que já foi resolvido".
-            const comBoleto = reservaIds.length
+            const viaFinal = reservaIds.length
                 ? await db.BoletoHistory.findAll({
                     where: { idreserva: { [Op.in]: reservaIds }, status: 'success', ignorado: false },
-                    attributes: ['idreserva'],
+                    attributes: [
+                        'idreserva',
+                        [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
+                    ],
                     group: ['idreserva'],
                     raw: true,
                 })
                 : [];
-            const reservasComBoleto = new Set(comBoleto.map(c => Number(c.idreserva)));
+            const reservasComBoleto = new Set(viaFinal.map(c => Number(c.idreserva)));
 
             // Reserva cancelada/vencida no CV: o boleto que ficou pelo caminho
             // não tem conserto (o cliente desistiu), então não entra na fila de
@@ -325,18 +328,28 @@ export async function listHistory(req, res) {
                 reservaIds, settingsMortas?.cv_situacoes_reserva_morta || [],
             );
 
-            // Tentativa atual = MAX(id) por reserva SEM filtro de data/status,
-            // pra refletir o estado de agora mesmo que a última tentativa tenha
-            // ficado fora do range de datas do escopo.
+            // Linha ATUAL da reserva — a mesma regra dos KPIs, pra clicar num
+            // cartão e ver na tabela exatamente a conta que ele mostra:
             //
-            // `ignorado` fica de fora: essa linha é espelho, não tentativa. Ela
-            // nasce quando o CV redispara o webhook e já existe boleto válido —
-            // o fluxo é pulado, e a linha guarda só o registro do acionamento,
-            // sem nosso número e com payment_status parado em `pending`. Sendo
-            // a linha de id mais alto, ela era eleita a "atual" e escondia o
-            // boleto de verdade: 10 reservas apareciam pendentes, sendo que 5
-            // já estavam pagas e 5 baixadas.
-            const currents = reservaIds.length
+            //   tem boleto  → a via final (o success mais recente)
+            //   não tem     → a última tentativa de verdade
+            //
+            // "De verdade" exclui `ignorado`: essa linha é espelho, não
+            // tentativa. Nasce quando o CV redispara o webhook e já existe
+            // boleto válido — o fluxo é pulado e sobra o registro do
+            // acionamento, sem nosso número e com payment_status parado em
+            // `pending`. Sendo a de id mais alto, era eleita a atual e escondia
+            // o boleto: 10 reservas apareciam pendentes, 5 delas já pagas.
+            //
+            // A via final ganhar da última tentativa cobre o mesmo problema na
+            // outra ponta: re-disparo que termina em `skipped` (reserva sem
+            // série de Ato) ou em erro sumia com o boleto da tabela. Eram 95
+            // reservas pagas que o cartão contava e a tabela não mostrava.
+            //
+            // Nada disso usa filtro de data/status: o estado é o de agora,
+            // mesmo que a linha esteja fora do recorte. O filtro escolhe quais
+            // reservas aparecem, e é aplicado depois, sobre esta linha.
+            const ultimas = reservaIds.length
                 ? await db.BoletoHistory.findAll({
                     where: { idreserva: { [Op.in]: reservaIds }, ignorado: false },
                     attributes: [
@@ -347,7 +360,9 @@ export async function listHistory(req, res) {
                     raw: true,
                 })
                 : [];
-            const ids = currents.map(c => Number(c.max_id));
+            const atualPorReserva = new Map(ultimas.map(c => [Number(c.idreserva), Number(c.max_id)]));
+            for (const v of viaFinal) atualPorReserva.set(Number(v.idreserva), Number(v.max_id));
+            const ids = [...atualPorReserva.values()];
             const found = ids.length
                 ? await db.BoletoHistory.findAll({ where: { id: { [Op.in]: ids } } })
                 : [];
@@ -471,7 +486,7 @@ export async function getHistoryStats(req, res) {
             emitidos: { qty: 0, valor: 0 },     // via FINAL (success mais recente) por reserva
             processing: { qty: 0, valor: 0 },
             errors: { qty: 0, valor: 0 },       // reservas que HOJE estão sem boleto por erro
-            dead: { qty: 0, valor: 0 },         // reserva morta no CV (cancelada/vencida) sem boleto
+            dead: { qty: 0, valor: 0 },         // reserva morta no CV: sem boleto por erro, ou com boleto baixado
             skipped: { qty: 0, valor: 0 },      // status='skipped' (sem série de Ato)
             queued: { qty: 0, valor: 0 },       // status='queued' (fora da janela, aguardando abertura)
             paid: { qty: 0, valor: 0 },         // via final + paid
@@ -507,10 +522,18 @@ export async function getHistoryStats(req, res) {
             const finais = finalIds.length
                 ? await db.BoletoHistory.findAll({
                     where: { id: { [Op.in]: finalIds } },
-                    attributes: ['payment_status', 'valor'],
+                    attributes: ['idreserva', 'payment_status', 'valor'],
                     raw: true,
                 })
                 : [];
+            // Boleto baixado de reserva CANCELADA não é evasão: o cliente não
+            // fugiu do pagamento, a reserva é que morreu. Contado em "Baixados"
+            // ele inflava a taxa - só a 7819 levava R$ 40.000,52 pra dentro do
+            // indicador. Vai pra `dead`, junto das canceladas sem boleto.
+            const mortasComBoleto = await fetchReservasMortas(
+                finais.map(f => Number(f.idreserva)),
+                (await db.BoletoSettings.findByPk(1))?.cv_situacoes_reserva_morta || [],
+            );
             for (const f of finais) {
                 const valor = Number(f.valor) || 0;
                 stats.emitidos.qty += 1;
@@ -518,6 +541,9 @@ export async function getHistoryStats(req, res) {
                 if (f.payment_status === 'paid') {
                     stats.paid.qty += 1;
                     stats.paid.valor += valor;
+                } else if (f.payment_status === 'cancelled' && mortasComBoleto.has(Number(f.idreserva))) {
+                    stats.dead.qty += 1;
+                    stats.dead.valor += valor;
                 } else if (f.payment_status === 'cancelled') {
                     stats.cancelled.qty += 1;
                     stats.cancelled.valor += valor;
@@ -599,6 +625,7 @@ export async function getHistoryStats(req, res) {
             settingsMortas?.cv_situacoes_reserva_morta || [],
         );
 
+        const deadSemBoleto = { qty: 0, valor: 0 };
         for (const r of atuais) {
             // Agora sim o filtro de status entra: sobre a situação atual.
             if (statusArr && !statusArr.includes(r.status)) continue;
@@ -606,6 +633,8 @@ export async function getHistoryStats(req, res) {
             if (r.status === 'error' && reservasMortas.has(Number(r.idreserva))) {
                 stats.dead.qty += 1;
                 stats.dead.valor += valor;
+                deadSemBoleto.qty += 1;
+                deadSemBoleto.valor += valor;
                 continue;
             }
             const bucket = { error: 'errors', skipped: 'skipped', processing: 'processing', queued: 'queued' }[r.status];
@@ -615,9 +644,12 @@ export async function getHistoryStats(req, res) {
         }
 
         // `total` é reserva, não linha: é o denominador honesto pra taxa de erro.
-        stats.total.qty = stats.emitidos.qty + stats.errors.qty + stats.dead.qty + stats.skipped.qty
+        // `dead` tem duas origens: reserva morta COM boleto baixado (já contada
+        // em emitidos) e reserva morta SEM boleto (não contada em lugar nenhum).
+        // Só a segunda entra no total, senão a reserva conta duas vezes.
+        stats.total.qty = stats.emitidos.qty + stats.errors.qty + deadSemBoleto.qty + stats.skipped.qty
             + stats.processing.qty + stats.queued.qty;
-        stats.total.valor = stats.emitidos.valor + stats.errors.valor + stats.dead.valor
+        stats.total.valor = stats.emitidos.valor + stats.errors.valor + deadSemBoleto.valor
             + stats.skipped.valor + stats.processing.valor + stats.queued.valor;
 
         // % do total de emitidos
