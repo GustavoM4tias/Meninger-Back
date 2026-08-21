@@ -50,6 +50,32 @@ export async function getMyPermissions(req, res) {
     }
 }
 
+/** Cargo + departamento dos ids informados. Uma consulta, não uma por pessoa. */
+async function carregarCargos(positionIds) {
+    const ids = [...new Set(positionIds.map(Number).filter(Boolean))];
+    if (!ids.length) return new Map();
+    const rows = await db.sequelize.query(
+        `SELECT p.id, p.name AS cargo, d.name AS departamento
+           FROM positions p
+           LEFT JOIN departments d ON d.id = p.department_id
+          WHERE p.id IN (:ids)`,
+        { replacements: { ids }, type: db.Sequelize.QueryTypes.SELECT },
+    );
+    return new Map(rows.map(r => [Number(r.id), { nome: r.cargo, departamento: r.departamento }]));
+}
+
+/** Nome da organização externa (imobiliária/empresa do CV), quando existe. */
+async function carregarOrganizacoes(orgIds) {
+    const ids = [...new Set(orgIds.map(Number).filter(Boolean))];
+    if (!ids.length) return new Map();
+    const rows = await db.sequelize.query(
+        `SELECT id, name FROM external_organizations WHERE id IN (:ids)`,
+        { replacements: { ids }, type: db.Sequelize.QueryTypes.SELECT },
+    );
+    // `name` é nulo em parte das linhas: sem nome, sem palpite.
+    return new Map(rows.filter(r => r.name).map(r => [Number(r.id), r.name]));
+}
+
 // ─── GET /api/permissions ────────────────────────────────────────────────────
 // Lista TODOS os usuários com perfil, exceções e rotas efetivas. (admin only)
 //
@@ -67,6 +93,7 @@ export async function getAllPermissions(req, res) {
             attributes: [
                 'id', 'username', 'email', 'role', 'status', 'permission_profile_id',
                 'auth_provider', 'external_kind', 'external_organization_id',
+                'position', 'position_id',
             ],
             include: [{
                 model: db.UserPermission,
@@ -80,6 +107,14 @@ export async function getAllPermissions(req, res) {
         // Rotas efetivas em LOTE. Era um getEffectiveRoutes por usuario dentro do
         // laco: 3 consultas x N usuarios, ~7s com 28 pessoas. O calculo e o
         // mesmo; o que muda e a ida ao banco.
+        // Cargo, departamento e organização: é o que a lista mostra na linha para
+        // dar contexto sem abrir a pessoa. Duas consultas pequenas em cima dos
+        // ids distintos - nada de uma por usuário.
+        const [cargos, organizacoes] = await Promise.all([
+            carregarCargos(users.map(u => u.position_id)),
+            carregarOrganizacoes(users.map(u => u.external_organization_id)),
+        ]);
+
         const naoAdmins = users.filter(u => u.role !== 'admin');
         const efetivas = await getEffectiveRoutesBulk(
             naoAdmins.map(u => u.id),
@@ -105,6 +140,15 @@ export async function getAllPermissions(req, res) {
             // `status` é o eixo ativo/inativo (users.status, booleano). Vai junto
             // para a tela filtrar sem precisar de outra chamada.
             plain.ativo = plain.status !== false;
+
+            /* `positions` é a fonte estruturada; `users.position` é o texto
+               livre que sobreviveu ao backfill (4 pessoas ainda só têm ele).
+               Departamento só existe pelo cargo estruturado - onde não houver,
+               vai nulo em vez de inventado. */
+            const cargo = cargos.get(Number(plain.position_id)) || null;
+            plain.cargo = cargo?.nome || plain.position || null;
+            plain.departamento = cargo?.departamento || null;
+            plain.organizacao = organizacoes.get(Number(plain.external_organization_id)) || null;
             return plain;
         });
         return res.json(out);
