@@ -96,12 +96,35 @@ export async function updateSettings(req, res) {
     try {
         const updates = {};
         if (req.body.active !== undefined) updates.active = !!req.body.active;
+        if (req.body.burst_guard_active !== undefined) updates.burst_guard_active = !!req.body.burst_guard_active;
+        if (req.body.baixar_boleto_no_cancelamento !== undefined) {
+            updates.baixar_boleto_no_cancelamento = !!req.body.baixar_boleto_no_cancelamento;
+        }
+
         for (const key of ['situacao_pendencia_id', 'situacao_cancelada_id']) {
             if (req.body[key] !== undefined) {
                 const n = Number(req.body[key]);
                 updates[key] = Number.isFinite(n) && n > 0 ? n : null;
             }
         }
+
+        // Freio de rajada — faixas conservadoras de propósito: um teto alto
+        // demais ou uma janela curta demais desliga o freio na prática, e a
+        // espera não pode passar do dedupe de 'processing' (15 min).
+        const FAIXAS = {
+            burst_window_seconds: { min: 10, max: 3600, rotulo: 'A janela do freio deve ficar entre 10s e 3600s.' },
+            burst_max_cancels: { min: 1, max: 500, rotulo: 'O teto do freio deve ficar entre 1 e 500 cancelamentos.' },
+            burst_settle_seconds: { min: 0, max: 600, rotulo: 'A espera do freio deve ficar entre 0s e 600s.' },
+        };
+        for (const [key, faixa] of Object.entries(FAIXAS)) {
+            if (req.body[key] === undefined) continue;
+            const n = Number(req.body[key]);
+            if (!Number.isFinite(n) || n < faixa.min || n > faixa.max) {
+                return res.status(400).json({ error: faixa.rotulo });
+            }
+            updates[key] = Math.floor(n);
+        }
+
         updates.updated_by = req.user?.id || null;
 
         let s = await db.ReservaCancelSettings.findByPk(1);

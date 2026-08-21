@@ -32,6 +32,11 @@
 // por unidade, pelo número de integração CVMENIN{unidade}{reserva} e pelos
 // contratos dos clientes Sienge com o documento do titular).
 //
+// Freio de rajada (definido pelo negócio em 2026-08-21, após a rotina de
+// sincronização do CV cancelar 98 reservas do Residencial dos Anjos em 21s):
+// cancelamento em massa retém TODOS os casos da rajada como 'held', sem tocar
+// em Sienge nem em CV. Regulado em settings (burst_*) — ver avaliarRajada().
+//
 // Workflow CV (definido pelo negócio em 2026-07-23):
 //   sucesso        → reserva PERMANECE/volta para "Cancelada" (settings.situacao_cancelada_id, ID 4)
 //   blocked/error  → reserva é movida para "Pendência" (settings.situacao_pendencia_id, ID 30);
@@ -255,8 +260,10 @@ async function validarCliente(contrato, titular) {
 /**
  * Gate do Ato (módulo Boleto Caixa). Regra definida pelo negócio:
  *   segue  → sem registro de boleto, sem série (skipped), geração com erro,
- *            ou boleto baixado por vencimento sem pagamento (payment_status cancelled)
- *   barra  → boleto em processamento, emitido pendente, pago, ou estado incerto
+ *            boleto baixado por vencimento sem pagamento (payment_status
+ *            cancelled), ou boleto pendente (segue vivo até vencer — a baixa
+ *            fica com o scheduler diário; ver baixar_boleto_no_cancelamento)
+ *   barra  → boleto em processamento, pago, ou estado incerto
  */
 async function validarAto(idreserva) {
     const boleto = await db.BoletoHistory.findOne({
@@ -277,10 +284,28 @@ async function validarAto(idreserva) {
         case 'paid':
             return { ok: false, detalhe: `Ato PAGO (boleto #${boleto.id}, liquidado em ${boleto.paid_at ? new Date(boleto.paid_at).toLocaleDateString('pt-BR') : '-'}).` };
         case 'pending': {
-            // Reserva cancelada não pode manter boleto vivo — o cliente poderia
-            // pagar o ato de uma reserva morta. Solicita a baixa por devolução
-            // AGORA (mesma automação do scheduler, ignorando a janela de
-            // vencimento). Só bloqueia se a baixa não puder ser confirmada.
+            // Boleto pendente NÃO é baixado pelo cancelamento desde 21/08/2026.
+            //
+            // A baixa na hora vira baixa em massa quando o CV dispara uma
+            // rajada: em 20/08 foram 99 cancelamentos num minuto no RESIDENCIAL
+            // DOS ANJOS, e o que segurou o estrago foi 81 dos boletos já
+            // estarem pagos, não uma trava nossa. Agora o boleto segue vivo até
+            // vencer e o scheduler diário o baixa pelo caminho de sempre.
+            //
+            // O preço, aceito pelo negócio: entre o cancelamento e o vencimento
+            // o cliente ainda consegue pagar o ato de uma reserva cancelada. O
+            // aviso abaixo deixa isso visível na tela em vez de silencioso.
+            // Pra voltar ao comportamento antigo, é a chave
+            // `baixar_boleto_no_cancelamento` nas configurações do módulo.
+            const cfg = await db.ReservaCancelSettings.findByPk(1);
+            if (!cfg?.baixar_boleto_no_cancelamento) {
+                return {
+                    ok: true,
+                    aviso: `Boleto #${boleto.id} segue pendente (venc. ${formatDateBr(boleto.vencimento)}). A baixa não é feita pelo cancelamento: fica com a rotina diária, depois do vencimento. Até lá o ato ainda pode ser pago.`,
+                    detalhe: `Ato pendente (boleto #${boleto.id}, venc. ${formatDateBr(boleto.vencimento)}) - baixa deixada para a rotina diária, após o vencimento.`,
+                };
+            }
+
             const baixa = await baixarBoletoPorCancelamento(idreserva);
             if (baixa.ok) {
                 return { ok: true, detalhe: `Boleto #${boleto.id} estava pendente — baixa automática solicitada pelo cancelamento: ${baixa.detalhe}` };
@@ -494,6 +519,107 @@ function mensagemErro(history, motivo) {
  * @param {number}  [params.triggeredBy]    - user.id do admin no disparo manual.
  * @param {object}  [params.webhookPayload] - corpo bruto do webhook (auditoria).
  */
+// ── Freio de rajada (superlotação) ────────────────────────────────────────────
+//
+// Cancelamento em massa no CV (uma rotina de sincronização disparando dezenas de
+// webhooks em segundos) quase nunca é operação legítima - e o estrago é
+// irreversível: contrato excluído no Sienge não volta. Com o freio ligado,
+// NENHUM caso da rajada é executado; todos ficam 'held' pra conferência humana.
+//
+// A espera (`burst_settle_seconds`) é o que garante o "nenhum": sem ela, os
+// primeiros webhooks passariam antes do contador estourar o teto. Cada caso
+// espera a janela assentar, enxerga a rajada inteira e só então decide.
+
+const BURST_FALLBACK = { janela: 300, teto: 10, espera: 15 };
+const ESPERA_MAX_S = 600; // teto de segurança: o dedupe de 'processing' vale 15 min.
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const posInt = (v, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+};
+
+/**
+ * Identifica o caso pela tabela LOCAL de reservas (sync do CV), sem gastar
+ * chamada de API. Um caso retido para antes da leitura ao vivo do CV, e sem
+ * `idempreendimento_cv` ele sumiria da tela para todo mundo que não é admin
+ * (reservaCancelScope recorta por esse id) - virava exatamente o caso invisível
+ * que o freio existe pra evitar. Best-effort: falhar aqui não muda a decisão.
+ */
+async function identificarPeloBancoLocal(history, idreserva) {
+    try {
+        const r = await db.Reserva.findByPk(idreserva, {
+            attributes: ['idreserva', 'empreendimento', 'unidade', 'unidade_json', 'titular'],
+        });
+        if (!r) return;
+        const u = r.unidade_json || {};
+        await history.update({
+            titular_nome: r.titular?.nome || null,
+            titular_documento: digits(r.titular?.documento) || null,
+            empreendimento: r.empreendimento || u.empreendimento || null,
+            idempreendimento_cv: Number(u.idempreendimento_cv) || null,
+            unidade_nome: r.unidade || u.unidade || null,
+            idunidade_cv: Number(u.idunidade_cv) || null,
+            idunidade_int: u.idunidade_int != null ? String(u.idunidade_int) : null,
+        });
+    } catch (err) {
+        console.warn(`[RESERVA-CANCEL][reserva ${idreserva}] Falha ao identificar pelo banco local: ${err.message}`);
+    }
+}
+
+async function contarAutomaticosNaJanela(excludeId, janelaSegundos) {
+    const { Op } = db.Sequelize;
+    return db.ReservaCancelHistory.count({
+        where: {
+            id: { [Op.ne]: excludeId },
+            manual: false,
+            created_at: { [Op.gte]: new Date(Date.now() - janelaSegundos * 1000) },
+        },
+    });
+}
+
+async function avaliarRajada({ history, settings, ev, tag }) {
+    if (!settings.burst_guard_active) return { reter: false };
+
+    const janela = posInt(settings.burst_window_seconds, BURST_FALLBACK.janela);
+    const teto = posInt(settings.burst_max_cancels, BURST_FALLBACK.teto);
+    const espera = Math.min(
+        posInt(settings.burst_settle_seconds, BURST_FALLBACK.espera),
+        ESPERA_MAX_S,
+    );
+
+    const motivoDe = (n) =>
+        `Freio de rajada: ${n} cancelamentos automáticos em ${janela}s, acima do teto de ${teto}. ` +
+        `Nada foi alterado no Sienge nem no CV. Verifique o que originou a rajada e reprocesse pela tela ` +
+        `os cancelamentos que forem legítimos.`;
+
+    const reter = async (n) => {
+        const motivo = motivoDe(n);
+        console.warn(`${tag} RETIDO pelo freio de rajada (${n} na janela de ${janela}s, teto ${teto}).`);
+        await identificarPeloBancoLocal(history, history.idreserva);
+        await ev('burst_held', motivo, 'warning', { na_janela: n, teto, janela_segundos: janela });
+        return { reter: true, motivo };
+    };
+
+    // Rajada já reconhecida: retém na hora, sem gastar a espera.
+    const antes = await contarAutomaticosNaJanela(history.id, janela) + 1;
+    if (antes > teto) return reter(antes);
+
+    if (espera <= 0) return { reter: false };
+
+    // Ainda sob o teto - espera a janela assentar antes de decidir.
+    await ev('burst_wait',
+        `Aguardando ${espera}s antes de agir, para conferir se este cancelamento faz parte de uma rajada.`,
+        'info', { na_janela: antes, teto, janela_segundos: janela });
+    await sleep(espera * 1000);
+
+    const depois = await contarAutomaticosNaJanela(history.id, janela) + 1;
+    if (depois > teto) return reter(depois);
+
+    await ev('burst_ok', `Janela tranquila: ${depois} cancelamento(s) em ${janela}s (teto ${teto}). Seguindo.`);
+    return { reter: false };
+}
+
 export async function processReservaCancel({ idreserva, manual = false, triggeredBy = null, webhookPayload = null }) {
     idreserva = Number(idreserva);
     const tag = `[RESERVA-CANCEL][reserva ${idreserva}]`;
@@ -604,6 +730,12 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         if (!settings.active && !manual) {
             console.log(`${tag} Automação desativada - registrando como skipped.`);
             return await finish('skipped', 'Automação desativada nas configurações. Reprocesse pela tela quando ativar.');
+        }
+
+        // ── 0a. Freio de rajada ───────────────────────────────────────────────
+        if (!manual) {
+            const rajada = await avaliarRajada({ history, settings, ev, tag });
+            if (rajada.reter) return await finish('held', rajada.motivo);
         }
 
         // ── 0b. Dedupe: outro processamento vivo ou sucesso anterior ──────────
@@ -738,6 +870,9 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
             // libera a unidade com boleto de ato pendente/pago/em processamento
             // (ex.: ato emitido mas o envio do contrato ao Sienge falhou).
             const atoSemContrato = await validarAto(idreserva);
+            // Boleto que segue vivo até vencer não barra o cancelamento, mas
+            // precisa aparecer: vira aviso na tela, não só linha de log.
+            if (atoSemContrato.aviso) warnings.push({ etapa: 'boleto_ato', erro: atoSemContrato.aviso });
             if (!(await addCheck('Ato sem boleto pendente/pago', atoSemContrato.ok, atoSemContrato.detalhe))) {
                 return await finishBlocked(`Gate do ato barrou a liberação da unidade: ${atoSemContrato.detalhe}`);
             }
@@ -833,6 +968,7 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
 
         // 3.6 Gate do Ato (Boleto Caixa)
         const ato = await validarAto(idreserva);
+        if (ato.aviso) warnings.push({ etapa: 'boleto_ato', erro: ato.aviso });
         allOk = (await addCheck('Ato sem boleto pendente/pago', ato.ok, ato.detalhe)) && allOk;
 
         // 3.7 Nenhum OUTRO contrato ativo na unidade
