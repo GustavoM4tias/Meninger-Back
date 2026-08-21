@@ -482,7 +482,6 @@ export async function getHistoryStats(req, res) {
                 group: ['idreserva'],
                 raw: true,
             });
-            grouped.forEach(g => reservasComBoleto.add(Number(g.idreserva)));
             const finalIds = grouped.map(g => Number(g.max_id));
             const finais = finalIds.length
                 ? await db.BoletoHistory.findAll({
@@ -513,33 +512,67 @@ export async function getHistoryStats(req, res) {
         }
 
         // Reservas que NÃO chegaram a ter boleto: uma linha por reserva, a
-        // última tentativa. Como essas reservas não têm nenhum success dentro
-        // do recorte, o MAX(id) geral já é o MAX(id) entre as não-success.
-        const ultimos = await db.BoletoHistory.findAll({
-            where,
-            attributes: [
-                'idreserva',
-                [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
-            ],
+        // tentativa ATUAL.
+        //
+        // A tentativa atual é o MAX(id) SEM o filtro de status — mesma regra
+        // que a listagem usa em `groupByReserva`. O filtro escolhe QUAIS
+        // reservas mostrar, não redefine qual é a situação de agora: com o
+        // padrão da tela (que esconde `skipped`), tomar o MAX(id) já filtrado
+        // ressuscitava um erro antigo de 16 reservas cuja última linha real é
+        // "sem série de Ato". O cartão marcava 42 e R$ 50.966,59 no lugar de
+        // 26 e R$ 36.396,55.
+        const scopeWhere = { ...where };
+        delete scopeWhere.status;
+        delete scopeWhere.payment_status;
+
+        const emEscopo = await db.BoletoHistory.findAll({
+            where: scopeWhere,
+            attributes: ['idreserva'],
             group: ['idreserva'],
             raw: true,
         });
-        const idsSemBoleto = ultimos
-            .filter(u => !reservasComBoleto.has(Number(u.idreserva)))
-            .map(u => Number(u.max_id));
-        const semBoleto = idsSemBoleto.length
+        const reservaIds = emEscopo.map(g => Number(g.idreserva));
+
+        // Mesmo critério do `has_boleto` da listagem (só idreserva + success),
+        // pra o recorte do cartão bater linha a linha com o que a tabela mostra.
+        const comBoleto = reservaIds.length
             ? await db.BoletoHistory.findAll({
-                where: { id: { [Op.in]: idsSemBoleto } },
+                where: { idreserva: { [Op.in]: reservaIds }, status: 'success' },
+                attributes: ['idreserva'],
+                group: ['idreserva'],
+                raw: true,
+            })
+            : [];
+        comBoleto.forEach(c => reservasComBoleto.add(Number(c.idreserva)));
+
+        const currents = reservaIds.length
+            ? await db.BoletoHistory.findAll({
+                where: { idreserva: { [Op.in]: reservaIds } },
+                attributes: [
+                    'idreserva',
+                    [db.sequelize.fn('MAX', db.sequelize.col('id')), 'max_id'],
+                ],
+                group: ['idreserva'],
+                raw: true,
+            })
+            : [];
+        const idsAtuais = currents
+            .filter(c => !reservasComBoleto.has(Number(c.idreserva)))
+            .map(c => Number(c.max_id));
+        const atuais = idsAtuais.length
+            ? await db.BoletoHistory.findAll({
+                where: { id: { [Op.in]: idsAtuais } },
                 attributes: ['status', 'valor'],
                 raw: true,
             })
             : [];
-        for (const r of semBoleto) {
-            const valor = Number(r.valor) || 0;
+        for (const r of atuais) {
+            // Agora sim o filtro de status entra: sobre a situação atual.
+            if (statusArr && !statusArr.includes(r.status)) continue;
             const bucket = { error: 'errors', skipped: 'skipped', processing: 'processing', queued: 'queued' }[r.status];
             if (!bucket) continue;
             stats[bucket].qty += 1;
-            stats[bucket].valor += valor;
+            stats[bucket].valor += Number(r.valor) || 0;
         }
 
         // `total` é reserva, não linha: é o denominador honesto pra taxa de erro.
