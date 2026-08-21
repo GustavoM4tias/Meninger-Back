@@ -29,6 +29,30 @@ async function isInternalUser(fromPhone) {
     return !!(await findUserByPhone(fromPhone, { attributes: ['id'] }));
 }
 
+/**
+ * Resposta a uma mensagem NOSSA: quem mandou o original decide quem responde.
+ *
+ * O webhook traz `context.id` com o wamid do que está sendo respondido - é
+ * assim que botão de template e citação chegam. Sem olhar isso, o "SIM" de um
+ * alerta do Office caía na Eme Atende (o número é o mesmo) e ela respondia
+ * mandando book de empreendimento. Aconteceu de verdade em 2026-08-21.
+ *
+ * Vale pros dois lados: resposta a mensagem da Eme Atende vai pra ela mesmo
+ * que o remetente seja funcionário.
+ * @returns {Promise<'office'|'eme'|null>} null = sem contexto ou desconhecido
+ */
+async function donoDoContexto(m) {
+    const alvo = m?.context?.id;
+    if (!alvo) return null;
+    try {
+        if (await db.WhatsappMessage.findOne({ where: { meta_message_id: alvo }, attributes: ['id'] })) return 'office';
+        if (await db.EmeAtendeMessage.findOne({ where: { wamid: alvo }, attributes: ['id'] })) return 'eme';
+    } catch (err) {
+        console.warn('[eme-atende/router] contexto não checado:', err?.message);
+    }
+    return null;
+}
+
 async function officeOwnsWamid(wamid) {
     if (!wamid) return true; // sem wamid não tem como casar - deixa no Office
     const row = await db.WhatsappMessage.findOne({
@@ -84,6 +108,12 @@ async function route(payload) {
                 const eme = [];
                 for (const m of value.messages) {
                     const from = m?.from || value.contacts?.[0]?.wa_id || null;
+                    // 1º: se é resposta a algo NOSSO, o dono do original decide.
+                    // Isso vem antes de tudo porque é o sinal mais forte que existe.
+                    const dono = await donoDoContexto(m);
+                    if (dono === 'office') { off.push(m); continue; }
+                    if (dono === 'eme') { eme.push(m); continue; }
+
                     // Número em teste ganha do check de interno: sem isso quem
                     // administra a Eme não consegue testar com o próprio celular.
                     const emTeste = await EmeAtendeAudience.isTestOverride(from);

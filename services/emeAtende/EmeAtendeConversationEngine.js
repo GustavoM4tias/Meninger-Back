@@ -420,9 +420,20 @@ async function buildPromptParts(flow, lead) {
     const docBlock = book
         ? '\n\nMATERIAL DISPONÍVEL: o book digital em PDF deste empreendimento pode ser enviado com a ferramenta enviar_documento.'
         : '';
+    // Interesse em OUTRO empreendimento registrado no meio da conversa: ela
+    // precisa saber pra não ignorar o assunto, mas não tem contexto do outro
+    // produto - por isso a instrução manda encaminhar, não improvisar.
+    const outros = (lead?.payload?.interesses || [])
+        .map(i => i.empreendimento)
+        .filter(e => e && e.toLowerCase() !== String(lead?.empreendimento || '').toLowerCase());
+    const outrosBloco = outros.length
+        ? '\n\nATENÇÃO: este lead também deixou contato para: ' + outros.join(', ')
+          + '. Você NÃO tem informação desses outros empreendimentos aqui. Se ele tocar'
+          + ' no assunto, reconheça o interesse e diga que um consultor fala sobre eles.'
+        : '';
     const leadInfo = `\n\nDADOS DO LEAD: nome=${lead?.name || 'desconhecido'}; origem=${lead?.source || '-'}; campanha=${lead?.campaign || '-'}; empreendimento de interesse=${lead?.empreendimento || '-'}.`;
     return {
-        systemPrompt: `${instructions}${context}${imageBlock}${docBlock}${leadInfo}\n${HARD_RULES}`,
+        systemPrompt: `${instructions}${context}${imageBlock}${docBlock}${outrosBloco}${leadInfo}\n${HARD_RULES}`,
         contextText: contextText || '',
     };
 }

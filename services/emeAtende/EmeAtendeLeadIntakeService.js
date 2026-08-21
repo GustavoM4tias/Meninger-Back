@@ -38,19 +38,42 @@ async function ingest(data = {}, { apiKeyName = null } = {}) {
             await EmeAtendeMessenger.logEvent(existing.id, null, 'reentry_blocked_opted_out', { source: data.source, apiKeyName });
             throw new IntakeError('Lead fez opt-out - não será recontatado.', 409);
         }
-        await existing.update({
-            name: data.name || existing.name,
-            email: data.email || existing.email,
-            campaign: data.campaign || existing.campaign,
-            empreendimento: data.empreendimento || existing.empreendimento,
-            payload: { ...existing.payload, ...extras, last_reentry_source: data.source || null },
-        });
         const activeConv = await db.EmeAtendeConversation.findOne({
             where: { lead_id: existing.id, state: { [Op.ne]: 'closed' } },
             order: [['id', 'DESC']],
         });
-        await EmeAtendeMessenger.logEvent(existing.id, activeConv?.id || null, 'lead_reentry', { source: data.source, apiKeyName });
-        if (activeConv) return { lead: existing, conversation: activeConv, reentry: true, reopened: false };
+
+        // A pessoa se cadastrou em OUTRA campanha enquanto a conversa rola.
+        // Sobrescrever o empreendimento apagaria o assunto que está em curso e
+        // deixaria a Eme falando de A com o cadastro dizendo B. O interesse novo
+        // é ACUMULADO; a conversa aberta continua no empreendimento dela.
+        const novoEmp = (data.empreendimento || '').trim();
+        const trocouEmp = !!novoEmp && !!existing.empreendimento
+            && novoEmp.toLowerCase() !== String(existing.empreendimento).toLowerCase();
+        const interesses = Array.isArray(existing.payload?.interesses) ? [...existing.payload.interesses] : [];
+        if (novoEmp && !interesses.some(i => i.empreendimento?.toLowerCase() === novoEmp.toLowerCase())) {
+            interesses.push({ empreendimento: novoEmp, campanha: data.campaign || null, em: new Date().toISOString() });
+        }
+
+        await existing.update({
+            name: data.name || existing.name,
+            email: data.email || existing.email,
+            campaign: data.campaign || existing.campaign,
+            // conversa aberta manda: o empreendimento em curso não muda no meio
+            empreendimento: (trocouEmp && activeConv) ? existing.empreendimento : (novoEmp || existing.empreendimento),
+            payload: { ...existing.payload, ...extras, interesses, last_reentry_source: data.source || null },
+        });
+
+        await EmeAtendeMessenger.logEvent(existing.id, activeConv?.id || null, 'lead_reentry', {
+            source: data.source, apiKeyName, empreendimento: novoEmp || null,
+            interesse_adicional: trocouEmp || null,
+        });
+        if (activeConv) {
+            if (trocouEmp) {
+                console.log(`[eme-atende/intake] lead ${existing.id} entrou por outra campanha (${novoEmp}) com conversa aberta - interesse acumulado, fluxo mantido.`);
+            }
+            return { lead: existing, conversation: activeConv, reentry: true, reopened: false, interesseAdicional: trocouEmp };
+        }
 
         // conversa anterior fechada → reabre com novo opener
         const { flow } = await EmeAtendeFlowService.matchFlow(existing);
