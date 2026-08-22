@@ -99,10 +99,19 @@ function formatCurrency(value) {
     return parseFloat(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-function formatDate(isoDate) {
-    if (!isoDate) return '-';
-    const [y, m, d] = String(isoDate).split('-');
-    return `${d}/${m}/${y}`;
+// Aceita 'YYYY-MM-DD' (colunas DATEONLY) e Date (colunas DATE, que o Sequelize
+// devolve como objeto). A versão antiga só tratava a string e produzia
+// "undefined/undefined/Wed Aug 12" quando recebia um Date - ver mensagem de
+// "Ato já pago" em 21/08/2026. Mesma regra do BoletoPaymentCheckService.
+function formatDate(valor) {
+    if (!valor) return '-';
+    const s = String(valor);
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+        const [y, m, d] = s.slice(0, 10).split('-');
+        return `${d}/${m}/${y}`;
+    }
+    const dt = new Date(valor);
+    return Number.isNaN(dt.getTime()) ? s : dt.toLocaleDateString('pt-BR');
 }
 
 async function getSettings() {
@@ -428,7 +437,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             order: [['id', 'DESC']],
         });
         if (atoPago) {
-            const pagoEm = atoPago.paid_at ? formatDate(String(atoPago.paid_at).slice(0, 10)) : null;
+            const pagoEm = atoPago.paid_at ? formatDate(atoPago.paid_at) : null;
             console.log(`[BOLETO] Reserva ${idreserva}: ato JÁ PAGO (boleto #${atoPago.id}, Nosso Nº ${atoPago.nosso_numero}) — nenhum boleto novo será emitido.`);
             const msg = [
                 'ℹ️ Boleto do ato já foi pago - nenhuma ação tomada.',
