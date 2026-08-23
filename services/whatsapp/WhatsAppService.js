@@ -544,12 +544,32 @@ async function createTemplate({ name, category, language = 'pt_BR', body, exampl
     // Quick Reply buttons (até 3). Quando user toca, inbound chega com:
     //   - type: 'button', button: { text: 'SIM', payload: 'SIM' }
     //   - context.id = wamid da mensagem template — perfeito pra amarrar ao alerta
+    // Suporta QUICK_REPLY (padrão) e URL. No botão de URL a Meta aceita um
+    // sufixo dinâmico `{{1}}` no fim da URL - é o que permite um template só
+    // servir para links diferentes (ex.: .../pagamentos/pt/{{1}}). Quando há
+    // variável na URL, `example` é obrigatório.
     if (Array.isArray(buttons) && buttons.length) {
         const valid = buttons.filter(b => b?.text).slice(0, 3);
         if (valid.length) {
             components.push({
                 type: 'BUTTONS',
-                buttons: valid.map(b => ({ type: 'QUICK_REPLY', text: String(b.text).slice(0, 25) })),
+                buttons: valid.map(b => {
+                    const text = String(b.text).slice(0, 25);
+                    if (b.type === 'URL' || b.url) {
+                        const botao = { type: 'URL', text, url: String(b.url) };
+                        if (/\{\{\s*\d+\s*\}\}/.test(botao.url)) {
+                            if (!b.example) {
+                                throw new CloudApiError(
+                                    `Botão de URL "${text}" tem variável e precisa de \`example\`.`,
+                                    { code: 'BUTTON_EXAMPLE_MISSING' }
+                                );
+                            }
+                            botao.example = Array.isArray(b.example) ? b.example : [String(b.example)];
+                        }
+                        return botao;
+                    }
+                    return { type: 'QUICK_REPLY', text };
+                }),
             });
         }
     }

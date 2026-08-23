@@ -5,7 +5,7 @@ import BoletoNotify, { sendBoletoToTitular, WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEM
 import EventLogger from '../../services/boleto/BoletoEventLogger.js';
 import { runDailyCheck } from '../../services/boleto/BoletoPaymentCheckService.js';
 import EcoLock from '../../services/boleto/BoletoEcoLockService.js';
-import { getBoletoTemplateDefinition, TEMPLATE_EXAMPLE_PDF_URL } from '../../services/boleto/boletoWhatsappTemplate.js';
+import { getBoletoTemplateDefinition, gerarPdfExemplo } from '../../services/boleto/boletoWhatsappTemplate.js';
 import axios from 'axios';
 import WhatsAppService from '../../services/whatsapp/WhatsAppService.js';
 import WhatsAppTemplateService from '../../services/whatsapp/WhatsAppTemplateService.js';
@@ -1147,14 +1147,14 @@ export async function createBoletoWhatsappTemplate(req, res) {
         const def = getBoletoTemplateDefinition();
 
         // Template v2 usa HEADER DOCUMENT — Meta exige `header_handle` no
-        // example, que vem do Resumable Upload de um PDF real.
-        console.log(`[BOLETO_TPL] Baixando PDF de exemplo de ${TEMPLATE_EXAMPLE_PDF_URL}...`);
-        const pdfResp = await axios.get(TEMPLATE_EXAMPLE_PDF_URL, {
-            responseType: 'arraybuffer',
-            timeout: 30000,
-        });
-        const pdfBuffer = Buffer.from(pdfResp.data);
-        console.log(`[BOLETO_TPL] PDF baixado (${Math.round(pdfBuffer.length / 1024)} KB), iniciando upload resumable...`);
+        // example, que vem do Resumable Upload de um PDF.
+        //
+        // O exemplo é GERADO na hora. Antes era a URL de um boleto real no
+        // Supabase e o cleanup scheduler apagou o arquivo: a URL passou a
+        // devolver NoSuchKey e este endpoint quebrava com um 400 sem explicação
+        // (descoberto em 23/08/2026, ao submeter o v3).
+        const pdfBuffer = await gerarPdfExemplo();
+        console.log(`[BOLETO_TPL] PDF de exemplo gerado (${pdfBuffer.length} bytes), iniciando upload resumable...`);
 
         const { handle } = await WhatsAppService.uploadResumableMedia({
             buffer: pdfBuffer,

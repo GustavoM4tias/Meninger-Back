@@ -55,8 +55,53 @@ export function getBoletoTemplateDefinition() {
     };
 }
 
-// URL pública de um PDF de exemplo pra resumable upload do template.
-// Reutiliza um boleto real já no Supabase — economiza armazenamento e
-// é uma URL estável (até o cleanup scheduler decidir remover).
-export const TEMPLATE_EXAMPLE_PDF_URL =
-    'https://geeeswzhtzmiparmgpjp.supabase.co/storage/v1/object/public/Office%20Bucket/office/boleto-caixa/66/boleto-7460-1780439714094.pdf';
+// PDF de exemplo para o resumable upload do header DOCUMENT.
+//
+// ARMADILHA CORRIGIDA (23/08/2026): isto era a URL de um boleto real no
+// Supabase, "estável até o cleanup scheduler decidir remover" - e ele removeu.
+// A URL passou a devolver 400/NoSuchKey e QUALQUER tentativa de criar o
+// template (inclusive o botão de sincronizar do painel) quebrava com um 400
+// sem explicação. Agora geramos o exemplo na hora: sem dependência de arquivo
+// que expira.
+export const TEMPLATE_EXAMPLE_PDF_URL = null;
+
+/** PDF mínimo de uma página, gerado em memória. */
+export async function gerarPdfExemplo() {
+    const { PDFDocument, StandardFonts } = await import('pdf-lib');
+    const doc = await PDFDocument.create();
+    const pagina = doc.addPage([595, 842]);
+    const fonte = await doc.embedFont(StandardFonts.Helvetica);
+    pagina.drawText('Exemplo de documento', { x: 60, y: 760, size: 20, font: fonte });
+    pagina.drawText('Usado apenas para aprovar o template no WhatsApp.', { x: 60, y: 730, size: 11, font: fonte });
+    return Buffer.from(await doc.save());
+}
+
+// ── v3: mesmo template, aviso final padronizado com o Link de Cartão ─────────
+//
+// Só o parágrafo de aviso muda. Antes ele falava em "gerar um novo boleto" e
+// não dizia o que está em jogo; agora deixa claro o risco de perder a unidade,
+// com o MESMO texto usado no link de pagamento (fonte única em
+// services/userede/useredeWhatsappTemplate.js).
+//
+// Submetido à Meta para aprovar em paralelo. A troca é depois: basta apontar
+// WHATSAPP_TEMPLATE_NAME em BoletoNotifyService.js para 'boleto_caixa_ato_v3'
+// quando o status estiver APPROVED. O v2 segue enviando até lá, então não há
+// janela sem notificação.
+import { AVISO_PRAZO, RODAPE } from '../userede/useredeWhatsappTemplate.js';
+
+export const WHATSAPP_TEMPLATE_NAME_V3 = 'boleto_caixa_ato_v3';
+
+export function getBoletoTemplateDefinitionV3() {
+    const base = getBoletoTemplateDefinition();
+    return {
+        ...base,
+        name: WHATSAPP_TEMPLATE_NAME_V3,
+        body:
+            'Olá, *{{1}}*! 👋\n\n'
+            + 'Seu boleto referente à reserva no empreendimento *{{2}}* (unidade *{{3}}*) está disponível em anexo.\n\n'
+            + '💰 *Valor:* {{4}}\n'
+            + '📅 *Vencimento:* {{5}}\n\n'
+            + AVISO_PRAZO,
+        footerText: RODAPE,
+    };
+}
