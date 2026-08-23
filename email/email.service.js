@@ -140,6 +140,14 @@ const META = {
         file: 'realestate.pending.hbs',
         headerLight: true,
     },
+    // Link de pagamento no cartão (Userede). Espelha o boleto.caixa: cliente
+    // externo, então header claro.
+    'link.cartao': {
+        subject: (d) => `Link de pagamento — ${d.empreendimento || 'Sua reserva'} (válido até ${d.validadeFormatada || ''})`,
+        preview: (d) => `Valor ${d.valorFormatado || ''} • ${d.parcelamentoFormatado || ''}`,
+        file: 'link.cartao.hbs',
+        headerLight: true,
+    },
     'boleto.caixa': {
         subject: (d) => `Boleto disponível — ${d.empreendimento || 'Sua reserva'} (venc. ${d.vencimentoFormatado || ''})`,
         preview: (d) => `Valor ${d.valorFormatado || ''} • Vencimento ${d.vencimentoFormatado || ''}`,
