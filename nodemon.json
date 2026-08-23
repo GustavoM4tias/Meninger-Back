@@ -1,5 +1,5 @@
 {
-  "watch": ["server.js", "controllers", "routes", "services", "models", "middlewares", "lib", "scheduler", "email", "utils", "validatorAI", "config"],
+  "watch": ["server.js", "controllers", "routes", "services", "models", "middlewares", "lib", "scheduler", "email", "utils", "validatorAI", "config", "playwright"],
   "ext": "js,json,mjs,hbs",
   "ignore": [
     "node_modules/**",
