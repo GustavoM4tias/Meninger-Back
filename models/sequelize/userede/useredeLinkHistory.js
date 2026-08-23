@@ -28,6 +28,10 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.DECIMAL(15, 2), allowNull: true,
             comment: 'Soma das parcelas da série antes de qualquer regra.',
         },
+        comissao_percentual_aplicada: {
+            type: DataTypes.DECIMAL(6, 2), allowNull: true,
+            comment: 'Percentual da regra do empreendimento aplicado sobre o valor da série (null = sem regra). Mesma regra do boleto.',
+        },
         // O portal oferece um TETO de parcelas; quem escolhe é o cliente. Por
         // isso duas colunas: o que ofertamos e o que ele de fato fez.
         parcelas_limite: {

@@ -83,6 +83,12 @@ export async function emitir(dados) {
     const {
         idreserva, titular = {}, empreendimento, unidade,
         valor, parcelas, validade, enviarAoCliente = true,
+        // Vindos do fluxo comum do Ato: o valor JA passou pelo percentual do
+        // empreendimento, e guardamos o original para a tela mostrar os dois.
+        valorOriginal = null, comissaoPercentual = null,
+        // Link anterior que este substitui (ja excluido no portal pelo gate de
+        // re-trigger antes de chegar aqui).
+        substituiId = null,
     } = dados;
 
     const registro = await db.UseredeLinkHistory.create({
@@ -93,9 +99,11 @@ export async function emitir(dados) {
         unidade: unidade || null,
         pv: settings?.pv_principal || null,
         valor,
-        valor_original: valor,
+        valor_original: valorOriginal ?? valor,
+        comissao_percentual_aplicada: comissaoPercentual,
         parcelas_limite: parcelas,
         validade,
+        substitui_id: substituiId,
         status: 'processing',
     });
 
@@ -140,6 +148,15 @@ export async function emitir(dados) {
             pedido_id: pedidoId ? pedidoId.toUpperCase() : null,
         });
         console.log(`${TAG} Reserva ${idreserva}: link ${criado.url}`);
+
+        // Fecha a cadeia: o antigo aponta para quem o substituiu. Sem isso a
+        // listagem agrupada por reserva nao sabe qual e a via vigente.
+        if (substituiId) {
+            await db.UseredeLinkHistory.update(
+                { substituido_por_id: registro.id },
+                { where: { id: substituiId } },
+            ).catch(() => {});
+        }
     } catch (err) {
         console.error(`${TAG} Reserva ${idreserva} falhou: ${err.message}`);
         await registro.update({

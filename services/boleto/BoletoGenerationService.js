@@ -658,125 +658,76 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             return;
         }
 
-        // -- 2b. FORMA DE PAGAMENTO: boleto ou cartao --------------------------
+        // -- 2b. FORMA DE PAGAMENTO: detecta, nao emite ------------------------
         //
-        // A MESMA serie decide, pelo seu `quantidade`:
-        //   1        -> boleto Caixa (fluxo abaixo, inalterado)
+        // A MESMA serie decide, pelo seu campo `quantidade`:
+        //   1        -> boleto Caixa
         //   2 a 12   -> link de pagamento no cartao (portal Userede)
         //   acima    -> erro: nao existe como cobrar (teto da Rede e 12x e o
         //               boleto e a vista)
         //
-        // Regra de negocio definida em 23/08/2026: entrada parcelada se cobra no
-        // cartao, a vista no boleto.
+        // AQUI SO DETECTAMOS. A emissao do cartao acontece la embaixo, no mesmo
+        // ponto em que o boleto emite - de proposito. Emitir aqui, como fazia a
+        // primeira versao, pulava todos os gates compartilhados: percentual por
+        // empreendimento, teto de valor, validacao de vencimento e, o mais
+        // grave, a decisao de re-trigger. Sem ela, cada redisparo do webhook
+        // criava um link novo e pagavel para a mesma reserva.
         const serieEntrada = seriesEncontradas[0];
         const qtdParcelas = Number(serieEntrada.quantidade) || 1;
+        const formaPagamento = qtdParcelas > 1 ? 'cartao' : 'boleto';
 
-        if (qtdParcelas > 1) {
-            // `valor` e POR PARCELA; o total e `valor_serie`, que o CV ja calcula.
-            const valorTotal = parseFloat(
-                serieEntrada.valor_serie ?? (parseFloat(serieEntrada.valor) * qtdParcelas),
-            );
-            const vencSerie = serieEntrada.vencimento;
-
-            if (qtdParcelas > MAX_PARCELAS_CARTAO) {
-                const msg = [
-                    `X Cobranca do ato nao emitida: condicao em ${qtdParcelas}x.`,
-                    '',
-                    `O cartao aceita no maximo ${MAX_PARCELAS_CARTAO}x e o boleto e a vista.`,
-                    'Ajuste a condicao de pagamento da reserva.',
-                    '',
-                    `Serie: ${serieEntrada.serie} - ${qtdParcelas}x de ${formatCurrency(serieEntrada.valor)} (total ${formatCurrency(valorTotal)})`,
-                ].join('\n') + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-                const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
-                await history.update({
-                    status: 'error',
-                    error_message: `Condicao em ${qtdParcelas}x - acima do maximo de ${MAX_PARCELAS_CARTAO}x do cartao.`,
-                    titular_nome: titular?.nome,
-                    empreendimento: unidade?.empreendimento,
-                    idpessoa_cv: titular?.idpessoa_cv,
-                    valor: valorTotal,
-                    vencimento: vencSerie,
-                    cv_mensagem_enviada: msgOk,
-                    warnings: warnings.length ? warnings : null,
-                });
-                if (settings.situacao_erro_id) {
-                    await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
-                }
-                return;
-            }
-
-            console.log(`[BOLETO] Reserva ${idreserva}: serie de entrada em ${qtdParcelas}x - vai por LINK DE CARTAO.`);
-
-            // O registro do boleto vira 'skipped': nao e falha, e a outra forma.
+        if (qtdParcelas > MAX_PARCELAS_CARTAO) {
+            const msg = [
+                `X Cobranca do ato nao emitida: condicao em ${qtdParcelas}x.`,
+                '',
+                `O cartao aceita no maximo ${MAX_PARCELAS_CARTAO}x e o boleto e a vista.`,
+                'Ajuste a condicao de pagamento da reserva.',
+                '',
+                `Serie: ${serieEntrada.serie} - ${qtdParcelas}x de ${formatCurrency(serieEntrada.valor)}`,
+            ].join('\n') + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
             await history.update({
-                status: 'skipped',
-                error_message: `Serie de entrada em ${qtdParcelas}x - cobranca emitida como link de cartao.`,
+                status: 'error',
+                error_message: `Condicao em ${qtdParcelas}x - acima do maximo de ${MAX_PARCELAS_CARTAO}x do cartao.`,
                 titular_nome: titular?.nome,
                 empreendimento: unidade?.empreendimento,
                 idpessoa_cv: titular?.idpessoa_cv,
-                valor: valorTotal,
-                vencimento: vencSerie,
+                cv_mensagem_enviada: msgOk,
+                warnings: warnings.length ? warnings : null,
             });
-
-            const { default: UseredeLink } = await import('../userede/UseredeLinkService.js');
-            const registroCartao = await UseredeLink.emitir({
-                idreserva,
-                titular: { ...titular, idpessoa_cv: titular?.idpessoa_cv },
-                empreendimento: unidade?.empreendimento,
-                unidade: unidade?.unidade || unidade?.nome || null,
-                valor: valorTotal,
-                parcelas: qtdParcelas,
-                validade: vencSerie,
-            });
-
-            const ok = registroCartao.status === 'success';
-            const corpo = ok
-                ? [
-                    'OK Link de pagamento no cartao gerado com sucesso.',
-                    '',
-                    `Forma: Cartao de credito (em ate ${qtdParcelas}x de ${formatCurrency(valorTotal / qtdParcelas)})`,
-                    `Valor: ${formatCurrency(valorTotal)}`,
-                    `Valido ate: ${formatDate(vencSerie)}`,
-                    `${registroCartao.link_url}`,
-                    '',
-                    `Enviado ao titular: e-mail ${registroCartao.cliente_email_enviado ? 'OK' : 'nao enviado'} | WhatsApp ${registroCartao.cliente_whatsapp_enviado ? 'OK' : 'nao enviado'}.`,
-                    '',
-                    'O pagamento garante a reserva da unidade. Sem confirmacao ate a data acima, a reserva pode ser cancelada.',
-                ].join('\n')
-                : [
-                    'X Link de pagamento no cartao nao foi gerado.',
-                    '',
-                    `Motivo: ${registroCartao.error_message || 'falha desconhecida'}`,
-                    '',
-                    `Condicao: ${qtdParcelas}x - ${formatCurrency(valorTotal)}`,
-                    `Vencimento: ${formatDate(vencSerie)}`,
-                ].join('\n');
-
-            const situacaoAlvo = ok ? settings.situacao_sucesso_id : settings.situacao_erro_id;
-            const msgFinal = corpo + linhaAvisoMudancaEtapa(settings, situacaoAlvo, ok ? 'a proxima etapa' : 'Erro');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msgFinal), 'cv_mensagem');
-            await registroCartao.update({ cv_mensagem_enviada: msgOk });
-
-            // Modo manual nao move a etapa, igual ao boleto.
-            if (!manual && situacaoAlvo) {
-                const alvo = await agendarSituacaoCv(history, situacaoAlvo, settings);
-                await registroCartao.update({
-                    situacao_pendente_id: Number(situacaoAlvo),
-                    situacao_pendente_em: alvo,
-                    situacao_pendente_aplicada: false,
-                });
+            if (settings.situacao_erro_id) {
+                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
             }
             return;
         }
 
-        const serie = seriesEncontradas[0];
-        console.log(`[BOLETO] Série encontrada: idserie=${serie.idserie}`);
+        // Daqui pra baixo o fluxo trabalha com `serie` - a mesma referencia,
+        // ja normalizada quando e cartao. Os gates seguintes (percentual, teto,
+        // vencimento, re-trigger) nao precisam saber qual e a forma.
+        const serie = serieEntrada;
+
+        if (formaPagamento === 'cartao') {
+            // `valor` da serie e POR PARCELA; o total e `valor_serie`. Normalizar
+            // AQUI faz o percentual, o teto e o re-trigger olharem o numero certo
+            // sem nenhum deles precisar saber que existe cartao.
+            serieEntrada.valor = parseFloat(
+                serieEntrada.valor_serie ?? (parseFloat(serieEntrada.valor) * qtdParcelas),
+            );
+            console.log(`[ATO] Reserva ${idreserva}: serie em ${qtdParcelas}x - forma = LINK DE CARTAO `
+                + `(total ${formatCurrency(serieEntrada.valor)}).`);
+        }
 
         // ── 2.5. Valida dados do titular antes de qualquer chamada cara ──────
         // O portal Ecobrança rejeita silenciosamente endereços/CPF/CEP malformados
         // com "ENDERECO SACADO INVALIDO" etc. Validamos antes pra dar feedback
         // claro ao admin sobre o que ajustar no CV.
-        const titularCheck = validateTitular(titular);
+        // O portal do cartao NAO pede CPF, endereco, CEP nem UF - o cliente
+        // preenche o cartao na tela da Rede. Exigir esses campos barraria
+        // emissoes validas, entao a validacao pesada e so do boleto, cujo
+        // formulario do Ecobranca recusa endereco malformado.
+        const titularCheck = formaPagamento === 'cartao'
+            ? { ok: true, errors: [] }
+            : validateTitular(titular);
         if (!titularCheck.valid) {
             console.warn(
                 `[BOLETO] Titular com divergências (${titularCheck.errors.length}): `
@@ -886,50 +837,129 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         //     └─ Sim + condições diferentes → SUBSTITUIR (baixa antigo no Ecobrança
         //                                     e emite novo no mesmo fluxo)
         //   - Não existe → EMITE normalmente
+        //
+        // Vale para as DUAS formas: a cobranca pendente anterior pode ser boleto
+        // ou link de cartao, e a condicao nova pode pedir a outra forma. Por isso
+        // a comparacao inclui o PARCELAMENTO - mudar de 1x para 3x muda a forma e
+        // e, por definicao, condicao diferente.
         const vencimentoStr = String(serie.vencimento).slice(0, 10); // YYYY-MM-DD
-        const boletoPendentePrevio = await db.BoletoHistory.findOne({
-            where: {
-                idreserva,
-                status: 'success',
-                payment_status: 'pending',
-                ignorado: false,
-                id: { [Op.ne]: history.id }, // ignora o registro recém criado nesta rodada
-            },
-            order: [['created_at', 'DESC']],
-        });
+        const [pendenteBoleto, pendenteCartao] = await Promise.all([
+            db.BoletoHistory.findOne({
+                where: {
+                    idreserva,
+                    status: 'success',
+                    payment_status: 'pending',
+                    ignorado: false,
+                    id: { [Op.ne]: history.id }, // ignora o registro recém criado nesta rodada
+                },
+                order: [['created_at', 'DESC']],
+            }),
+            db.UseredeLinkHistory.findOne({
+                where: {
+                    idreserva,
+                    status: 'success',
+                    payment_status: 'pending',
+                    ignorado: false,
+                    excluido_no_portal: false,
+                },
+                order: [['created_at', 'DESC']],
+            }),
+        ]);
+
+        // Se houver das duas (nao deveria, mas o mundo acontece), vence a mais
+        // recente - e a que o cliente recebeu por ultimo.
+        const candidatos = [
+            pendenteBoleto && { forma: 'boleto', reg: pendenteBoleto },
+            pendenteCartao && { forma: 'cartao', reg: pendenteCartao },
+        ].filter(Boolean).sort((a, b) => new Date(b.reg.created_at) - new Date(a.reg.created_at));
+        const anterior = candidatos[0] || null;
+        const boletoPendentePrevio = anterior?.forma === 'boleto' ? anterior.reg : null;
 
         let baixaPreviaNossoNumero = null;
 
-        if (boletoPendentePrevio) {
-            // Compara valor (2 casas) e vencimento (YYYY-MM-DD).
-            const sameValor = Number(boletoPendentePrevio.valor).toFixed(2)
-                            === Number(valorEmitir).toFixed(2);
-            const sameVenc  = String(boletoPendentePrevio.vencimento).slice(0, 10) === vencimentoStr;
+        if (anterior) {
+            const reg = anterior.reg;
+            // Valor (2 casas), vencimento (YYYY-MM-DD) e parcelamento. O
+            // parcelamento anterior sai de `parcelas_limite` no cartao; boleto e
+            // sempre 1.
+            const parcelasAnteriores = anterior.forma === 'cartao'
+                ? (Number(reg.parcelas_limite) || 1) : 1;
+            const vencAnterior = anterior.forma === 'cartao' ? reg.validade : reg.vencimento;
 
-            if (sameValor && sameVenc) {
+            const sameValor = Number(reg.valor).toFixed(2) === Number(valorEmitir).toFixed(2);
+            const sameVenc = String(vencAnterior).slice(0, 10) === vencimentoStr;
+            const sameParcelas = parcelasAnteriores === qtdParcelas;
+
+            // ── Condicao MUDOU e a cobranca anterior e um LINK ────────────────
+            // Cancelar antes de gerar a nova, senao ficam duas pagaveis - e link
+            // nao se baixa depois, so se exclui enquanto esta pendente.
+            if (!(sameValor && sameVenc && sameParcelas) && anterior.forma === 'cartao') {
+                const { default: UseredeLink } = await import('../userede/UseredeLinkService.js');
+                try {
+                    await UseredeLink.excluir(reg.id, {
+                        motivo: `Condicao alterada - substituido pelo acionamento #${history.id}.`,
+                    });
+                    await reg.update({ substituido_por_id: null });
+                    console.log(`[ATO] Reserva ${idreserva}: link anterior #${reg.pedido_id} excluido antes de gerar o novo.`);
+                } catch (err) {
+                    // Nao gerar o novo com o antigo vivo: seria cobranca dupla.
+                    // Mesma regra do boleto, onde falha na baixa aborta a reemissao.
+                    const msgErr = [
+                        'X Nova cobranca do ato NAO foi gerada.',
+                        '',
+                        `A condicao mudou, mas o link anterior (${reg.pedido_id}) nao pode ser excluido no portal:`,
+                        `  ${err.message}`,
+                        '',
+                        'Nada foi emitido para evitar duas cobrancas vivas ao mesmo tempo.',
+                        'Exclua o link no portal e reprocesse pela tela do Ato.',
+                    ].join(String.fromCharCode(10)) + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
+                    const okErr = pushWarn(await sendCvMessage(idreserva, msgErr), 'cv_mensagem');
+                    await history.update({
+                        status: 'error',
+                        error_message: `Falha ao excluir o link anterior (${reg.pedido_id}): ${err.message}`,
+                        titular_nome: titular?.nome,
+                        empreendimento: unidade?.empreendimento,
+                        idpessoa_cv: titular?.idpessoa_cv,
+                        cv_mensagem_enviada: okErr,
+                        warnings: warnings.length ? warnings : null,
+                    });
+                    if (settings.situacao_erro_id) {
+                        await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
+                    }
+                    return;
+                }
+            }
+
+            if (sameValor && sameVenc && sameParcelas) {
                 // ── IGNORAR ──
-                console.log(`[BOLETO] Reserva ${idreserva}: boleto pendente #${boletoPendentePrevio.id} `
-                    + `já existe com mesmas condições (R$ ${valorEmitir} / ${vencimentoStr}). Ignorando este gatilho.`);
+                const rotulo = anterior.forma === 'cartao' ? 'link de cartao' : 'boleto';
+                const doc = anterior.forma === 'cartao' ? reg.pedido_id : reg.nosso_numero;
+                const rotuloDoc = anterior.forma === 'cartao' ? 'Pedido' : 'Nosso Numero';
+
+                console.log(`[ATO] Reserva ${idreserva}: ${rotulo} pendente #${reg.id} `
+                    + `ja cobre estas condicoes (R$ ${valorEmitir} / ${vencimentoStr} / ${qtdParcelas}x). Ignorando este gatilho.`);
 
                 const msgIgnore = [
-                    'ℹ️ Boleto já emitido — nenhuma ação tomada.',
+                    `ℹ️ Cobranca do ato ja emitida por ${rotulo} - nenhuma acao tomada.`,
                     '',
-                    `Detectamos que já existe boleto pendente para esta reserva com as mesmas condições:`,
+                    `Ja existe cobranca pendente para esta reserva com as mesmas condicoes:`,
                     `  💰 Valor: ${formatCurrency(valorEmitir)}`,
                     `  📅 Vencimento: ${formatDate(vencimentoStr)}`,
-                    `  🔢 Nosso Número: ${boletoPendentePrevio.nosso_numero || '(não registrado)'}`,
+                    qtdParcelas > 1 ? `  💳 Parcelamento: em ate ${qtdParcelas}x` : null,
+                    `  🔢 ${rotuloDoc}: ${doc || '(nao registrado)'}`,
                     '',
-                    'Provavelmente o lote do Sienge falhou e o CV reagendou o envio. Mantemos o cliente nesta etapa pra que o próximo lote tente novamente.',
-                ].join('\n');
+                    'Provavelmente o lote do Sienge falhou e o CV reagendou o envio. Mantemos o cliente nesta etapa pra que o proximo lote tente novamente.',
+                ].filter(Boolean).join('\n');
                 const msgIgnOk = pushWarn(await sendCvMessage(idreserva, msgIgnore), 'cv_mensagem');
 
                 await EventLogger.log({
                     historyId: history.id, idreserva,
                     type: 'ignored_duplicate', severity: 'info',
-                    message: `Gatilho ignorado — boleto #${boletoPendentePrevio.id} já cobre estas condições.`,
+                    message: `Gatilho ignorado - ${rotulo} #${reg.id} ja cobre estas condicoes.`,
                     data: {
-                        previousHistoryId: boletoPendentePrevio.id,
-                        nossoNumero: boletoPendentePrevio.nosso_numero,
+                        previousHistoryId: reg.id,
+                        previousForma: anterior.forma,
+                        documento: doc,
                         valor: valorEmitir,
                         vencimento: vencimentoStr,
                     },
@@ -938,7 +968,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 await history.update({
                     status: 'success',          // não foi erro — só não fizemos nada
                     ignorado: true,
-                    substitui_id: boletoPendentePrevio.id,
+                    // A coluna aponta para boleto_history: com id de cartao
+                    // apontaria para um registro alheio.
+                    substitui_id: anterior.forma === 'boleto' ? reg.id : null,
                     titular_nome: titular?.nome,
                     empreendimento: unidade?.empreendimento,
                     idpessoa_cv: titular?.idpessoa_cv,
@@ -954,7 +986,14 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             }
 
             // ── SUBSTITUIR ──
-            // Condições diferentes — baixa o antigo no Ecobrança e emite novo.
+            // Condições diferentes. Se o anterior era um LINK, ele já foi
+            // excluído lá em cima (antes desta comparação) - link não se baixa,
+            // se exclui, e só enquanto está pendente. O que resta aqui é a baixa
+            // prévia do BOLETO, que acontece na mesma sessão da emissão nova.
+            if (!boletoPendentePrevio) {
+                console.log(`[ATO] Reserva ${idreserva}: cobrança anterior era link de cartão, `
+                    + 'já excluída. Seguindo para a emissão nova.');
+            } else {
             console.log(`[BOLETO] Reserva ${idreserva}: boleto pendente #${boletoPendentePrevio.id} `
                 + `tem condições diferentes (antigo: R$ ${boletoPendentePrevio.valor} / ${boletoPendentePrevio.vencimento}, `
                 + `novo: R$ ${valorEmitir} / ${vencimentoStr}). Baixando antigo e emitindo novo.`);
@@ -986,6 +1025,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             await history.update({
                 substitui_id: boletoPendentePrevio.id,
             });
+            }
         }
 
         // ── 3. Valida vencimento (deve ser >= hoje) ───────────────────────────
@@ -1054,6 +1094,88 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             });
             if (settings.situacao_erro_id) {
                 await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
+            }
+            return;
+        }
+
+        // -- 3b. EMISSAO POR CARTAO ------------------------------------------
+        //
+        // Daqui pra tras tudo foi compartilhado com o boleto: janela, ato ja
+        // pago, serie unica, percentual do empreendimento, teto de valor,
+        // vencimento e re-trigger. So agora os caminhos se separam, que e o
+        // unico ponto em que eles realmente diferem: como a cobranca e criada.
+        if (formaPagamento === 'cartao') {
+            const { default: UseredeLink } = await import('../userede/UseredeLinkService.js');
+
+            // O registro do boleto vira 'skipped': nao e falha, e a outra forma.
+            await history.update({
+                status: 'skipped',
+                error_message: `Serie de entrada em ${qtdParcelas}x - cobranca emitida como link de cartao.`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                valor: valorEmitir,
+                valor_original: valorOriginal,
+                comissao_percentual_aplicada: comissaoPercentualAplicada,
+                vencimento: vencimentoStr,
+            });
+
+            const registroCartao = await UseredeLink.emitir({
+                idreserva,
+                titular: { ...titular, idpessoa_cv: titular?.idpessoa_cv },
+                empreendimento: unidade?.empreendimento,
+                unidade: unidade?.unidade || unidade?.nome || null,
+                // `valorEmitir` ja passou pelo percentual do empreendimento e
+                // pelo teto - o cartao cobra exatamente o mesmo que o boleto
+                // cobraria nas mesmas regras.
+                valor: valorEmitir,
+                valorOriginal,
+                comissaoPercentual: comissaoPercentualAplicada,
+                parcelas: qtdParcelas,
+                validade: vencimentoStr,
+                substituiId: anterior?.forma === 'cartao' ? anterior.reg.id : null,
+            });
+
+            const ok = registroCartao.status === 'success';
+            const corpo = ok
+                ? [
+                    'OK Link de pagamento no cartao gerado com sucesso.',
+                    '',
+                    `Forma: Cartao de credito (em ate ${qtdParcelas}x de ${formatCurrency(valorEmitir / qtdParcelas)})`,
+                    `Valor: ${formatCurrency(valorEmitir)}`,
+                    comissaoPercentualAplicada
+                        ? `Percentual aplicado: ${comissaoPercentualAplicada}% de ${formatCurrency(valorOriginal)}`
+                        : null,
+                    `Valido ate: ${formatDate(vencimentoStr)}`,
+                    `${registroCartao.link_url}`,
+                    '',
+                    `Enviado ao titular: e-mail ${registroCartao.cliente_email_enviado ? 'OK' : 'nao enviado'}`
+                        + ` | WhatsApp ${registroCartao.cliente_whatsapp_enviado ? 'OK' : 'nao enviado'}.`,
+                    '',
+                    'O pagamento garante a reserva da unidade. Sem confirmacao ate a data acima, a reserva pode ser cancelada.',
+                ].filter(Boolean).join('\n')
+                : [
+                    'X Link de pagamento no cartao nao foi gerado.',
+                    '',
+                    `Motivo: ${registroCartao.error_message || 'falha desconhecida'}`,
+                    '',
+                    `Condicao: ${qtdParcelas}x - ${formatCurrency(valorEmitir)}`,
+                    `Vencimento: ${formatDate(vencimentoStr)}`,
+                ].join('\n');
+
+            const situacaoAlvo = ok ? settings.situacao_sucesso_id : settings.situacao_erro_id;
+            const msgFinal = corpo + linhaAvisoMudancaEtapa(settings, situacaoAlvo, ok ? 'a proxima etapa' : 'Erro');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msgFinal), 'cv_mensagem');
+            await registroCartao.update({ cv_mensagem_enviada: msgOk });
+
+            // Modo manual nao move a etapa, igual ao boleto.
+            if (!manual && situacaoAlvo) {
+                const alvo = await agendarSituacaoCv(history, situacaoAlvo, settings);
+                await registroCartao.update({
+                    situacao_pendente_id: Number(situacaoAlvo),
+                    situacao_pendente_em: alvo,
+                    situacao_pendente_aplicada: false,
+                });
             }
             return;
         }
