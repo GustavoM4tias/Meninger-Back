@@ -160,4 +160,147 @@ async function tentarAbrirLinkPagamento(page, tentativa) {
     return true;
 }
 
-export default { clicarNoMenu, abrirLinkPagamento };
+export default { clicarNoMenu, abrirLinkPagamento, abrirGerenciar, excluirLink };
+
+// ── Ações sobre um link existente (aba Gerenciar) ─────────────────────────────
+//
+// Cada linha traz um menu de três pontinhos (`dsr-menu-overflow`) com:
+//   value="6" Cobrar cliente | value="1" Duplicar link | value="2" Excluir link
+// e, em telas largas, os mesmos comandos como `dsr-button` soltos (classe
+// `hideInTablet` - por isso somem em viewport estreito, e foi assim que passaram
+// despercebidos numa primeira varredura).
+//
+// EXCLUIR EXISTE e é o equivalente à baixa do boleto: sem ele, um link emitido
+// por engano ficaria pagável até vencer.
+
+/** Abre a aba Gerenciar. */
+export async function abrirGerenciar(page) {
+    await page.evaluate(() => {
+        const varrer = (root, d) => {
+            if (d > 14) return null;
+            for (const el of root.querySelectorAll('*')) {
+                if (!el.children.length && /^Gerenciar$/i.test((el.textContent || '').trim())) return el;
+                if (el.shadowRoot) { const a = varrer(el.shadowRoot, d + 1); if (a) return a; }
+            }
+            return null;
+        };
+        const el = varrer(document, 0);
+        if (el) for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+        }
+    }).catch(() => {});
+    await page.waitForTimeout(5000);
+}
+
+/**
+ * Exclui um link pelo identificador do pedido (ex.: 'EKL7FBML').
+ *
+ * @returns {Promise<{ excluido: boolean, motivo?: string }>}
+ */
+export async function excluirLink(page, idPedido) {
+    const id = String(idPedido || '').replace(/^#/, '').trim().toUpperCase();
+    if (!id) throw new Error('Identificador do pedido é obrigatório para excluir.');
+
+    await abrirGerenciar(page);
+
+    // 1. Expandir a linha do pedido (o botão de expandir é um dsr-button-icon
+    //    com aria-label "Exibir/Esconder detalhes" na primeira coluna).
+    const expandiu = await page.evaluate((alvoId) => {
+        const texto = (e) => (e.textContent || '').replace(/\s+/g, ' ').trim();
+        const varrer = (root, d, achados) => {
+            if (d > 14) return achados;
+            for (const el of root.querySelectorAll('*')) {
+                if (texto(el).includes(alvoId) && texto(el).length < 300) achados.push(el);
+                if (el.shadowRoot) varrer(el.shadowRoot, d + 1, achados);
+            }
+            return achados;
+        };
+        const cands = varrer(document, 0, []);
+        if (!cands.length) return 'linha-nao-encontrada';
+        // sobe até a linha da tabela e procura o botão de expandir
+        let ctx = cands[cands.length - 1];
+        for (let i = 0; i < 6 && ctx; i++) {
+            const btn = ctx.querySelector?.('dsr-button-icon');
+            if (btn) {
+                const real = btn.shadowRoot?.querySelector('button') || btn;
+                real.click();
+                return 'expandido';
+            }
+            ctx = ctx.parentElement;
+        }
+        return 'expansor-nao-encontrado';
+    }, id);
+    if (expandiu !== 'expandido') return { excluido: false, motivo: expandiu };
+    await page.waitForTimeout(2500);
+
+    // 2. Clicar em "Excluir link" (botão direto ou item do menu overflow).
+    const clicou = await page.evaluate(() => {
+        const texto = (e) => (e.textContent || '').replace(/\s+/g, ' ').trim();
+        const varrer = (root, d) => {
+            if (d > 14) return null;
+            for (const el of root.querySelectorAll('dsr-button, dsr-menu-item, button')) {
+                if (/^excluir link$/i.test(texto(el))) {
+                    const real = el.shadowRoot?.querySelector('button, li') || el;
+                    real.click();
+                    return true;
+                }
+            }
+            for (const el of root.querySelectorAll('*')) {
+                if (el.shadowRoot) { const a = varrer(el.shadowRoot, d + 1); if (a) return a; }
+            }
+            return null;
+        };
+        return !!varrer(document, 0);
+    });
+    if (!clicou) return { excluido: false, motivo: 'acao-excluir-nao-encontrada' };
+    await page.waitForTimeout(2500);
+
+    // 3. Confirmar no modal.
+    //
+    // ARMADILHA: o botão de confirmar tem o MESMO texto do que abriu o modal
+    // ("Excluir link"). Buscar por texto pega o de trás e a exclusão nunca
+    // acontece - foi assim que o primeiro teste "clicou" e o link continuou
+    // listado. Por isso escopamos ao container do modal, que também tem o
+    // "Não quero excluir" ao lado.
+    const confirmou = await page.evaluate(() => {
+        const texto = (e) => (e.textContent || '').replace(/\s+/g, ' ').trim();
+
+        // Acha o container do modal: tem os DOIS botões da confirmação.
+        const modais = [];
+        const varrer = (root, d) => {
+            if (d > 14) return;
+            for (const el of root.querySelectorAll('*')) {
+                const t = texto(el);
+                if (/n[ãa]o quero excluir/i.test(t) && /excluir link/i.test(t) && t.length < 400) modais.push(el);
+                if (el.shadowRoot) varrer(el.shadowRoot, d + 1);
+            }
+        };
+        varrer(document, 0);
+        if (!modais.length) return 'sem-modal';
+
+        // O mais interno é o container justo da dupla de botões.
+        const modal = modais[modais.length - 1];
+        const botoes = [];
+        const coletar = (root, d) => {
+            if (d > 8) return;
+            for (const el of root.querySelectorAll('dsr-button, button')) {
+                if (/^excluir link$/i.test(texto(el)) && el.getBoundingClientRect().width > 0) botoes.push(el);
+                if (el.shadowRoot) coletar(el.shadowRoot, d + 1);
+            }
+        };
+        coletar(modal, 0);
+        if (!botoes.length) return 'sem-botao-no-modal';
+        (botoes[0].shadowRoot?.querySelector('button') || botoes[0]).click();
+        return 'confirmado';
+    }).catch(() => 'erro');
+    log('UREDE_NAV', `Confirmação da exclusão: ${confirmou}.`);
+    await page.waitForTimeout(5000);
+
+    // 4. Conferir que sumiu da listagem.
+    await abrirGerenciar(page);
+    const aindaExiste = await page.evaluate((alvoId) =>
+        (document.body.innerText || '').includes(alvoId), id);
+
+    log('UREDE_NAV', `Excluir link ${id}: ${aindaExiste ? 'AINDA APARECE na listagem' : 'removido'}.`);
+    return aindaExiste ? { excluido: false, motivo: 'ainda-listado' } : { excluido: true };
+}
