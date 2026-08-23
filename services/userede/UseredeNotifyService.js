@@ -125,18 +125,15 @@ export async function enviarWhatsapp({ titular, dados }) {
         };
     }
 
-    // PENDENTE: o botão de URL do template tem sufixo dinâmico ({{1}} = id do
-    // link) e o `sendTemplate` ainda não monta o componente BUTTON. Enquanto
-    // isso, o caminho de template só serve para links cujo id seja fixo - ou
-    // seja, na prática ele ainda não está pronto. Barramos aqui em vez de
-    // enviar uma mensagem com botão apontando para o exemplo.
+    // O template declara a URL do botão como `.../pagamentos/pt/{{1}}`; mandamos
+    // só o id e a Meta concatena. Sem o id não dá para montar o botão, e a Meta
+    // recusa a mensagem - então barramos antes com um erro que explica.
     const id = idDoLink(dados.url);
-    if (id) {
+    if (!id) {
         return {
             ok: false,
             to: phone,
-            error: 'Envio por template ainda não suporta o parâmetro do botão de URL. '
-                 + 'Use a janela de 24h ou complete o suporte a BUTTON em WhatsAppService.sendTemplate.',
+            error: `Não consegui extrair o id do link em "${dados.url}" - sem ele o botão do template não pode ser montado.`,
         };
     }
 
@@ -153,6 +150,7 @@ export async function enviarWhatsapp({ titular, dados }) {
                 descreverParcelamento(dados.valor, dados.parcelas),
                 formatDateBr(dados.validade),
             ],
+            urlButtonParam: id,
         });
         console.log(`${TAG} ✓ WhatsApp TEMPLATE para ${phone}.`);
         return { ok: true, to: phone, freeWindow: false, messageId: msgId };

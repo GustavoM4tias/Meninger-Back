@@ -160,7 +160,7 @@ async function tentarAbrirLinkPagamento(page, tentativa) {
     return true;
 }
 
-export default { clicarNoMenu, abrirLinkPagamento, abrirGerenciar, excluirLink };
+export default { clicarNoMenu, abrirLinkPagamento, abrirGerenciar, excluirLink, listarLinks, detalharLink, normalizarStatus };
 
 // ── Ações sobre um link existente (aba Gerenciar) ─────────────────────────────
 //
@@ -303,4 +303,113 @@ export async function excluirLink(page, idPedido) {
 
     log('UREDE_NAV', `Excluir link ${id}: ${aindaExiste ? 'AINDA APARECE na listagem' : 'removido'}.`);
     return aindaExiste ? { excluido: false, motivo: 'ainda-listado' } : { excluido: true };
+}
+
+// ── Conciliação: leitura da listagem ──────────────────────────────────────────
+//
+// O status de cada link vive na própria linha da aba Gerenciar, em texto:
+//   "Vence em 28/08" (a vencer) | "Pago" | "Expirado" | "Negado" | "Estornado"
+//
+// Lemos a listagem INTEIRA de uma vez e casamos pelo identificador do pedido,
+// em vez de abrir link por link: uma passada resolve dezenas de registros e
+// cada expansão custa segundos.
+
+/** Normaliza o texto do portal para o vocabulário do histórico. */
+export function normalizarStatus(texto) {
+    const t = String(texto || '').toLowerCase();
+    if (/vence em|a vencer/.test(t)) return 'pending';
+    if (/\bpago\b|liquidad/.test(t)) return 'paid';
+    if (/expirad/.test(t)) return 'expired';
+    if (/negad|recusad/.test(t)) return 'denied';
+    if (/estornad/.test(t)) return 'refunded';
+    return null;
+}
+
+/**
+ * Lê todas as linhas visíveis da aba Gerenciar.
+ * @returns {Promise<Array<{ pedidoId, titulo, criadoEm, valor, statusTexto, status }>>}
+ */
+export async function listarLinks(page) {
+    await abrirGerenciar(page);
+
+    const brutas = await page.evaluate(() => {
+        // Cada linha começa com "#IDENTIFICADOR •". Partimos o texto da tabela
+        // por esse marcador em vez de depender da estrutura de <tr>, que muda
+        // conforme a linha está expandida ou não.
+        const txt = (document.body.innerText || '').replace(/\s+/g, ' ');
+        const i = txt.indexOf('identificação do pedido');
+        if (i < 0) return [];
+        const corpo = txt.slice(i);
+        const partes = corpo.split(/(?=#[A-Z0-9]{6,12}\s*•)/).slice(1);
+        return partes.map(p => p.slice(0, 220));
+    });
+
+    const RE = /^#([A-Z0-9]{6,12})\s*•\s*(.*?)\s+(\d{2}\/\d{2}\/\d{4})\s+R\$\s*([\d.,]+)\s+(.*)$/;
+    const linhas = [];
+    for (const bruta of brutas) {
+        const m = bruta.match(RE);
+        if (!m) continue;
+        // O status vai até o começo da próxima linha ou de um rótulo de ação.
+        const statusTexto = m[5]
+            .replace(/\s*(Cobrar cliente|copiar link|Duplicar link|Excluir link|REDECARD).*$/i, '')
+            .trim();
+        linhas.push({
+            pedidoId: m[1],
+            titulo: m[2].trim(),
+            criadoEm: m[3],
+            valor: Number(m[4].replace(/\./g, '').replace(',', '.')),
+            statusTexto,
+            status: normalizarStatus(statusTexto),
+        });
+    }
+    log('UREDE_NAV', `Gerenciar: ${linhas.length} link(s) lido(s).`);
+    return linhas;
+}
+
+/**
+ * Abre um link e lê os dados da tentativa de pagamento.
+ * Só vale a pena para os que mudaram de status - é uma expansão por registro.
+ *
+ * @returns {Promise<{ parcelas, bandeira, cartao, titular, momento, motivo } | null>}
+ */
+export async function detalharLink(page, pedidoId) {
+    const id = String(pedidoId).replace(/^#/, '').toUpperCase();
+
+    const expandiu = await page.evaluate((alvo) => {
+        const texto = (e) => (e.textContent || '').replace(/\s+/g, ' ').trim();
+        const achados = [];
+        const varrer = (root, d) => {
+            if (d > 14) return;
+            for (const el of root.querySelectorAll('*')) {
+                if (texto(el).includes(alvo) && texto(el).length < 300) achados.push(el);
+                if (el.shadowRoot) varrer(el.shadowRoot, d + 1);
+            }
+        };
+        varrer(document, 0);
+        if (!achados.length) return false;
+        let ctx = achados[achados.length - 1];
+        for (let i = 0; i < 6 && ctx; i++) {
+            const btn = ctx.querySelector?.('dsr-button-icon');
+            if (btn) { (btn.shadowRoot?.querySelector('button') || btn).click(); return true; }
+            ctx = ctx.parentElement;
+        }
+        return false;
+    }, id);
+    if (!expandiu) return null;
+    await page.waitForTimeout(2500);
+
+    return page.evaluate((alvo) => {
+        const txt = (document.body.innerText || '').replace(/\s+/g, ' ');
+        const i = txt.indexOf(alvo);
+        const trecho = txt.slice(i, i + 900);
+        const pegar = (re) => (trecho.match(re) || [])[1]?.trim() || null;
+        return {
+            // "10x de R$ 202,11 sem juros" -> 10
+            parcelas: Number(pegar(/Cr[ée]dito parcelado\s+(\d+)x/i)) || null,
+            cartao: pegar(/N[úu]mero do cart[ãa]o\s+([*\d\s]+\d{4})/i),
+            titular: pegar(/Titular informado no pagamento\s+(.+?)(?:\s{2,}|Momento|$)/i),
+            momento: pegar(/Momento da tentativa\s+(\d{2}\/\d{2}\/\d{4}[^A-Za-z]*\d{2}:\d{2})/i),
+            motivo: pegar(/(Negado pelo antifraude|Negado[^.]*)\./i),
+        };
+    }, id);
 }

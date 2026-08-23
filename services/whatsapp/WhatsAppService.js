@@ -205,7 +205,7 @@ async function uploadMessageMedia({ buffer, filename, mimeType }) {
  * @param {object} [params.headerDocument] - { id } ou { link, filename } pra header DOCUMENT
  * @returns {Promise<{ id: string, raw: object }>}
  */
-async function sendTemplate({ to, templateName, language = 'pt_BR', variables = [], headerImage = null, headerDocument = null }) {
+async function sendTemplate({ to, templateName, language = 'pt_BR', variables = [], headerImage = null, headerDocument = null, urlButtonParam = null }) {
     const phone = normalizePhone(to);
     if (!phone) throw new CloudApiError('Telefone inválido', { code: 'BAD_PHONE' });
     if (!templateName) throw new CloudApiError('templateName é obrigatório', { code: 'NO_TEMPLATE' });
@@ -232,6 +232,22 @@ async function sendTemplate({ to, templateName, language = 'pt_BR', variables = 
         components.push({
             type: 'body',
             parameters: variables.map(v => ({ type: 'text', text: String(v ?? '') })),
+        });
+    }
+
+    // Botão de URL com sufixo dinâmico. O template declara a URL como
+    // `.../pagamentos/pt/{{1}}` e aqui mandamos SÓ o sufixo (o id do link) - a
+    // Meta concatena. Sem isto, um template com botão dinâmico é recusado no
+    // envio, e era o que bloqueava o link de cartão.
+    //
+    // `index: 0` porque o template tem um botão só; se ganhar mais, o índice
+    // precisa acompanhar a ordem declarada na criação.
+    if (urlButtonParam) {
+        components.push({
+            type: 'button',
+            sub_type: 'url',
+            index: '0',
+            parameters: [{ type: 'text', text: String(urlButtonParam) }],
         });
     }
 

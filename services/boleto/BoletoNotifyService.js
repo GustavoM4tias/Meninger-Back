@@ -32,7 +32,10 @@ const { WhatsappMessage } = db;
 // v2 (atual): header DOCUMENT (PDF anexo) + 5 vars (nome, empreendimento,
 // unidade, valor, vencimento). O link do PDF NÃO entra no body — vai no
 // anexo nativo do WhatsApp, mais limpo.
-export const WHATSAPP_TEMPLATE_NAME = 'boleto_caixa_ato_v2';
+// v3 desde 23/08/2026: mesmo template do v2, só o parágrafo de aviso mudou -
+// agora diz o que está em jogo (perder a unidade) com o MESMO texto do link de
+// cartão. Aprovado na Meta antes da troca; o v2 continua existindo lá.
+export const WHATSAPP_TEMPLATE_NAME = 'boleto_caixa_ato_v3';
 export const WHATSAPP_TEMPLATE_LANG = 'pt_BR';
 
 /**
