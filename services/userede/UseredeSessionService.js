@@ -24,6 +24,7 @@ import db from '../../models/sequelize/index.js';
 import { encrypt, decrypt } from '../../utils/encryption.js';
 import { abrirComSessao, uredeLogin, estaAutenticado } from '../../playwright/modules/userede/login.js';
 import { log, error } from '../../playwright/core/logger.js';
+import { withLock } from './UseredeLockService.js';
 
 // Página leve e autenticada, usada tanto pelo keep-alive quanto pela sondagem.
 const URL_SONDA = 'https://meu.userede.com.br/home';
@@ -125,7 +126,17 @@ export async function marcarPrecisaHumano(motivo) {
  *   sessão salva (o keep-alive usa assim, para não transformar uma checagem de
  *   rotina em tentativa de login).
  */
-export async function withSession(fn, { permitirLogin = true } = {}) {
+export async function withSession(fn, { permitirLogin = true, owner = null, semTrava = false } = {}) {
+    // Uma operação por vez no portal. Sem isto, dois acionamentos simultâneos
+    // abrem duas sessões do mesmo usuário, gravam o storageState por cima um do
+    // outro e podem disparar dois logins - e login é onde mora o reCAPTCHA.
+    // `semTrava` existe só para quem JÁ está dentro de uma trava (evita
+    // deadlock de auto-espera).
+    if (!semTrava) {
+        const dono = owner || `userede:${process.pid}:${Date.now()}`;
+        return withLock(dono, () => withSession(fn, { permitirLogin, semTrava: true }));
+    }
+
     const settings = await getSettings();
     if (!settings) throw new Error('Configurações do Userede não encontradas.');
 

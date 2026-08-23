@@ -603,49 +603,78 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             return;
         }
 
-        // ── 2a. FORMA DE PAGAMENTO: boleto ou cartão ──────────────────────────
-        //
-        // Mesma série de entrada; o que decide é o PARCELAMENTO da condição:
-        //   1 parcela   -> boleto Caixa (fluxo abaixo, inalterado)
-        //   2 a 12      -> link de pagamento no cartão (portal Userede)
-        //
-        // Até 23/08/2026 mais de uma parcela era ERRO ("múltiplas parcelas de
-        // entrada"). Deixou de ser: passou a ser o gatilho do cartão. A regra
-        // veio do negócio - entrada parcelada se cobra no cartão, à vista no
-        // boleto.
-        //
-        // Acima de 12 continua erro, porque é o teto da Rede: não existe forma
-        // de cobrar aquilo, nem no boleto (que é à vista) nem no cartão.
+        // -- 2a. Uma serie de entrada, e so uma --------------------------------
+        // Duas linhas de Recurso Proprio a Vista NAO significam "2x" - significa
+        // condicao malformada. O parcelamento vive DENTRO da serie, no campo
+        // `quantidade` que o CV devolve; duas linhas seriam duas entradas, o que
+        // nao existe.
         if (seriesEncontradas.length > 1) {
-            const parcelas = seriesEncontradas.length;
-            const valorTotal = seriesEncontradas.reduce((soma, s) => soma + parseFloat(s.valor || 0), 0);
-            // O cliente paga UMA vez e a bandeira parcela; então o prazo do link
-            // é o vencimento da PRIMEIRA parcela, não o da última.
-            const vencimentos = seriesEncontradas
-                .map(s => new Date(s.vencimento)).filter(d => !Number.isNaN(+d)).sort((a, b) => a - b);
-            const primeiroVenc = vencimentos[0];
-
             const detalhe = seriesEncontradas
-                .map(s => `série ${s.idserie} — venc. ${formatDate(s.vencimento)} — ${formatCurrency(s.valor)}`)
-                .join('\n• ');
+                .map(s => `serie ${s.idserie} - ${s.quantidade}x de ${formatCurrency(s.valor)} - venc. ${formatDate(s.vencimento)}`)
+                .join('\n- ');
+            const msg = [
+                'X Cobranca do ato nao emitida: multiplas series de entrada.',
+                '',
+                `A reserva tem ${seriesEncontradas.length} linhas com serie de entrada configurada, e so pode haver uma.`,
+                'O parcelamento fica DENTRO da serie, nao em linhas separadas.',
+                '',
+                'Series encontradas:',
+                `- ${detalhe}`,
+            ].join('\n') + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+            await history.update({
+                status: 'error',
+                error_message: `Multiplas series de entrada (${seriesEncontradas.length}) - deve haver apenas uma.`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                cv_mensagem_enviada: msgOk,
+                warnings: warnings.length ? warnings : null,
+            });
+            if (settings.situacao_erro_id) {
+                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
+            }
+            return;
+        }
 
-            if (parcelas > MAX_PARCELAS_CARTAO) {
+        // -- 2b. FORMA DE PAGAMENTO: boleto ou cartao --------------------------
+        //
+        // A MESMA serie decide, pelo seu `quantidade`:
+        //   1        -> boleto Caixa (fluxo abaixo, inalterado)
+        //   2 a 12   -> link de pagamento no cartao (portal Userede)
+        //   acima    -> erro: nao existe como cobrar (teto da Rede e 12x e o
+        //               boleto e a vista)
+        //
+        // Regra de negocio definida em 23/08/2026: entrada parcelada se cobra no
+        // cartao, a vista no boleto.
+        const serieEntrada = seriesEncontradas[0];
+        const qtdParcelas = Number(serieEntrada.quantidade) || 1;
+
+        if (qtdParcelas > 1) {
+            // `valor` e POR PARCELA; o total e `valor_serie`, que o CV ja calcula.
+            const valorTotal = parseFloat(
+                serieEntrada.valor_serie ?? (parseFloat(serieEntrada.valor) * qtdParcelas),
+            );
+            const vencSerie = serieEntrada.vencimento;
+
+            if (qtdParcelas > MAX_PARCELAS_CARTAO) {
                 const msg = [
-                    `❌ Cobrança do ato não emitida: condição em ${parcelas}x.`,
+                    `X Cobranca do ato nao emitida: condicao em ${qtdParcelas}x.`,
                     '',
-                    `O cartão aceita no máximo ${MAX_PARCELAS_CARTAO}x e o boleto é à vista.`,
-                    'Ajuste a condição de pagamento da reserva.',
+                    `O cartao aceita no maximo ${MAX_PARCELAS_CARTAO}x e o boleto e a vista.`,
+                    'Ajuste a condicao de pagamento da reserva.',
                     '',
-                    'Parcelas encontradas:',
-                    `• ${detalhe}`,
+                    `Serie: ${serieEntrada.serie} - ${qtdParcelas}x de ${formatCurrency(serieEntrada.valor)} (total ${formatCurrency(valorTotal)})`,
                 ].join('\n') + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
                 const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
                 await history.update({
                     status: 'error',
-                    error_message: `Condição em ${parcelas}x — acima do máximo de ${MAX_PARCELAS_CARTAO}x do cartão.`,
+                    error_message: `Condicao em ${qtdParcelas}x - acima do maximo de ${MAX_PARCELAS_CARTAO}x do cartao.`,
                     titular_nome: titular?.nome,
                     empreendimento: unidade?.empreendimento,
                     idpessoa_cv: titular?.idpessoa_cv,
+                    valor: valorTotal,
+                    vencimento: vencSerie,
                     cv_mensagem_enviada: msgOk,
                     warnings: warnings.length ? warnings : null,
                 });
@@ -655,19 +684,17 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 return;
             }
 
-            console.log(`[BOLETO] Reserva ${idreserva}: condição em ${parcelas}x — vai por LINK DE CARTÃO.`);
+            console.log(`[BOLETO] Reserva ${idreserva}: serie de entrada em ${qtdParcelas}x - vai por LINK DE CARTAO.`);
 
-            // O registro do boleto vira 'skipped': não é falha, é a outra forma.
-            // O histórico do cartão é próprio (userede_link_history) e a tela do
-            // Ato mostra os dois juntos.
+            // O registro do boleto vira 'skipped': nao e falha, e a outra forma.
             await history.update({
                 status: 'skipped',
-                error_message: `Condição em ${parcelas}x — cobrança emitida como link de cartão.`,
+                error_message: `Serie de entrada em ${qtdParcelas}x - cobranca emitida como link de cartao.`,
                 titular_nome: titular?.nome,
                 empreendimento: unidade?.empreendimento,
                 idpessoa_cv: titular?.idpessoa_cv,
                 valor: valorTotal,
-                vencimento: primeiroVenc,
+                vencimento: vencSerie,
             });
 
             const { default: UseredeLink } = await import('../userede/UseredeLinkService.js');
@@ -677,40 +704,39 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 empreendimento: unidade?.empreendimento,
                 unidade: unidade?.unidade || unidade?.nome || null,
                 valor: valorTotal,
-                parcelas,
-                validade: primeiroVenc,
+                parcelas: qtdParcelas,
+                validade: vencSerie,
             });
 
             const ok = registroCartao.status === 'success';
-            const msg = ok
+            const corpo = ok
                 ? [
-                    '✅ Link de pagamento no cartão gerado com sucesso.',
+                    'OK Link de pagamento no cartao gerado com sucesso.',
                     '',
-                    `💳 Forma: Cartão de crédito (em até ${parcelas}x de ${formatCurrency(valorTotal / parcelas)})`,
-                    `💰 Valor: ${formatCurrency(valorTotal)}`,
-                    `📅 Válido até: ${formatDate(primeiroVenc)}`,
-                    `🔗 ${registroCartao.link_url}`,
+                    `Forma: Cartao de credito (em ate ${qtdParcelas}x de ${formatCurrency(valorTotal / qtdParcelas)})`,
+                    `Valor: ${formatCurrency(valorTotal)}`,
+                    `Valido ate: ${formatDate(vencSerie)}`,
+                    `${registroCartao.link_url}`,
                     '',
-                    `Enviado ao titular: e-mail ${registroCartao.cliente_email_enviado ? 'OK' : 'não enviado'}`
-                        + ` | WhatsApp ${registroCartao.cliente_whatsapp_enviado ? 'OK' : 'não enviado'}.`,
+                    `Enviado ao titular: e-mail ${registroCartao.cliente_email_enviado ? 'OK' : 'nao enviado'} | WhatsApp ${registroCartao.cliente_whatsapp_enviado ? 'OK' : 'nao enviado'}.`,
                     '',
-                    'O pagamento garante a reserva da unidade. Sem confirmação até a data acima, a reserva pode ser cancelada.',
+                    'O pagamento garante a reserva da unidade. Sem confirmacao ate a data acima, a reserva pode ser cancelada.',
                 ].join('\n')
                 : [
-                    '❌ Link de pagamento no cartão não foi gerado.',
+                    'X Link de pagamento no cartao nao foi gerado.',
                     '',
                     `Motivo: ${registroCartao.error_message || 'falha desconhecida'}`,
                     '',
-                    `💳 Condição: ${parcelas}x — ${formatCurrency(valorTotal)}`,
-                    `📅 Vencimento: ${formatDate(primeiroVenc)}`,
+                    `Condicao: ${qtdParcelas}x - ${formatCurrency(valorTotal)}`,
+                    `Vencimento: ${formatDate(vencSerie)}`,
                 ].join('\n');
 
             const situacaoAlvo = ok ? settings.situacao_sucesso_id : settings.situacao_erro_id;
-            const msgFinal = msg + linhaAvisoMudancaEtapa(settings, situacaoAlvo, ok ? 'a próxima etapa' : 'Erro');
+            const msgFinal = corpo + linhaAvisoMudancaEtapa(settings, situacaoAlvo, ok ? 'a proxima etapa' : 'Erro');
             const msgOk = pushWarn(await sendCvMessage(idreserva, msgFinal), 'cv_mensagem');
             await registroCartao.update({ cv_mensagem_enviada: msgOk });
 
-            // Modo manual não move a etapa, igual ao boleto.
+            // Modo manual nao move a etapa, igual ao boleto.
             if (!manual && situacaoAlvo) {
                 const alvo = await agendarSituacaoCv(history, situacaoAlvo, settings);
                 await registroCartao.update({
