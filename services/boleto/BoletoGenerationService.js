@@ -430,35 +430,56 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         // Skip controlado (`status='skipped'`, fora dos KPIs de erro), mensagem
         // informativa no CV e SEM mexer na situação — a reserva segue o fluxo
         // Sienge normalmente, como no ramo "ignorar" da decisão de re-trigger.
-        const atoPago = await db.BoletoHistory.findOne({
-            where: {
-                idreserva,
-                status: 'success',
-                payment_status: 'paid',
-                ignorado: false,
-                id: { [Op.ne]: history.id },
-            },
-            order: [['id', 'DESC']],
-        });
+        // Olha as DUAS formas: o ato pode ter sido pago por boleto OU por link de
+        // cartão. Enquanto este gate via só o boleto, o cartão ficava exposto
+        // exatamente ao problema que o commit 36db1e4 corrigiu aqui - um webhook
+        // redisparado emitia uma segunda cobrança de um ato já quitado.
+        const [atoPagoBoleto, atoPagoCartao] = await Promise.all([
+            db.BoletoHistory.findOne({
+                where: {
+                    idreserva,
+                    status: 'success',
+                    payment_status: 'paid',
+                    ignorado: false,
+                    id: { [Op.ne]: history.id },
+                },
+                order: [['id', 'DESC']],
+            }),
+            db.UseredeLinkHistory.findOne({
+                where: { idreserva, status: 'success', payment_status: 'paid', ignorado: false },
+                order: [['id', 'DESC']],
+            }),
+        ]);
+        const atoPago = atoPagoBoleto || atoPagoCartao;
+        const atoPagoForma = atoPagoBoleto ? 'boleto' : (atoPagoCartao ? 'cartao' : null);
         if (atoPago) {
             const pagoEm = atoPago.paid_at ? formatDate(atoPago.paid_at) : null;
-            console.log(`[BOLETO] Reserva ${idreserva}: ato JÁ PAGO (boleto #${atoPago.id}, Nosso Nº ${atoPago.nosso_numero}) — nenhum boleto novo será emitido.`);
+            // O documento tem nome diferente em cada forma: Nosso Número no
+            // boleto, identificação do pedido no cartão.
+            const ehCartao = atoPagoForma === 'cartao';
+            const rotuloForma = ehCartao ? 'link de cartão' : 'boleto';
+            const documento = ehCartao ? atoPago.pedido_id : atoPago.nosso_numero;
+            const rotuloDoc = ehCartao ? 'Pedido' : 'Nosso Número';
+
+            console.log(`[BOLETO] Reserva ${idreserva}: ato JÁ PAGO (${rotuloForma} #${atoPago.id}, ${rotuloDoc} ${documento}) — nenhuma cobrança nova será emitida.`);
             const msg = [
-                'ℹ️ Boleto do ato já foi pago - nenhuma ação tomada.',
+                `ℹ️ O ato desta reserva já foi pago por ${rotuloForma} - nenhuma ação tomada.`,
                 '',
-                'Recebemos um novo acionamento do fluxo de boleto, mas o ato desta reserva já está quitado:',
-                `  🔢 Nosso Número: ${atoPago.nosso_numero || '(não registrado)'}`,
+                'Recebemos um novo acionamento do fluxo de cobrança, mas o ato já está quitado:',
+                `  🔢 ${rotuloDoc}: ${documento || '(não registrado)'}`,
                 `  💰 Valor: ${formatCurrency(atoPago.valor)}`,
                 pagoEm ? `  ✅ Pago em: ${pagoEm}` : null,
                 '',
-                'Nenhum boleto novo foi emitido, para evitar cobrança em duplicidade.',
+                'Nenhuma cobrança nova foi emitida, para evitar cobrança em duplicidade.',
                 'A reserva PERMANECE na situação atual - nenhuma mudança de etapa foi feita.',
             ].filter(Boolean).join('\n');
             const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
             await history.update({
                 status: 'skipped',
-                error_message: `Ato já pago (boleto #${atoPago.id}, Nosso Nº ${atoPago.nosso_numero || '-'}${pagoEm ? `, pago em ${pagoEm}` : ''}) - emissão ignorada pra evitar duplicidade.`,
-                substitui_id: atoPago.id,
+                error_message: `Ato já pago por ${rotuloForma} (#${atoPago.id}, ${rotuloDoc} ${documento || '-'}${pagoEm ? `, pago em ${pagoEm}` : ''}) - emissão ignorada pra evitar duplicidade.`,
+                // `substitui_id` aponta para boleto_history; só faz sentido quando
+                // o pago também é boleto, senão apontaria para um registro alheio.
+                substitui_id: ehCartao ? null : atoPago.id,
                 titular_nome: titular?.nome,
                 empreendimento: unidade?.empreendimento,
                 idpessoa_cv: titular?.idpessoa_cv,
@@ -468,8 +489,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             await EventLogger.log({
                 historyId: history.id, idreserva,
                 type: 'ignored_duplicate', severity: 'info',
-                message: `Acionamento ignorado - ato já pago pelo boleto #${atoPago.id} (Nosso Nº ${atoPago.nosso_numero || '-'}).`,
-                data: { paidHistoryId: atoPago.id, nossoNumero: atoPago.nosso_numero, paid_at: atoPago.paid_at, manual },
+                message: `Acionamento ignorado - ato já pago por ${rotuloForma} #${atoPago.id} (${rotuloDoc} ${documento || '-'}).`,
+                data: { paidHistoryId: atoPago.id, forma: atoPagoForma, documento, paid_at: atoPago.paid_at, manual },
             });
             return;
         }
