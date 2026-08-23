@@ -135,6 +135,8 @@ import BoletoHistoryDefine from './boleto/boletoHistory.js';
 import BoletoComissionRuleDefine from './boleto/boletoComissionRule.js';
 import BoletoEventDefine from './boleto/boletoEvent.js';
 import BoletoEcoLockDefine from './boleto/boletoEcoLock.js';
+// Link de Cartão (Userede) — credenciais e sessão persistente do portal.
+import UseredeSettingsDefine from './userede/useredeSettings.js';
 
 // Cancelamento de Reservas (CV × Sienge)
 import ReservaCancelSettingsDefine from './reservaCancel/reservaCancelSettings.js';
@@ -403,6 +405,7 @@ db.BoletoHistory       = BoletoHistoryDefine(sequelize, DataTypes);
 db.BoletoComissionRule = BoletoComissionRuleDefine(sequelize, DataTypes);
 db.BoletoEvent         = BoletoEventDefine(sequelize, DataTypes);
 db.BoletoEcoLock       = BoletoEcoLockDefine(sequelize, DataTypes);
+db.UseredeSettings     = UseredeSettingsDefine(sequelize, DataTypes);
 
 // Cancelamento de Reservas (CV × Sienge)
 db.ReservaCancelSettings = ReservaCancelSettingsDefine(sequelize, DataTypes);

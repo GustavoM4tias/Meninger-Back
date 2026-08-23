@@ -31,6 +31,7 @@ import conditionsRoutes from './routes/conditionsRoutes.js';
 import eventPlanRoutes from './routes/eventPlanRoutes.js';
 import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
+import useredeRoutes from './routes/useredeRoutes.js';
 import reservaCancelRoutes from './routes/reservaCancelRoutes.js';
 import aboutRoutes from './routes/aboutRoutes.js';
 import shortLinkRoutes from './routes/shortLinkRoutes.js';
@@ -95,6 +96,7 @@ import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import boletoPaymentCheckScheduler from './scheduler/boletoPaymentCheckScheduler.js';
 import boletoSituacaoApplyScheduler from './scheduler/boletoSituacaoApplyScheduler.js';
 import boletoWindowScheduler from './scheduler/boletoWindowScheduler.js';
+import useredeKeepAliveScheduler from './scheduler/useredeKeepAliveScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import marketingDispatchScheduler from './scheduler/marketingDispatchScheduler.js';
 import marketingSyncScheduler     from './scheduler/marketingSyncScheduler.js';
@@ -110,6 +112,7 @@ import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
+import { ensureUseredeSchema } from './lib/ensureUseredeSchema.js';
 import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
 import { ensureRepasseIndexes } from './lib/ensureRepasseIndexes.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
@@ -258,6 +261,7 @@ app.use('/api/correspondents', correspondentRoutes); // correspondentes (CV)
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/event-plans', eventPlanRoutes); // Plano de Eventos (comercial)
 app.use('/api/boleto-caixa', boletoRoutes);
+app.use('/api/link-cartao', useredeRoutes);
 app.use('/api/cancelamento-reservas', reservaCancelRoutes);
 app.use('/api/about', aboutRoutes); // Sobre o Office: números ao vivo (admin)
 // Encurtador de URL público — rota fora de /api por elegância.
@@ -480,6 +484,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['FinanceOverrides', ensureFinanceOverridesSchema],
     ['SiengeBackupLog', ensureSiengeBackupLogSchema],
     ['Boleto', ensureBoletoSchema],
+    ['Userede', ensureUseredeSchema],
     ['ReservaCancel', ensureReservaCancelSchema],
     ['RepasseIndexes', ensureRepasseIndexes],
     ['AcademyPostSync', ensureAcademyPostSync],
@@ -629,6 +634,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
   if (schedulerOn('ENABLE_BOLETO_SITUACAO_APPLY')) boletoSituacaoApplyScheduler.start(); // 1min: aplica situações CV agendadas (delay lote Sienge)
   if (schedulerOn('ENABLE_BOLETO_WINDOW')) boletoWindowScheduler.start(); // 1min: retoma emissões que chegaram fora da janela 06h-23h
+  if (schedulerOn('ENABLE_UREDE_KEEPALIVE')) useredeKeepAliveScheduler.start(); // 20min: mantém viva a sessão do portal Userede (evita relogin, que é onde mora o reCAPTCHA)
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
   if (schedulerOn('ENABLE_REPORT_PUBLIC_EXPIRY')) reportPublicExpiryScheduler.start(); // links públicos de relatórios: aviso D-3 + revoga vencidos (08:00)
   if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
