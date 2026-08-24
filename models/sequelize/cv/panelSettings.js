@@ -18,7 +18,12 @@ export default (sequelize, DataTypes) => {
     const CvPanelSettings = sequelize.define('CvPanelSettings', {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
 
-        email: { type: DataTypes.STRING(255), comment: 'E-mail do usuário do painel do CV' },
+        // Credencial da API v1/v2 (chave de integração). Vazio = usa o ambiente,
+        // que é como sempre funcionou.
+        api_email: { type: DataTypes.STRING(255), comment: 'E-mail da chave de integração v1/v2' },
+        api_token: { type: DataTypes.STRING(255), comment: 'Token da chave de integração v1/v2' },
+
+        email: { type: DataTypes.STRING(255), comment: 'E-mail do usuário do painel do CV (v3)' },
         senha: { type: DataTypes.STRING(255), comment: 'Senha desse usuário (o CV rotaciona periodicamente)' },
         painel: { type: DataTypes.STRING(40), defaultValue: 'gestor', comment: 'gestor | corretor | imobiliaria' },
 

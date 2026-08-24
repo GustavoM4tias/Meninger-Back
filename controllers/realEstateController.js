@@ -531,7 +531,11 @@ export async function getCvPanel(req, res) {
                    (SELECT MAX(synced_at) FROM cv_imobiliaria_empreendimentos)       AS last_sync_vinculos
         `, { type: db.Sequelize.QueryTypes.SELECT });
 
-        return res.json({ ok: true, ...status, notificados, espelho });
+        // A credencial v1/v2 (chave de integração) é a que responde pela maior
+        // parte das chamadas ao CV. Antes ela só existia no ambiente, sem tela
+        // e sem como testar.
+        const { statusApiCv } = await import('../lib/apiCv.js');
+        return res.json({ ok: true, ...status, notificados, espelho, api: await statusApiCv() });
     } catch (err) {
         console.error('[realestate] getCvPanel:', err);
         return res.status(500).json({ ok: false, error: 'Erro ao ler a credencial do CV.' });
@@ -575,6 +579,11 @@ export async function updateCvPanel(req, res) {
             patch.notify_user_ids = ids;
         }
 
+        // Credencial da API v1/v2. Vazio nos dois campos volta a valer o
+        // ambiente - é o jeito de desfazer sem precisar saber o valor antigo.
+        if (req.body.api_email !== undefined) patch.api_email = String(req.body.api_email || '').trim() || null;
+        if (req.body.api_token !== undefined) patch.api_token = String(req.body.api_token || '').trim() || null;
+
         if (!Object.keys(patch).length) {
             return res.status(400).json({ ok: false, error: 'Nada para salvar.' });
         }
@@ -585,12 +594,17 @@ export async function updateCvPanel(req, res) {
 
         // Salvar sem testar deixaria o admin achando que resolveu. Testa na
         // hora e devolve o veredito para a tela mostrar.
-        const { testarCredencial, statusV3 } = await import('../lib/apiCvV3.js');
-        const teste = (patch.email || patch.senha || patch.painel)
-            ? await testarCredencial()
-            : { ok: true, mensagem: 'Destinatários atualizados.' };
+        const { statusApiCv, invalidarCredencialCv, testarApiCv } = await import('../lib/apiCv.js');
+        const mexeuNaApi = patch.api_email !== undefined || patch.api_token !== undefined;
+        if (mexeuNaApi) invalidarCredencialCv();
 
-        return res.json({ ok: true, teste, ...(await statusV3()) });
+        const { testarCredencial, statusV3 } = await import('../lib/apiCvV3.js');
+        let teste;
+        if (mexeuNaApi) teste = await testarApiCv();
+        else if (patch.email || patch.senha || patch.painel) teste = await testarCredencial();
+        else teste = { ok: true, mensagem: 'Destinatários atualizados.' };
+
+        return res.json({ ok: true, teste, ...(await statusV3()), api: await statusApiCv() });
     } catch (err) {
         console.error('[realestate] updateCvPanel:', err);
         return res.status(500).json({ ok: false, error: 'Erro ao salvar a credencial do CV.' });
@@ -678,5 +692,16 @@ export async function runCvJob(req, res) {
             ok: false,
             error: desconhecido ? 'Cron não encontrado.' : 'Erro ao executar a sincronização.',
         });
+    }
+}
+
+/** Testa a credencial da API v1/v2 já gravada, sem alterar nada. */
+export async function testCvApi(req, res) {
+    try {
+        const { testarApiCv, statusApiCv } = await import('../lib/apiCv.js');
+        return res.json({ ok: true, teste: await testarApiCv(), api: await statusApiCv() });
+    } catch (err) {
+        console.error('[realestate] testCvApi:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao testar a conexão com o CV.' });
     }
 }
