@@ -156,3 +156,43 @@ Vale uma revisão à parte, com quem administra o tenant, para tirar o que não 
 usado. E, no mesmo movimento, trocar o segredo por um **certificado** ou mover
 para o **Key Vault**, que é o caminho recomendado pela Microsoft para app com
 permissão de aplicação.
+
+---
+
+## Anexo: o que mais foi encontrado ao implementar as novidades
+
+### Teams como canal de mensagem: bloqueado
+
+O Office fala por e-mail, WhatsApp, in-app e push, mas não pelo canal onde a
+empresa conversa. O app tem `Chat.Read.All` (**ler** toda conversa do tenant) e
+nenhuma permissão de **escrita**.
+
+Para mandar mensagem seria preciso uma destas, todas de **Aplicação** e todas
+com consentimento de administrador:
+
+- `ChatMessage.Send` - manda mensagem em chat
+- `Chat.ReadWrite.All` - idem, mais amplo
+- `TeamsActivity.Send` - notificação no feed de atividades do Teams
+
+Vale notar o desequilíbrio: o app **lê** toda conversa de Teams da empresa e não
+consegue mandar uma mensagem. Se o Teams como canal não for prioridade, a
+`Chat.Read.All` é forte candidata a ser **removida** - o Office não a usa.
+
+O caminho de webhook de canal do Teams (sem permissão nenhuma) resolveria aviso
+em canal, mas não mensagem para uma pessoa, que é o caso de cobrança e alerta.
+Por isso não foi implementado: entregaria metade fingindo ser inteiro.
+
+### Assinaturas de mudança: sem permissão nova, mas com URL pública
+
+As assinaturas (`POST /subscriptions`) usam as mesmas permissões da leitura, que
+já estão concedidas. O que falta não é permissão:
+
+**`PUBLIC_API_URL`** com o endereço HTTPS público do backend, por exemplo
+`https://menin.up.railway.app`. A Microsoft chama
+`{PUBLIC_API_URL}/api/microsoft/webhook` para validar a assinatura e depois para
+avisar cada mudança. Em ambiente local não funciona - a Microsoft não alcança a
+máquina, e o serviço recusa criar a assinatura em vez de criar algo surdo.
+
+Depois de definir a variável, ligue com `ENABLE_GRAPH_SUBSCRIPTIONS=true` e
+assine sua caixa em **POST /api/microsoft/subscriptions**. A renovação é
+automática (de hora em hora): a assinatura dura ~3 dias e morre em silêncio.

@@ -42,7 +42,9 @@ export function registerApp(app) { _app = app; }
 // Prefixos de rota que PODEM ficar sem autenticação:
 const PUBLIC_PREFIXES = [
     '/api/auth',                 // login/refresh/reset — é o próprio fluxo de autenticação
-    '/api/microsoft',            // OAuth redirect da Microsoft
+    '/api/microsoft',            // OAuth redirect da Microsoft + webhook do Graph
+                                 // (a Microsoft chama sem JWT; a autenticação do
+                                 // webhook é o clientState, conferido no controller)
     '/api/bolao/public',         // bolão público do site
     '/api/public',               // landing pages públicas (lp.menin)
     '/api/marketing/public',     // formulários públicos de captação

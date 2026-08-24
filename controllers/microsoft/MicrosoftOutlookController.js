@@ -15,6 +15,7 @@
 import db from '../../models/sequelize/index.js';
 import outlook from '../../services/microsoft/MicrosoftOutlookService.js';
 import settingsService from '../../services/microsoft/MicrosoftSettingsService.js';
+import { unreadFromCache } from './MicrosoftWebhookController.js';
 
 /** Traduz o erro do Graph em uma frase que diz o que fazer. */
 function fail(res, err, ctx) {
@@ -82,6 +83,13 @@ class MicrosoftOutlookController {
     unread = async (req, res) => {
         try {
             const { mailbox } = await this._resolveMailbox(req);
+
+            // Quando existe assinatura de mudança nesta caixa, o webhook já
+            // atualizou a contagem quando o e-mail chegou. Usar o valor de lá
+            // troca uma chamada ao Graph a cada 2 minutos por nenhuma.
+            const doCache = unreadFromCache(mailbox);
+            if (doCache) return res.json({ ...doCache, viaNotificacao: true });
+
             return res.json(await outlook.unreadCount(mailbox));
         } catch (err) { return this._guard(res, err) || fail(res, err, 'unread'); }
     };

@@ -9,6 +9,7 @@ import MicrosoftPlannerController from '../controllers/microsoft/MicrosoftPlanne
 import MicrosoftDiagnosticsController from '../controllers/microsoft/MicrosoftDiagnosticsController.js';
 import MicrosoftMailLabController from '../controllers/microsoft/MicrosoftMailLabController.js';
 import MicrosoftOutlookController from '../controllers/microsoft/MicrosoftOutlookController.js';
+import MicrosoftWebhookController from '../controllers/microsoft/MicrosoftWebhookController.js';
 import InPersonMeetingController from '../controllers/InPersonMeetingController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
@@ -36,6 +37,17 @@ const teamsController = MicrosoftTeamsController;
 router.get('/auth/login', authController.login);
 router.get('/auth/callback', authController.callback);
 router.post('/auth/exchange', authController.exchange);
+
+// ── Webhook do Graph (PÚBLICA por obrigação) ─────────────────────────────────
+// É a Microsoft que chama, e ela não carrega o JWT do Office. A autenticação é
+// o clientState conferido no controller. O handshake de validação precisa
+// devolver o token como text/plain em até 10 segundos.
+router.post('/webhook', MicrosoftWebhookController.receive);
+
+// ── Assinaturas de mudança (admin) ───────────────────────────────────────────
+router.get('/subscriptions',        authenticate, requireAdmin, MicrosoftWebhookController.list);
+router.post('/subscriptions',       authenticate, requireAdmin, MicrosoftWebhookController.create);
+router.delete('/subscriptions/:id', authenticate, requireAdmin, MicrosoftWebhookController.remove);
 
 // ── Auth: Autenticadas ────────────────────────────────────────────────────────
 // link/start é POST de propósito: o redirect do navegador não carrega o

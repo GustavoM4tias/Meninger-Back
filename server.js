@@ -146,6 +146,7 @@ import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import microsoftMeetingReminderScheduler from './scheduler/microsoftMeetingReminderScheduler.js';
+import microsoftSubscriptionScheduler from './scheduler/microsoftSubscriptionScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
 import reportPublicExpiryScheduler from './scheduler/reportPublicExpiryScheduler.js';
 import seedBolaoCopa2026 from './services/bolao/seedBolaoCopa2026.js';
@@ -643,7 +644,8 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_UREDE_KEEPALIVE')) useredeKeepAliveScheduler.start(); // 20min: mantém viva a sessão do portal Userede (evita relogin, que é onde mora o reCAPTCHA)
   if (schedulerOn('ENABLE_UREDE_CONCILIACAO')) useredeConciliacaoScheduler.start(); // 08:10: concilia os links de cartão (pago/expirado/negado/estornado)
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
-  if (schedulerOn('ENABLE_MEETING_REMINDER')) microsoftMeetingReminderScheduler.start(); // 5min: avisa reunião do Teams que está começando (push chega com o Office fechado)
+  if (schedulerOn('ENABLE_MEETING_REMINDER')) microsoftMeetingReminderScheduler.start();
+  if (schedulerOn('ENABLE_GRAPH_SUBSCRIPTIONS')) microsoftSubscriptionScheduler.start(); // 1h: renova assinatura de mudanca do Graph antes de vencer (ela morre em silencio) // 5min: avisa reunião do Teams que está começando (push chega com o Office fechado)
   if (schedulerOn('ENABLE_REPORT_PUBLIC_EXPIRY')) reportPublicExpiryScheduler.start(); // links públicos de relatórios: aviso D-3 + revoga vencidos (08:00)
   if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)
   if (schedulerOn('ENABLE_ACADEMY_RECERTIFY')) startAcademyRecertifyScheduler(); // recertificação periódica (expira certificado + reassign mandatory)

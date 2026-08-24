@@ -142,6 +142,7 @@ import UseredeLinkEventDefine from './userede/useredeLinkEvent.js';
 
 // Microsoft 365 (integração)
 import MicrosoftSettingsDefine from './microsoft/microsoftSettings.js';
+import MicrosoftSubscriptionDefine from './microsoft/microsoftSubscription.js';
 
 // Cancelamento de Reservas (CV × Sienge)
 import ReservaCancelSettingsDefine from './reservaCancel/reservaCancelSettings.js';
@@ -416,6 +417,7 @@ db.UseredeLinkEvent    = UseredeLinkEventDefine(sequelize, DataTypes);
 
 // Microsoft 365 (integração)
 db.MicrosoftSettings = MicrosoftSettingsDefine(sequelize, DataTypes);
+db.MicrosoftSubscription = MicrosoftSubscriptionDefine(sequelize, DataTypes);
 
 // Cancelamento de Reservas (CV × Sienge)
 db.ReservaCancelSettings = ReservaCancelSettingsDefine(sequelize, DataTypes);
