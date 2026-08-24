@@ -54,6 +54,20 @@ export default (sequelize, DataTypes) => {
             comment: 'Quantas mensagens a lista traz por vez.',
         },
 
+        // ── Lembrete de reunião ──────────────────────────────────────────────
+        meeting_reminder_enabled: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: true,
+            comment: 'Avisa antes de a reunião do Teams começar, pelos canais que a pessoa escolheu.',
+        },
+        meeting_reminder_minutes: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 15,
+            comment: 'Quantos minutos antes avisar.',
+        },
+
         // ── Transcrições ─────────────────────────────────────────────────────
         // Com permissão de APLICAÇÃO consentida (OnlineMeetingTranscript.Read.All
         // + política de acesso), o Office consegue a transcrição de reunião que o

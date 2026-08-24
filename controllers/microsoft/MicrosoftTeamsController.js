@@ -36,6 +36,25 @@ class MicrosoftTeamsController {
         } catch (err) { handleErr(res, err, 'event'); }
     }
 
+    /**
+     * POST /teams/schedule — quem está livre no intervalo.
+     * Devolve só ocupado/livre, nunca o assunto do compromisso alheio.
+     */
+    async schedule(req, res) {
+        if (!req.user.microsoft_id) return res.status(401).json({ error: 'Conta Microsoft não conectada.' });
+        try {
+            const { emails, start, end, slotMinutes } = req.body || {};
+            if (!Array.isArray(emails) || !emails.length) {
+                return res.status(400).json({ error: 'Informe ao menos um e-mail.' });
+            }
+            if (!start || !end) return res.status(400).json({ error: 'Informe início e fim.' });
+            // Teto para a consulta não virar varredura de agenda da empresa.
+            if (emails.length > 20) return res.status(400).json({ error: 'Consulte no máximo 20 pessoas por vez.' });
+
+            res.json(await teamsService.getSchedule(req.user, emails, start, end, slotMinutes));
+        } catch (err) { handleErr(res, err, 'schedule'); }
+    }
+
     async createScheduledMeeting(req, res) {
         if (!req.user.microsoft_id) return res.status(401).json({ error: 'Conta Microsoft não conectada.' });
         try {

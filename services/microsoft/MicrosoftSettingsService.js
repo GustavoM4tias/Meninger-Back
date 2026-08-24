@@ -13,6 +13,8 @@ const DEFAULTS = {
     upload_max_mb: 250,
     upload_chunk_mb: 8,
     transcript_app_fallback: true,
+    meeting_reminder_enabled: true,
+    meeting_reminder_minutes: 15,
     outlook_enabled: true,
     outlook_send_enabled: true,
     outlook_page_size: 25,

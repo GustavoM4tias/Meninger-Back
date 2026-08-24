@@ -44,6 +44,66 @@ export default class MicrosoftSharepointController {
         }
     };
 
+    // ── Planilha na nuvem ────────────────────────────────────────────────────
+
+    // GET /sharepoint/drives/:driveId/items/:itemId/worksheets
+    worksheets = async (req, res) => {
+        try {
+            const user = await this._getUser(req.user.id);
+            if (!user?.microsoft_id) return this._notConnected(res);
+            return res.json(await sharepointService.listWorksheets(user, req.params.driveId, req.params.itemId));
+        } catch (err) {
+            const status = err?.response?.status;
+            console.error('❌ [SharePoint] worksheets:', err?.response?.data || err.message);
+            // 400/404 aqui costuma ser "não é .xlsx", não falha do Office.
+            if (status === 400 || status === 404) {
+                return res.status(422).json({ error: 'Este arquivo não é uma planilha do Excel (.xlsx) que a Microsoft consiga abrir na nuvem.' });
+            }
+            return res.status(status || 500).json({ error: err.message });
+        }
+    };
+
+    // GET /sharepoint/drives/:driveId/items/:itemId/worksheets/:sheet?range=A1:F50
+    worksheetRange = async (req, res) => {
+        try {
+            const user = await this._getUser(req.user.id);
+            if (!user?.microsoft_id) return this._notConnected(res);
+            const data = await sharepointService.readWorksheetRange(
+                user, req.params.driveId, req.params.itemId,
+                decodeURIComponent(req.params.sheet), req.query.range || null
+            );
+            return res.json(data);
+        } catch (err) {
+            console.error('❌ [SharePoint] worksheetRange:', err?.response?.data || err.message);
+            return res.status(err?.response?.status || 500).json({ error: err.message });
+        }
+    };
+
+    // ── GET /api/microsoft/sharepoint/my-drive
+    // A pasta pessoal (OneDrive) de quem pediu.
+    myDrive = async (req, res) => {
+        try {
+            const user = await this._getUser(req.user.id);
+            if (!user?.microsoft_id) return this._notConnected(res);
+            return res.json(await sharepointService.getMyDrive(user));
+        } catch (err) {
+            console.error('❌ [SharePoint] myDrive:', err?.response?.data || err.message);
+            return res.status(err?.response?.status || 500).json({ error: err.message });
+        }
+    };
+
+    // ── GET /api/microsoft/sharepoint/shared-with-me
+    sharedWithMe = async (req, res) => {
+        try {
+            const user = await this._getUser(req.user.id);
+            if (!user?.microsoft_id) return this._notConnected(res);
+            return this._sendList(res, await sharepointService.getSharedWithMe(user));
+        } catch (err) {
+            console.error('❌ [SharePoint] sharedWithMe:', err?.response?.data || err.message);
+            return res.status(err?.response?.status || 500).json({ error: err.message });
+        }
+    };
+
     // ── GET /api/microsoft/sharepoint/sites/:siteId/drives
     drives = async (req, res) => {
         try {

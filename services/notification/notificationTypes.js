@@ -25,6 +25,9 @@ export const NotificationType = {
     SUPPORT_UPDATED:         'support.updated',
     GENERIC:                 'generic',
 
+    // Microsoft — agenda
+    MEETING_STARTING:        'meeting.starting',
+
     // Alertas — compartilhamento entre usuários
     ALERT_SHARED:            'alert.shared',
 
@@ -122,6 +125,21 @@ export const NOTIFICATION_CATALOG = {
         defaults: { inapp: true, email: false, whatsapp: true },
         userOptional: true,
     },
+    [NotificationType.MEETING_STARTING]: {
+        label: 'Reunião começando',
+        group: 'Microsoft',
+        description: 'Aviso alguns minutos antes de uma reunião do seu calendário do Teams começar.',
+        // Sem emailType: e-mail 10 minutos antes chega tarde e ainda polui a
+        // caixa. O valor aqui e o push, que toca no celular com o Office fechado.
+        whatsapp: {
+            template: 'meeting_starting_v1',
+            language: 'pt_BR',
+            category: 'UTILITY',
+            variables: ['userName', 'subject', 'startTime'],
+        },
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
     [NotificationType.SUPPORT_OPENED]: {
         label: 'Chamado aberto',
         group: 'Suporte',
@@ -150,6 +168,8 @@ export const NOTIFICATION_CATALOG = {
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },
+    [NotificationType.MEETING_STARTING]: ['/microsoft/teams'],
+
     [NotificationType.CONDITION_AUTHORIZATION_REQUESTED]: {
         label: 'Ficha comercial aguardando autorização',
         group: 'Comercial',

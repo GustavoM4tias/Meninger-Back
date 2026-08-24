@@ -31,6 +31,9 @@ import './ProfileTools.js';
 import './ProjectionTools.js';
 import './ReportsTools.js';
 import './ChecklistTools.js';
+// Microsoft: agenda, disponibilidade, agendamento, busca no SharePoint e e-mail.
+// A Eme nao conhecia nada do Graph antes disto.
+import './MicrosoftTools.js';
 import { getToolsFor, toGeminiDeclarations, findTool, userHasPermissions } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
 

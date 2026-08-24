@@ -35,6 +35,56 @@ class MicrosoftSharepointService {
         };
     }
 
+    /**
+     * A pasta pessoal (OneDrive) de quem está pedindo.
+     *
+     * Só os sites estavam expostos, e é no OneDrive que mora o documento em
+     * rascunho - o que a pessoa ainda não publicou em biblioteca de time.
+     */
+    async getMyDrive(user) {
+        const d = await graphService.get(user, '/me/drive?$select=id,name,driveType,webUrl,quota');
+        return {
+            id: d.id,
+            name: 'Meus arquivos (OneDrive)',
+            driveType: d.driveType,
+            webUrl: d.webUrl,
+            quota: d.quota ? { usado: d.quota.used, total: d.quota.total } : null,
+        };
+    }
+
+    /**
+     * Arquivos que outras pessoas compartilharam com quem está pedindo.
+     *
+     * Cada item traz o driveId de ORIGEM (a biblioteca de quem compartilhou),
+     * porque abrir/baixar depende dele, não do drive de quem recebeu.
+     */
+    async getSharedWithMe(user) {
+        const cap = await settingsService.listCap();
+        const { items, truncated } = await graphService.getAllPages(
+            user, '/me/drive/sharedWithMe', undefined, { max: Math.min(cap, 200) }
+        );
+
+        return {
+            items: items.map(item => {
+                const normal = this._normalizeItem(item);
+                const origem = item.remoteItem || item;
+                return {
+                    ...normal,
+                    id: origem.id || normal.id,
+                    driveId: origem.parentReference?.driveId || normal.driveId,
+                    isFolder: !!origem.folder,
+                    size: origem.size || 0,
+                    lastModified: origem.lastModifiedDateTime || normal.lastModified,
+                    webUrl: origem.webUrl || normal.webUrl,
+                    compartilhadoPor: item.createdBy?.user?.displayName
+                        || origem.createdBy?.user?.displayName
+                        || null,
+                };
+            }),
+            truncated,
+        };
+    }
+
     // ── Drives ────────────────────────────────────────────────────────────────
     async getSiteDrives(user, siteId) {
         const cap = await settingsService.listCap();
@@ -224,6 +274,59 @@ class MicrosoftSharepointService {
             contentType: response.headers['content-type'] || 'application/octet-stream',
             contentLength: response.headers['content-length'] || null,
         };
+    }
+
+    // ── Planilha na nuvem (Workbook API) ─────────────────────────────────────
+    //
+    // Dado que hoje entra no Office por planilha trocada em anexo pode passar a
+    // ser lido da fonte: o Graph abre o .xlsx que está no SharePoint e devolve
+    // célula e intervalo, sem baixar o arquivo e sem biblioteca de Excel aqui.
+    //
+    // Só funciona em .xlsx (não em .xls nem em planilha do Google).
+
+    async listWorksheets(user, driveId, itemId) {
+        const data = await graphService.get(user,
+            `/drives/${driveId}/items/${itemId}/workbook/worksheets?$select=id,name,position,visibility`
+        );
+        return (data.value || []).map(w => ({
+            id: w.id,
+            name: w.name,
+            position: w.position,
+            visible: w.visibility === 'Visible',
+        }));
+    }
+
+    /**
+     * Lê um intervalo (ex.: 'A1:F50'). Sem intervalo, devolve a região usada da
+     * aba - que é o que se quer em 90% dos casos e evita varrer 1M de linhas
+     * vazias que o Excel considera parte da planilha.
+     */
+    async readWorksheetRange(user, driveId, itemId, sheetName, range = null) {
+        const base = `/drives/${driveId}/items/${itemId}/workbook/worksheets/${encodeURIComponent(sheetName)}`;
+        const path = range
+            ? `${base}/range(address='${encodeURIComponent(range)}')`
+            : `${base}/usedRange(valuesOnly=true)`;
+
+        const data = await graphService.get(user, `${path}?$select=address,rowCount,columnCount,values,text`);
+
+        return {
+            sheet: sheetName,
+            address: data.address || null,
+            rows: data.rowCount ?? 0,
+            columns: data.columnCount ?? 0,
+            // `values` traz o valor bruto (número/data como serial) e `text` o que
+            // aparece na tela. Os dois vão: número serve para conta, texto para ler.
+            values: data.values || [],
+            text: data.text || [],
+        };
+    }
+
+    /** Nomes definidos da pasta de trabalho — atalho para intervalo nomeado. */
+    async listWorkbookNames(user, driveId, itemId) {
+        const data = await graphService.get(user,
+            `/drives/${driveId}/items/${itemId}/workbook/names?$select=name,value,comment`
+        );
+        return (data.value || []).map(n => ({ name: n.name, value: n.value, comment: n.comment || null }));
     }
 
     // ── Normalização ──────────────────────────────────────────────────────────

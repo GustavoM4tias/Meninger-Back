@@ -118,6 +118,49 @@ class MicrosoftTeamsService {
         return { items: items.map(normalizeEvent), truncated };
     }
 
+    /**
+     * Disponibilidade de um grupo de pessoas num intervalo (getSchedule).
+     *
+     * Antes disto o modal de reunião pedia horário no escuro e a pessoa
+     * descobria o conflito remarcando. O Graph devolve os blocos ocupados de
+     * cada agenda sem expor o assunto do compromisso alheio — só que está
+     * ocupado, que é exatamente o que basta para escolher um horário.
+     *
+     * @param {string[]} emails
+     * @param {string} start ISO local sem Z (America/Sao_Paulo)
+     * @param {string} end
+     * @param {number} slotMinutes granularidade do retorno
+     */
+    async getSchedule(user, emails, start, end, slotMinutes = 30) {
+        const data = await graph.post(user, '/me/calendar/getSchedule', {
+            schedules: emails,
+            startTime: { dateTime: start, timeZone: 'America/Sao_Paulo' },
+            endTime:   { dateTime: end,   timeZone: 'America/Sao_Paulo' },
+            availabilityViewInterval: slotMinutes,
+        });
+
+        return (data.value || []).map(s => {
+            const ocupado = (s.scheduleItems || [])
+                // 'free' e 'workingElsewhere' não impedem reunião.
+                .filter(i => !['free', 'workingElsewhere'].includes(i.status))
+                .map(i => ({
+                    inicio: i.start?.dateTime || null,
+                    fim: i.end?.dateTime || null,
+                    situacao: i.status,   // busy | tentative | oof
+                }));
+
+            return {
+                email: s.scheduleId,
+                // availabilityView é uma string de dígitos, um por slot:
+                // 0 livre, 1 tentativo, 2 ocupado, 3 fora do escritório.
+                mapa: s.availabilityView || '',
+                ocupado,
+                livre: ocupado.length === 0,
+                erro: s.error?.message || null,
+            };
+        });
+    }
+
     async getEvent(user, eventId) {
         const data = await graph.get(user, `/me/events/${eventId}?$select=${EVENT_SELECT}`);
         return normalizeEvent(data);

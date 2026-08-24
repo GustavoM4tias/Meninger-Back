@@ -43,6 +43,30 @@ const ALLOWED_SETTINGS = {
         return n;
     },
     transcript_app_fallback: (v) => v === true || v === 'true',
+
+    // ── Outlook ──────────────────────────────────────────────────────────────
+    outlook_enabled:      (v) => v === true || v === 'true',
+    outlook_send_enabled: (v) => v === true || v === 'true',
+    outlook_page_size: (v) => {
+        const n = Number(v);
+        // Teto do $top do Graph em mensagens.
+        if (!Number.isInteger(n) || n < 5 || n > 100) {
+            throw new Error('A quantidade de mensagens por página deve ficar entre 5 e 100.');
+        }
+        return n;
+    },
+
+    // ── Lembrete de reunião ──────────────────────────────────────────────────
+    meeting_reminder_enabled: (v) => v === true || v === 'true',
+    meeting_reminder_minutes: (v) => {
+        const n = Number(v);
+        // Abaixo de 5 o scheduler (que roda a cada 5 min) perderia reunião;
+        // acima de 120 o aviso deixa de ser aviso.
+        if (!Number.isInteger(n) || n < 5 || n > 120) {
+            throw new Error('O aviso de reunião deve ficar entre 5 e 120 minutos antes.');
+        }
+        return n;
+    },
 };
 
 /** Lê o claim `scp` do access_token sem validar assinatura (uso só de leitura). */
