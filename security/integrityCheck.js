@@ -86,7 +86,14 @@ const NO_SCREEN_PERMISSION = [
     ['/api/academy-chat', 'assistente do Academy, mesmo escopo do módulo'],
     // Microsoft: cada handler usa o token DELEGADO do próprio usuário, então o
     // que ele enxerga já é o que a conta Microsoft dele enxerga.
-    ['/api/microsoft', 'Graph com o token delegado do próprio usuário'],
+    //
+    // EXCEÇÃO DENTRO DA EXCEÇÃO: /api/microsoft/outlook/* usa token de
+    // APLICAÇÃO, não o delegado — o Graph aceitaria a caixa de qualquer pessoa.
+    // Lá a justificativa acima NÃO vale, e por isso aquelas rotas têm
+    // requireCapability('/microsoft/outlook', ...) de verdade, e o controller
+    // amarra a caixa ao microsoft_id de quem pediu (_resolveMailbox).
+    // Se alguém acrescentar rota de e-mail sem capability, é regressão.
+    ['/api/microsoft', 'Graph com o token delegado do próprio usuário (exceto /outlook, que usa capability)'],
     // A Eme não é porta de entrada: cada tool declara requiredPermissions e o
     // ToolRegistry recusa a que o usuário não tem (fail-closed).
     ['/api/office-chat', 'alçada é validada tool a tool no ToolRegistry'],

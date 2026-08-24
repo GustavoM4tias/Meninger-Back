@@ -1,5 +1,6 @@
 // services/microsoft/MicrosoftTeamsService.js
 import graph from './MicrosoftGraphService.js';
+import settingsService from './MicrosoftSettingsService.js';
 
 const EVENT_SELECT = [
     'id', 'subject', 'bodyPreview', 'body', 'start', 'end',
@@ -104,14 +105,17 @@ class MicrosoftTeamsService {
             $orderby: 'start/dateTime',
             $top: '200',
         };
-        // Prefer header converte todos os horários para o fuso de Brasília automaticamente
-        const data = await graph.get(
+        // Prefer header converte todos os horários para o fuso de Brasília automaticamente.
+        // getAllPages segue o @odata.nextLink: mês cheio de agenda não some do fim
+        // da lista só porque não coube numa página.
+        const cap = await settingsService.listCap();
+        const { items, truncated } = await graph.getAllPages(
             user,
             '/me/calendarView',
             params,
-            { 'Prefer': 'outlook.timezone="America/Sao_Paulo"' }
+            { max: cap, headers: { 'Prefer': 'outlook.timezone="America/Sao_Paulo"' } }
         );
-        return (data.value || []).map(normalizeEvent);
+        return { items: items.map(normalizeEvent), truncated };
     }
 
     async getEvent(user, eventId) {

@@ -1,5 +1,6 @@
 // controllers/InPersonMeetingController.js
 import { MeetingSummaryService } from '../validatorAI/src/services/MeetingSummaryService.js';
+import { AIService } from '../validatorAI/src/services/AIService.js';
 import { cuesToText } from '../services/microsoft/MicrosoftTranscriptService.js';
 import { sendEmail } from '../email/email.service.js';
 import db from '../models/sequelize/index.js';
@@ -15,6 +16,39 @@ function guard(req, res) {
 function durationMin(start, end) {
     if (!start || !end) return null;
     return Math.round((new Date(end) - new Date(start)) / 60000);
+}
+
+// Teto do áudio enviado para transcrição. Uma hora de reunião em Opus fica em
+// torno de 10 MB, então 20 MB cobre com folga sem estourar a chamada da IA.
+const AUDIO_MAX_BYTES = 20 * 1024 * 1024;
+
+/** Lê o array de falas devolvido pela IA, tolerando cerca de código em volta. */
+function parseCueJson(text) {
+    const clean = String(text || '')
+        .replace(/^\s*```(?:json)?/i, '')
+        .replace(/```\s*$/, '')
+        .trim();
+    try {
+        const parsed = JSON.parse(clean);
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+            .filter(c => c && c.text)
+            .map(c => ({
+                speaker:  String(c.speaker || 'Participante').trim(),
+                startStr: String(c.startStr || '00:00:00').trim(),
+                startSec: toSeconds(c.startStr),
+                text:     String(c.text).trim(),
+            }));
+    } catch {
+        return [];
+    }
+}
+
+function toSeconds(ts) {
+    const parts = String(ts || '').split(':').map(Number);
+    if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + (parts[2] || 0);
+    if (parts.length === 2) return (parts[0] * 60) + (parts[1] || 0);
+    return 0;
 }
 
 class InPersonMeetingController {
@@ -100,6 +134,74 @@ class InPersonMeetingController {
 
             res.json(record);
         } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    }
+
+    // ── POST /inperson/meetings/:id/audio ─────────────────────────────────────
+    // Transcreve o áudio gravado pelo navegador.
+    //
+    // O caminho antigo era a Web Speech API, que só existe no Chrome do desktop:
+    // no Safari do iPhone e no Firefox a gravação simplesmente não funcionava, e
+    // é pelo celular que a diretoria usa o Office. O MediaRecorder roda em todo
+    // lugar; a transcrição (com separação de quem falou) acontece aqui.
+    async transcribeAudio(req, res) {
+        if (!guard(req, res)) return;
+        try {
+            const record = await db.InPersonMeeting.findOne({
+                where: { id: req.params.id, user_id: req.user.id },
+            });
+            if (!record) return res.status(404).json({ error: 'Reunião não encontrada.' });
+
+            if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+                return res.status(400).json({ error: 'Nenhum áudio recebido.' });
+            }
+            if (req.body.length > AUDIO_MAX_BYTES) {
+                return res.status(413).json({
+                    error: `A gravação tem ${(req.body.length / 1024 / 1024).toFixed(1)} MB e o limite para transcrição é ${AUDIO_MAX_BYTES / 1024 / 1024} MB. Grave a reunião em partes menores.`,
+                });
+            }
+
+            const mimeType = (req.headers['content-type'] || 'audio/webm').split(';')[0];
+            const attendees = (record.attendees_json || []).map(a => a?.name || a).filter(Boolean);
+
+            const prompt = [
+                'Transcreva esta gravação de reunião em português do Brasil.',
+                'Separe as falas por quem falou. Quando não der para identificar a pessoa, use "Participante 1", "Participante 2" e assim por diante, mantendo o mesmo rótulo para a mesma voz.',
+                attendees.length ? `Participantes informados: ${attendees.join(', ')}. Use estes nomes quando a voz for reconhecível pelo contexto.` : '',
+                'Responda SOMENTE com um array JSON, sem texto em volta e sem cercas de código, no formato:',
+                '[{"speaker":"Nome","startStr":"00:00:12","text":"a fala"}]',
+                'startStr é o momento da fala na gravação, no formato hh:mm:ss.',
+            ].filter(Boolean).join('\n');
+
+            const result = await AIService.generateResponseFromAudio(
+                prompt, req.body, mimeType, ['gemini-2.5-pro', 'gemini-2.5-flash']
+            );
+
+            if (result?.error || !result?.response) {
+                throw new Error(result?.error || 'A transcrição não retornou resultado.');
+            }
+
+            const cues = parseCueJson(result.response);
+            if (!cues.length) {
+                return res.status(422).json({
+                    error: 'Não foi possível entender o áudio. Verifique se o microfone captou a conversa e tente de novo.',
+                });
+            }
+
+            const parsedJson = JSON.stringify(cues);
+            const endedAt = new Date();
+            await record.update({
+                parsed_transcript:     parsedJson,
+                transcript_char_count: parsedJson.length,
+                ended_at:              record.ended_at || endedAt,
+                duration_min:          record.duration_min || durationMin(record.meeting_date, endedAt),
+                status:                'recorded',
+            });
+
+            res.json({ cues, count: cues.length });
+        } catch (err) {
+            console.error('❌ [InPerson] transcribeAudio:', err.message);
             res.status(500).json({ error: err.message });
         }
     }

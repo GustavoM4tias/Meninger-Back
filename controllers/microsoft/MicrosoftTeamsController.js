@@ -20,7 +20,12 @@ class MicrosoftTeamsController {
         try {
             const { start, end } = req.query;
             if (!start || !end) return res.status(400).json({ error: 'Parâmetros start e end são obrigatórios.' });
-            res.json(await teamsService.getCalendarView(req.user, start, end));
+            // Corpo segue sendo o array de eventos; o corte (se houver) vai no cabeçalho.
+            const { items, truncated } = await teamsService.getCalendarView(req.user, start, end);
+            res.set('X-Graph-Truncated', truncated ? '1' : '0');
+            res.set('X-Graph-Count', String(items.length));
+            res.set('Access-Control-Expose-Headers', 'X-Graph-Truncated, X-Graph-Count');
+            res.json(items);
         } catch (err) { handleErr(res, err, 'calendarView'); }
     }
 

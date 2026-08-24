@@ -119,4 +119,23 @@ export class AIService {
       "document_ocr"
     );
   }
+
+  // ── Chamada ÁUDIO (buffer) → texto  ───────────────────────────────────────
+  // Usado pela transcrição de reunião presencial gravada no navegador.
+  // O caminho antigo dependia da Web Speech API, que só existe no Chrome do
+  // desktop: no Safari do iPhone (que é como a diretoria acessa) o recurso
+  // simplesmente não existia.
+
+  static async generateResponseFromAudio(prompt, audioBuffer, mimeType, preferredModels) {
+    const base64Data = audioBuffer.toString("base64");
+    const modelsToTry = this._resolveModels(preferredModels);
+    return this._runWithRetry(
+      modelsToTry,
+      () => [
+        { inlineData: { mimeType: mimeType || "audio/webm", data: base64Data } },
+        { text: prompt },
+      ],
+      "audio_transcription"
+    );
+  }
 } 

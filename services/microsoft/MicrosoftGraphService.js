@@ -64,6 +64,45 @@ class MicrosoftGraphService {
         return this.call(user, 'get', path, { params, headers: extraHeaders });
     }
 
+    /**
+     * GET paginado: segue o @odata.nextLink até acabar a coleção ou bater o teto.
+     *
+     * O Graph devolve no máximo o que couber numa página ($top é sugestão, não
+     * garantia) e o resto vem em @odata.nextLink. Sem seguir esse link, uma
+     * biblioteca com 501 arquivos mostrava 500 e dizia que tinha acabado — corte
+     * silencioso, que é justamente o que não pode acontecer.
+     *
+     * @returns {{ items: any[], truncated: boolean, pages: number }}
+     *   `truncated` = bateu no teto e AINDA havia mais; quem chama precisa dizer
+     *   isso na tela em vez de fingir que a lista está completa.
+     */
+    async getAllPages(user, path, params, { max = 5000, headers } = {}) {
+        const items = [];
+        let nextPath = path;
+        let nextParams = params;
+        let pages = 0;
+        let truncated = false;
+
+        while (nextPath) {
+            const data = await this.call(user, 'get', nextPath, { params: nextParams, headers });
+            pages++;
+
+            if (Array.isArray(data?.value)) items.push(...data.value);
+            else if (data) items.push(data);
+
+            const nextLink = data?.['@odata.nextLink'];
+            if (!nextLink) break;
+
+            if (items.length >= max) { truncated = true; break; }
+
+            // O nextLink vem absoluto e já carrega toda a query string original.
+            nextPath = nextLink.replace(GRAPH_BASE, '');
+            nextParams = undefined;
+        }
+
+        return { items: items.slice(0, max), truncated, pages };
+    }
+
     /** POST /v1.0{path} */
     post(user, path, data) {
         return this.call(user, 'post', path, { data });
@@ -164,6 +203,42 @@ class MicrosoftGraphService {
 
     /** GET app-only /v1.0{path} */
     appGet(path, params) { return this.appCall('get', path, { params }); }
+
+    /** GET app-only paginado — mesma mecânica de getAllPages, sem usuário. */
+    async appGetAllPages(path, params, { max = 5000, headers } = {}) {
+        const items = [];
+        let nextPath = path;
+        let nextParams = params;
+        let truncated = false;
+
+        while (nextPath) {
+            const data = await this.appCall('get', nextPath, { params: nextParams, headers });
+            if (Array.isArray(data?.value)) items.push(...data.value);
+            else if (data) items.push(data);
+
+            const nextLink = data?.['@odata.nextLink'];
+            if (!nextLink) break;
+            if (items.length >= max) { truncated = true; break; }
+
+            nextPath = nextLink.replace(GRAPH_BASE, '');
+            nextParams = undefined;
+        }
+
+        return { items: items.slice(0, max), truncated };
+    }
+
+    /**
+     * Streaming GET app-only — usado para baixar anexo de e-mail sem carregar o
+     * arquivo inteiro na memória do processo.
+     */
+    async appStream(path) {
+        const token = await microsoftAuthService.getAppToken();
+        return axios.get(`${GRAPH_BASE}${path}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            responseType: 'stream',
+            maxRedirects: 10,
+        });
+    }
     /** POST app-only /v1.0{path} */
     appPost(path, data) { return this.appCall('post', path, { data }); }
     /** PATCH app-only /v1.0{path} */

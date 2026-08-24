@@ -116,6 +116,7 @@ import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibili
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureUseredeSchema } from './lib/ensureUseredeSchema.js';
 import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
+import { ensureMicrosoftSchema } from './lib/ensureMicrosoftSchema.js';
 import { ensureRepasseIndexes } from './lib/ensureRepasseIndexes.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
@@ -489,6 +490,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['Boleto', ensureBoletoSchema],
     ['Userede', ensureUseredeSchema],
     ['ReservaCancel', ensureReservaCancelSchema],
+    ['Microsoft', ensureMicrosoftSchema],
     ['RepasseIndexes', ensureRepasseIndexes],
     ['AcademyPostSync', ensureAcademyPostSync],
     ['MarketingCapture', ensureMarketingCaptureSchema],

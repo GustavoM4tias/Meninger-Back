@@ -2,6 +2,8 @@
 import axios from 'axios';
 import graph from './MicrosoftGraphService.js';
 import microsoftAuthService from './MicrosoftAuthService.js';
+import settingsService from './MicrosoftSettingsService.js';
+import db from '../../models/sequelize/index.js';
 
 const GRAPH_BASE      = 'https://graph.microsoft.com/v1.0';
 const GRAPH_BASE_BETA = 'https://graph.microsoft.com/beta';
@@ -152,6 +154,82 @@ class MicrosoftTranscriptService {
 
         console.warn('[Transcript] getMeetingIdByJoinUrl: reunião não encontrada.');
         return null;
+    }
+
+    // ── Caminho de APLICAÇÃO (participante) ──────────────────────────────────
+    //
+    // O caminho delegado (/me/onlineMeetings) só enxerga reunião que a PRÓPRIA
+    // pessoa organizou — quem apenas participou recebia "reunião não encontrada"
+    // e ficava sem relatório. Com permissão de aplicação consentida e uma
+    // política de acesso a aplicativo no tenant, dá para ler a reunião pelo id
+    // do ORGANIZADOR.
+    //
+    // Tudo aqui é best-effort: sem o consentimento, cada método devolve null e o
+    // comportamento volta a ser exatamente o de antes.
+
+    /** microsoft_id do organizador, pelo cadastro do Office ou pelo diretório. */
+    async resolveOrganizerId(organizerEmail) {
+        if (!organizerEmail) return null;
+
+        const local = await db.User.findOne({
+            where: db.Sequelize.where(
+                db.Sequelize.fn('lower', db.Sequelize.col('email')),
+                String(organizerEmail).trim().toLowerCase()
+            ),
+            attributes: ['microsoft_id'],
+        }).catch(() => null);
+
+        if (local?.microsoft_id) return local.microsoft_id;
+
+        try {
+            const found = await graph.appGet(`/users/${encodeURIComponent(organizerEmail)}?$select=id`);
+            return found?.id || null;
+        } catch {
+            return null;
+        }
+    }
+
+    async getMeetingIdByJoinUrlApp(organizerId, joinUrl) {
+        if (!organizerId || !joinUrl) return null;
+        const safe = (fn) => { try { return fn(); } catch { return null; } };
+        const variants = [
+            safe(() => decodeURIComponent(joinUrl).split('?')[0]),
+            joinUrl.split('?')[0],
+        ].filter((v, i, arr) => v && arr.indexOf(v) === i);
+
+        for (const variant of variants) {
+            try {
+                const filter = `joinWebUrl eq '${variant}'`;
+                const data = await graph.appGet(`/users/${organizerId}/onlineMeetings`, { $filter: filter });
+                const id = data?.value?.[0]?.id;
+                if (id) {
+                    console.log('[Transcript] reunião resolvida pelo token de aplicação (participante).');
+                    return id;
+                }
+            } catch (err) {
+                // 403 = permissão de aplicação ou política de acesso ausente.
+                if (err?.response?.status === 403) return null;
+            }
+        }
+        return null;
+    }
+
+    async listTranscriptsApp(organizerId, meetingId) {
+        try {
+            const data = await graph.appGet(`/users/${organizerId}/onlineMeetings/${meetingId}/transcripts`);
+            return (data?.value || []).map(t => ({ id: t.id, createdAt: t.createdDateTime, meetingId }));
+        } catch {
+            return [];
+        }
+    }
+
+    async getTranscriptContentApp(organizerId, meetingId, transcriptId) {
+        const token = await microsoftAuthService.getAppToken();
+        const { data: vttText } = await axios.get(
+            `${GRAPH_BASE}/users/${organizerId}/onlineMeetings/${meetingId}/transcripts/${transcriptId}/content`,
+            { headers: { Authorization: `Bearer ${token}`, Accept: 'text/vtt' }, responseType: 'text' }
+        );
+        return parseVTT(vttText);
     }
 
     /**
@@ -332,8 +410,11 @@ class MicrosoftTranscriptService {
         const start = new Date();
         start.setDate(start.getDate() - days);
 
-        // Usa params object para que axios codifique corretamente (sem $filter/$orderby)
-        const data = await graph.get(
+        // Usa params object para que axios codifique corretamente (sem $filter/$orderby).
+        // getAllPages segue o @odata.nextLink — antes o período parava na primeira
+        // página e reuniões antigas sumiam da listagem sem aviso.
+        const cap = await settingsService.listCap();
+        const { items } = await graph.getAllPages(
             user,
             '/me/calendarView',
             {
@@ -342,10 +423,10 @@ class MicrosoftTranscriptService {
                 $select: 'id,subject,start,end,isOnlineMeeting,onlineMeeting,organizer,attendees,webLink',
                 $top: '100',
             },
-            { Prefer: 'outlook.timezone="America/Sao_Paulo"' }
+            { max: cap, headers: { Prefer: 'outlook.timezone="America/Sao_Paulo"' } }
         );
 
-        return (data.value || [])
+        return items
             .filter(e => e.isOnlineMeeting && e.onlineMeeting?.joinUrl)
             .sort((a, b) => new Date(b.start?.dateTime || 0) - new Date(a.start?.dateTime || 0))
             .map(e => ({

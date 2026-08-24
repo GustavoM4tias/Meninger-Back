@@ -1,5 +1,6 @@
 // controllers/microsoft/MicrosoftTranscriptController.js
 import transcriptService, { cuesToText } from '../../services/microsoft/MicrosoftTranscriptService.js';
+import settingsService from '../../services/microsoft/MicrosoftSettingsService.js';
 import { MeetingSummaryService } from '../../validatorAI/src/services/MeetingSummaryService.js';
 import { sendEmail } from '../../email/email.service.js';
 import db from '../../models/sequelize/index.js';
@@ -84,17 +85,37 @@ class MicrosoftTranscriptController {
             const { joinUrl } = req.query;
             if (!joinUrl) return res.status(400).json({ error: 'joinUrl obrigatório' });
 
-            const meetingId = await transcriptService.getMeetingIdByJoinUrl(req.user, joinUrl);
+            // 1) Caminho de sempre: a conta da própria pessoa (organizador).
+            let meetingId = await transcriptService.getMeetingIdByJoinUrl(req.user, joinUrl);
+            let viaApp = false;
+
+            // 2) Não achou: pode ser reunião de que ela só PARTICIPOU. Tenta pelo
+            //    organizador com o token de aplicação. Sem consentimento no
+            //    portal, isto devolve null e nada muda em relação a antes.
+            if (!meetingId) {
+                const { transcript_app_fallback } = await settingsService.get();
+                if (transcript_app_fallback && req.query.organizerEmail) {
+                    const organizerId = await transcriptService.resolveOrganizerId(req.query.organizerEmail);
+                    if (organizerId) {
+                        meetingId = await transcriptService.getMeetingIdByJoinUrlApp(organizerId, joinUrl);
+                        viaApp = !!meetingId;
+                    }
+                }
+            }
+
             if (!meetingId) {
                 return res.json({
                     available: false,
                     transcripts: [],
                     reason: 'meeting_not_found',
-                    hint: 'A reunião não foi encontrada via Graph API. Apenas reuniões onde você é o organizador são acessíveis pela API. Use /transcripts/diagnose para diagnóstico detalhado.',
+                    hint: 'Não foi possível abrir esta reunião pela Microsoft. Reuniões que você organizou funcionam sempre; para as que você apenas participou, o administrador precisa liberar a permissão de aplicação em Configurações > Integração Microsoft 365.',
                 });
             }
 
-            const transcripts = await transcriptService.listTranscripts(req.user, meetingId);
+            const transcripts = viaApp
+                ? await transcriptService.listTranscriptsApp(
+                    await transcriptService.resolveOrganizerId(req.query.organizerEmail), meetingId)
+                : await transcriptService.listTranscripts(req.user, meetingId);
 
             if (!transcripts.length) {
                 return res.json({
@@ -181,8 +202,19 @@ class MicrosoftTranscriptController {
                 });
             }
 
-            // Busca do Graph API
-            const cues = await transcriptService.getTranscriptContent(req.user, meetingId, transcriptId);
+            // Busca do Graph API. Se a conta da pessoa não alcança a reunião
+            // (ela só participou), tenta pelo organizador com token de aplicação.
+            let cues;
+            try {
+                cues = await transcriptService.getTranscriptContent(req.user, meetingId, transcriptId);
+            } catch (err) {
+                const { transcript_app_fallback } = await settingsService.get();
+                const organizerId = transcript_app_fallback && organizerEmail
+                    ? await transcriptService.resolveOrganizerId(organizerEmail)
+                    : null;
+                if (!organizerId) throw err;
+                cues = await transcriptService.getTranscriptContentApp(organizerId, meetingId, transcriptId);
+            }
             const parsedJson = JSON.stringify(cues);
 
             await record.update({

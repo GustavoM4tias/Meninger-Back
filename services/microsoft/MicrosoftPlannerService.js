@@ -4,15 +4,19 @@
 // com o @odata.etag do item. Aqui fazemos isso transparentemente.
 
 import graphService from './MicrosoftGraphService.js';
+import settingsService from './MicrosoftSettingsService.js';
 
 class MicrosoftPlannerService {
 
     // ── Grupos Microsoft 365 ──────────────────────────────────────────────────
 
     async getMyGroups(user) {
-        const res = await graphService.get(user, '/me/memberOf?$select=id,displayName,description,groupTypes&$top=100');
+        const cap = await settingsService.listCap();
+        const { items } = await graphService.getAllPages(
+            user, '/me/memberOf?$select=id,displayName,description,groupTypes&$top=100', undefined, { max: cap }
+        );
         // Filtra apenas grupos Microsoft 365 (Unified) que têm Planner
-        const groups = (res.value ?? []).filter(g =>
+        const groups = items.filter(g =>
             g['@odata.type'] === '#microsoft.graph.group' &&
             Array.isArray(g.groupTypes) && g.groupTypes.includes('Unified')
         );
@@ -22,8 +26,9 @@ class MicrosoftPlannerService {
     // ── Plans ─────────────────────────────────────────────────────────────────
 
     async getGroupPlans(user, groupId) {
-        const res = await graphService.get(user, `/groups/${groupId}/planner/plans`);
-        return res.value ?? [];
+        const cap = await settingsService.listCap();
+        const { items } = await graphService.getAllPages(user, `/groups/${groupId}/planner/plans`, undefined, { max: cap });
+        return items;
     }
 
     async getPlan(user, planId) {
@@ -50,8 +55,9 @@ class MicrosoftPlannerService {
     // ── Buckets ───────────────────────────────────────────────────────────────
 
     async getPlanBuckets(user, planId) {
-        const res = await graphService.get(user, `/planner/plans/${planId}/buckets`);
-        return res.value ?? [];
+        const cap = await settingsService.listCap();
+        const { items } = await graphService.getAllPages(user, `/planner/plans/${planId}/buckets`, undefined, { max: cap });
+        return items;
     }
 
     async createBucket(user, planId, name, orderHint = ' !') {
@@ -74,8 +80,9 @@ class MicrosoftPlannerService {
     // ── Tasks ─────────────────────────────────────────────────────────────────
 
     async getPlanTasks(user, planId) {
-        const res = await graphService.get(user, `/planner/plans/${planId}/tasks`);
-        return res.value ?? [];
+        const cap = await settingsService.listCap();
+        const { items } = await graphService.getAllPages(user, `/planner/plans/${planId}/tasks`, undefined, { max: cap });
+        return items;
     }
 
     async getTask(user, taskId) {
@@ -130,6 +137,31 @@ class MicrosoftPlannerService {
                 orderHint: ' !',
             },
         };
+    }
+
+    /**
+     * Monta o payload de responsáveis para um PATCH de tarefa.
+     *
+     * O Planner não aceita "substituir a lista": quem sai precisa vir no corpo
+     * com valor null. Sem isso, remover responsável não funcionava — só somava.
+     *
+     * @param {object}   current  - assignments que a tarefa tem hoje (do Graph)
+     * @param {string[]} desired  - microsoft_ids que devem ficar
+     */
+    buildAssignments(current = {}, desired = []) {
+        const keep = new Set((desired || []).filter(Boolean));
+        const payload = {};
+
+        for (const id of keep) {
+            if (!current?.[id]) {
+                payload[id] = { '@odata.type': '#microsoft.graph.plannerAssignment', orderHint: ' !' };
+            }
+        }
+        for (const id of Object.keys(current || {})) {
+            if (!keep.has(id)) payload[id] = null; // null = tira o responsável
+        }
+
+        return payload;
     }
 
     // Mapeia priority numérica (0-9) para label

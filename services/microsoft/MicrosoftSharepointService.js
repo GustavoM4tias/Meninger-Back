@@ -1,49 +1,78 @@
 // services/microsoft/MicrosoftSharepointService.js
+import axios from 'axios';
 import graphService from './MicrosoftGraphService.js';
+import settingsService from './MicrosoftSettingsService.js';
 
 const ITEM_SELECT = 'id,name,size,folder,file,webUrl,lastModifiedDateTime,parentReference,@microsoft.graph.downloadUrl';
+
+// Busca é caso à parte: ninguém rola 5.000 resultados de busca, e paginar tudo
+// deixaria a caixa de busca lenta. O teto é baixo DE PROPÓSITO e continua sendo
+// anunciado na resposta (truncated), então a tela avisa em vez de fingir.
+const SEARCH_CAP = 200;
+
+// Página do Graph. O $top é sugestão, não garantia — quem completa a lista é o
+// @odata.nextLink, seguido por graphService.getAllPages().
+const PAGE_SIZE = 200;
 
 class MicrosoftSharepointService {
 
     // ── Sites ─────────────────────────────────────────────────────────────────
     async getSites(user) {
-        const result = await graphService.get(user,
-            '/sites?search=*&$select=id,name,displayName,webUrl,description&$top=50'
+        const cap = await settingsService.listCap();
+        const { items, truncated } = await graphService.getAllPages(user,
+            `/sites?search=*&$select=id,name,displayName,webUrl,description&$top=${PAGE_SIZE}`,
+            undefined,
+            { max: cap }
         );
-        return (result.value || []).map(s => ({
-            id: s.id,
-            name: s.displayName || s.name,
-            webUrl: s.webUrl,
-            description: s.description || null,
-        }));
+        return {
+            items: items.map(s => ({
+                id: s.id,
+                name: s.displayName || s.name,
+                webUrl: s.webUrl,
+                description: s.description || null,
+            })),
+            truncated,
+        };
     }
 
     // ── Drives ────────────────────────────────────────────────────────────────
     async getSiteDrives(user, siteId) {
-        const result = await graphService.get(user,
-            `/sites/${siteId}/drives?$select=id,name,driveType,webUrl,description`
+        const cap = await settingsService.listCap();
+        const { items, truncated } = await graphService.getAllPages(user,
+            `/sites/${siteId}/drives?$select=id,name,driveType,webUrl,description`,
+            undefined,
+            { max: cap }
         );
-        return (result.value || []).map(d => ({
-            id: d.id,
-            name: d.name,
-            driveType: d.driveType,
-            webUrl: d.webUrl,
-        }));
+        return {
+            items: items.map(d => ({
+                id: d.id,
+                name: d.name,
+                driveType: d.driveType,
+                webUrl: d.webUrl,
+            })),
+            truncated,
+        };
     }
 
     // ── Itens ─────────────────────────────────────────────────────────────────
     async getDriveRoot(user, driveId) {
-        const result = await graphService.get(user,
-            `/drives/${driveId}/root/children?$select=${ITEM_SELECT}&$top=500`
+        const cap = await settingsService.listCap();
+        const { items, truncated } = await graphService.getAllPages(user,
+            `/drives/${driveId}/root/children?$select=${ITEM_SELECT}&$top=${PAGE_SIZE}`,
+            undefined,
+            { max: cap }
         );
-        return this._normalizeItems(result.value || []);
+        return { items: this._normalizeItems(items), truncated };
     }
 
     async getFolderChildren(user, driveId, itemId) {
-        const result = await graphService.get(user,
-            `/drives/${driveId}/items/${itemId}/children?$select=${ITEM_SELECT}&$top=500`
+        const cap = await settingsService.listCap();
+        const { items, truncated } = await graphService.getAllPages(user,
+            `/drives/${driveId}/items/${itemId}/children?$select=${ITEM_SELECT}&$top=${PAGE_SIZE}`,
+            undefined,
+            { max: cap }
         );
-        return this._normalizeItems(result.value || []);
+        return { items: this._normalizeItems(items), truncated };
     }
 
     async getItem(user, driveId, itemId) {
@@ -54,10 +83,12 @@ class MicrosoftSharepointService {
     }
 
     async search(user, driveId, query) {
-        const result = await graphService.get(user,
-            `/drives/${driveId}/root/search(q='${encodeURIComponent(query)}')?$select=${ITEM_SELECT}&$top=30`
+        const { items, truncated } = await graphService.getAllPages(user,
+            `/drives/${driveId}/root/search(q='${encodeURIComponent(query)}')?$select=${ITEM_SELECT}&$top=50`,
+            undefined,
+            { max: SEARCH_CAP }
         );
-        return this._normalizeItems(result.value || []);
+        return { items: this._normalizeItems(items), truncated };
     }
 
     // ── Mutações ──────────────────────────────────────────────────────────────
@@ -81,12 +112,95 @@ class MicrosoftSharepointService {
 
     /**
      * Faz upload de um arquivo pequeno (< 4 MB) via conteúdo binário.
-     * Para arquivos maiores, seria necessário usar upload em sessão (resumable).
+     * Arquivos maiores vão por uploadStream() — sessão em pedaços.
      */
     async uploadFile(user, driveId, parentId, filename, buffer, contentType) {
         const path = `/drives/${driveId}/items/${parentId}:/${encodeURIComponent(filename)}:/content`;
         const result = await graphService.put(user, path, buffer, contentType || 'application/octet-stream');
         return this._normalizeItem(result);
+    }
+
+    /**
+     * Upload de arquivo GRANDE por sessão do Graph, lendo direto do stream da
+     * requisição — o arquivo nunca é carregado inteiro na memória do Node.
+     *
+     * Antes só existia o PUT direto: a rota aceitava 100 MB, o buffer inteiro
+     * atravessava o processo e o Graph recusava qualquer coisa acima do limite
+     * do upload simples. O usuário esperava a barra encher para receber um erro
+     * opaco no fim.
+     *
+     * @param {Readable} stream    - o próprio `req` (não consumido por body parser)
+     * @param {number}   totalBytes - Content-Length da requisição (obrigatório:
+     *   o Graph exige Content-Range com o tamanho total em cada pedaço)
+     * @param {number}   chunkBytes - múltiplo de 320 KiB
+     */
+    async uploadStream(user, driveId, parentId, filename, stream, totalBytes, chunkBytes) {
+        if (!totalBytes || totalBytes <= 0) {
+            throw new Error('Tamanho do arquivo não informado pelo navegador. Tente enviar novamente.');
+        }
+
+        const sessionPath = `/drives/${driveId}/items/${parentId}:/${encodeURIComponent(filename)}:/createUploadSession`;
+        const session = await graphService.post(user, sessionPath, {
+            item: { '@microsoft.graph.conflictBehavior': 'rename' },
+        });
+
+        const uploadUrl = session?.uploadUrl;
+        if (!uploadUrl) throw new Error('A Microsoft não devolveu a sessão de upload.');
+
+        let sent = 0;
+        let pending = [];
+        let pendingBytes = 0;
+        let finalItem = null;
+
+        // A uploadUrl já vem pré-autenticada pelo Graph: mandar o Authorization
+        // junto faz a Microsoft recusar o pedaço.
+        const putChunk = async (buf) => {
+            const start = sent;
+            const end = sent + buf.length - 1;
+            const { data, status } = await axios.put(uploadUrl, buf, {
+                headers: {
+                    'Content-Length': buf.length,
+                    'Content-Range': `bytes ${start}-${end}/${totalBytes}`,
+                },
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity,
+                validateStatus: (st) => st === 200 || st === 201 || st === 202,
+            });
+            sent = end + 1;
+            if (status === 200 || status === 201) finalItem = data;
+        };
+
+        try {
+            for await (const piece of stream) {
+                pending.push(piece);
+                pendingBytes += piece.length;
+
+                while (pendingBytes >= chunkBytes) {
+                    const merged = Buffer.concat(pending, pendingBytes);
+                    await putChunk(merged.subarray(0, chunkBytes));
+                    const rest = merged.subarray(chunkBytes);
+                    pending = rest.length ? [rest] : [];
+                    pendingBytes = rest.length;
+                }
+            }
+
+            if (pendingBytes > 0) {
+                await putChunk(Buffer.concat(pending, pendingBytes));
+            }
+        } catch (err) {
+            // Sessão pendurada no SharePoint vira arquivo fantasma: cancela.
+            await axios.delete(uploadUrl).catch(() => {});
+            const graphMsg = err?.response?.data?.error?.message;
+            throw new Error(graphMsg || err.message || 'Falha no envio do arquivo.');
+        }
+
+        if (sent !== totalBytes) {
+            await axios.delete(uploadUrl).catch(() => {});
+            throw new Error('O envio foi interrompido antes do fim do arquivo. Tente novamente.');
+        }
+
+        // O último pedaço devolve o driveItem pronto.
+        return finalItem ? this._normalizeItem(finalItem) : null;
     }
 
     /** Cria um link de compartilhamento para o item */

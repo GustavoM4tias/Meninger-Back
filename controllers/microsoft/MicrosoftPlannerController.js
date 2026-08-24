@@ -19,6 +19,36 @@ class MicrosoftPlannerController {
         return res.status(err?.response?.status || 500).json({ error: err.message });
     }
 
+    // ── GET /api/microsoft/planner/people ────────────────────────────────────
+    // Quem pode ser responsável por uma tarefa.
+    //
+    // A lista sai do PRÓPRIO Office (pessoas ativas com conta Microsoft
+    // vinculada), não do diretório do Azure: assim o quadro ganha responsável
+    // sem depender de permissão nova no portal, e o nome que aparece é o mesmo
+    // que a pessoa vê no resto do sistema.
+    getPeople = async (req, res) => {
+        try {
+            const user = await this._getUser(req.user.id);
+            if (!user?.microsoft_id) return this._notConnected(res);
+
+            const rows = await db.User.findAll({
+                where: {
+                    microsoft_id: { [db.Sequelize.Op.ne]: null },
+                    status: true,
+                },
+                attributes: ['id', 'microsoft_id', 'username', 'name', 'email'],
+                order: [['username', 'ASC']],
+                raw: true,
+            });
+
+            return res.json(rows.map(r => ({
+                microsoftId: r.microsoft_id,
+                name: r.name || r.username || r.email,
+                email: r.email,
+            })));
+        } catch (err) { return this._err(res, err, 'getPeople'); }
+    };
+
     // ── GET /api/microsoft/planner/groups ────────────────────────────────────
     getGroups = async (req, res) => {
         try {
@@ -120,9 +150,14 @@ class MicrosoftPlannerController {
         try {
             const user = await this._getUser(req.user.id);
             if (!user?.microsoft_id) return this._notConnected(res);
-            const { planId, bucketId, title } = req.body;
+            const { planId, bucketId, title, assignedTo, ...rest } = req.body;
             if (!planId || !bucketId || !title) return res.status(400).json({ error: 'planId, bucketId e title são obrigatórios.' });
-            return res.status(201).json(await plannerService.createTask(user, req.body));
+
+            const payload = { planId, bucketId, title, ...rest };
+            if (Array.isArray(assignedTo) && assignedTo.length) {
+                payload.assignments = plannerService.buildAssignments({}, assignedTo);
+            }
+            return res.status(201).json(await plannerService.createTask(user, payload));
         } catch (err) { return this._err(res, err, 'createTask'); }
     };
 
@@ -131,8 +166,15 @@ class MicrosoftPlannerController {
         try {
             const user = await this._getUser(req.user.id);
             if (!user?.microsoft_id) return this._notConnected(res);
-            const { etag, ...data } = req.body;
+            const { etag, assignedTo, currentAssignments, ...data } = req.body;
             if (!etag) return res.status(400).json({ error: 'etag é obrigatório.' });
+
+            // Responsáveis: a tela manda a lista final; o Planner exige o
+            // diff (quem sai vai com null no corpo).
+            if (Array.isArray(assignedTo)) {
+                data.assignments = plannerService.buildAssignments(currentAssignments || {}, assignedTo);
+            }
+
             return res.json(await plannerService.updateTask(user, req.params.taskId, data, etag));
         } catch (err) { return this._err(res, err, 'updateTask'); }
     };
