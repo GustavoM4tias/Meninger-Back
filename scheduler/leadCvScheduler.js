@@ -8,14 +8,15 @@
 // poderia divergir do de verdade.
 // src/scheduler/leadCvScheduler.js
 import CvLeadSyncController from '../services/bulkData/cv/bulkDataController.js';
+import { criarResposta, exigirSucesso } from '../services/cv/fakeRes.js';
 
 const ctl = new CvLeadSyncController();
 const CRON_EXPR = process.env.LEAD_CV_CRON_EXPRESSION || '*/30 * * * *'; // a cada 30min
 
-const fakeRes = { send: () => { }, status: () => ({ send: () => { } }) };
-
 export async function run() {
-    await ctl.deltaSync({}, fakeRes);
+    const { res, estado } = criarResposta();
+    await ctl.deltaSync({}, res);
+    exigirSucesso(estado);
 }
 
 // bootstrapDelayMs 0: roda ao subir, cobrindo a janela perdida no restart.

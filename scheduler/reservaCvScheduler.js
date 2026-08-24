@@ -10,14 +10,15 @@
 // Cron de delta de reservas — a cada 20 min. Status muda rápido (entrou em repasse,
 // virou venda, distrato, etc) por isso é mais agressivo que precadastro/lead.
 import CvReservasSyncController from '../controllers/cv/reservasSyncController.js';
+import { criarResposta, exigirSucesso } from '../services/cv/fakeRes.js';
 
 const ctl = new CvReservasSyncController();
 const CRON_EXPR = process.env.RESERVA_CV_CRON_EXPRESSION || '*/20 * * * *';
 
-const fakeRes = { send: () => { }, status: () => ({ send: () => { } }) };
-
 export async function run() {
-    await ctl.deltaSync({}, fakeRes);
+    const { res, estado } = criarResposta();
+    await ctl.deltaSync({}, res);
+    exigirSucesso(estado);
 }
 
 export default { run, cronPadrao: CRON_EXPR };

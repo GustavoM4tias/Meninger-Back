@@ -8,15 +8,16 @@
 // poderia divergir do de verdade.
 // scheduler/leadCancelReasonScheduler.js
 import CvLeadSyncController from '../services/bulkData/cv/bulkDataController.js';
+import { criarResposta, exigirSucesso } from '../services/cv/fakeRes.js';
 
 const ctl = new CvLeadSyncController();
 // Roda a cada 2 horas, levemente defasado do lead sync
 const CRON_EXPR = process.env.LEAD_CANCEL_REASON_CRON_EXPRESSION || '15 */2 * * *';
 
-const fakeRes = { send: () => {}, status: () => ({ send: () => {} }) };
-
 export async function run() {
-    await ctl.cancelReasonSync({}, fakeRes);
+    const { res, estado } = criarResposta();
+    await ctl.cancelReasonSync({}, res);
+    exigirSucesso(estado);
 }
 
 export default { run, cronPadrao: CRON_EXPR, bootstrapDelayMs: 0 };

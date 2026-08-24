@@ -9,15 +9,17 @@
 // scheduler/precadastroCvScheduler.js
 // Cron de delta de pré-cadastros — a cada 30 min (sem documentos, ~30s p/ 11k).
 import CvPrecadastrosSyncController from '../controllers/cv/precadastrosSyncController.js';
+import { criarResposta, exigirSucesso } from '../services/cv/fakeRes.js';
 
 const ctl = new CvPrecadastrosSyncController();
 const CRON_EXPR = process.env.PRECADASTRO_CV_CRON_EXPRESSION || '*/30 * * * *';
 
 const fakeReq = { query: {}, body: {} };
-const fakeRes = { send: () => {}, status: () => ({ send: () => {} }) };
 
 export async function run() {
-    await ctl.deltaSync(fakeReq, fakeRes);
+    const { res, estado } = criarResposta();
+    await ctl.deltaSync(fakeReq, res);
+    exigirSucesso(estado);
 }
 
 export default { run, cronPadrao: CRON_EXPR };

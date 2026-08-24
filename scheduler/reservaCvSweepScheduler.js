@@ -16,15 +16,17 @@
 // Default: 04:00 todo dia (America/Sao_Paulo).
 // Habilitar via env: ENABLE_CV_RESERVA_SWEEP_SCHEDULE=true
 import CvReservasSyncController from '../controllers/cv/reservasSyncController.js';
+import { criarResposta, exigirSucesso } from '../services/cv/fakeRes.js';
 
 const ctl = new CvReservasSyncController();
 const CRON_EXPR = process.env.RESERVA_CV_SWEEP_CRON_EXPRESSION || '0 4 * * *';
 
 const fakeReq = { body: {} };
-const fakeRes = { json: () => { }, status: () => ({ json: () => { }, send: () => { } }), send: () => { } };
 
 export async function run() {
-    await ctl.fullSweep(fakeReq, fakeRes);
+    const { res, estado } = criarResposta();
+    await ctl.fullSweep(fakeReq, res);
+    exigirSucesso(estado);
 }
 
 export default { run, cronPadrao: CRON_EXPR };

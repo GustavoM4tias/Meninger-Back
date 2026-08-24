@@ -7,15 +7,16 @@
 // exatamente a mesma execução do agendamento - não um caminho paralelo, que
 // poderia divergir do de verdade.
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
+import { criarResposta, exigirSucesso } from '../services/cv/fakeRes.js';
 
 const ctl = new EnterprisesSyncController();
 // Hora cheia, das 11h às 22h (horário comercial BR)
 const CRON = process.env.ENTERPRISE_CV_CRON_EXPRESSION || '0 11-22 * * *';
 
-const fakeRes = { send: () => { }, status: () => ({ send: () => { } }) };
-
 export async function run() {
-    await ctl.deltaSync({}, fakeRes);
+    const { res, estado } = criarResposta();
+    await ctl.deltaSync({}, res);
+    exigirSucesso(estado);
 }
 
 export default { run, cronPadrao: CRON, bootstrapDelayMs: 0 };
