@@ -24,6 +24,7 @@ import { findUnsupported, rewriteInstruction, SAFE_FALLBACK } from './emeAtendeG
 import { HARD_RULES, mergeStandards, buildInstructions } from './emeAtendeRules.js';
 import EmeAtendeLeadService from './EmeAtendeLeadService.js';
 import Scoring from './emeAtendeLeadScoring.js';
+import EmeAtendeInteresseService from './EmeAtendeInteresseService.js';
 
 // Tentativas de reescrita antes de desistir e mandar o fail-safe.
 const MAX_REWRITE_ATTEMPTS = 2;
@@ -82,6 +83,17 @@ const FUNCTION_DECLARATIONS = [
                 observacao: { type: 'string', description: 'Detalhe curto do que ele falou' },
             },
             required: ['motivo'],
+        },
+    },
+    {
+        name: 'definir_empreendimento_principal',
+        description: 'Muda o empreendimento sobre o qual esta conversa fala. Use SOMENTE depois de o lead CONFIRMAR que agora quer falar de outro - por exemplo, quando ele voltar a perguntar do empreendimento anterior e disser que o interesse dele é aquele. Nunca chame por conta própria nem para atender curiosidade: pergunte antes.',
+        parameters: {
+            type: 'object',
+            properties: {
+                empreendimento: { type: 'string', description: 'Nome do empreendimento que passa a ser o assunto, como o lead falou' },
+            },
+            required: ['empreendimento'],
         },
     },
     {
@@ -420,20 +432,25 @@ async function buildPromptParts(flow, lead) {
     const docBlock = book
         ? '\n\nMATERIAL DISPONÍVEL: o book digital em PDF deste empreendimento pode ser enviado com a ferramenta enviar_documento.'
         : '';
-    // Interesse em OUTRO empreendimento registrado no meio da conversa: ela
-    // precisa saber pra não ignorar o assunto, mas não tem contexto do outro
-    // produto - por isso a instrução manda encaminhar, não improvisar.
-    const outros = (lead?.payload?.interesses || [])
+    // Empreendimento PRINCIPAL x os que ele já procurou antes.
+    //
+    // Ela só tem contexto do principal - por isso a instrução é confirmar antes
+    // de mudar de assunto, e nunca responder sobre o antigo de memória. Sem esse
+    // aviso ela responderia do jeito mais perigoso: misturando os dois.
+    const principal = lead?.empreendimento || null;
+    const anteriores = (lead?.payload?.interesses || [])
         .map(i => i.empreendimento)
-        .filter(e => e && e.toLowerCase() !== String(lead?.empreendimento || '').toLowerCase());
-    const outrosBloco = outros.length
-        ? '\n\nATENÇÃO: este lead também deixou contato para: ' + outros.join(', ')
-          + '. Você NÃO tem informação desses outros empreendimentos aqui. Se ele tocar'
-          + ' no assunto, reconheça o interesse e diga que um consultor fala sobre eles.'
+        .filter(e => e && EmeAtendeInteresseService.chave(e) !== EmeAtendeInteresseService.chave(principal));
+    const interesseBloco = anteriores.length
+        ? '\n\nHISTÓRICO DE INTERESSE: este lead já procurou antes por ' + anteriores.join(', ')
+          + '. O assunto ATUAL é ' + (principal || 'o empreendimento deste atendimento')
+          + ', e você só tem informação dele aqui. Se o lead perguntar de um dos anteriores,'
+          + ' NÃO responda de memória: pergunte se o interesse dele agora é aquele em vez deste.'
+          + ' Se ele confirmar, chame definir_empreendimento_principal; se não, siga no atual.'
         : '';
     const leadInfo = `\n\nDADOS DO LEAD: nome=${lead?.name || 'desconhecido'}; origem=${lead?.source || '-'}; campanha=${lead?.campaign || '-'}; empreendimento de interesse=${lead?.empreendimento || '-'}.`;
     return {
-        systemPrompt: `${instructions}${context}${imageBlock}${docBlock}${outrosBloco}${leadInfo}\n${HARD_RULES}`,
+        systemPrompt: `${instructions}${context}${imageBlock}${docBlock}${interesseBloco}${leadInfo}\n${HARD_RULES}`,
         contextText: contextText || '',
     };
 }
@@ -549,6 +566,60 @@ async function enforceNoInvention({ text, contextText, systemPrompt, history, us
     return SAFE_FALLBACK;
 }
 
+// Janela de serviço da Cloud API: 24h desde a ÚLTIMA mensagem do lead. Cada
+// mensagem dele reinicia a contagem; fora dela só template aprovado passa.
+const JANELA_MS = 24 * 60 * 60 * 1000;
+const JANELA_MARGEM_MS = 5 * 60 * 1000;
+
+function janelaAberta(conversation) {
+    const ultimo = conversation?.last_inbound_at;
+    if (!ultimo) return false;
+    return (Date.now() - new Date(ultimo).getTime()) < (JANELA_MS - JANELA_MARGEM_MS);
+}
+
+/**
+ * Abre o assunto do NOVO empreendimento numa conversa que já existe.
+ *
+ * Dentro da janela de 24h a Eme escreve normalmente (texto livre, grátis).
+ * Fora dela só template aprovado alcança o lead - e aí a abertura é a mesma
+ * que qualquer campanha usaria, com o nome do empreendimento novo.
+ *
+ * Se nem template houver, registra `intro_pendente` em vez de fingir que
+ * avisou: lead trocado de assunto sem aviso é pior que troca não anunciada.
+ */
+async function apresentarNovoEmpreendimento({ lead, conversation, flow, anterior }) {
+    const nome = flow?.site_snapshot?.nome || flow?.name || 'nosso empreendimento';
+
+    if (!janelaAberta(conversation)) {
+        const msg = await EmeAtendeMessenger.sendOpener({ lead, conversation, flow });
+        if (!msg || msg.status === 'failed' || msg.status === 'skipped') {
+            await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'intro_pendente',
+                { empreendimento: nome, motivo: 'janela fechada e template indisponível' });
+        }
+        return;
+    }
+
+    if (!hasGeminiKey()) return;
+    const { systemPrompt } = await buildPromptParts(flow, lead);
+    const instrucao = `O lead acabou de demonstrar interesse no ${nome}`
+        + (anterior ? `, depois de vir falando do ${anterior}` : '')
+        + '. Escreva UMA mensagem curta reconhecendo esse novo interesse e oferecendo'
+        + ' falar sobre ele agora. Não peça desculpas, não recapitule a conversa anterior'
+        + ' e não chame ferramenta nenhuma.';
+    try {
+        const r = await runChat({ systemPrompt, history: [], userMessage: instrucao,
+            functionDeclarations: [], onTool: async () => ({ ok: true }) });
+        if (r?.text) {
+            await EmeAtendeMessenger.sendText({ conversation, body: r.text });
+            await conversation.update({ ai_messages_count: conversation.ai_messages_count + 1 });
+        }
+    } catch (err) {
+        console.error('[eme-atende/engine] apresentação da troca falhou:', err?.message);
+        await EmeAtendeMessenger.logEvent(lead?.id, conversation.id, 'intro_pendente',
+            { empreendimento: nome, motivo: err?.message });
+    }
+}
+
 async function fireAI(conversationId) {
     // Só uma instância passa daqui por rodada.
     if (!await claimRound(conversationId)) {
@@ -588,7 +659,7 @@ async function fireAI(conversationId) {
     // gerando resposta repetida no próximo tick do sweeper.
     await conversation.update({ last_answered_message_id: pendentes[pendentes.length - 1].id });
 
-    const actions = { qualified: null, close: null, optOut: false, perda: null };
+    const actions = { qualified: null, close: null, optOut: false, perda: null, trocouEmpreendimento: null };
     const images = validImages(flow);
     const book = flowBook(flow);
     const { systemPrompt, contextText } = await buildPromptParts(flow, lead);
@@ -627,6 +698,16 @@ async function fireAI(conversationId) {
                     });
                     actions.perda = r.ok ? r.motivo : null;
                     return { ok: true, info: 'Motivo registrado. Não comente isso com o lead - apenas siga a despedida, sem julgar o caso dele.' };
+                }
+                if (name === 'definir_empreendimento_principal') {
+                    const troca = await EmeAtendeInteresseService.trocarPrincipal({
+                        lead, conversation, empreendimento: args?.empreendimento, origem: 'lead',
+                    });
+                    if (!troca.trocou) {
+                        return { ok: false, error: `não consegui mudar o assunto para "${args?.empreendimento}" (${troca.motivo}). Diga ao lead que um consultor fala sobre esse empreendimento e siga no atual.` };
+                    }
+                    actions.trocouEmpreendimento = troca.nome;
+                    return { ok: true, info: `Assunto agora é ${troca.nome}. Responda só confirmando a mudança, em uma frase - a apresentação do empreendimento novo sai logo em seguida, com os dados corretos. NÃO descreva ${troca.nome} agora: você ainda está com o contexto antigo.` };
                 }
                 if (name === 'encerrar_conversa') {
                     actions.close = args?.motivo || '';
@@ -676,6 +757,23 @@ async function fireAI(conversationId) {
         await conversation.update({ ai_messages_count: conversation.ai_messages_count + 1 });
     }
 
+    // Trocou de empreendimento no meio da rodada: o texto que acabou de sair foi
+    // escrito com o contexto ANTIGO (o prompt é montado antes da tool rodar).
+    // Sem esta apresentação, ela dizia "deixa eu verificar" e nada mais chegava
+    // até o lead escrever de novo.
+    if (actions.trocouEmpreendimento) {
+        try {
+            await conversation.reload();
+            await lead?.reload();
+            const novoFluxo = await EmeAtendeFlowService.getFlow(conversation.flow_id);
+            await apresentarNovoEmpreendimento({
+                lead, conversation, flow: novoFluxo, anterior: lead?.payload?.empreendimento_anterior || null,
+            });
+        } catch (err) {
+            console.error('[eme-atende/engine] apresentação pós-troca falhou:', err?.message);
+        }
+    }
+
     if (actions.close !== null) {
         await conversation.update({ state: 'closed' });
         // opt_out é DEFINITIVO: o lead sai da audiência (emeAtendeAudience ignora
@@ -693,7 +791,7 @@ async function fireAI(conversationId) {
 
 export default {
     handleWebhookPayload, fireAI, sweepDueRounds,
-    buildSystemPrompt, buildPromptParts, validImages,
+    buildSystemPrompt, buildPromptParts, validImages, apresentarNovoEmpreendimento, janelaAberta,
     FUNCTION_DECLARATIONS, IMAGE_TOOL, DOC_TOOL, flowBook,
     // exposto só para teste do corte de mensagens pendentes
     __buildHistory: buildHistory,

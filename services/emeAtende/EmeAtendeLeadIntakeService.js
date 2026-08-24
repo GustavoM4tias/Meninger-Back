@@ -8,6 +8,7 @@ import db from '../../models/sequelize/index.js';
 import { normalizePhone, phoneSuffix } from './emeAtendePhone.js';
 import EmeAtendeFlowService from './EmeAtendeFlowService.js';
 import EmeAtendeMessenger from './EmeAtendeMessenger.js';
+import EmeAtendeInteresseService from './EmeAtendeInteresseService.js';
 
 class IntakeError extends Error {
     constructor(message, status = 400) { super(message); this.status = status; }
@@ -44,36 +45,45 @@ async function ingest(data = {}, { apiKeyName = null } = {}) {
         });
 
         // A pessoa se cadastrou em OUTRA campanha enquanto a conversa rola.
-        // Sobrescrever o empreendimento apagaria o assunto que está em curso e
-        // deixaria a Eme falando de A com o cadastro dizendo B. O interesse novo
-        // é ACUMULADO; a conversa aberta continua no empreendimento dela.
+        // O empreendimento novo vira o PRINCIPAL e a conversa muda de assunto -
+        // mesma thread, mesmo histórico, fluxo novo. Ver EmeAtendeInteresseService:
+        // só troca se o empreendimento existir de verdade.
         const novoEmp = (data.empreendimento || '').trim();
-        const trocouEmp = !!novoEmp && !!existing.empreendimento
-            && novoEmp.toLowerCase() !== String(existing.empreendimento).toLowerCase();
-        const interesses = Array.isArray(existing.payload?.interesses) ? [...existing.payload.interesses] : [];
-        if (novoEmp && !interesses.some(i => i.empreendimento?.toLowerCase() === novoEmp.toLowerCase())) {
-            interesses.push({ empreendimento: novoEmp, campanha: data.campaign || null, em: new Date().toISOString() });
-        }
+        const ehOutro = !!novoEmp && !!existing.empreendimento
+            && EmeAtendeInteresseService.chave(novoEmp) !== EmeAtendeInteresseService.chave(existing.empreendimento);
 
         await existing.update({
             name: data.name || existing.name,
             email: data.email || existing.email,
             campaign: data.campaign || existing.campaign,
-            // conversa aberta manda: o empreendimento em curso não muda no meio
-            empreendimento: (trocouEmp && activeConv) ? existing.empreendimento : (novoEmp || existing.empreendimento),
-            payload: { ...existing.payload, ...extras, interesses, last_reentry_source: data.source || null },
+            empreendimento: ehOutro ? existing.empreendimento : (novoEmp || existing.empreendimento),
+            payload: { ...existing.payload, ...extras, last_reentry_source: data.source || null },
         });
 
         await EmeAtendeMessenger.logEvent(existing.id, activeConv?.id || null, 'lead_reentry', {
             source: data.source, apiKeyName, empreendimento: novoEmp || null,
-            interesse_adicional: trocouEmp || null,
         });
-        if (activeConv) {
-            if (trocouEmp) {
-                console.log(`[eme-atende/intake] lead ${existing.id} entrou por outra campanha (${novoEmp}) com conversa aberta - interesse acumulado, fluxo mantido.`);
+
+        if (activeConv && ehOutro) {
+            const troca = await EmeAtendeInteresseService.trocarPrincipal({
+                lead: existing, conversation: activeConv, empreendimento: novoEmp,
+                origem: 'campanha',
+            });
+            if (troca.trocou) {
+                await existing.reload();
+                await activeConv.reload();
+                // Import dinâmico: o engine importa serviços que importam este
+                // arquivo; estático aqui fecharia o ciclo no boot.
+                const { default: Engine } = await import('./EmeAtendeConversationEngine.js');
+                await Engine.apresentarNovoEmpreendimento({
+                    lead: existing, conversation: activeConv, flow: troca.fluxo, anterior: troca.anterior,
+                });
+                return { lead: existing, conversation: activeConv, reentry: true, reopened: false, trocouEmpreendimento: true };
             }
-            return { lead: existing, conversation: activeConv, reentry: true, reopened: false, interesseAdicional: trocouEmp };
+            // Não reconhecido: segue no assunto atual, com o registro já feito.
+            return { lead: existing, conversation: activeConv, reentry: true, reopened: false, trocouEmpreendimento: false };
         }
+        if (activeConv) return { lead: existing, conversation: activeConv, reentry: true, reopened: false };
 
         // conversa anterior fechada → reabre com novo opener
         const { flow } = await EmeAtendeFlowService.matchFlow(existing);
