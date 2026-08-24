@@ -22,12 +22,16 @@ import {
     parseCardAuthenticated,
     getImobiliariasReport,
     syncImobiliarias,
+    getCvPanel,
+    updateCvPanel,
+    testCvPanel,
 } from '../controllers/realEstateController.js';
 
 const TELA = '/comercial/imobiliarias';
 const podeVer = requireCapability(TELA, 'view');
 const podeCadastrar = requireCapability(TELA, 'register');
 const podeSincronizar = requireCapability(TELA, 'sync');
+const podeConfigurar = requireCapability(TELA, 'configure');
 
 const router = express.Router();
 
@@ -46,5 +50,10 @@ router.post('/parse-cnpj-card', podeCadastrar, upload.single('file'), parseCardA
 // Relatório de imobiliárias (backup local do CV)
 router.get('/report', podeVer, getImobiliariasReport);
 router.post('/sync', podeSincronizar, syncImobiliarias);
+
+// Credencial do painel do CV (v3) + quem é avisado quando ela para de valer.
+router.get('/cv-panel', podeConfigurar, getCvPanel);
+router.put('/cv-panel', podeConfigurar, updateCvPanel);
+router.post('/cv-panel/test', podeConfigurar, testCvPanel);
 
 export default router;

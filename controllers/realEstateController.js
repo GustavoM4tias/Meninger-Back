@@ -496,3 +496,104 @@ async function handleParseCard(req, res) {
         });
     }
 }
+
+// ── Credencial do painel do CV (APIs v3) ─────────────────────────────────────
+//
+// A associação imobiliária x empreendimento só é legível pela v3, que exige
+// e-mail e senha de um usuário do CV — e o CV força troca de senha de tempos em
+// tempos. Por isso a credencial é editável por tela: rotação de senha vira um
+// formulário, não um deploy.
+
+const PAINEIS_VALIDOS = ['gestor', 'corretor', 'imobiliaria'];
+
+export async function getCvPanel(req, res) {
+    try {
+        const { statusV3 } = await import('../lib/apiCvV3.js');
+        const status = await statusV3();
+
+        // Nomes de quem é avisado, para a tela não mostrar só números.
+        let notificados = [];
+        if (status.notify_user_ids?.length) {
+            notificados = await db.User.findAll({
+                where: { id: status.notify_user_ids },
+                attributes: ['id', 'username', 'email'],
+                raw: true,
+            });
+        }
+        return res.json({ ok: true, ...status, notificados });
+    } catch (err) {
+        console.error('[realestate] getCvPanel:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao ler a credencial do CV.' });
+    }
+}
+
+export async function updateCvPanel(req, res) {
+    try {
+        const patch = {};
+
+        if (req.body.email !== undefined) {
+            const email = String(req.body.email || '').trim();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                return res.status(400).json({ ok: false, error: 'Informe um e-mail válido.' });
+            }
+            patch.email = email;
+        }
+
+        // Senha em branco NÃO apaga a que está gravada: a tela nunca recebe a
+        // senha de volta, então mandar vazio significa "não mexi neste campo".
+        if (req.body.senha) patch.senha = String(req.body.senha);
+
+        if (req.body.painel !== undefined) {
+            const painel = String(req.body.painel || '').trim().toLowerCase();
+            if (!PAINEIS_VALIDOS.includes(painel)) {
+                return res.status(400).json({ ok: false, error: `Painel inválido. Use: ${PAINEIS_VALIDOS.join(', ')}.` });
+            }
+            patch.painel = painel;
+        }
+
+        if (req.body.notify_user_ids !== undefined) {
+            const ids = Array.isArray(req.body.notify_user_ids)
+                ? [...new Set(req.body.notify_user_ids.map(Number).filter(Number.isInteger))]
+                : [];
+            if (ids.length) {
+                const achados = await db.User.count({ where: { id: ids } });
+                if (achados !== ids.length) {
+                    return res.status(400).json({ ok: false, error: 'Há usuário inexistente na lista de avisados.' });
+                }
+            }
+            patch.notify_user_ids = ids;
+        }
+
+        if (!Object.keys(patch).length) {
+            return res.status(400).json({ ok: false, error: 'Nada para salvar.' });
+        }
+
+        let s = await db.CvPanelSettings.findByPk(1);
+        if (!s) s = await db.CvPanelSettings.create({ id: 1, painel: 'gestor' });
+        await s.update(patch);
+
+        // Salvar sem testar deixaria o admin achando que resolveu. Testa na
+        // hora e devolve o veredito para a tela mostrar.
+        const { testarCredencial, statusV3 } = await import('../lib/apiCvV3.js');
+        const teste = (patch.email || patch.senha || patch.painel)
+            ? await testarCredencial()
+            : { ok: true, mensagem: 'Destinatários atualizados.' };
+
+        return res.json({ ok: true, teste, ...(await statusV3()) });
+    } catch (err) {
+        console.error('[realestate] updateCvPanel:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao salvar a credencial do CV.' });
+    }
+}
+
+/** Testa a credencial já gravada, sem alterar nada. */
+export async function testCvPanel(req, res) {
+    try {
+        const { testarCredencial, statusV3 } = await import('../lib/apiCvV3.js');
+        const teste = await testarCredencial();
+        return res.json({ ok: true, teste, ...(await statusV3()) });
+    } catch (err) {
+        console.error('[realestate] testCvPanel:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao testar a credencial do CV.' });
+    }
+}

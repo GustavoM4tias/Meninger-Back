@@ -113,6 +113,7 @@ import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSc
 import { ensureWhatsappMessagesSchema } from './lib/ensureWhatsappMessagesSchema.js';
 import { ensureUserPhoneBackfill } from './lib/ensureUserPhoneBackfill.js';
 import { ensurePlatformUpdatesSchema } from './lib/ensurePlatformUpdatesSchema.js';
+import { ensureCvPanelSchema } from './lib/ensureCvPanelSchema.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
@@ -508,6 +509,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['UserPhoneBackfill', ensureUserPhoneBackfill],
     ['PlatformUpdates', ensurePlatformUpdatesSchema],
     ['EmeAtendeSeed', ensureEmeAtendeSeed],
+    ['CvPanel', ensureCvPanelSchema],
     ['AlertShares', ensureAlertSharesSchema],
     ['DeptSpending', ensureDeptSpendingSchema],
     ['DepartmentVisibility', ensureDepartmentVisibilitySchema],

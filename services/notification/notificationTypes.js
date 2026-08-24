@@ -29,6 +29,10 @@ export const NotificationType = {
     MEETING_STARTING:        'meeting.starting',
     MEETING_REPORT_READY:    'meeting.report.ready',
 
+    // Integrações — a credencial do CV para de valer quando o CV rotaciona a
+    // senha, e sem aviso o dado só envelhece calado.
+    CV_PANEL_CREDENTIAL_FAILED: 'integracao.cv.credencial',
+
     // Alertas — compartilhamento entre usuários
     ALERT_SHARED:            'alert.shared',
 
@@ -141,6 +145,19 @@ export const NOTIFICATION_CATALOG = {
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
     },
+    [NotificationType.CV_PANEL_CREDENTIAL_FAILED]: {
+        label: 'Credencial do CV parou de funcionar',
+        group: 'Sistema',
+        description: 'Quando o login do Office no CV falha (normalmente porque o CV forçou troca de senha), '
+            + 'parando a leitura de imobiliárias por empreendimento.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        // Vale e-mail: quem conserta isso pode estar fora do Office, e a
+        // integração fica parada até alguém agir.
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+
     [NotificationType.MEETING_REPORT_READY]: {
         label: 'Ata da reunião pronta',
         group: 'Microsoft',

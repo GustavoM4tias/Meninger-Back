@@ -97,8 +97,8 @@ export default class ImobiliariaSyncService {
      * empreendimento que falhou mantém o que já estava gravado.
      */
     async syncAssociacoes() {
-        if (!v3Configurado()) {
-            console.warn('[Imobiliárias] associações não sincronizadas: CV_PANEL_EMAIL/CV_PANEL_SENHA ausentes.');
+        if (!(await v3Configurado())) {
+            console.warn('[Imobiliárias] associações não sincronizadas: credencial do painel do CV não configurada.');
             return { ok: false, motivo: 'sem_credencial', pares: 0 };
         }
 
