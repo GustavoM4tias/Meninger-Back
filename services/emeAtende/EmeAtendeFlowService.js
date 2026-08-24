@@ -4,6 +4,7 @@
 // seguinte, sem deploy.
 
 import db from '../../models/sequelize/index.js';
+import EmeAtendeInteresseService from './EmeAtendeInteresseService.js';
 
 const CACHE_TTL_MS = 30 * 1000;
 let _cache = { at: 0, rules: null, defaultFlow: null };
@@ -33,6 +34,23 @@ function leadFieldValue(lead, field) {
     return fromPayload === undefined || fromPayload === null ? null : String(fromPayload);
 }
 
+/**
+ * Regra por IDENTIDADE do empreendimento: o valor é o slug do site, não um
+ * pedaço de texto.
+ *
+ * O casamento por "contém" comparava string crua, e string crua tem acento: a
+ * regra com valor "orquideas" NUNCA casaria com "Alameda das Orquídeas" que
+ * chega da campanha - e falharia calada, jogando o lead no fluxo default. Aqui
+ * o nome que veio é RESOLVIDO contra os fluxos existentes (nome, slug e nome do
+ * site, sem acento e sem caixa) e comparado por slug.
+ */
+async function empreendimentoCasa(rule, lead) {
+    const texto = lead?.empreendimento || lead?.payload?.empreendimento;
+    if (!texto) return false;
+    const fluxo = await EmeAtendeInteresseService.resolverFluxo(texto);
+    return !!fluxo && fluxo.site_slug === rule.value;
+}
+
 function ruleMatches(rule, fieldValue) {
     if (fieldValue === null) return false;
     const val = String(rule.value);
@@ -50,9 +68,10 @@ async function matchFlow(lead) {
     const { rules, defaultFlow } = await load();
     for (const rule of rules) {
         if (!rule.flow || !rule.flow.active) continue;
-        if (ruleMatches(rule, leadFieldValue(lead, rule.field))) {
-            return { flow: rule.flow, matchedRule: rule };
-        }
+        const casou = rule.field === 'site_slug'
+            ? await empreendimentoCasa(rule, lead)
+            : ruleMatches(rule, leadFieldValue(lead, rule.field));
+        if (casou) return { flow: rule.flow, matchedRule: rule };
     }
     return { flow: defaultFlow, matchedRule: null };
 }
