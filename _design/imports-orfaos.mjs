@@ -42,7 +42,13 @@ let orfaos = 0;
 
 for (const arquivo of staged) {
     if (!fs.existsSync(arquivo)) continue; // arquivo deletado no commit
-    const src = fs.readFileSync(arquivo, 'utf8');
+
+    // Tira comentário antes de varrer: import citado em comentário (exemplo de
+    // uso, nota de histórico) não é import. Sem isto o verificador acusa o
+    // próprio arquivo que explica como ele funciona.
+    const src = fs.readFileSync(arquivo, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
 
     // Pega `from './x.js'` e `import('./x.js')` — só caminho relativo, porque
     // pacote do node_modules não é problema nosso.
