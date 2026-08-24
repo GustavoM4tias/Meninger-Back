@@ -514,28 +514,99 @@ export async function mapaNomesDoPrecadastro() {
 }
 
 /**
+ * Cidades onde cada empresa correspondente ATUA, deduzidas do empreendimento
+ * das reservas e dos pré-cadastros em que ela aparece.
+ *
+ * Existe porque o cadastro de empresa correspondente quase nunca tem cidade
+ * preenchida - medido em 2026-08-24: 31 das 33. E o escopo de acesso é por
+ * cidade, fail-closed, então a tela ficava COMPLETAMENTE VAZIA para qualquer
+ * não-admin: 0 de 33 empresas, 0 de 128 pessoas.
+ *
+ * O GET de empresas do CV, que traria cidade e estado prontos, continua
+ * quebrado (200 com mensagem de erro em texto puro, com ou sem parâmetro),
+ * então a dedução é o caminho que existe. Cobertura medida: 31 de 31, nenhuma
+ * empresa sem empreendimento rastreável.
+ *
+ * Devolve um CONJUNTO por empresa, não uma cidade: correspondente atua em
+ * várias praças, e quem tem uma delas no escopo precisa enxergar a empresa.
+ */
+// A varredura das reservas custa ~2,5s e o resultado é IGUAL para todo mundo -
+// só o recorte por escopo muda depois. Sem cache, cada abertura da tela pagava
+// isso de novo, por usuário.
+const ATUACAO_TTL_MS = 5 * 60 * 1000;
+let atuacaoCache = null;   // { em, mapa }
+
+export function invalidarCidadesDeAtuacao() { atuacaoCache = null; }
+
+export async function cidadesDeAtuacao() {
+    if (atuacaoCache && (Date.now() - atuacaoCache.em) < ATUACAO_TTL_MS) return atuacaoCache.mapa;
+    try {
+        const linhas = await db.sequelize.query(`
+            WITH atuacao AS (
+              SELECT (empresa_correspondente->>'idempresa')::int AS idempresa,
+                     empreendimento AS nome_emp
+                FROM reservas
+               WHERE jsonb_typeof(empresa_correspondente) = 'object'
+                 AND COALESCE(empresa_correspondente->>'idempresa', '') <> ''
+              UNION ALL
+              SELECT idempresa_correspondente AS idempresa,
+                     empreendimento->>'nome'  AS nome_emp
+                FROM cv_precadastros
+               WHERE idempresa_correspondente IS NOT NULL
+                 AND empreendimento->>'nome' IS NOT NULL
+            )
+            SELECT a.idempresa,
+                   array_agg(DISTINCT e.cidade) FILTER (WHERE e.cidade IS NOT NULL) AS cidades
+              FROM atuacao a
+              LEFT JOIN cv_enterprises e
+                     ON upper(unaccent(e.nome)) = upper(unaccent(a.nome_emp))
+             WHERE a.idempresa IS NOT NULL
+             GROUP BY a.idempresa
+        `, { type: db.Sequelize.QueryTypes.SELECT });
+
+        const mapa = new Map(linhas.map((l) => [Number(l.idempresa), l.cidades || []]));
+        atuacaoCache = { em: Date.now(), mapa };
+        return mapa;
+    } catch (err) {
+        // Origem secundária: se falhar, o escopo volta a depender só da cidade
+        // cadastrada - o comportamento anterior, não algo pior.
+        console.warn('[Correspondentes] não foi possível deduzir cidades de atuação:', err.message);
+        return new Map();
+    }
+}
+
+/**
  * Panorama da tela: empresas (cadastro local) com os usuários do espelho.
  * Empresas que existem no CV mas nunca passaram pelo Office ganham o nome
  * inferido dos pré-cadastros - é o melhor possível sem o GET de empresas.
  */
 export async function montarPanorama(user = null) {
-    const [empresas, usuarios, nomesCv] = await Promise.all([
+    const [empresas, usuarios, nomesCv, atuacao] = await Promise.all([
         CorrespondentCompany.findAll({ order: [['nome', 'ASC']] }),
         CvCorrespondent.findAll({ order: [['nome', 'ASC']] }),
         mapaNomesDoPrecadastro(),
+        cidadesDeAtuacao(),
     ]);
 
-    // Escopo de acesso (accessScopeService): correspondente não tem
-    // empreendimento, então vale a mesma régua da tela de Imobiliárias - as
+    // Escopo de acesso (accessScopeService): correspondente não pertence a
+    // empreendimento, então a régua é a mesma da tela de Imobiliárias - as
     // cidades dos empreendimentos liberados. null = admin (sem filtro).
-    // Fail-closed: sem escopo, ou empresa sem cidade, não aparece.
+    //
+    // A cidade da empresa quase nunca está preenchida (31 de 33), então ela
+    // sozinha reprovava todo mundo e a tela ficava vazia para não-admin. Agora
+    // vale também a cidade ONDE A EMPRESA ATUA, deduzida do empreendimento das
+    // reservas e pré-cadastros dela - o mesmo princípio de herança que a tela
+    // de Imobiliárias já usa.
     const scopeCities = await visibleCities(user);
-    const noEscopo = (empresa) => {
+    const cidadesDe = (empresa, cvIdempresa) => {
+        const propria = String(empresa?.cidade || '').trim();
+        if (propria) return [propria];
+        return atuacao.get(Number(cvIdempresa)) || [];
+    };
+    const noEscopo = (cidades) => {
         if (scopeCities === null) return true;
-        if (!scopeCities.length) return false;
-        const cidade = empresa?.cidade;
-        if (!cidade) return false;
-        return scopeCities.some((sc) => cityMatches(cidade, sc));
+        if (!scopeCities.length || !cidades.length) return false;
+        return cidades.some((c) => scopeCities.some((sc) => cityMatches(c, sc)));
     };
 
     const porEmpresa = new Map();
@@ -551,22 +622,25 @@ export async function montarPanorama(user = null) {
     let usuariosVisiveis = 0;
 
     for (const e of empresas) {
-        if (!noEscopo(e)) continue;
+        const cidades = cidadesDe(e, e.cv_idempresa);
+        if (!noEscopo(cidades)) continue;
         const lista = e.cv_idempresa ? (porEmpresa.get(Number(e.cv_idempresa)) || []) : [];
         const origem = !e.cv_idempresa ? 'pendente' : (e.status === 'imported' ? 'importada' : 'office');
-        linhas.push(montaLinha(e, e.cv_idempresa, lista, origem));
+        linhas.push(montaLinha(e, e.cv_idempresa, lista, origem, null, cidades));
         usuariosVisiveis += lista.length;
     }
     // Empresas vistas no CV que ainda não foram materializadas pelo sync.
     // Sem nome no pré-cadastro, não entram: viraria "Empresa #N" sem serventia.
     for (const [idempresa, lista] of porEmpresa) {
         if (!idempresa || mapaLocal.has(Number(idempresa))) continue;
-        // Empresa que só existe no CV não tem cidade cadastrada aqui, então não
-        // dá para provar que está no escopo: fica só para o admin.
-        if (scopeCities !== null) continue;
+        // Empresa que só existe no CV também tem cidade de atuação, então já dá
+        // para provar o escopo dela - antes era escondida de todo não-admin.
+        const cidades = cidadesDe(null, idempresa);
+        if (!noEscopo(cidades)) continue;
+        // Sem nome no pré-cadastro ela vira "Empresa #N". Feia, mas some da
+        // tela levando as PESSOAS junto se for descartada - e a pessoa existe.
         const nomeCv = nomesCv.get(Number(idempresa));
-        if (!nomeCv) continue;
-        linhas.push(montaLinha(null, idempresa, lista, 'cv', nomeCv));
+        linhas.push(montaLinha(null, idempresa, lista, 'cv', nomeCv, cidades));
         usuariosVisiveis += lista.length;
     }
 
@@ -582,7 +656,7 @@ export async function montarPanorama(user = null) {
     };
 }
 
-function montaLinha(empresa, cvIdempresa, usuarios, origem, nomeCv = null) {
+function montaLinha(empresa, cvIdempresa, usuarios, origem, nomeCv = null, cidades = []) {
     return {
         id: empresa?.id ?? null,
         cv_idempresa: cvIdempresa ? Number(cvIdempresa) : null,
@@ -593,7 +667,13 @@ function montaLinha(empresa, cvIdempresa, usuarios, origem, nomeCv = null) {
         nome_inferido: origem === 'importada' || (!empresa?.nome && !!nomeCv),
         regiao: empresa?.regiao ?? null,
         estado: empresa?.estado ?? null,
-        cidade: empresa?.cidade ?? null,
+        cidade: empresa?.cidade || cidades[0] || null,
+        // Todas as praças onde a empresa aparece, e de onde veio essa
+        // informação - a tela precisa poder dizer que a cidade foi deduzida.
+        cidades,
+        cidade_origem: String(empresa?.cidade || '').trim()
+            ? 'cadastro'
+            : (cidades.length ? 'atuacao' : null),
         endereco: empresa?.endereco ?? null,
         email: empresa?.email ?? null,
         telefone: empresa?.telefone ?? null,
