@@ -265,12 +265,81 @@ async function validarCliente(contrato, titular) {
  *            fica com o scheduler diário; ver baixar_boleto_no_cancelamento)
  *   barra  → boleto em processamento, pago, ou estado incerto
  */
+/**
+ * Valida o ato quando ele foi cobrado por LINK DE CARTAO.
+ *
+ * Devolve `null` quando nao ha link para a reserva - af o chamador segue para a
+ * validacao do boleto.
+ *
+ * MESMA POLITICA DO BOLETO: link pendente NAO e excluido pelo cancelamento.
+ * A baixa/exclusao na hora vira acao em massa quando o CV dispara uma rajada
+ * (20/08/2026: 99 cancelamentos num minuto no RESIDENCIAL DOS ANJOS). No cartao
+ * ha um alivio a mais: o proprio portal expira o link no vencimento, entao nem
+ * precisamos agir - basta nao gerar cobranca nova, o que o gate de "ato ja
+ * pago" e o re-trigger ja garantem.
+ *
+ * O preco, o mesmo aceito no boleto: entre o cancelamento e o vencimento o
+ * cliente ainda consegue pagar o ato de uma reserva cancelada. O aviso deixa
+ * isso visivel na tela em vez de silencioso.
+ */
+async function validarAtoCartao(idreserva) {
+    const link = await db.UseredeLinkHistory.findOne({
+        where: { idreserva, ignorado: false },
+        order: [['id', 'DESC']],
+    });
+    if (!link) return null;
+
+    if (link.status === 'skipped') return { ok: true, detalhe: 'Ato pulado (sem serie de entrada).' };
+    if (link.status === 'error') {
+        return { ok: true, detalhe: `Geracao do link de cartao terminou em erro nao resolvido (#${link.id}).` };
+    }
+    if (link.status === 'processing') {
+        return { ok: false, detalhe: `Link de cartao em processamento (#${link.id}).` };
+    }
+
+    const venc = link.validade ? new Date(link.validade).toLocaleDateString('pt-BR') : '-';
+    switch (link.payment_status) {
+        case 'paid':
+            return {
+                ok: false,
+                detalhe: `Ato PAGO no cartao (pedido ${link.pedido_id}, em `
+                    + `${link.paid_at ? new Date(link.paid_at).toLocaleDateString('pt-BR') : '-'}). `
+                    + 'Cartao pago nao se exclui: o caminho e estorno pelo portal.',
+            };
+        case 'cancelled':
+        case 'expired':
+            return { ok: true, detalhe: `Ato nao pago - link ${link.pedido_id} ja ${link.payment_status === 'expired' ? 'expirou' : 'foi excluido'}.` };
+        case 'denied':
+            return { ok: true, detalhe: `Ato nao pago - pagamento negado no link ${link.pedido_id}.` };
+        case 'refunded':
+            return { ok: true, detalhe: `Ato estornado no cartao (pedido ${link.pedido_id}).` };
+        case 'pending':
+            return {
+                ok: true,
+                aviso: `Link de cartao ${link.pedido_id} segue pagavel ate ${venc}. `
+                    + 'A exclusao nao e feita pelo cancelamento: o portal expira o link no vencimento. '
+                    + 'Ate la o ato ainda pode ser pago.',
+                detalhe: `Ato pendente no cartao (pedido ${link.pedido_id}, valido ate ${venc}) `
+                    + '- exclusao deixada para o vencimento.',
+            };
+        default:
+            return { ok: false, detalhe: `Estado incerto do link ${link.pedido_id} (${link.payment_status}).` };
+    }
+}
+
 async function validarAto(idreserva) {
+    // O ato pode ter sido cobrado por LINK DE CARTAO em vez de boleto - decide
+    // o parcelamento da serie, nao a tela. Enquanto isto olhava so o boleto,
+    // reserva cancelada com cobranca no cartao passava batido: sem validacao,
+    // sem aviso, e o link seguia pagavel.
+    const validacaoCartao = await validarAtoCartao(idreserva);
+    if (validacaoCartao) return validacaoCartao;
+
     const boleto = await db.BoletoHistory.findOne({
         where: { idreserva, ignorado: false },
         order: [['id', 'DESC']],
     });
-    if (!boleto) return { ok: true, detalhe: 'Reserva sem ato registrado no módulo Boleto Caixa.' };
+    if (!boleto) return { ok: true, detalhe: 'Reserva sem ato registrado no modulo de Cobranca do Ato.' };
 
     if (boleto.status === 'skipped') return { ok: true, detalhe: 'Ato pulado (reserva sem série de Ato).' };
     if (boleto.status === 'error')   return { ok: true, detalhe: `Geração do ato terminou em erro não resolvido (boleto #${boleto.id}).` };

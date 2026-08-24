@@ -138,6 +138,10 @@ import BoletoEcoLockDefine from './boleto/boletoEcoLock.js';
 // Link de Cartão (Userede) — credenciais e sessão persistente do portal.
 import UseredeSettingsDefine from './userede/useredeSettings.js';
 import UseredeLinkHistoryDefine from './userede/useredeLinkHistory.js';
+import UseredeLinkEventDefine from './userede/useredeLinkEvent.js';
+
+// Microsoft 365 (integração)
+import MicrosoftSettingsDefine from './microsoft/microsoftSettings.js';
 
 // Cancelamento de Reservas (CV × Sienge)
 import ReservaCancelSettingsDefine from './reservaCancel/reservaCancelSettings.js';
@@ -408,6 +412,10 @@ db.BoletoEvent         = BoletoEventDefine(sequelize, DataTypes);
 db.BoletoEcoLock       = BoletoEcoLockDefine(sequelize, DataTypes);
 db.UseredeSettings     = UseredeSettingsDefine(sequelize, DataTypes);
 db.UseredeLinkHistory  = UseredeLinkHistoryDefine(sequelize, DataTypes);
+db.UseredeLinkEvent    = UseredeLinkEventDefine(sequelize, DataTypes);
+
+// Microsoft 365 (integração)
+db.MicrosoftSettings = MicrosoftSettingsDefine(sequelize, DataTypes);
 
 // Cancelamento de Reservas (CV × Sienge)
 db.ReservaCancelSettings = ReservaCancelSettingsDefine(sequelize, DataTypes);

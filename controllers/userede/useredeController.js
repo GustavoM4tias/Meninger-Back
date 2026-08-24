@@ -6,9 +6,13 @@
 // o banco) e NUNCA saem. O GET devolve só `usuario_set`/`senha_set`, do mesmo
 // jeito que o boleto faz com a senha do Ecobrança.
 import db from '../../models/sequelize/index.js';
+import apiCv from '../../lib/apiCv.js';
 import { encrypt, decrypt } from '../../utils/encryption.js';
 import { withSession, marcarPrecisaHumano } from '../../services/userede/UseredeSessionService.js';
 import { abrirLinkPagamento } from '../../playwright/modules/userede/navegacao.js';
+import UseredeLink from '../../services/userede/UseredeLinkService.js';
+import { conciliar } from '../../services/userede/UseredeConciliacaoService.js';
+import { enviarLinkAoTitular } from '../../services/userede/UseredeNotifyService.js';
 
 // Limites FÍSICOS do portal, medidos na tela (20/08/2026). Não são preferência
 // nossa: acima disto o formulário da Rede simplesmente não aceita.
@@ -206,4 +210,78 @@ export async function resetSession(req, res) {
     }
 }
 
-export default { getSettings, updateSettings, testConnection, resetSession };
+// ── Ações sobre um link do histórico ──────────────────────────────────────────
+// Espelham as do boleto (reprocessar, marcar baixado, reenviar, conferir), mas
+// operam na tabela do cartão. Rotear por forma é obrigatório: os ids das duas
+// tabelas se cruzam, então mandar id de cartão para a rota do boleto acerta o
+// registro de outra reserva.
+
+async function carregar(req, res) {
+    const registro = await db.UseredeLinkHistory.findByPk(Number(req.params.id));
+    if (!registro) { res.status(404).json({ error: 'Registro não encontrado.' }); return null; }
+    return registro;
+}
+
+/** Exclui o link no portal - o equivalente à baixa do boleto. */
+export async function excluirLinkHistorico(req, res) {
+    const registro = await carregar(req, res);
+    if (!registro) return;
+    try {
+        const r = await UseredeLink.excluir(registro.id, { motivo: 'Exclusão manual pela tela do Ato.' });
+        return res.json({ ok: true, payment_status: r.payment_status });
+    } catch (err) {
+        return res.status(400).json({ error: err.message });
+    }
+}
+
+/** Reenvia o link ao titular (e-mail + WhatsApp). */
+export async function reenviarAoTitular(req, res) {
+    const registro = await carregar(req, res);
+    if (!registro) return;
+    if (!registro.link_url) return res.status(400).json({ error: 'Registro sem link para reenviar.' });
+
+    try {
+        const reserva = await apiCv.get(`/v1/comercial/reservas/${registro.idreserva}`);
+        const titular = reserva.data?.[registro.idreserva]?.titular;
+        if (!titular) return res.status(404).json({ error: 'Titular não encontrado no CV.' });
+
+        const envio = await enviarLinkAoTitular({
+            titular,
+            dados: {
+                empreendimento: registro.empreendimento,
+                unidade: registro.unidade,
+                valor: Number(registro.valor),
+                parcelas: registro.parcelas_limite,
+                validade: registro.validade,
+                url: registro.link_url,
+            },
+            forcar: true,   // ação deliberada de quem opera; vale mesmo em dev
+        });
+        await registro.update({
+            cliente_email_enviado: registro.cliente_email_enviado || !!envio.email?.ok,
+            cliente_whatsapp_enviado: registro.cliente_whatsapp_enviado || !!envio.whatsapp?.ok,
+            cliente_envio_em: new Date(),
+        });
+        return res.json({ ok: envio.email?.ok || envio.whatsapp?.ok, envio });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+/** Concilia só esta reserva - o "verificar pagamento agora" do cartão. */
+export async function conferirPagamento(req, res) {
+    const registro = await carregar(req, res);
+    if (!registro) return;
+    try {
+        const r = await conciliar({ idreservas: [registro.idreserva] });
+        const atualizado = await db.UseredeLinkHistory.findByPk(registro.id);
+        return res.json({ ok: true, payment_status: atualizado.payment_status, resultado: r });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+}
+
+export default {
+    getSettings, updateSettings, testConnection, resetSession,
+    excluirLinkHistorico, reenviarAoTitular, conferirPagamento,
+};

@@ -12,8 +12,11 @@ import { withSession } from './UseredeSessionService.js';
 import { abrirLinkPagamento, excluirLink } from '../../playwright/modules/userede/navegacao.js';
 import { criarLink, montarNome, rotuloPrazo } from '../../playwright/modules/userede/criarLink.js';
 import { enviarLinkAoTitular } from './UseredeNotifyService.js';
+import Eventos from '../cobrancaAto/eventoService.js';
 
 const TAG = '[UREDE][LINK]';
+
+const formatarBRL = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /** Limites físicos do portal - acima disto o formulário não aceita. */
 export const REDE_MAX_PARCELAS = 12;
@@ -111,6 +114,11 @@ export async function emitir(dados) {
     if (impedimento) {
         console.warn(`${TAG} Reserva ${idreserva} barrada: ${impedimento}`);
         await registro.update({ status: 'error', error_message: impedimento });
+        await Eventos.registrar({
+            forma: 'cartao', historyId: registro.id, idreserva,
+            type: 'validation_failed', severity: 'error', message: impedimento,
+            data: { valor, parcelas, validade },
+        });
         return registro;
     }
 
@@ -148,6 +156,12 @@ export async function emitir(dados) {
             pedido_id: pedidoId ? pedidoId.toUpperCase() : null,
         });
         console.log(`${TAG} Reserva ${idreserva}: link ${criado.url}`);
+        await Eventos.registrar({
+            forma: 'cartao', historyId: registro.id, idreserva,
+            type: 'link_created', severity: 'success',
+            message: `Link criado no portal - ${formatarBRL(valor)} em ate ${parcelas}x, valido ate ${new Date(validade).toLocaleDateString('pt-BR')}.`,
+            data: { pedidoId, url: criado.url, valor, parcelas },
+        });
 
         // Fecha a cadeia: o antigo aponta para quem o substituiu. Sem isso a
         // listagem agrupada por reserva nao sabe qual e a via vigente.
@@ -162,6 +176,10 @@ export async function emitir(dados) {
         await registro.update({
             status: 'error',
             error_message: String(err.message).slice(0, 500),
+        });
+        await Eventos.registrar({
+            forma: 'cartao', historyId: registro.id, idreserva,
+            type: 'link_failed', severity: 'error', message: String(err.message).slice(0, 400),
         });
         return registro;
     }
@@ -180,6 +198,15 @@ export async function emitir(dados) {
                 ...(envio.whatsapp?.ok ? [] : [{ etapa: 'cliente_whatsapp', erro: envio.whatsapp?.error }]),
             ].filter(w => w.erro) || null,
         });
+        for (const [canal, r] of [['client_email', envio.email], ['client_whatsapp', envio.whatsapp]]) {
+            await Eventos.registrar({
+                forma: 'cartao', historyId: registro.id, idreserva,
+                type: r?.ok ? canal : `${canal}_skipped`,
+                severity: r?.ok ? 'success' : 'warning',
+                message: r?.ok ? `Enviado para ${r.to}` : (r?.error || 'nao enviado'),
+                data: { to: r?.to || null, freeWindow: r?.freeWindow ?? null },
+            });
+        }
     }
 
     return registro;
@@ -214,6 +241,12 @@ export async function excluir(registroId, { motivo = null } = {}) {
         payment_status: 'cancelled',
         cancelled_at: new Date(),
         error_message: motivo || registro.error_message,
+    });
+    await Eventos.registrar({
+        forma: 'cartao', historyId: registro.id, idreserva: registro.idreserva,
+        type: 'link_deleted', severity: 'warning',
+        message: motivo || `Link ${registro.pedido_id} excluido no portal.`,
+        data: { pedidoId: registro.pedido_id },
     });
     return registro;
 }

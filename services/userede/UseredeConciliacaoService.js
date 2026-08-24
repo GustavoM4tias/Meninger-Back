@@ -18,6 +18,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { withSession } from './UseredeSessionService.js';
 import { abrirLinkPagamento, listarLinks, detalharLink } from '../../playwright/modules/userede/navegacao.js';
+import Eventos from '../cobrancaAto/eventoService.js';
 
 const TAG = '[UREDE][CONCILIA]';
 
@@ -97,6 +98,16 @@ export async function conciliar({ idreservas = null } = {}) {
             }
 
             await registro.update(atualizacao);
+            await Eventos.registrar({
+                forma: 'cartao', historyId: registro.id, idreserva: registro.idreserva,
+                type: linha.status,
+                severity: linha.status === 'paid' ? 'success'
+                    : (['denied', 'refunded'].includes(linha.status) ? 'error' : 'warning'),
+                message: `Portal: "${linha.statusTexto}"`
+                    + (atualizacao.parcelas_escolhidas ? ` - cliente parcelou em ${atualizacao.parcelas_escolhidas}x` : '')
+                    + (atualizacao.motivo_recusa ? ` - ${atualizacao.motivo_recusa}` : ''),
+                data: { pedidoId: linha.pedidoId, de: 'pending', para: linha.status },
+            });
             mudancas.push({
                 id: registro.id,
                 idreserva: registro.idreserva,

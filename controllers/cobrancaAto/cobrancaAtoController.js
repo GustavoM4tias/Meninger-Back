@@ -4,6 +4,7 @@
 // continuam nos controllers de cada forma, porque o que se faz com um boleto e
 // com um link é diferente (baixar x excluir, por exemplo).
 import Historico from '../../services/cobrancaAto/historicoService.js';
+import Eventos from '../../services/cobrancaAto/eventoService.js';
 
 function filtrosDaQuery(req) {
     return {
@@ -49,4 +50,26 @@ export async function getHistoryFacets(req, res) {
     }
 }
 
-export default { listHistory, getHistoryStats, getHistoryFacets };
+/**
+ * Timeline consolidada da reserva: tentativas e eventos das DUAS formas, em
+ * ordem cronologica. E a visao que a operacao quer - "o que aconteceu com a
+ * cobranca deste ato" - inclusive quando a condicao mudou e a forma trocou.
+ */
+export async function getReservaTimeline(req, res) {
+    try {
+        const idreserva = Number(req.params.idreserva);
+        if (!Number.isInteger(idreserva)) {
+            return res.status(400).json({ error: 'idreserva invalido.' });
+        }
+        const [tentativas, eventos] = await Promise.all([
+            Eventos.listarTentativas(idreserva),
+            Eventos.listarPorReserva(idreserva),
+        ]);
+        return res.json({ idreserva, tentativas, eventos });
+    } catch (err) {
+        console.error('[COBRANCA_ATO] getReservaTimeline:', err);
+        return res.status(500).json({ error: 'Falha ao carregar a linha do tempo.' });
+    }
+}
+
+export default { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline };
