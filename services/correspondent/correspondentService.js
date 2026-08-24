@@ -414,6 +414,11 @@ export async function sincronizarEspelho() {
     }
 
     await importarEmpresasDoCv(usuarios);
+    // Empresa que ainda não tinha nada no sistema entra na tela assim que
+    // ganhar nome ou praça de atuação. O cache de 5 min já faria isso sozinho;
+    // derrubá-lo aqui garante que o botão "Sincronizar" da tela mostre o
+    // resultado na hora, e não daqui a alguns minutos.
+    invalidarCidadesDeAtuacao();
     return usuarios.length;
 }
 
@@ -598,10 +603,15 @@ export async function montarPanorama(user = null) {
     // reservas e pré-cadastros dela - o mesmo princípio de herança que a tela
     // de Imobiliárias já usa.
     const scopeCities = await visibleCities(user);
+    // O conceito aqui é CIDADE DE ATUAÇÃO, não endereço. Uma empresa sediada em
+    // Votuporanga que trabalha em Marília precisa aparecer para quem tem
+    // Marília no escopo - e vice-versa. Por isso é a UNIÃO: onde ela atua mais
+    // onde ela está cadastrada, e não um substituindo o outro.
     const cidadesDe = (empresa, cvIdempresa) => {
+        const conjunto = new Set(atuacao.get(Number(cvIdempresa)) || []);
         const propria = String(empresa?.cidade || '').trim();
-        if (propria) return [propria];
-        return atuacao.get(Number(cvIdempresa)) || [];
+        if (propria) conjunto.add(propria);
+        return [...conjunto];
     };
     const noEscopo = (cidades) => {
         if (scopeCities === null) return true;
@@ -637,9 +647,13 @@ export async function montarPanorama(user = null) {
         // para provar o escopo dela - antes era escondida de todo não-admin.
         const cidades = cidadesDe(null, idempresa);
         if (!noEscopo(cidades)) continue;
-        // Sem nome no pré-cadastro ela vira "Empresa #N". Feia, mas some da
-        // tela levando as PESSOAS junto se for descartada - e a pessoa existe.
+        // Empresa que existe no CV mas não tem NADA no sistema - nem nome vindo
+        // de pré-cadastro, nem uma praça onde tenha atuado - não é relevante
+        // para a operação e fica de fora. Não é perda silenciosa: no minuto em
+        // que ela aparecer numa reserva ou num pré-cadastro, passa a ter nome
+        // ou cidade e entra sozinha, sem ninguém cadastrar nada.
         const nomeCv = nomesCv.get(Number(idempresa));
+        if (!nomeCv && !cidades.length) continue;
         linhas.push(montaLinha(null, idempresa, lista, 'cv', nomeCv, cidades));
         usuariosVisiveis += lista.length;
     }
@@ -668,12 +682,13 @@ function montaLinha(empresa, cvIdempresa, usuarios, origem, nomeCv = null, cidad
         regiao: empresa?.regiao ?? null,
         estado: empresa?.estado ?? null,
         cidade: empresa?.cidade || cidades[0] || null,
-        // Todas as praças onde a empresa aparece, e de onde veio essa
-        // informação - a tela precisa poder dizer que a cidade foi deduzida.
+        // Todas as praças onde a empresa APARECE - o conceito é atuação, não
+        // endereço, então a lista soma onde ela trabalha com onde ela está
+        // cadastrada. A tela precisa poder dizer de onde veio cada uma.
         cidades,
-        cidade_origem: String(empresa?.cidade || '').trim()
-            ? 'cadastro'
-            : (cidades.length ? 'atuacao' : null),
+        cidade_origem: !cidades.length
+            ? null
+            : (String(empresa?.cidade || '').trim() ? 'cadastro' : 'atuacao'),
         endereco: empresa?.endereco ?? null,
         email: empresa?.email ?? null,
         telefone: empresa?.telefone ?? null,
