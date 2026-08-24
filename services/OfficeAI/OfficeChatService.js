@@ -150,6 +150,48 @@ function toolLabel(name) {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(name || 'consulta');
 }
 
+/**
+ * O complemento do passo, tirado dos ARGUMENTOS da chamada.
+ *
+ * "Executando editar reunião" não diz nada: editar qual, para quando? Com o
+ * detalhe, a linha do tempo vira relato do que está acontecendo - que é o que
+ * deixa a pessoa acompanhar em vez de esperar no escuro.
+ *
+ * Só texto curto e sem dado sensível: isto aparece na tela e fica guardado na
+ * mensagem.
+ */
+function toolDetalhe(name, args) {
+  const a = args || {};
+  const corta = (v, n = 42) => {
+    const t = String(v ?? '').replace(/\s+/g, ' ').trim();
+    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  };
+
+  switch (name) {
+    case 'my_agenda':          return corta(a.quando || 'hoje');
+    case 'check_availability': return corta((a.emails || []).join(', '));
+    case 'schedule_meeting':   return corta([a.assunto, a.inicio?.slice(11, 16)].filter(Boolean).join(' · '));
+    case 'update_meeting':     return corta([a.termo || a.assunto, a.inicio?.slice(11, 16)].filter(Boolean).join(' → '));
+    case 'cancel_meeting':     return corta(a.termo || a.id);
+    case 'reschedule_meetings':
+      return corta([a.termo, a.comecarEm && `a partir de ${a.comecarEm}`, a.duracaoMin && `${a.duracaoMin} min`]
+        .filter(Boolean).join(' · '));
+    case 'send_teams_message': return corta(a.conversa || a.email);
+    case 'read_teams_chat':    return corta(a.conversa);
+    case 'meeting_report':
+    case 'my_meetings':        return corta(a.termo || '');
+    case 'search_meetings':
+    case 'find_in_sharepoint':
+    case 'search_email':       return corta(a.termo || a.q || '');
+    default: {
+      // Genérico: o primeiro argumento de texto que parecer um assunto.
+      const chave = ['termo', 'assunto', 'q', 'nome', 'titulo', 'quando', 'periodo']
+        .find(k => typeof a[k] === 'string' && a[k].trim());
+      return chave ? corta(a[chave]) : '';
+    }
+  }
+}
+
 // Tipos de action que representam UM item específico (card de detalhe). Quando a
 // cadeia consultou 2+ itens desses (resposta plural), anexar só o último card
 // seria enganoso (ex.: varredura de fichas exibindo um card solto de outro
@@ -847,7 +889,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
 
           // Progresso visível: o front mostra "Consultando <label>…" em vez do
           // "..." mudo (que ficava até 1 min sem sinal em cadeias longas).
-          sendSSE(res, { type: 'tool_start', name, label: toolLabel(name), step: toolStep });
+          sendSSE(res, { type: 'tool_start', name, label: toolLabel(name), detalhe: toolDetalhe(name, args), step: toolStep });
 
           // Roteamento da tool (ACADEMY e OFFICE) — ver runToolCall acima.
           const toolResult = await runToolCall(name, args, toolStart);
@@ -1108,7 +1150,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         passos++;
 
         const inicio = Date.now();
-        sendSSE(res, { type: 'tool_start', name: chamada.name, label: toolLabel(chamada.name), step: 99 + passos });
+        sendSSE(res, { type: 'tool_start', name: chamada.name, label: toolLabel(chamada.name), detalhe: toolDetalhe(chamada.name, chamada.args), step: 99 + passos });
         const resultado = await runToolCall(chamada.name, chamada.args, inicio);
         toolCalls.push({
           name: chamada.name,

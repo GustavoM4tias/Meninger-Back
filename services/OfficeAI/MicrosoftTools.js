@@ -1010,3 +1010,151 @@ registerTool({
         } };
     },
 });
+
+// ─── Reorganizar o dia em UMA chamada ────────────────────────────────────────
+//
+// "Põe as comerciais de segunda em sequência, 20 minutos cada, a partir das
+// 08:30" é UM pedido - mas vira nove edições. Uma por chamada de ferramenta não
+// funciona: o turno tem teto de 5 ferramentas (senão vira laço), e cada ida ao
+// modelo entre uma e outra custa segundos. O pedido morria no meio, com metade
+// da agenda ajustada e metade não - que é pior do que não ter começado.
+//
+// Aqui o lote inteiro é uma chamada só: a tool acha as reuniões, monta a
+// sequência, mostra a PRÉVIA (de → para, linha a linha) e, com o "sim", aplica
+// todas seguidas. Se uma falhar, as outras seguem e o resultado diz qual falhou.
+
+function somarMinutos(iso, minutos) {
+    const [data, hora] = String(iso).split('T');
+    const [h, m] = String(hora || '00:00').split(':').map(Number);
+    const base = new Date(2000, 0, 1, h || 0, m || 0);
+    base.setMinutes(base.getMinutes() + minutos);
+    const hh = String(base.getHours()).padStart(2, '0');
+    const mm = String(base.getMinutes()).padStart(2, '0');
+    return `${data}T${hh}:${mm}:00`;
+}
+
+function combina(evento, termos) {
+    const assunto = String(evento.subject || '').toLowerCase();
+    return (termos || []).some(t => assunto.includes(String(t).toLowerCase()));
+}
+
+registerTool({
+    name: 'reschedule_meetings',
+    description: 'Reorganiza VÁRIAS reuniões de um dia de uma vez, em sequência. Use quando o pedido for de conjunto: "põe as comerciais de segunda em sequência de 20 minutos a partir das 08:30", "desafoga minha terça", "essas reuniões estão sobrepostas, arruma". NÃO chame update_meeting várias vezes para isso - o turno tem teto de ferramentas e o pedido morreria no meio. Devolve a prévia (de → para, linha a linha) e só aplica com confirmado:true.',
+    parameters: {
+        type: 'object',
+        properties: {
+            termo:        { type: 'string', description: 'O que as reuniões têm no assunto. Ex: "Comercial".' },
+            dia:          { type: 'string', description: 'Dia, AAAA-MM-DD. Padrão: hoje.' },
+            comecarEm:    { type: 'string', description: 'Horário da primeira, HH:MM. Ex: "08:30".' },
+            duracaoMin:   { type: 'number', description: 'Duração de cada uma, em minutos. Ex: 20.' },
+            intervaloMin: { type: 'number', description: 'Respiro entre uma e outra, em minutos. Padrão 0 (emendadas).' },
+            manter:       { type: 'array', items: { type: 'string' }, description: 'Trechos do assunto das que NÃO devem ser mexidas. Ex: ["Marília"].' },
+            ids:          { type: 'array', items: { type: 'string' }, description: 'Em vez de buscar por termo, a lista exata de ids na ordem desejada.' },
+            confirmado:   { type: 'boolean', description: 'Passe true SÓ depois de o usuário aprovar a prévia.' },
+        },
+        required: ['comecarEm', 'duracaoMin'],
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u?.microsoft_id) return { result: semConta };
+
+        const duracao = Math.max(5, Math.min(Number(args?.duracaoMin) || 30, 480));
+        const respiro = Math.max(0, Math.min(Number(args?.intervaloMin) || 0, 120));
+        const hora0 = String(args?.comecarEm || '').trim();
+        if (!/^\d{1,2}:\d{2}$/.test(hora0)) {
+            return { result: { erro: 'Diga o horário da primeira reunião no formato HH:MM (ex: 08:30).' } };
+        }
+
+        // O dia: o pedido diz, ou é hoje.
+        const hoje = new Date(new Date().toLocaleString('en-US', { timeZone: TZ }));
+        const dia0 = /^\d{4}-\d{2}-\d{2}$/.test(args?.dia || '')
+            ? args.dia
+            : `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`;
+
+        const inicioDia = new Date(`${dia0}T00:00:00`);
+        const fimDia = new Date(`${dia0}T23:59:59`);
+        const { items } = await teamsService.getCalendarView(u, inicioDia.toISOString(), fimDia.toISOString());
+
+        const doDia = items.filter(e => !e.isCancelled && !e.isAllDay && String(e.start || '').startsWith(dia0));
+
+        // Quem entra na fila: por id (ordem dada) ou por termo (ordem do dia).
+        let fila;
+        if (Array.isArray(args?.ids) && args.ids.length) {
+            fila = args.ids.map(id => doDia.find(e => e.id === id)).filter(Boolean);
+        } else {
+            const termo = String(args?.termo || '').trim().toLowerCase();
+            if (!termo) return { result: { erro: 'Diga o que essas reuniões têm em comum no assunto (ex: "Comercial"), ou passe os ids.' } };
+            fila = doDia
+                .filter(e => String(e.subject || '').toLowerCase().includes(termo))
+                .filter(e => !combina(e, args?.manter))
+                .sort((a, b) => String(a.start).localeCompare(String(b.start)));
+        }
+
+        if (!fila.length) {
+            return { result: { erro: `Não achei reuniões para reorganizar em ${dia0}${args?.termo ? ` com "${args.termo}" no assunto` : ''}.` } };
+        }
+        if (fila.length > 20) {
+            return { result: { erro: `São ${fila.length} reuniões - demais para um lote. Restrinja o termo ou passe os ids.` } };
+        }
+
+        // Só o organizador pode mexer: as outras saem da fila com o motivo dito.
+        const semPermissao = fila.filter(e => !e.isOrganizer);
+        fila = fila.filter(e => e.isOrganizer);
+
+        // A sequência.
+        const plano = fila.map((e, i) => {
+            const inicio = somarMinutos(`${dia0}T${hora0.padStart(5, '0')}:00`, i * (duracao + respiro));
+            return {
+                id: e.id,
+                assunto: e.subject,
+                de: `${hora(e.start)}–${hora(e.end)}`,
+                para: `${inicio.slice(11, 16)}–${somarMinutos(inicio, duracao).slice(11, 16)}`,
+                inicio,
+                fim: somarMinutos(inicio, duracao),
+                recorrente: e.isRecurring,
+            };
+        });
+
+        if (args?.confirmado !== true) {
+            return { result: {
+                previa: true,
+                dia: dia0,
+                total: plano.length,
+                mudancas: plano.map(p => ({ assunto: p.assunto, de: p.de, para: p.para, recorrente: p.recorrente })),
+                naoMexidas: [
+                    ...(args?.manter || []).map(m => `mantida por pedido: ${m}`),
+                    ...semPermissao.map(e => `${e.subject}: você não organiza, quem organiza é ${e.organizer?.name || 'outra pessoa'}`),
+                ],
+                resumo: `Confirme antes de eu aplicar: ${plano.length} reunião(ões) de ${dia0}, ${duracao} min cada, a partir de ${hora0}. `
+                      + 'Cada uma dispara convite atualizado para os participantes. '
+                      + (plano.some(p => p.recorrente) ? 'ATENÇÃO: há reunião recorrente na lista - a mudança vale só para este dia.' : ''),
+            } };
+        }
+
+        // Aplica em sequência. Uma que falhe não derruba as outras: o pedido é
+        // de conjunto, e parar no meio deixa a agenda pior do que estava.
+        const feitas = [];
+        const falhas = [];
+        for (const p of plano) {
+            try {
+                await teamsService.updateEvent(u, p.id, { start: p.inicio, end: p.fim });
+                feitas.push({ assunto: p.assunto, para: p.para });
+            } catch (err) {
+                falhas.push({ assunto: p.assunto, motivo: err?.message || 'erro ao salvar' });
+            }
+        }
+
+        return { result: {
+            aplicado: true,
+            dia: dia0,
+            ajustadas: feitas,
+            falhas,
+            resumo: `${feitas.length} reunião(ões) reorganizada(s) a partir de ${hora0}, ${duracao} min cada.`
+                  + (falhas.length ? ` ${falhas.length} não deu: ${falhas.map(f => f.assunto).join(', ')}.` : '')
+                  + ' Os participantes receberam o convite atualizado.',
+        } };
+    },
+});
