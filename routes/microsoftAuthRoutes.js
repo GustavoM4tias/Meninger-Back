@@ -164,6 +164,10 @@ router.get('/teams/chats/:chatId/messages',             authenticate, cc.message
 router.post('/teams/chats/:chatId/messages',            authenticate, cc.send.bind(cc));
 router.post('/teams/chats/:chatId/read',                authenticate, cc.read.bind(cc));
 
+// Presença e salas: leitura pura, com o token da própria pessoa.
+router.get('/teams/presence',                            authenticate, teamsController.presence.bind(teamsController));
+router.get('/teams/rooms',                               authenticate, teamsController.rooms.bind(teamsController));
+
 // ── Transcrições & Relatórios IA ──────────────────────────────────────────────
 const tc = MicrosoftTranscriptController;
 router.get('/transcripts/meetings',                             authenticate, tc.listMeetings.bind(tc));

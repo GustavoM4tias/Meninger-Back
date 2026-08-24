@@ -17,6 +17,20 @@ const EVENT_SELECT = [
 // isto — leitura avulsa e edição passaram a usar também.
 const TZ_PREFER = { Prefer: 'outlook.timezone="America/Sao_Paulo"' };
 
+// O Graph responde a presença em inglês e com estados que não interessam à
+// tela (PresenceUnknown, OffWork). Aqui vira o que a pessoa lê.
+const ROTULO_PRESENCA = {
+    Available:        'Disponível',
+    AvailableIdle:    'Disponível',
+    Away:             'Ausente',
+    BeRightBack:      'Volto logo',
+    Busy:             'Ocupado',
+    BusyIdle:         'Ocupado',
+    DoNotDisturb:     'Não perturbe',
+    Offline:          'Offline',
+    PresenceUnknown:  'Sem informação',
+};
+
 /**
  * O campo de descrição da tela é texto puro, mas o corpo do evento é HTML:
  * mandar o texto cru colapsa as quebras de linha do convite. Texto vira HTML de
@@ -211,6 +225,64 @@ class MicrosoftTeamsService {
         });
     }
 
+    /**
+     * Presença no Teams (disponível, ocupado, em reunião, ausente) de várias
+     * pessoas de uma vez.
+     *
+     * É o dado mais barato e mais visível da integração: saber que o fulano
+     * está em reunião AGORA muda se você manda mensagem ou espera. O Graph
+     * aceita até 650 ids por chamada, e responde só o que a pessoa pode ver.
+     */
+    async getPresences(user, ids = []) {
+        const lista = [...new Set((ids || []).filter(Boolean))].slice(0, 650);
+        if (!lista.length) return {};
+
+        const data = await graph.post(user, '/communications/getPresencesByUserId', { ids: lista });
+
+        const porId = {};
+        for (const p of (data.value || [])) {
+            porId[p.id] = {
+                estado: p.availability || 'PresenceUnknown',   // Available | Busy | Away | DoNotDisturb | Offline...
+                atividade: p.activity || null,                  // InAMeeting | InACall | Presenting...
+                rotulo: ROTULO_PRESENCA[p.availability] || 'Sem informação',
+            };
+        }
+        return porId;
+    }
+
+    /**
+     * Salas e recursos que a empresa cadastrou.
+     *
+     * O campo de local era texto solto: dava para escrever "sala grande" e
+     * ninguém reservava nada. Sala de verdade entra como PARTICIPANTE do tipo
+     * recurso - é assim que o Exchange reserva e responde aceitando ou
+     * recusando quando já está ocupada.
+     */
+    async listRooms(user) {
+        const cap = await settingsService.listCap();
+        const { items } = await graph.getAllPages(
+            user,
+            '/places/microsoft.graph.room',
+            { $top: '100' },
+            { max: Math.min(cap, 300) }
+        );
+
+        return items.map(r => ({
+            id: r.id,
+            nome: r.displayName,
+            email: r.emailAddress,
+            capacidade: r.capacity ?? null,
+            andar: r.floorLabel || r.floorNumber || null,
+            predio: r.building || null,
+            endereco: [r.address?.street, r.address?.city].filter(Boolean).join(', ') || null,
+            recursos: [
+                r.audioDeviceName && 'áudio',
+                r.videoDeviceName && 'vídeo',
+                r.displayDeviceName && 'tela',
+            ].filter(Boolean),
+        })).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    }
+
     async getEvent(user, eventId) {
         const data = await graph.get(user, `/me/events/${eventId}?$select=${EVENT_SELECT}`, undefined, TZ_PREFER);
         return normalizeEvent(data);
@@ -224,7 +296,7 @@ class MicrosoftTeamsService {
      *   start/end: ISO datetime strings (sem Z) no fuso America/Sao_Paulo
      *   recurrence: { type: 'daily'|'weekly'|'monthly', interval, endType: 'noEnd'|'endDate'|'count', endDate, occurrences }
      */
-    async createScheduledMeeting(user, { subject, start, end, attendees = [], body = '', isOnlineMeeting = true, location = '', isAllDay = false, recurrence = null }) {
+    async createScheduledMeeting(user, { subject, start, end, attendees = [], body = '', isOnlineMeeting = true, location = '', isAllDay = false, recurrence = null, sala = null }) {
         const payload = {
             subject,
             body: { contentType: 'html', content: toHtml(body) },
@@ -239,6 +311,18 @@ class MicrosoftTeamsService {
         };
 
         if (location) payload.location = { displayName: location };
+
+        // Sala de verdade não é texto no campo local: ela entra como
+        // PARTICIPANTE do tipo recurso, e aí o Exchange reserva e responde
+        // aceitando ou recusando se já estiver ocupada. Sem isto, "Sala 2"
+        // escrito no local não reserva nada e duas reuniões caem no mesmo lugar.
+        if (sala?.email) {
+            payload.attendees.push({
+                emailAddress: { address: sala.email, name: sala.nome || sala.email },
+                type: 'resource',
+            });
+            payload.location = { displayName: sala.nome || sala.email, locationEmailAddress: sala.email };
+        }
 
         if (recurrence) payload.recurrence = this._buildRecurrence(recurrence, start);
 

@@ -29,6 +29,24 @@ class MicrosoftTeamsController {
         } catch (err) { handleErr(res, err, 'calendarView'); }
     }
 
+    // Presença de várias pessoas de uma vez. Os ids vêm do cliente, mas o Graph
+    // só devolve o que a pessoa logada pode ver - não há como espiar quem não
+    // se alcança.
+    async presence(req, res) {
+        if (!req.user.microsoft_id) return res.status(401).json({ error: "Conta Microsoft não conectada." });
+        try {
+            const ids = String(req.query.ids || "").split(",").map(s => s.trim()).filter(Boolean);
+            res.json(await teamsService.getPresences(req.user, ids));
+        } catch (err) { handleErr(res, err, "presence"); }
+    }
+
+    async rooms(req, res) {
+        if (!req.user.microsoft_id) return res.status(401).json({ error: "Conta Microsoft não conectada." });
+        try {
+            res.json(await teamsService.listRooms(req.user));
+        } catch (err) { handleErr(res, err, "rooms"); }
+    }
+
     async event(req, res) {
         if (!req.user.microsoft_id) return res.status(401).json({ error: 'Conta Microsoft não conectada.' });
         try {
