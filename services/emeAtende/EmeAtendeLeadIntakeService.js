@@ -9,6 +9,7 @@ import { normalizePhone, phoneSuffix } from './emeAtendePhone.js';
 import EmeAtendeFlowService from './EmeAtendeFlowService.js';
 import EmeAtendeMessenger from './EmeAtendeMessenger.js';
 import EmeAtendeInteresseService from './EmeAtendeInteresseService.js';
+import Empreendimento from './emeAtendeEmpreendimento.js';
 
 class IntakeError extends Error {
     constructor(message, status = 400) { super(message); this.status = status; }
@@ -23,8 +24,14 @@ async function ingest(data = {}, { apiKeyName = null } = {}) {
     if (!phone) throw new IntakeError('phone é obrigatório (formato BR com ou sem DDI).');
     if (phone.length < 10) throw new IntakeError('phone muito curto após normalização.');
 
-    const known = ['name', 'phone', 'email', 'source', 'campaign', 'empreendimento', 'external_id'];
+    const known = ['name', 'phone', 'email', 'source', 'campaign', 'empreendimento', 'external_id',
+        'empreendimento_id', 'cv_enterprise_id', 'bound_empreendimentos'];
     const extras = Object.fromEntries(Object.entries(data).filter(([k]) => !known.includes(k)));
+
+    // Identidade resolvida UMA vez, aqui: id explícito > bound_empreendimentos
+    // (o que o formulário do Office grava) > nome. Daqui pra frente todo o
+    // roteamento usa o id; o texto fica só como rótulo.
+    const ident = await Empreendimento.identificar(data);
 
     // Dedup por sufixo (últimos 8 dígitos - resolve 9º dígito e formatações)
     const suffix = phoneSuffix(phone);
@@ -49,8 +56,12 @@ async function ingest(data = {}, { apiKeyName = null } = {}) {
         // mesma thread, mesmo histórico, fluxo novo. Ver EmeAtendeInteresseService:
         // só troca se o empreendimento existir de verdade.
         const novoEmp = (data.empreendimento || '').trim();
-        const ehOutro = !!novoEmp && !!existing.empreendimento
-            && EmeAtendeInteresseService.chave(novoEmp) !== EmeAtendeInteresseService.chave(existing.empreendimento);
+        // Compara por IDENTIDADE quando ela existe dos dois lados; só cai no
+        // texto quando a origem não mandou id.
+        const ehOutro = ident?.id && existing.cv_enterprise_id
+            ? Number(ident.id) !== Number(existing.cv_enterprise_id)
+            : (!!novoEmp && !!existing.empreendimento
+                && EmeAtendeInteresseService.chave(novoEmp) !== EmeAtendeInteresseService.chave(existing.empreendimento));
 
         await existing.update({
             name: data.name || existing.name,
@@ -66,7 +77,8 @@ async function ingest(data = {}, { apiKeyName = null } = {}) {
 
         if (activeConv && ehOutro) {
             const troca = await EmeAtendeInteresseService.trocarPrincipal({
-                lead: existing, conversation: activeConv, empreendimento: novoEmp,
+                lead: existing, conversation: activeConv,
+                empreendimento: ident?.nome || novoEmp, cvId: ident?.id || null,
                 origem: 'campanha',
             });
             if (troca.trocou) {
@@ -98,12 +110,13 @@ async function ingest(data = {}, { apiKeyName = null } = {}) {
 
     // Lead novo
     const lead = await db.EmeAtendeLead.create({
+        cv_enterprise_id: ident?.id || null,
         name: data.name || null,
         phone,
         email: data.email || null,
         source: data.source || apiKeyName || 'api',
         campaign: data.campaign || null,
-        empreendimento: data.empreendimento || null,
+        empreendimento: ident?.nome || data.empreendimento || null,
         external_id: data.external_id ? String(data.external_id) : null,
         payload: extras,
         status: 'received',

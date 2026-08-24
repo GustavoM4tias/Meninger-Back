@@ -15,6 +15,12 @@ export default (sequelize, DataTypes) => {
         source: { type: DataTypes.STRING(60), allowNull: true },   // meta|site|cv|manual|whatsapp_inbound...
         campaign: { type: DataTypes.STRING(180), allowNull: true },
         empreendimento: { type: DataTypes.STRING(180), allowNull: true },
+        // Identidade do empreendimento no cadastro do Office (cv_enterprises.
+        // idempreendimento) - o MESMO id que os formulários e campanhas usam em
+        // `bound_empreendimentos`. O campo de texto acima é só rótulo: existem
+        // dois "TRES MARIAS" no CV (Garça e Ibitinga), e por nome eles se
+        // confundem. Roteamento e vínculo são SEMPRE por este id.
+        cv_enterprise_id: { type: DataTypes.INTEGER, allowNull: true },
         external_id: { type: DataTypes.STRING(80), allowNull: true }, // id no sistema de origem
         // futuro: reconciliação com o CRM pra Eme Atende mover etapa do lead
         cv_lead_id: { type: DataTypes.STRING(40), allowNull: true },
@@ -52,7 +58,7 @@ export default (sequelize, DataTypes) => {
         tableName: 'eme_atende_leads',
         underscored: true,
         timestamps: true,
-        indexes: [{ fields: ['phone'] }, { fields: ['status'] }, { fields: ['temperatura'] }, { fields: ['estagio'] }],
+        indexes: [{ fields: ['phone'] }, { fields: ['status'] }, { fields: ['temperatura'] }, { fields: ['estagio'] }, { fields: ['cv_enterprise_id'] }],
     });
 
     return EmeAtendeLead;

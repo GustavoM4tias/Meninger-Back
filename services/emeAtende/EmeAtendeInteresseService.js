@@ -37,7 +37,13 @@ function chave(texto) {
  * mas só quando UM fluxo casa: dois candidatos viram indefinição, e indefinição
  * aqui significaria mandar o lead pro empreendimento errado.
  */
-export async function resolverFluxo(empreendimento) {
+export async function resolverFluxo(empreendimento, cvId = null) {
+    // Identidade ganha do texto: o fluxo aponta pro mesmo id do cadastro que a
+    // campanha usa, então quando ele vem não há o que interpretar.
+    if (cvId) {
+        const porId = await db.EmeAtendeFlow.findOne({ where: { active: true, cv_enterprise_id: cvId } });
+        if (porId) return porId;
+    }
     const alvo = chave(empreendimento);
     if (!alvo) return null;
 
@@ -64,13 +70,13 @@ export async function resolverFluxo(empreendimento) {
  * @param {string} p.origem 'campanha' | 'lead' - só pro log
  * @returns {Promise<{trocou: boolean, motivo?: string, fluxo?: object, anterior?: string}>}
  */
-export async function trocarPrincipal({ lead, conversation, empreendimento, origem = 'campanha' }) {
+export async function trocarPrincipal({ lead, conversation, empreendimento, cvId = null, origem = 'campanha' }) {
     if (!lead || !empreendimento) return { trocou: false, motivo: 'sem dados' };
 
     const anterior = lead.empreendimento || null;
     if (chave(anterior) === chave(empreendimento)) return { trocou: false, motivo: 'mesmo empreendimento' };
 
-    const fluxo = await resolverFluxo(empreendimento);
+    const fluxo = await resolverFluxo(empreendimento, cvId);
     if (!fluxo) {
         // Não reconhecido: registra e NÃO troca. Guardar um empreendimento que
         // não existe faria a Eme atender sobre o nada.
@@ -98,7 +104,12 @@ export async function trocarPrincipal({ lead, conversation, empreendimento, orig
     payload.empreendimento_anterior = anterior;
 
     const nomeNovo = fluxo.site_snapshot?.nome || fluxo.name;
-    await lead.update({ empreendimento: nomeNovo, flow_id: fluxo.id, payload });
+    await lead.update({
+        empreendimento: nomeNovo,
+        cv_enterprise_id: fluxo.cv_enterprise_id || lead.cv_enterprise_id,
+        flow_id: fluxo.id,
+        payload,
+    });
     if (conversation) await conversation.update({ flow_id: fluxo.id });
 
     await EmeAtendeMessenger.logEvent(lead.id, conversation?.id, 'interesse_principal_trocado',

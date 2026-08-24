@@ -4,7 +4,7 @@
 // seguinte, sem deploy.
 
 import db from '../../models/sequelize/index.js';
-import EmeAtendeInteresseService from './EmeAtendeInteresseService.js';
+import Empreendimento from './emeAtendeEmpreendimento.js';
 
 const CACHE_TTL_MS = 30 * 1000;
 let _cache = { at: 0, rules: null, defaultFlow: null };
@@ -45,10 +45,16 @@ function leadFieldValue(lead, field) {
  * site, sem acento e sem caixa) e comparado por slug.
  */
 async function empreendimentoCasa(rule, lead) {
+    // Por ID (cadastro do Office). O lead já chega com ele resolvido pelo
+    // intake; a regra guarda o mesmo id que o formulário/campanha usa.
+    const idLead = Number(lead?.cv_enterprise_id || lead?.payload?.empreendimento_id || 0);
+    if (idLead) return Number(rule.value) === idLead;
+
+    // Sem id (entrada manual antiga): tenta resolver o nome pelo cadastro.
     const texto = lead?.empreendimento || lead?.payload?.empreendimento;
     if (!texto) return false;
-    const fluxo = await EmeAtendeInteresseService.resolverFluxo(texto);
-    return !!fluxo && fluxo.site_slug === rule.value;
+    const e = await Empreendimento.resolverPorNome(texto);
+    return !!e && Number(e.id) === Number(rule.value);
 }
 
 function ruleMatches(rule, fieldValue) {
@@ -68,7 +74,7 @@ async function matchFlow(lead) {
     const { rules, defaultFlow } = await load();
     for (const rule of rules) {
         if (!rule.flow || !rule.flow.active) continue;
-        const casou = rule.field === 'site_slug'
+        const casou = rule.field === 'cv_enterprise_id'
             ? await empreendimentoCasa(rule, lead)
             : ruleMatches(rule, leadFieldValue(lead, rule.field));
         if (casou) return { flow: rule.flow, matchedRule: rule };
