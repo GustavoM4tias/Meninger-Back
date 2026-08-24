@@ -1,5 +1,6 @@
 // routes/microsoftAuthRoutes.js
 import express from 'express';
+import MicrosoftChatController from '../controllers/microsoft/MicrosoftChatController.js';
 import MicrosoftAuthController from '../controllers/microsoft/MicrosoftAuthController.js';
 import MicrosoftSharepointController from '../controllers/microsoft/MicrosoftSharepointController.js';
 import MicrosoftTeamsController from '../controllers/microsoft/MicrosoftTeamsController.js';
@@ -152,6 +153,16 @@ router.post('/teams/meetings/instant',                  authenticate, teamsContr
 router.patch('/teams/events/:eventId',                  authenticate, teamsController.updateEvent.bind(teamsController));
 router.post('/teams/events/:eventId/cancel',            authenticate, teamsController.cancelEvent.bind(teamsController));
 router.delete('/teams/events/:eventId',                 authenticate, teamsController.deleteEvent.bind(teamsController));
+
+// ── Conversas do Teams ────────────────────────────────────────────────────────
+// Token DELEGADO: a conversa é a da própria pessoa e a mensagem sai no nome
+// dela. Nenhuma rota aceita 'de quem'.
+const cc = MicrosoftChatController;
+router.get('/teams/chats',                              authenticate, cc.list.bind(cc));
+router.post('/teams/chats',                             authenticate, cc.start.bind(cc));
+router.get('/teams/chats/:chatId/messages',             authenticate, cc.messages.bind(cc));
+router.post('/teams/chats/:chatId/messages',            authenticate, cc.send.bind(cc));
+router.post('/teams/chats/:chatId/read',                authenticate, cc.read.bind(cc));
 
 // ── Transcrições & Relatórios IA ──────────────────────────────────────────────
 const tc = MicrosoftTranscriptController;
