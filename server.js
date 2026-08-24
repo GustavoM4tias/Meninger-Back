@@ -47,6 +47,7 @@ import emeAtendePublicRoutes from './routes/emeAtendePublicRoutes.js';
 import { ensureEmeAtendeSeed } from './services/emeAtende/emeAtendeSeed.js';
 import academyChatRoutes from './routes/academyChatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
+import platformRoutes from './routes/platformRoutes.js';
 import pushRoutes from './routes/pushRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import whatsappWebhookRoutes from './routes/whatsappWebhookRoutes.js';
@@ -110,6 +111,7 @@ import { ensureEmeReportsSchema } from './lib/ensureEmeReportsSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
 import { ensureWhatsappMessagesSchema } from './lib/ensureWhatsappMessagesSchema.js';
 import { ensureUserPhoneBackfill } from './lib/ensureUserPhoneBackfill.js';
+import { ensurePlatformUpdatesSchema } from './lib/ensurePlatformUpdatesSchema.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
@@ -282,6 +284,7 @@ app.use('/api/eme-atende/public', emeAtendePublicRoutes); // intake de leads (X-
 app.use('/api/eme-atende', emeAtendeRoutes);              // admin (JWT + admin)
 app.use('/api/academy-chat', academyChatRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/platform', platformRoutes);   // mural de atualizações da plataforma
 app.use('/api/push', pushRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
@@ -501,6 +504,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['WhatsappAutomation', ensureWhatsappAutomationSchema],
     ['WhatsappMessages', ensureWhatsappMessagesSchema],
     ['UserPhoneBackfill', ensureUserPhoneBackfill],
+    ['PlatformUpdates', ensurePlatformUpdatesSchema],
     ['EmeAtendeSeed', ensureEmeAtendeSeed],
     ['AlertShares', ensureAlertSharesSchema],
     ['DeptSpending', ensureDeptSpendingSchema],

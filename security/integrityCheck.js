@@ -76,6 +76,7 @@ const NO_SCREEN_PERMISSION = [
     ['/api/permissions/me', 'as próprias alçadas do solicitante'],
     ['/api/favorite', 'favoritos pessoais do usuário'],
     ['/api/notifications', 'caixa de notificações PESSOAL (cada um vê a sua)'],
+    ['/api/platform', 'marca pessoal de "já li as novidades" (mural de atualizações da plataforma)'],
     ['/api/push', 'assinatura de push do dispositivo do próprio usuário'],
     ['/api/alerts', 'alertas PESSOAIS (tela /settings/alerts é permissionManaged:false)'],
     ['/api/support', 'reportar problema — qualquer um abre; a leitura é admin'],

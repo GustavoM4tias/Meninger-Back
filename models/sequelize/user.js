@@ -93,6 +93,10 @@ export default (sequelize, DataTypes) => {
     face_threshold: { type: DataTypes.FLOAT, defaultValue: 0.6 },
     face_last_update: { type: DataTypes.DATE },
 
+    // Mural da plataforma: até qual release este usuário já leu as novidades.
+    // O catálogo de releases vive no front (config/changelog.js); aqui só fica a
+    // marca. Ver lib/ensurePlatformUpdatesSchema.js.
+    last_seen_release: { type: DataTypes.STRING(20), allowNull: true },
     reset_password_code: { type: DataTypes.STRING(255), allowNull: true },
     reset_password_expires_at: { type: DataTypes.DATE, allowNull: true },
     reset_password_attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
