@@ -1,9 +1,11 @@
-// Assinatura padronizada em 2026-08-24: o horário e o liga/desliga destes
-// crons passaram a morar em cv_sync_jobs, editáveis em CV CRM > Configurações.
-// `start({ expression, bootstrap })` recebe o horário vindo do banco e devolve
-// a task, para o gerente (services/cv/cvCronManager.js) conseguir PARAR e
-// reagendar sem reiniciar o processo. `bootstrap:false` evita disparar a carga
-// inicial quando o admin só salvou uma configuração na tela.
+// Este módulo expõe só o TRABALHO (`run`). Quem agenda, liga, desliga, mede o
+// tempo e grava o resultado é o gerente (services/cv/cvCronManager.js), com a
+// regra vindo de cv_sync_jobs e da tela CV CRM > Configurações.
+//
+// Separar as duas coisas foi o que permitiu a tela mostrar "quando rodou pela
+// última vez e se deu certo" para TODOS os crons, e ter um "rodar agora" que é
+// exatamente a mesma execução do agendamento - não um caminho paralelo, que
+// poderia divergir do de verdade.
 // scheduler/reservaCvGapScheduler.js
 //
 // Preenche os BURACOS de idreserva que o delta sync não enxerga.
@@ -24,14 +26,12 @@
 // hora; ids que voltam 404 vão para cv_reserva_id_dead e não são tentados de
 // novo, então o custo cai sozinho.
 
-import cron from 'node-cron';
 import db from '../models/sequelize/index.js';
 import ReservaFullSweepService from '../services/bulkData/cv/ReservaFullSweepService.js';
 import { markRunning, markFinished } from '../services/bulkData/cv/syncState.js';
 
 const JOB = 'cv_reservas_gap';
 const CRON_EXPR = process.env.RESERVA_CV_GAP_CRON_EXPRESSION || '25 * * * *';
-const TZ = 'America/Sao_Paulo';
 
 // Teto por execução: mantém o job curto e previsível. Referência de custo: o
 // sweep faz ~130 ids em 37s. O que sobrar entra na próxima rodada.
@@ -158,11 +158,8 @@ export async function runGapFill() {
     }
 }
 
-export default {
-    start({ expression, bootstrap = true } = {}) {
-        const expr = expression || CRON_EXPR;
-        const task = cron.schedule(expr, runGapFill, { timezone: TZ });
-        console.log(`✅ CVCRM Reservas GAP agendado: ${expr} (${TZ})`);
-        return task;
-    }
-};
+export async function run() {
+    await runGapFill();
+}
+
+export default { run, cronPadrao: CRON_EXPR };

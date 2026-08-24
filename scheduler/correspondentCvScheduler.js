@@ -1,9 +1,11 @@
-// Assinatura padronizada em 2026-08-24: o horário e o liga/desliga destes
-// crons passaram a morar em cv_sync_jobs, editáveis em CV CRM > Configurações.
-// `start({ expression, bootstrap })` recebe o horário vindo do banco e devolve
-// a task, para o gerente (services/cv/cvCronManager.js) conseguir PARAR e
-// reagendar sem reiniciar o processo. `bootstrap:false` evita disparar a carga
-// inicial quando o admin só salvou uma configuração na tela.
+// Este módulo expõe só o TRABALHO (`run`). Quem agenda, liga, desliga, mede o
+// tempo e grava o resultado é o gerente (services/cv/cvCronManager.js), com a
+// regra vindo de cv_sync_jobs e da tela CV CRM > Configurações.
+//
+// Separar as duas coisas foi o que permitiu a tela mostrar "quando rodou pela
+// última vez e se deu certo" para TODOS os crons, e ter um "rodar agora" que é
+// exatamente a mesma execução do agendamento - não um caminho paralelo, que
+// poderia divergir do de verdade.
 // scheduler/correspondentCvScheduler.js
 //
 // Mantém o espelho de correspondentes em dia sem ninguém clicar em sincronizar.
@@ -13,11 +15,9 @@
 //
 // A cada 30 min por padrão: o volume é pequeno (~125 usuários, 1 chamada
 // paginada) e o cadastro de correspondente muda ao longo do dia.
-import cron from 'node-cron';
 import correspondentService from '../services/correspondent/correspondentService.js';
 
 const CRON_EXPR = process.env.CORRESPONDENT_CV_CRON_EXPRESSION || '*/30 * * * *';
-const TZ = 'America/Sao_Paulo';
 
 async function rodar(origem) {
     try {
@@ -29,16 +29,10 @@ async function rodar(origem) {
     }
 }
 
-export default {
-    start({ expression, bootstrap = true } = {}) {
-        const expr = expression || CRON_EXPR;
-        const task = cron.schedule(expr, () => rodar('agendado'), { timezone: TZ });
+export async function run() {
+    await rodar('execução');
+}
 
-        // Primeira carga logo após o boot, para a tela não abrir vazia quando
-        // as tabelas acabaram de ser criadas.
-        if (bootstrap) setTimeout(() => rodar('boot'), 45_000).unref?.();
-
-        console.log(`✅ Correspondentes agendado — ${expr} (${TZ})`);
-        return task;
-    },
-};
+// Primeira carga um pouco depois do boot, para a tela não abrir vazia quando as
+// tabelas acabaram de ser criadas.
+export default { run, cronPadrao: CRON_EXPR, bootstrapDelayMs: 45_000 };

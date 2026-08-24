@@ -655,3 +655,28 @@ export async function updateCvJob(req, res) {
         });
     }
 }
+
+/** Dispara um cron de CV na hora, pela tela. */
+export async function runCvJob(req, res) {
+    try {
+        const { executarAgora } = await import('../services/cv/cvCronManager.js');
+        const quem = req.user?.username ? `tela (${req.user.username})` : 'tela';
+        const { resultado, jobs } = await executarAgora(req.params.key, quem);
+
+        // Já rodando não é erro: é a resposta certa para quem clicou duas vezes.
+        if (resultado?.motivo === 'ja_em_execucao') {
+            return res.status(409).json({ ok: false, error: 'Esta sincronização já está rodando agora.', jobs });
+        }
+        if (!resultado?.ok) {
+            return res.status(502).json({ ok: false, error: resultado?.erro || 'A sincronização falhou.', jobs });
+        }
+        return res.json({ ok: true, resultado, jobs });
+    } catch (err) {
+        console.error('[realestate] runCvJob:', err);
+        const desconhecido = /desconhecido/i.test(err?.message || '');
+        return res.status(desconhecido ? 404 : 500).json({
+            ok: false,
+            error: desconhecido ? 'Cron não encontrado.' : 'Erro ao executar a sincronização.',
+        });
+    }
+}

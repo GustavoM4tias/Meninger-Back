@@ -1,9 +1,11 @@
-// Assinatura padronizada em 2026-08-24: o horário e o liga/desliga destes
-// crons passaram a morar em cv_sync_jobs, editáveis em CV CRM > Configurações.
-// `start({ expression, bootstrap })` recebe o horário vindo do banco e devolve
-// a task, para o gerente (services/cv/cvCronManager.js) conseguir PARAR e
-// reagendar sem reiniciar o processo. `bootstrap:false` evita disparar a carga
-// inicial quando o admin só salvou uma configuração na tela.
+// Este módulo expõe só o TRABALHO (`run`). Quem agenda, liga, desliga, mede o
+// tempo e grava o resultado é o gerente (services/cv/cvCronManager.js), com a
+// regra vindo de cv_sync_jobs e da tela CV CRM > Configurações.
+//
+// Separar as duas coisas foi o que permitiu a tela mostrar "quando rodou pela
+// última vez e se deu certo" para TODOS os crons, e ter um "rodar agora" que é
+// exatamente a mesma execução do agendamento - não um caminho paralelo, que
+// poderia divergir do de verdade.
 // scheduler/imobiliariaCvScheduler.js
 //
 // Mantém o espelho de imobiliárias (cv_imobiliarias) em dia sem ninguém clicar
@@ -17,11 +19,9 @@
 // De hora em hora: é UMA chamada ao CV que devolve a lista inteira (~555
 // registros), então é barato, e cadastro de imobiliária acontece ao longo do
 // dia útil.
-import cron from 'node-cron';
 import ImobiliariaSyncService from '../services/bulkData/cv/ImobiliariaSyncService.js';
 
 const CRON_EXPR = process.env.IMOBILIARIA_CV_CRON_EXPRESSION || '17 * * * *';
-const TZ = 'America/Sao_Paulo';
 
 async function rodar(origem) {
     const svc = new ImobiliariaSyncService();
@@ -43,16 +43,10 @@ async function rodar(origem) {
     }
 }
 
-export default {
-    start({ expression, bootstrap = true } = {}) {
-        const expr = expression || CRON_EXPR;
-        const task = cron.schedule(expr, () => rodar('agendado'), { timezone: TZ });
+export async function run() {
+    await rodar('execução');
+}
 
-        // Primeira carga logo após o boot, para a tela não abrir com um espelho
-        // velho depois de um deploy.
-        if (bootstrap) setTimeout(() => rodar('boot'), 60_000).unref?.();
-
-        console.log(`✅ Imobiliárias agendado — ${expr} (${TZ})`);
-        return task;
-    },
-};
+// Primeira carga um pouco depois do boot, para o espelho não ficar velho
+// esperando a virada da hora depois de um deploy.
+export default { run, cronPadrao: CRON_EXPR, bootstrapDelayMs: 60_000 };

@@ -9,18 +9,22 @@
 // operava o sistema não tinha como nem ver a regra vigente.
 //
 // Agora a regra mora em `cv_sync_jobs` e a tela CV CRM > Configurações edita.
-// O ambiente vira SEMENTE: no primeiro boot, cada job nasce com exatamente o
-// que as variáveis diziam, então o comportamento não muda no dia da virada.
-// Depois disso o painel manda - trocar o default no código não mexe em quem
-// já configurou.
+// O ambiente vira SEMENTE: no primeiro boot cada job nasce com exatamente o
+// que as variáveis diziam, então o comportamento não muda na virada. Depois
+// disso o painel manda - trocar o default no código não mexe em quem já
+// configurou.
 //
-// Reagendar não reinicia o processo: `start()` de cada scheduler devolve a task
-// do node-cron, então dá para parar e subir de novo com o horário novo. E o
-// `bootstrap:false` no reapply evita que salvar uma configuração na tela
-// dispare uma carga inteira sem querer.
+// Este módulo é o ÚNICO que agenda. Cada scheduler expõe só o trabalho
+// (`run`), e é aqui que ele é cronometrado e o resultado gravado em
+// `cv_sync_state`. Foi o que permitiu a tela responder "rodou quando, e deu
+// certo?" para todos os crons, e ter um "rodar agora" que executa exatamente
+// a mesma coisa que o agendamento - não um caminho paralelo que poderia
+// divergir do de verdade.
 
+import cron from 'node-cron';
 import db from '../../models/sequelize/index.js';
 import { ensureCvPanelSchema } from '../../lib/ensureCvPanelSchema.js';
+import { markRunning, markFinished } from '../bulkData/cv/syncState.js';
 
 import leadCvScheduler from '../../scheduler/leadCvScheduler.js';
 import leadCancelReasonScheduler from '../../scheduler/leadCancelReasonScheduler.js';
@@ -34,6 +38,7 @@ import cvExtrasScheduler from '../../scheduler/cvExtrasScheduler.js';
 import correspondentCvScheduler from '../../scheduler/correspondentCvScheduler.js';
 import imobiliariaCvScheduler from '../../scheduler/imobiliariaCvScheduler.js';
 
+const TZ = 'America/Sao_Paulo';
 const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 
 // Regra histórica "sem flag, ligado em produção" — a mesma do schedulerOn() do
@@ -166,7 +171,14 @@ export const CV_JOBS = [
 ];
 
 const porChave = new Map(CV_JOBS.map(j => [j.key, j]));
-const tasks = new Map();   // key → task do node-cron
+const tasks = new Map();        // key → task do node-cron
+const emExecucao = new Set();   // key → evita duas rodadas do mesmo job juntas
+
+// Nome da linha em cv_sync_state. Prefixo próprio para não colidir com as
+// linhas que alguns controllers já gravam por conta (cv_reservas e cia): ali
+// quem escreve é o controller, aqui é o agendador, e misturar os dois deixaria
+// o histórico ambíguo.
+const stateKey = (key) => `cron:${key}`;
 
 /**
  * Garante a tabela e semeia a linha de cada job a partir do ambiente.
@@ -200,7 +212,7 @@ async function garantirLinhas() {
     }
 }
 
-/** Configuração vigente de todos os jobs, já com o catálogo junto. */
+/** Configuração vigente de todos os jobs, com catálogo e última execução. */
 export async function listarJobs() {
     await garantirLinhas();
     const linhas = await db.CvSyncJob.findAll({ raw: true });
@@ -216,9 +228,16 @@ export async function listarJobs() {
         });
     }
 
+    const estados = await db.CvSyncState.findAll({
+        where: { job_name: CV_JOBS.map(j => stateKey(j.key)) },
+        raw: true,
+    });
+    const porEstado = new Map(estados.map(e => [e.job_name, e]));
+
     return CV_JOBS.map(j => {
         const l = porKey.get(j.key) || {};
         const pai = j.dependeDe ? porKey.get(j.dependeDe) : null;
+        const e = porEstado.get(stateKey(j.key)) || {};
         return {
             key: j.key,
             label: j.label,
@@ -230,10 +249,65 @@ export async function listarJobs() {
             // Ligado na configuração mas parado porque o cron do qual ele
             // depende está desligado. Sem dizer isso, o admin liga e nada acontece.
             bloqueado_por_dependencia: !!(j.dependeDe && l.active && pai && !pai.active),
-            rodando: tasks.has(j.key),
-            last_applied_at: l.last_applied_at,
+            agendado: tasks.has(j.key),
+            executando: emExecucao.has(j.key),
+            // Última execução: é o que responde "isto está funcionando?".
+            last_run_at: e.last_run_at || null,
+            last_status: e.last_status || null,
+            last_message: e.last_message || null,
+            last_duration_ms: e.last_stats?.duracao_ms ?? null,
+            last_origin: e.last_stats?.origem ?? null,
         };
     });
+}
+
+/**
+ * Executa um job UMA vez, cronometrando e gravando o resultado.
+ * É o mesmo caminho do agendamento e do "rodar agora" - de propósito: um botão
+ * que executa por outro caminho acabaria divergindo do que roda de verdade.
+ */
+async function executar(key, origem) {
+    const def = porChave.get(key);
+    if (!def) throw new Error(`Cron de CV desconhecido: ${key}`);
+
+    // Rodada anterior ainda em pé: pular é melhor que empilhar duas varreduras
+    // do mesmo dado, que é como o CV começa a devolver 429.
+    if (emExecucao.has(key)) {
+        console.warn(`[CV crons] "${key}" ainda rodando; ${origem} ignorado.`);
+        return { ok: false, motivo: 'ja_em_execucao' };
+    }
+
+    emExecucao.add(key);
+    const t0 = Date.now();
+    await markRunning(stateKey(key));
+    try {
+        const extra = await def.modulo.run();
+        const duracao_ms = Date.now() - t0;
+        await markFinished(stateKey(key), {
+            status: extra?.parcial ? 'parcial' : 'ok',
+            message: extra?.parcial ? extra.falhas.join(' | ') : null,
+            stats: { duracao_ms, origem },
+        });
+        console.log(`[CV crons] "${key}" ${extra?.parcial ? 'parcial' : 'ok'} em ${duracao_ms}ms (${origem})`);
+        return { ok: true, duracao_ms, parcial: !!extra?.parcial };
+    } catch (err) {
+        const duracao_ms = Date.now() - t0;
+        await markFinished(stateKey(key), {
+            status: 'error',
+            message: String(err?.message || err).slice(0, 1000),
+            stats: { duracao_ms, origem },
+        });
+        console.error(`[CV crons] "${key}" FALHOU em ${duracao_ms}ms (${origem}):`, err?.message);
+        return { ok: false, erro: err?.message };
+    } finally {
+        emExecucao.delete(key);
+    }
+}
+
+/** Dispara um job na hora, pela tela. */
+export async function executarAgora(key, quem = 'tela') {
+    const r = await executar(key, quem);
+    return { resultado: r, jobs: await listarJobs() };
 }
 
 function pararTodos() {
@@ -244,12 +318,31 @@ function pararTodos() {
 }
 
 /**
- * Aplica a configuração vigente: para o que está rodando e sobe de novo só o
+ * Processo novo significa que nada está rodando. Linha que ficou marcada como
+ * "running" é de uma execução que o restart matou no meio - deixá-la assim faz
+ * a tela mostrar para sempre um estado que não existe mais.
+ */
+async function limparExecucoesInterrompidas() {
+    try {
+        const [n] = await db.CvSyncState.update(
+            { last_status: 'interrompido', last_message: 'Execução interrompida por reinício do sistema.' },
+            { where: { last_status: 'running' } }
+        );
+        if (n) console.log(`[CV crons] ${n} execução(ões) marcada(s) como interrompida(s) no boot.`);
+    } catch (e) {
+        console.warn('[CV crons] falha ao limpar execuções interrompidas:', e?.message);
+    }
+}
+
+/**
+ * Aplica a configuração vigente: para o que está rodando e agenda de novo só o
  * que está ligado.
- * @param {boolean} bootstrap dispara a carga inicial dos jobs que têm uma.
+ * @param {boolean} bootstrap dispara a carga inicial dos jobs que pedem uma.
  *        `true` só no boot; salvar na tela não pode disparar sync completo.
  */
 export async function aplicar({ bootstrap = false } = {}) {
+    if (bootstrap) await limparExecucoesInterrompidas();
+
     const jobs = await listarJobs();
     pararTodos();
 
@@ -257,17 +350,29 @@ export async function aplicar({ bootstrap = false } = {}) {
     for (const j of jobs) {
         if (!j.active || j.bloqueado_por_dependencia) continue;
         const def = porChave.get(j.key);
-        try {
-            const task = def.modulo.start({ expression: j.cron_expression, bootstrap });
-            if (task) tasks.set(j.key, task);
-            ligados++;
-        } catch (err) {
-            console.error(`[CV crons] falha ao subir "${j.key}":`, err?.message);
+
+        if (!cron.validate(j.cron_expression)) {
+            console.error(`[CV crons] "${j.key}" tem horário inválido (${j.cron_expression}); não foi agendado.`);
+            continue;
+        }
+
+        tasks.set(j.key, cron.schedule(
+            j.cron_expression,
+            () => executar(j.key, 'agendado'),
+            { timezone: TZ }
+        ));
+        ligados++;
+
+        // Carga inicial de quem pede: cobre a janela perdida enquanto o
+        // processo estava fora. Sempre em segundo plano, para não atrasar o boot.
+        const atraso = def.modulo.bootstrapDelayMs;
+        if (bootstrap && atraso !== undefined) {
+            setTimeout(() => { executar(j.key, 'boot').catch(() => {}); }, atraso).unref?.();
         }
     }
 
     await db.CvSyncJob.update({ last_applied_at: new Date() }, { where: {} });
-    console.log(`✅ Crons do CV: ${ligados} de ${jobs.length} no ar.`);
+    console.log(`✅ Crons do CV: ${ligados} de ${jobs.length} agendado(s) (${TZ}).`);
     return listarJobs();
 }
 
@@ -292,4 +397,4 @@ export async function salvarJob(key, { active, cron_expression }) {
     return aplicar({ bootstrap: false });
 }
 
-export default { CV_JOBS, listarJobs, aplicar, salvarJob };
+export default { CV_JOBS, listarJobs, aplicar, salvarJob, executarAgora };

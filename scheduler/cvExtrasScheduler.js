@@ -1,10 +1,5 @@
-// Assinatura padronizada em 2026-08-24: o horário e o liga/desliga destes
-// crons passaram a morar em cv_sync_jobs, editáveis em CV CRM > Configurações.
-// `start({ expression, bootstrap })` recebe o horário vindo do banco e devolve
-// a task, para o gerente (services/cv/cvCronManager.js) conseguir PARAR e
-// reagendar sem reiniciar o processo. `bootstrap:false` evita disparar a carga
-// inicial quando o admin só salvou uma configuração na tela.
-import cron from 'node-cron';
+// Este módulo expõe só o TRABALHO (`run`). Quem agenda, liga, desliga, mede o
+// tempo e grava o resultado é o gerente (services/cv/cvCronManager.js).
 import PriceTableSyncService from '../services/bulkData/cv/PriceTableSyncService.js';
 import RealtorSyncService from '../services/bulkData/cv/RealtorSyncService.js';
 import CorrespondentSyncService from '../services/bulkData/cv/CorrespondentSyncService.js';
@@ -12,38 +7,38 @@ import CorrespondentSyncService from '../services/bulkData/cv/CorrespondentSyncS
 // Padrão: uma vez por dia às 6h (tabelas de preço mudam pouco)
 // Pode ser sobrescrito com CV_EXTRAS_CRON_EXPRESSION
 const CRON = process.env.CV_EXTRAS_CRON_EXPRESSION || '0 6 * * *';
-const TZ = 'America/Sao_Paulo';
 
-export default {
-    start({ expression, bootstrap = true } = {}) {
-        const expr = expression || CRON;
-        const task = cron.schedule(expr, async () => {
-            console.log(`[CV Extras] Iniciando sync (${new Date().toISOString()})`);
-            try {
-                const ptSvc = new PriceTableSyncService();
-                await ptSvc.syncAll();
-            } catch (e) {
-                console.error('[CV Extras] Erro PriceTable sync:', e?.message || e);
-            }
+// Os tres cadastros sao independentes: um que falhe nao pode impedir os
+// outros de atualizar. Por isso cada um tem o proprio try, e o run() so
+// propaga erro se TODOS falharem - senao a tela marcaria como falha uma
+// rodada que atualizou duas de tres coisas.
+export async function run() {
+    const falhas = [];
 
-            try {
-                const rlSvc = new RealtorSyncService();
-                await rlSvc.syncAll();
-            } catch (e) {
-                console.error('[CV Extras] Erro Realtor sync:', e?.message || e);
-            }
-
-            try {
-                const crSvc = new CorrespondentSyncService();
-                await crSvc.syncAll();
-            } catch (e) {
-                console.error('[CV Extras] Erro Correspondent sync:', e?.message || e);
-            }
-
-            console.log(`[CV Extras] Sync concluído (${new Date().toISOString()})`);
-        }, { timezone: TZ });
-
-        console.log(`✅ CV Extras (tabelas/imobiliárias/correspondentes) agendado: ${expr} (${TZ})`);
-        return task;
+    try {
+        await new PriceTableSyncService().syncAll();
+    } catch (e) {
+        falhas.push('tabelas de preço: ' + (e?.message || e));
+        console.error('[CV Extras] Erro PriceTable sync:', e?.message || e);
     }
-};
+
+    try {
+        await new RealtorSyncService().syncAll();
+    } catch (e) {
+        falhas.push('corretores: ' + (e?.message || e));
+        console.error('[CV Extras] Erro Realtor sync:', e?.message || e);
+    }
+
+    try {
+        await new CorrespondentSyncService().syncAll();
+    } catch (e) {
+        falhas.push('correspondentes: ' + (e?.message || e));
+        console.error('[CV Extras] Erro Correspondent sync:', e?.message || e);
+    }
+
+    if (falhas.length === 3) throw new Error(falhas.join(' | '));
+    if (falhas.length) return { parcial: true, falhas };
+    return null;
+}
+
+export default { run, cronPadrao: CRON };

@@ -27,6 +27,7 @@ import {
     testCvPanel,
     getCvJobs,
     updateCvJob,
+    runCvJob,
 } from '../controllers/realEstateController.js';
 
 const TELA = '/crm/imobiliarias';
@@ -61,5 +62,6 @@ router.post('/cv-panel/test', podeConfigurar, testCvPanel);
 // Crons de dados do CV: o que roda e em que horário.
 router.get('/cv-jobs', podeConfigurar, getCvJobs);
 router.put('/cv-jobs/:key', podeConfigurar, updateCvJob);
+router.post('/cv-jobs/:key/run', podeConfigurar, runCvJob);
 
 export default router;
