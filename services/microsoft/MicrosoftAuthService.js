@@ -23,8 +23,9 @@ const {
 // ATENÇÃO: escopo novo aqui muda o login de TODO MUNDO. Se ele exigir
 // consentimento de administrador e ainda não tiver sido concedido no portal do
 // Azure, o login passa a falhar com "need admin approval" para todos. Antes de
-// mexer, confira em /settings/integracao-microsoft o que já está consentido.
-// O inventário do que cada tela precisa está em lib/microsoftScopes.js.
+// mexer, confira no portal do Azure o que já está consentido. O inventário
+// completo - o que cada tela precisa, o que falta e como conceder - está em
+// _estudo/microsoft/PERMISSOES-AZURE.md.
 export const BASE_SCOPES = 'openid profile email User.Read offline_access Sites.ReadWrite.All Files.ReadWrite.All Calendars.ReadWrite OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All';
 
 // ── Outlook / e-mail: consentimento INCREMENTAL, fora do login ───────────────

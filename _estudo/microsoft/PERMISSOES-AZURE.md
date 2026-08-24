@@ -9,8 +9,10 @@ de sondagem contra a caixa real; o resto está marcado item a item entre
 **medido** (o Graph respondeu) e **documentado** (é o que a Microsoft exige, e
 ninguém rodou aqui ainda).
 
-O inventário que a TELA lê é `lib/microsoftScopes.js`. Este arquivo é o passo a
-passo humano. **Feature nova que fala com o Graph entra nos dois.**
+**Este arquivo é a fonte única.** A tela de diagnóstico da integração e o
+Laboratório do Outlook foram removidos em 24/08/2026 - a configuração existe, não
+muda, e vale pelo padrão do `MicrosoftSettingsService`. Feature nova que fala com
+o Graph atualiza aqui.
 
 ---
 
@@ -35,6 +37,114 @@ concedido, o login passa a falhar com "need admin approval" para todos. Por isso
 o padrão da casa é **conceder no portal primeiro** - o consentimento de
 administrador devolve o escopo no token mesmo sem ele estar em `BASE_SCOPES`. É
 assim que Planner e importação de pessoas funcionam hoje.
+
+---
+
+## Link direto para a tela de permissões
+
+```
+https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/291d3be9-7ec0-48aa-9f4b-598db950a538/isMSAApp~/false
+```
+
+O mesmo link vale trocando `entra.microsoft.com` por `portal.azure.com`. Se ele
+abrir no app errado (acontece quando a conta tem mais de um tenant), vá pelo
+caminho manual descrito em "Passo a passo no portal", mais abaixo, e confira o
+Id do aplicativo no topo.
+
+---
+
+## LIBERAR TUDO DE UMA VEZ
+
+Esta é a lista completa: tudo que o Office usa hoje, tudo que ele já tem código
+para usar e está esperando, e tudo que destrava funcionalidade que hoje não
+existe. Cada linha diz o **tipo** (Aplicação x Delegada), se já está concedida, e
+o que ela abre.
+
+Marcações: **[JÁ]** concedida e em uso · **[FALTA]** o código espera e não tem ·
+**[NOVO]** destrava funcionalidade que ainda não existe · **[+]** exige mais do
+que o consentimento (política, manifesto, código).
+
+### Identidade e pessoas
+
+| Permissão | Tipo | | O que abre |
+|---|---|---|---|
+| `User.Read` | Delegada | [JÁ] | Entrar com a conta Microsoft. Base de tudo. |
+| `User.ReadBasic.All` | Delegada | [FALTA] | Nome de qualquer pessoa da Menin: responsável de tarefa do Planner, participante de reunião, seletor de pessoas. Hoje quem nunca entrou no Office aparece como "Pessoa da equipe". |
+| `User.Read.All` | Aplicação | [JÁ] | Importar pessoas do diretório em lote, com cargo e departamento. |
+| `Presence.Read.All` | Delegada | [NOVO] | Status do Teams (disponível, ocupado, em reunião, ausente) ao lado do nome, em qualquer tela que liste pessoas. Barato e visível. |
+| `User.ReadWrite.All` | Aplicação | [JÁ] | Concedida e **não usada**. Só faria sentido se o Office fosse criar/alterar conta no Azure. Candidata a remoção. |
+
+### Agenda e reuniões
+
+| Permissão | Tipo | | O que abre |
+|---|---|---|---|
+| `Calendars.ReadWrite` | Delegada | [JÁ] | Ler o calendário, criar, editar, cancelar, série recorrente. |
+| `Calendars.Read.Shared` | Delegada | [FALTA] | Ver quem está livre antes de marcar. Sem ela, todo convidado sai cinza. |
+| `Calendars.ReadWrite.Shared` | Delegada | [NOVO] | Agenda de quem delegou acesso: secretária marcando pelo diretor, agenda compartilhada de time. Cobre também a de cima. |
+| `Place.Read.All` | Delegada | [NOVO] | Salas e recursos: escolher a sala na hora de marcar e saber se está livre. Hoje o campo de local é texto solto. |
+| `OnlineMeetings.ReadWrite` | Delegada | [JÁ] | Reunião instantânea com link do Teams. |
+| `OnlineMeetings.Read.All` | Aplicação | [FALTA] [+] | Transcrição de reunião que a pessoa só participou, quando ninguém carregou ainda. **Exige política de acesso a aplicativo** (PowerShell do Teams). |
+| `OnlineMeetingTranscript.Read.All` | Aplicação | [JÁ] | Baixar a transcrição. |
+| `OnlineMeetingRecording.Read.All` | Aplicação | [NOVO] [+] | A **gravação** da reunião, não só o texto. Abre reassistir trecho e anexar o vídeo ao relatório. Mesma política de acesso. |
+| `CallRecords.Read.All` | Aplicação | [NOVO] | Relatório de participação: quem entrou, quando saiu, quanto tempo ficou. É o que responde "quem realmente estava na reunião". |
+
+### E-mail (Outlook)
+
+| Permissão | Tipo | | O que abre |
+|---|---|---|---|
+| `Mail.Read` | Aplicação | [JÁ] | Ler pastas, mensagens, anexos, buscar, sincronizar. |
+| `Mail.Send` | Aplicação | [JÁ] | Enviar em nome da pessoa. |
+| `Mail.ReadWrite` | Aplicação | [FALTA] | Rascunho, marcar lido, sinalizar, categorizar, **mover entre pastas**, excluir, **criar e renomear pasta**. É o que falta para o Office ser caixa de trabalho e não vitrine. Inclui o que `Mail.Read` já dá. |
+| `MailboxSettings.Read` | Aplicação | [FALTA] | Ler assinatura, fuso, horário de trabalho, resposta automática e regras. |
+| `MailboxSettings.ReadWrite` | Aplicação | [NOVO] | **Ligar** resposta automática e mexer em regra pela tela do Office (a de cima só lê). É o que permite "vou viajar, ativa meu fora do escritório" pela Eme. |
+| `Contacts.Read` | Delegada | [NOVO] | Catálogo de contatos da pessoa no autocompletar de destinatário. Hoje só sugere quem está no Office. |
+
+### Arquivos (SharePoint e OneDrive)
+
+| Permissão | Tipo | | O que abre |
+|---|---|---|---|
+| `Sites.ReadWrite.All` | Delegada | [JÁ] | Navegar em site e biblioteca, e também **listas** do SharePoint (que o Office ainda não usa - é funcionalidade a construir, não permissão a pedir). |
+| `Files.ReadWrite.All` | Delegada | [JÁ] | Enviar, renomear, mover, excluir, link de compartilhamento, OneDrive, "compartilhados comigo" e a API de planilha (que exige ReadWrite mesmo só para ler célula). |
+| `Sites.Manage.All` | Delegada | [NOVO] | Criar biblioteca e pasta estruturada por empreendimento, e mexer em coluna de lista. Só se o Office for organizar o SharePoint, não só usá-lo. |
+| `Files.ReadWrite.All` | Aplicação | [JÁ] | Rotina sem usuário mexendo em arquivo (relatório que se salva sozinho na pasta do empreendimento). |
+
+### Teams como canal de mensagem
+
+Aqui a escolha é de produto antes de ser de portal. **Peça as três primeiras** se
+quiser o caminho completo (notificação do Office + mensagem com pessoa na tela).
+
+| Permissão | Tipo | | O que abre |
+|---|---|---|---|
+| `TeamsActivity.Send` | Aplicação | [NOVO] [+] | Notificação no feed do Teams **em nome do Office**: cobrança de checklist, alerta de reserva cancelada, aviso de fechamento. É o caminho suportado pela Microsoft. **Exige o Office registrado como app do Teams** (manifesto). |
+| `TeamsAppInstallation.ReadWriteForUser.All` | Aplicação | [NOVO] [+] | Instalar esse app do Teams para a pessoa sem ela precisar fazer nada. Sem isto, cada um teria que instalar na mão antes de receber a primeira notificação. |
+| `Chat.Create` | Delegada | [NOVO] | Abrir a conversa de chat quando ela ainda não existe. |
+| `ChatMessage.Send` | Delegada | [NOVO] | Mandar mensagem **em nome da pessoa que está na tela**. Serve para "avisa o fulano daqui", não serve para rotina automática. |
+| `Chat.ReadWrite.All` | Aplicação | [NOVO] | Escrever em qualquer conversa da empresa. Resolve tudo e é a mais ampla das cinco - só peça se descartar o caminho do app do Teams. |
+| `ChannelMessage.Send` | Delegada | [NOVO] | Postar em canal de equipe (mural de time). Webhook de canal faz parecido sem permissão nenhuma. |
+| `Team.ReadBasic.All` + `Channel.ReadBasic.All` | Delegada | [NOVO] | Listar equipes e canais para a pessoa escolher o destino. |
+| `Chat.Read.All` | Aplicação | [JÁ] | **Concedida e não usada.** Lê toda conversa de Teams da empresa. Se o Teams como canal não for por aqui, esta é a primeira a sair. |
+
+### Tarefas (Planner e To Do)
+
+| Permissão | Tipo | | O que abre |
+|---|---|---|---|
+| `Tasks.ReadWrite` | Delegada | [JÁ, informal] | O quadro do Planner. Funciona hoje só porque o consentimento de administrador devolve o escopo - não é pedido no login. Formalizar tira a fragilidade. |
+| `GroupMember.Read.All` | Delegada | [FALTA] | A lista de grupos que têm plano. Sem ela a tela diz "sem planos" e parece Planner vazio. |
+| `Group.ReadWrite.All` | Delegada | [NOVO] | **Comentário de tarefa do Planner** (que por baixo é conversa do grupo) e criar plano novo. É uma permissão ampla: pesa. |
+| `Tasks.ReadWrite.All` | Aplicação | [JÁ] | Concedida. Antes de contar com ela para importar planos e aposentar o Planner, confirme que o Planner aceita permissão de aplicação no v1.0 - historicamente valia para o To Do, não para o Planner. |
+
+### Assinaturas e diretório
+
+| Permissão | Tipo | | O que abre |
+|---|---|---|---|
+| (nenhuma nova) | | | As assinaturas de mudança usam as mesmas permissões da leitura. O que falta é `PUBLIC_API_URL` e `ENABLE_GRAPH_SUBSCRIPTIONS=true`, não permissão. |
+| `Directory.Read.All` | Delegada | [NOVO] | Cobre de uma vez `User.ReadBasic.All` e `GroupMember.Read.All`. Mais ampla; peça só se preferir uma linha a duas. |
+
+### O que NÃO adianta pedir
+
+- `Calls.AccessMedia.All` e `Policy.ReadWrite.FedTokenValidation`: concedidas, sem uso e sem plano de uso. Removê-las.
+- Qualquer permissão para o **Office Online abrir arquivo interno em iframe**: não existe. O iframe do Office Viewer exige arquivo público, e é por isso que a prévia de planilha foi feita pela API de pastas de trabalho.
+- Qualquer permissão para ler `.xls` antigo pela API de planilha: ela só abre `.xlsx`. Converter é a saída.
 
 ---
 
@@ -131,14 +241,14 @@ O quadro roda **só com o token da pessoa**. Quatro coisas para saber:
 consentimento de administrador feito no portal devolve o escopo assim mesmo. Está
 concedido e funciona - mas é frágil: uma revisão de permissões pela TI derruba a
 tela sem aviso, e o que chega no usuário é um 403 genérico. Confira em
-Configurações > Integração Microsoft 365 antes de mexer em qualquer coisa.
+a lista de permissões no portal antes de mexer em qualquer coisa.
 
 **b) A lista de grupos é onde quebra primeiro.** `getMyGroups()` chama
 `/me/memberOf` e filtra os grupos Microsoft 365. Se a resposta vier vazia, a tela
 diz "sem planos" e parece que o Planner está vazio, quando é permissão faltando.
 A menos privilegiada que resolve é **`GroupMember.Read.All`** (`Group.Read.All` e
-`Directory.Read.All` também servem, e são mais amplas). *Documentado: confira na
-tela de diagnóstico antes de conceder, porque pode já estar coberto.*
+`Directory.Read.All` também servem, e são mais amplas). *Documentado: pode já estar coberto pelo consentimento de administrador -
+se a lista de grupos aparece, está.*
 
 **c) Responsável só existe para quem já entrou no Office.** O id de um assignment
 do Planner é o id do Azure, e ele vem da nossa tabela `users.microsoft_id`. Quem
@@ -172,7 +282,7 @@ Precisa de duas coisas, e a segunda não é um botão no portal:
    "permissão concedida que não funciona sozinha".
 
 Sem os dois, o caminho pelo Graph continua valendo só para o organizador. O
-interruptor está na tela de integração.
+interruptor é o `transcript_app_fallback` do MicrosoftSettingsService, que já vem ligado por padrão.
 
 **Mas existe um terceiro caminho, e ele já está no ar** (24/08/2026): a
 transcrição tem id próprio no Graph e é a MESMA para todo mundo que esteve na
@@ -309,11 +419,18 @@ sair e entrar de novo se quiser ver na hora.
 
 ### 4. Conferir que pegou
 
-**Pelo Office**: Configurações > **Integração Microsoft 365**. A lista compara o
-que cada tela precisa com o que o token realmente carrega, item por item.
+Não existe mais tela de diagnóstico no Office (removida em 24/08/2026: a
+configuração não muda, e tela para isso era peso sem uso). A conferência é em
+dois lugares:
 
-**Pelo laboratório**: Configurações > **Laboratório do Outlook**, rodar a
-sondagem. É o único lugar que testa contra o Graph de verdade, e só cobre e-mail.
+**No portal**: a coluna **Status** de cada linha em Permissões de API precisa
+dizer "Concedido para <organização>", em verde. Confira também a coluna de
+**tipo** - Aplicação e Delegada aparecem misturadas na mesma lista.
+
+**Na prática, pela funcionalidade**: cada permissão desta lista tem um sintoma
+próprio, e a coluna "sintoma sem ela" é o teste. Mover um e-mail de pasta,
+marcar uma reunião e ver os convidados ficarem verdes ou vermelhos, abrir o
+Planner e ver a lista de grupos. Se o comportamento mudou, pegou.
 
 ---
 
@@ -329,7 +446,8 @@ tipo da permissão - Aplicação e Delegada aparecem misturadas na mesma lista.
 
 **Concedi e a tela continua vazia, sem erro**
 É o caso do Planner e da disponibilidade: eles não dão 403, dão resposta vazia ou
-com erro por item. Vá pela tela de diagnóstico, não pela cara da tela.
+com erro por item. Teste a funcionalidade em si (a coluna de sintoma acima),
+não a cara da tela.
 
 **Marquei a permissão errada**
 Dá para remover na mesma tela (três pontos na linha > Remover permissão). Não

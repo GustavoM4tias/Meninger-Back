@@ -146,7 +146,7 @@ class MicrosoftTranscriptController {
                     available: false,
                     transcripts: [],
                     reason: 'meeting_not_found',
-                    hint: 'Não foi possível abrir esta reunião pela Microsoft. Reuniões que você organizou funcionam sempre; para as que você apenas participou, o administrador precisa liberar a permissão de aplicação em Configurações > Integração Microsoft 365.',
+                    hint: 'Não foi possível abrir esta reunião pela Microsoft. Reuniões que você organizou funcionam sempre; para as que você apenas participou, basta que alguém que estava na reunião abra a transcrição aqui uma vez - a partir daí ela vale para todos os participantes. Se ninguém abriu ainda, o administrador precisa liberar a permissão de aplicação no portal do Azure.',
                 });
             }
 

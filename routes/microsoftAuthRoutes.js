@@ -6,8 +6,6 @@ import MicrosoftTeamsController from '../controllers/microsoft/MicrosoftTeamsCon
 import MicrosoftTranscriptController from '../controllers/microsoft/MicrosoftTranscriptController.js';
 import MicrosoftOrgUsersController from '../controllers/microsoft/MicrosoftOrgUsersController.js';
 import MicrosoftPlannerController from '../controllers/microsoft/MicrosoftPlannerController.js';
-import MicrosoftDiagnosticsController from '../controllers/microsoft/MicrosoftDiagnosticsController.js';
-import MicrosoftMailLabController from '../controllers/microsoft/MicrosoftMailLabController.js';
 import MicrosoftOutlookController from '../controllers/microsoft/MicrosoftOutlookController.js';
 import MicrosoftWebhookController from '../controllers/microsoft/MicrosoftWebhookController.js';
 import InPersonMeetingController from '../controllers/InPersonMeetingController.js';
@@ -57,18 +55,11 @@ router.get('/auth/status', authenticate, authController.status);
 router.post('/auth/refresh', authenticate, authController.refresh);
 router.delete('/auth/unlink', authenticate, authController.unlink);
 
-// ── Diagnóstico e configuração da integração (admin only) ────────────────────
-// Tela 100% de administração do sistema: trava de código nos três níveis
-// (adminOnly no navRegistry, requiresAdmin na rota do front, requireAdmin aqui).
-router.get('/diagnostics', authenticate, requireAdmin, MicrosoftDiagnosticsController.diagnostics);
-router.get('/settings',    authenticate, requireAdmin, MicrosoftDiagnosticsController.getSettings);
-router.put('/settings',    authenticate, requireAdmin, MicrosoftDiagnosticsController.updateSettings);
-
-// ── Laboratório do Outlook (admin only) ──────────────────────────────────────
-// Escopos de e-mail vivem FORA do login: a autorização é por conta e sob demanda.
-router.get('/mail/status',         authenticate, requireAdmin, MicrosoftMailLabController.status);
-router.post('/mail/consent/start', authenticate, requireAdmin, MicrosoftMailLabController.consentStart);
-router.post('/mail/probe',         authenticate, requireAdmin, MicrosoftMailLabController.probe);
+// A tela de diagnóstico da integração e o Laboratório do Outlook saíram em
+// 24/08/2026. A configuração continua existindo e vale pelo padrão do
+// MicrosoftSettingsService - ela não muda, e tela para isso era peso sem uso.
+// O que precisa ser liberado no portal do Azure está em
+// _estudo/microsoft/PERMISSOES-AZURE.md.
 
 // ── Gestão de Usuários da Org Microsoft (admin only) ─────────────────────────
 router.get('/org-users',        authenticate, requireAdmin, MicrosoftOrgUsersController.listOrgUsers);

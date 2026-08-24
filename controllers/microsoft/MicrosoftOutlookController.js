@@ -27,7 +27,7 @@ function fail(res, err, ctx) {
     if (status === 403) {
         return res.status(403).json({
             error: 'O Office ainda não tem permissão para esta operação no e-mail. '
-                 + 'Confira em Configurações > Integração Microsoft 365 o que falta liberar.',
+                 + 'Falta liberar a permissão no portal do Azure - o administrador tem a lista.',
             code,
         });
     }
