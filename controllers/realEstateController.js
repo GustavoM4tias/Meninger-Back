@@ -520,7 +520,18 @@ export async function getCvPanel(req, res) {
                 raw: true,
             });
         }
-        return res.json({ ok: true, ...status, notificados });
+        // Números do espelho: é o que responde "isto está atualizado?" sem
+        // precisar abrir a tela de Imobiliárias e contar no olho.
+        const [espelho] = await db.sequelize.query(`
+            SELECT (SELECT COUNT(*)::int FROM cv_imobiliarias)                       AS imobiliarias,
+                   (SELECT COUNT(*)::int FROM cv_imobiliarias WHERE ativo = 'S')     AS ativas,
+                   (SELECT COUNT(*)::int FROM cv_imobiliaria_empreendimentos)        AS vinculos,
+                   (SELECT COUNT(DISTINCT idimobiliaria)::int FROM cv_imobiliaria_empreendimentos) AS com_vinculo,
+                   (SELECT MAX(synced_at) FROM cv_imobiliarias)                      AS last_sync,
+                   (SELECT MAX(synced_at) FROM cv_imobiliaria_empreendimentos)       AS last_sync_vinculos
+        `, { type: db.Sequelize.QueryTypes.SELECT });
+
+        return res.json({ ok: true, ...status, notificados, espelho });
     } catch (err) {
         console.error('[realestate] getCvPanel:', err);
         return res.status(500).json({ ok: false, error: 'Erro ao ler a credencial do CV.' });
