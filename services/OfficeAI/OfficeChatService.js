@@ -1058,6 +1058,90 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     }
   }
 
+  // ── PROMESSA SEM AÇÃO ──────────────────────────────────────────────────────
+  //
+  // O modelo às vezes termina o turno dizendo "um momento enquanto eu ajusto" -
+  // e para. Para quem está do outro lado, a Eme prometeu e sumiu: o pedido não
+  // foi feito, ninguém avisou, e a pessoa só descobre olhando a agenda.
+  //
+  // Aqui isso é tratado como o que é: um turno incompleto. Uma única vez por
+  // turno, o modelo recebe de volta a instrução de EXECUTAR agora, e a cadeia de
+  // tools roda de verdade. Se ele prometer de novo, o texto é substituído por
+  // uma frase honesta em vez de manter a promessa vazia na tela.
+  const PROMESSA = /(um momento|s[oó] um instante|um instante|aguarde|j[aá] (?:vou|estou)|vou (?:fazer|ajustar|criar|cancelar|remover|reorganizar|atualizar|agendar|enviar|mandar)|estou (?:ajustando|criando|cancelando|reorganizando|atualizando|enviando)|deixa comigo|em seguida eu)/i;
+
+  const promessaNoFim = (txt) => PROMESSA.test(String(txt || '').slice(-260));
+
+  if (!isAcademy && promessaNoFim(fullAssistantText)) {
+    console.warn('[OfficeChatService] Promessa sem ação detectada — cutucando o modelo para executar.');
+    sendSSE(res, { type: 'tool_start', name: 'continuar', label: 'retomando a execução', step: 99 });
+
+    try {
+      const cutucada =
+        'INSTRUÇÃO DO SISTEMA (não é o usuário falando): você terminou o turno anterior prometendo executar ' +
+        'algo ("um momento", "vou ajustar") e NÃO chamou nenhuma ferramenta. Prometer e parar deixa o pedido ' +
+        'por fazer sem ninguém saber. Execute AGORA as chamadas necessárias para cumprir o que você prometeu, ' +
+        'usando os dados que você já consultou neste turno. Se faltar informação para agir, faça UMA pergunta ' +
+        'objetiva. Nunca escreva "um momento" de novo.';
+
+      let stream = (await chat.sendMessageStream([{ text: cutucada }])).stream;
+      let texto = '';
+      let chamada = null;
+      let passos = 0;
+
+      // Mesma cadeia da execução normal, com teto próprio: a cutucada é uma
+      // segunda chance, não um caminho para laço infinito.
+      do {
+        chamada = null;
+        for await (const chunk of stream) {
+          const cand = chunk.candidates?.[0];
+          if (cand?.finishReason) lastFinishReason = cand.finishReason;
+          for (const part of cand?.content?.parts || []) {
+            if (part.text) texto += part.text;
+            if (part.functionCall && !chamada) {
+              chamada = { name: part.functionCall.name, args: part.functionCall.args };
+            }
+          }
+        }
+
+        if (!chamada) break;
+        passos++;
+
+        const inicio = Date.now();
+        sendSSE(res, { type: 'tool_start', name: chamada.name, label: toolLabel(chamada.name), step: 99 + passos });
+        const resultado = await runToolCall(chamada.name, chamada.args, inicio);
+        toolCalls.push({
+          name: chamada.name,
+          args: chamada.args || {},
+          result_summary: summarizeForFeedback(resultado),
+          error: resultado?.error || null,
+          ms: Date.now() - inicio,
+        });
+        sendSSE(res, { type: 'tool_result', name: chamada.name, ms: Date.now() - inicio, error: resultado?.error || null });
+
+        texto = '';
+        stream = (await chat.sendMessageStream([
+          { functionResponse: { name: chamada.name, response: summarizeForGemini(resultado) } },
+        ])).stream;
+      } while (passos < 4);
+
+      const finalLimpo = stripPseudoToolCalls(texto).trim();
+      if (finalLimpo) {
+        // Prometeu de novo, mesmo depois da cutucada: melhor dizer a verdade do
+        // que deixar a promessa vazia na tela.
+        fullAssistantText = (passos === 0 && promessaNoFim(finalLimpo))
+          ? 'Não consegui concluir sozinha o que faltava. Me diga de novo o que ajustar, item por item, que eu executo na hora.'
+          : finalLimpo;
+        sendSSE(res, { type: 'replace', text: fullAssistantText });
+      } else if (passos === 0) {
+        fullAssistantText = 'Não consegui concluir sozinha o que faltava. Me diga de novo o que ajustar, item por item, que eu executo na hora.';
+        sendSSE(res, { type: 'replace', text: fullAssistantText });
+      }
+    } catch (err) {
+      console.warn('[OfficeChatService] Cutucada falhou:', err?.message || err);
+    }
+  }
+
   // Blindagem final: sobrou nome de tool cru no texto e nenhuma tool rodou no
   // turno → é vazamento, não resposta. Entrega uma mensagem honesta em vez de
   // deixar o usuário achar que a consulta foi feita.
