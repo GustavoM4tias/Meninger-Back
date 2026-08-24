@@ -56,8 +56,7 @@ import realEstateRoutes from './routes/realEstateRoutes.js';
 import realEstatePublicRoutes from './routes/realEstatePublicRoutes.js';
 import correspondentRoutes from './routes/correspondentRoutes.js';
 import correspondentPublicRoutes from './routes/correspondentPublicRoutes.js';
-import correspondentCvScheduler from './scheduler/correspondentCvScheduler.js';
-import imobiliariaCvScheduler from './scheduler/imobiliariaCvScheduler.js';
+import cvCronManager from './services/cv/cvCronManager.js';
 import emeReportsRoutes from './routes/emeReportsRoutes.js';
 import emeReportsPublicRoutes from './routes/emeReportsPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
@@ -80,19 +79,10 @@ import contractValidatorScheduler from './scheduler/contractValidatorScheduler.j
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import salesClosingScheduler from './scheduler/salesClosingScheduler.js';
 import contractAdjustmentScheduler from './scheduler/contractAdjustmentScheduler.js';
-import leadCvScheduler from './scheduler/leadCvScheduler.js';
-import repasseCvScheduler from './scheduler/repasseCvScheduler.js';
-import reservaCvScheduler from './scheduler/reservaCvScheduler.js';
-import reservaCvSweepScheduler from './scheduler/reservaCvSweepScheduler.js';
-import reservaCvGapScheduler from './scheduler/reservaCvGapScheduler.js';
 import landScheduler from './scheduler/landScheduler.js';
-import enterpriseCvScheduler from './scheduler/enterpriseCvScheduler.js';
-import precadastroCvScheduler from './scheduler/precadastroCvScheduler.js';
 import creditorPollingScheduler from './scheduler/creditorPollingScheduler.js';
 import contractApprovalScheduler from './scheduler/contractApprovalScheduler.js';
-import leadCancelReasonScheduler from './scheduler/leadCancelReasonScheduler.js';
 import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.js';
-import cvExtrasScheduler from './scheduler/cvExtrasScheduler.js';
 import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateScheduler.js';
 import eventPlanCycleScheduler from './scheduler/eventPlanCycleScheduler.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
@@ -604,24 +594,19 @@ async function startBackgroundServices() {
   // Mesma lógica para os ajustes contábeis: o sync pode reescrever justamente o
   // dado que foi corrigido à mão.
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractAdjustmentScheduler.start();
-  if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCvScheduler.start();
-  if (process.env.ENABLE_CV_REPASSE_SCHEDULE === 'true') repasseCvScheduler.start();
-  if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true') reservaCvScheduler.start();
-  if (process.env.ENABLE_CV_RESERVA_SWEEP_SCHEDULE === 'true') reservaCvSweepScheduler.start();
-  // Gap-fill de reservas: acompanha o delta. A listagem do CV não devolve tudo,
-  // e sem isto o banco fica com furos permanentes na sequência de idreserva
-  // (reservas que existem no CV e nunca chegam à projeção). Roda junto do delta
-  // porque é o complemento dele; desligue com ENABLE_CV_RESERVA_GAP=false.
-  if (process.env.ENABLE_CV_RESERVA_SCHEDULE === 'true' && process.env.ENABLE_CV_RESERVA_GAP !== 'false') {
-    reservaCvGapScheduler.start();
-  }
+  // Crons de dados do CV (leads, reservas, repasses, pré-cadastros,
+  // empreendimentos, extras, correspondentes, imobiliárias e as duas passadas
+  // complementares de reserva): quem liga e em que horário agora é a tabela
+  // cv_sync_jobs, editável em CV CRM > Configurações. No primeiro boot cada job
+  // é semeado com o que as variáveis de ambiente diziam, então nada muda de
+  // comportamento na virada. Ver services/cv/cvCronManager.js.
+  cvCronManager.aplicar({ bootstrap: true })
+    .catch(e => console.error('[CV crons] falha ao aplicar a configuração:', e?.message));
+
   if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') landScheduler.start();
-  if (process.env.ENABLE_CV_ENTERPRISE_SCHEDULE === 'true') enterpriseCvScheduler.start();
   // Registro unificado de empresas/empreendimentos: sync diário de madrugada
   // (sempre ligado — dispensa o sync manual; ORG_REGISTRY_CRON_EXPRESSION p/ ajustar).
   orgRegistryScheduler.start();
-  if (process.env.ENABLE_CV_PRECADASTRO_SCHEDULE === 'true') precadastroCvScheduler.start();
-  if (process.env.ENABLE_CV_LEAD_SCHEDULE === 'true') leadCancelReasonScheduler.start();
   if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
 
   // Índices de performance no backup do Sienge (Custos/Títulos ao vivo). O restore
@@ -641,9 +626,6 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_CREDITOR_POLLING')) creditorPollingScheduler.start();
   if (schedulerOn('ENABLE_CONTRACT_APPROVAL')) contractApprovalScheduler.start();
   if (schedulerOn('ENABLE_SUPABASE_KEEPALIVE')) supabaseKeepAliveScheduler.start();
-  if (schedulerOn('ENABLE_CV_EXTRAS_SCHEDULE')) cvExtrasScheduler.start(); // extras do CV
-  if (schedulerOn('ENABLE_CV_CORRESPONDENT_SCHEDULE')) correspondentCvScheduler.start(); // espelho de correspondentes + empresas
-  if (schedulerOn('ENABLE_CV_IMOBILIARIA_SCHEDULE')) imobiliariaCvScheduler.start();   // espelho de imobiliárias do CV
   if (schedulerOn('ENABLE_CONDITION_AUTOGEN')) conditionAutoGenerateScheduler.start(); // auto-geração mensal de fichas (com e sem CV)
   if (schedulerOn('ENABLE_EVENT_PLAN_CYCLE')) eventPlanCycleScheduler.start(); // Plano de Eventos: abre o mês seguinte + cobra o prazo
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase

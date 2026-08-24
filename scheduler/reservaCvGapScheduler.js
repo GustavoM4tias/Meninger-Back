@@ -1,3 +1,9 @@
+// Assinatura padronizada em 2026-08-24: o horário e o liga/desliga destes
+// crons passaram a morar em cv_sync_jobs, editáveis em CV CRM > Configurações.
+// `start({ expression, bootstrap })` recebe o horário vindo do banco e devolve
+// a task, para o gerente (services/cv/cvCronManager.js) conseguir PARAR e
+// reagendar sem reiniciar o processo. `bootstrap:false` evita disparar a carga
+// inicial quando o admin só salvou uma configuração na tela.
 // scheduler/reservaCvGapScheduler.js
 //
 // Preenche os BURACOS de idreserva que o delta sync não enxerga.
@@ -153,8 +159,10 @@ export async function runGapFill() {
 }
 
 export default {
-    start() {
-        cron.schedule(CRON_EXPR, runGapFill, { timezone: TZ });
-        console.log(`✅ CVCRM Reservas GAP agendado: ${CRON_EXPR} (${TZ})`);
+    start({ expression, bootstrap = true } = {}) {
+        const expr = expression || CRON_EXPR;
+        const task = cron.schedule(expr, runGapFill, { timezone: TZ });
+        console.log(`✅ CVCRM Reservas GAP agendado: ${expr} (${TZ})`);
+        return task;
     }
 };

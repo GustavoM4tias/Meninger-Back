@@ -608,3 +608,50 @@ export async function testCvPanel(req, res) {
         return res.status(500).json({ ok: false, error: 'Erro ao testar a credencial do CV.' });
     }
 }
+
+// ── Crons de dados do CV ─────────────────────────────────────────────────────
+//
+// Liga/desliga e horário de cada sync do CV. A regra saiu das variáveis de
+// ambiente (que exigiam deploy e não apareciam em lugar nenhum do sistema) e
+// virou tabela + tela. Ver services/cv/cvCronManager.js.
+
+export async function getCvJobs(req, res) {
+    try {
+        const { listarJobs } = await import('../services/cv/cvCronManager.js');
+        return res.json({ ok: true, jobs: await listarJobs() });
+    } catch (err) {
+        console.error('[realestate] getCvJobs:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao ler os crons do CV.' });
+    }
+}
+
+export async function updateCvJob(req, res) {
+    try {
+        const { key } = req.params;
+        const { active, cron_expression } = req.body || {};
+
+        // Expressão inválida derrubaria o agendador na hora de aplicar, e o
+        // job ficaria fora do ar sem ninguém perceber. Barra aqui.
+        if (cron_expression !== undefined) {
+            const expr = String(cron_expression || '').trim();
+            const cron = (await import('node-cron')).default;
+            if (!expr || !cron.validate(expr)) {
+                return res.status(400).json({
+                    ok: false,
+                    error: 'Horário inválido. Use o formato cron, por exemplo "*/20 * * * *" (a cada 20 minutos).',
+                });
+            }
+        }
+
+        const { salvarJob } = await import('../services/cv/cvCronManager.js');
+        const jobs = await salvarJob(key, { active, cron_expression });
+        return res.json({ ok: true, jobs });
+    } catch (err) {
+        console.error('[realestate] updateCvJob:', err);
+        const desconhecido = /desconhecido/i.test(err?.message || '');
+        return res.status(desconhecido ? 404 : 500).json({
+            ok: false,
+            error: desconhecido ? 'Cron não encontrado.' : 'Erro ao salvar o cron.',
+        });
+    }
+}

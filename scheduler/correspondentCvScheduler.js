@@ -1,3 +1,9 @@
+// Assinatura padronizada em 2026-08-24: o horário e o liga/desliga destes
+// crons passaram a morar em cv_sync_jobs, editáveis em CV CRM > Configurações.
+// `start({ expression, bootstrap })` recebe o horário vindo do banco e devolve
+// a task, para o gerente (services/cv/cvCronManager.js) conseguir PARAR e
+// reagendar sem reiniciar o processo. `bootstrap:false` evita disparar a carga
+// inicial quando o admin só salvou uma configuração na tela.
 // scheduler/correspondentCvScheduler.js
 //
 // Mantém o espelho de correspondentes em dia sem ninguém clicar em sincronizar.
@@ -24,13 +30,15 @@ async function rodar(origem) {
 }
 
 export default {
-    start() {
-        cron.schedule(CRON_EXPR, () => rodar('agendado'), { timezone: TZ });
+    start({ expression, bootstrap = true } = {}) {
+        const expr = expression || CRON_EXPR;
+        const task = cron.schedule(expr, () => rodar('agendado'), { timezone: TZ });
 
         // Primeira carga logo após o boot, para a tela não abrir vazia quando
         // as tabelas acabaram de ser criadas.
-        setTimeout(() => rodar('boot'), 45_000).unref?.();
+        if (bootstrap) setTimeout(() => rodar('boot'), 45_000).unref?.();
 
-        console.log(`✅ Correspondentes agendado — ${CRON_EXPR} (${TZ})`);
+        console.log(`✅ Correspondentes agendado — ${expr} (${TZ})`);
+        return task;
     },
 };
