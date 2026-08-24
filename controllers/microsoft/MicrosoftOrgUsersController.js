@@ -37,7 +37,7 @@ class MicrosoftOrgUsersController {
             return res.json({ users: result, total: result.length });
         } catch (err) {
             console.error('❌ [OrgUsers] listOrgUsers:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -129,7 +129,7 @@ class MicrosoftOrgUsersController {
             return res.json({ created, skipped, errors });
         } catch (err) {
             console.error('❌ [OrgUsers] importOrgUsers:', err.message);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 

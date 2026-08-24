@@ -40,7 +40,7 @@ export default class MicrosoftSharepointController {
             return this._sendList(res, await sharepointService.getSites(user));
         } catch (err) {
             console.error('❌ [SharePoint] sites:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -59,7 +59,7 @@ export default class MicrosoftSharepointController {
             if (status === 400 || status === 404) {
                 return res.status(422).json({ error: 'Este arquivo não é uma planilha do Excel (.xlsx) que a Microsoft consiga abrir na nuvem.' });
             }
-            return res.status(status || 500).json({ error: err.message });
+            return res.status(status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -75,7 +75,7 @@ export default class MicrosoftSharepointController {
             return res.json(data);
         } catch (err) {
             console.error('❌ [SharePoint] worksheetRange:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -88,7 +88,7 @@ export default class MicrosoftSharepointController {
             return res.json(await sharepointService.getMyDrive(user));
         } catch (err) {
             console.error('❌ [SharePoint] myDrive:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -100,7 +100,7 @@ export default class MicrosoftSharepointController {
             return this._sendList(res, await sharepointService.getSharedWithMe(user));
         } catch (err) {
             console.error('❌ [SharePoint] sharedWithMe:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -112,7 +112,7 @@ export default class MicrosoftSharepointController {
             return this._sendList(res, await sharepointService.getSiteDrives(user, req.params.siteId));
         } catch (err) {
             console.error('❌ [SharePoint] drives:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -124,7 +124,7 @@ export default class MicrosoftSharepointController {
             return this._sendList(res, await sharepointService.getDriveRoot(user, req.params.driveId));
         } catch (err) {
             console.error('❌ [SharePoint] driveRoot:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -136,7 +136,7 @@ export default class MicrosoftSharepointController {
             return this._sendList(res, await sharepointService.getFolderChildren(user, req.params.driveId, req.params.itemId));
         } catch (err) {
             console.error('❌ [SharePoint] folderChildren:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -148,7 +148,7 @@ export default class MicrosoftSharepointController {
             return res.json(await sharepointService.getItem(user, req.params.driveId, req.params.itemId));
         } catch (err) {
             console.error('❌ [SharePoint] item:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -162,7 +162,7 @@ export default class MicrosoftSharepointController {
             return this._sendList(res, await sharepointService.search(user, req.params.driveId, q.trim()));
         } catch (err) {
             console.error('❌ [SharePoint] search:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -175,7 +175,7 @@ export default class MicrosoftSharepointController {
             return res.status(204).end();
         } catch (err) {
             console.error('❌ [SharePoint] deleteItem:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -191,7 +191,7 @@ export default class MicrosoftSharepointController {
             return res.json(item);
         } catch (err) {
             console.error('❌ [SharePoint] updateItem:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -233,7 +233,7 @@ export default class MicrosoftSharepointController {
             return res.status(201).json(item);
         } catch (err) {
             console.error('❌ [SharePoint] upload:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -246,7 +246,7 @@ export default class MicrosoftSharepointController {
             return res.json({ maxMb: limits.maxMb, maxBytes: limits.maxBytes });
         } catch (err) {
             console.error('❌ [SharePoint] uploadLimits:', err.message);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -284,7 +284,7 @@ export default class MicrosoftSharepointController {
             });
         } catch (err) {
             console.error('❌ [SharePoint] itemContent:', err?.response?.data || err.message);
-            if (!res.headersSent) return res.status(err?.response?.status || 500).json({ error: err.message });
+            if (!res.headersSent) return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -297,7 +297,7 @@ export default class MicrosoftSharepointController {
             return res.json({ link });
         } catch (err) {
             console.error('❌ [SharePoint] createLink:', err?.response?.data || err.message);
-            return res.status(err?.response?.status || 500).json({ error: err.message });
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 }

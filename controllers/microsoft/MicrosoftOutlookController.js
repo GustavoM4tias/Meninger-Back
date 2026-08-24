@@ -29,6 +29,7 @@ function fail(res, err, ctx) {
             error: 'O Office ainda não tem permissão para esta operação no e-mail. '
                  + 'Falta liberar a permissão no portal do Azure - o administrador tem a lista.',
             code,
+            permissao: err?.permissao || null,
         });
     }
     if (status === 404) return res.status(404).json({ error: 'Mensagem ou pasta não encontrada.', code });
@@ -60,7 +61,7 @@ class MicrosoftOutlookController {
     }
 
     _guard(res, err) {
-        if (err?.expose) return res.status(err.expose).json({ error: err.message });
+        if (err?.expose) return res.status(err.expose).json({ error: err.message, permissao: err.permissao || null });
         return null;
     }
 

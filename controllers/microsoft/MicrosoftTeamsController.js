@@ -10,7 +10,7 @@ function handleErr(res, err, ctx) {
     console.error(`❌ [Teams] ${ctx}:`, err?.response?.data || msg);
     const authProbe = (err?.message || '').toLowerCase();
     const isAuth = authProbe.includes('não conectada') || authProbe.includes('expirada');
-    return res.status(isAuth ? 401 : err?.response?.status || 500).json({ error: msg });
+    return res.status(isAuth ? 401 : err?.response?.status || 500).json({ error: msg, permissao: err?.permissao || null });
 }
 
 class MicrosoftTeamsController {

@@ -120,7 +120,7 @@ class MicrosoftWebhookController {
             });
         } catch (err) {
             console.error('❌ [GraphWebhook] list:', err.message);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -154,7 +154,7 @@ class MicrosoftWebhookController {
             });
         } catch (err) {
             console.error('❌ [GraphWebhook] create:', err.message);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 
@@ -166,7 +166,7 @@ class MicrosoftWebhookController {
             return res.status(204).end();
         } catch (err) {
             console.error('❌ [GraphWebhook] remove:', err.message);
-            return res.status(500).json({ error: err.message });
+            return res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     };
 }

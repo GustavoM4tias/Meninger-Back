@@ -1,5 +1,6 @@
 // services/microsoft/MicrosoftTeamsService.js
 import graph from './MicrosoftGraphService.js';
+import { marcarErroDePermissao } from '../../lib/microsoftPermissoes.js';
 import settingsService from './MicrosoftSettingsService.js';
 
 const EVENT_SELECT = [
@@ -177,7 +178,18 @@ class MicrosoftTeamsService {
             availabilityViewInterval: slotMinutes,
         });
 
-        return (data.value || []).map(s => {
+        // O getSchedule não dá 403: ele responde 200 e devolve um erro DENTRO de
+        // cada agenda que não pôde ler. Quando TODAS voltam com acesso negado, é
+        // a permissão que falta (Calendars.Read.Shared) - e isso precisa virar
+        // aviso, não uma tela cheia de etiquetas cinzas que ninguém entende.
+        const agendas = data.value || [];
+        const negadas = agendas.filter(s => /access is denied|accessdenied|forbidden/i.test(s?.error?.message || ''));
+        if (agendas.length && negadas.length === agendas.length) {
+            const e = new Error('O Office não consegue ler a disponibilidade das agendas.');
+            throw marcarErroDePermissao(e, '/me/calendar/getSchedule', 'post');
+        }
+
+        return agendas.map(s => {
             const ocupado = (s.scheduleItems || [])
                 // 'free' e 'workingElsewhere' não impedem reunião.
                 .filter(i => !['free', 'workingElsewhere'].includes(i.status))

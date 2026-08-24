@@ -73,7 +73,7 @@ class MicrosoftTranscriptController {
 
             res.json(all);
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     }
 
@@ -184,7 +184,7 @@ class MicrosoftTranscriptController {
                 })),
             });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     }
 
@@ -198,7 +198,7 @@ class MicrosoftTranscriptController {
             const result = await transcriptService.diagnoseMeeting(req.user, joinUrl);
             res.json(result);
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     }
 
@@ -293,7 +293,7 @@ class MicrosoftTranscriptController {
                 cached: false,
             });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     }
 
@@ -368,7 +368,7 @@ class MicrosoftTranscriptController {
                 { status: 'error', error_message: err.message },
                 { where: { user_id: req.user.id, transcript_id: req.params.transcriptId } }
             ).catch(() => {});
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     }
 
@@ -411,7 +411,7 @@ class MicrosoftTranscriptController {
                 kpiCount: r.report_json?.kpis?.length || 0,
             })));
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     }
 
@@ -441,7 +441,7 @@ class MicrosoftTranscriptController {
                 report: record.report_json,
             });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     }
 
@@ -499,7 +499,7 @@ class MicrosoftTranscriptController {
 
             res.json({ ok: true, sentTo: recipients.length });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ error: err.message, permissao: err.permissao || null });
         }
     }
 }

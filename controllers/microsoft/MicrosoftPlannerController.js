@@ -16,7 +16,7 @@ class MicrosoftPlannerController {
 
     _err(res, err, ctx) {
         console.error(`❌ [Planner] ${ctx}:`, err?.response?.data || err.message);
-        return res.status(err?.response?.status || 500).json({ error: err.message });
+        return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
     }
 
     // ── GET /api/microsoft/planner/people ────────────────────────────────────

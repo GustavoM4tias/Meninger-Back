@@ -5,6 +5,7 @@
 // Gerencia token automaticamente via MicrosoftAuthService.getValidToken().
 
 import axios from 'axios';
+import { marcarErroDePermissao } from '../../lib/microsoftPermissoes.js';
 import microsoftAuthService from './MicrosoftAuthService.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
@@ -45,7 +46,14 @@ class MicrosoftGraphService {
             const innerCode  = graphError?.innerError?.code;
 
             if (status === 401) throw new Error('Sessão Microsoft expirada. Por favor, reconecte sua conta Microsoft.');
-            if (status === 403) throw new Error(`Permissão insuficiente para esta operação Microsoft. Código: ${graphError?.code || 'Forbidden'}`);
+            if (status === 403) {
+                // O 403 vira frase acionável: qual permissão falta, de que tipo
+                // e o que ela destrava. O front avisa com isso toda vez que a
+                // pessoa tentar - pedido de liberação só sai do papel quando
+                // alguém vê o nome da permissão que falta.
+                const e = new Error(`Permissão insuficiente para esta operação Microsoft. Código: ${graphError?.code || 'Forbidden'}`);
+                throw marcarErroDePermissao(e, path, method);
+            }
             if (status === 423 || innerCode === 'resourceLocked') {
                 throw new Error('O arquivo está aberto no Office Online ou por outro usuário. Feche-o e tente novamente.');
             }
@@ -127,7 +135,10 @@ class MicrosoftGraphService {
         } catch (err) {
             const status = err?.response?.status;
             if (status === 401) throw new Error('Sessão Microsoft expirada. Por favor, reconecte sua conta Microsoft.');
-            if (status === 403) throw new Error(`Permissão insuficiente para esta operação Microsoft. Código: ${err?.response?.data?.error?.code || 'Forbidden'}`);
+            if (status === 403) {
+                const e = new Error(`Permissão insuficiente para esta operação Microsoft. Código: ${err?.response?.data?.error?.code || 'Forbidden'}`);
+                throw marcarErroDePermissao(e, path, 'put');
+            }
             throw err;
         }
     }
@@ -195,7 +206,10 @@ class MicrosoftGraphService {
             const status = err?.response?.status;
             const graphError = err?.response?.data?.error;
             if (status === 401) throw new Error('Falha de autenticação da aplicação Microsoft (app token).');
-            if (status === 403) throw new Error(`Permissão de aplicação insuficiente para esta operação. Código: ${graphError?.code || 'Forbidden'}`);
+            if (status === 403) {
+                const e = new Error(`Permissão de aplicação insuficiente para esta operação. Código: ${graphError?.code || 'Forbidden'}`);
+                throw marcarErroDePermissao(e, path, method);
+            }
             if (status === 404) throw new Error(graphError?.message || 'Recurso Microsoft não encontrado.');
             throw err;
         }
