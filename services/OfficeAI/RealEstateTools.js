@@ -21,7 +21,7 @@ import { buildImobiliariasReport } from '../realestate/realEstateReportService.j
 import { onlyDigits } from '../realestate/realEstateRegistrationService.js';
 
 const LP_HOST = process.env.LP_BASE_URL || 'https://lp.menin.com.br';
-const SCREEN = '/comercial/imobiliarias';
+const SCREEN = '/crm/imobiliarias';
 const MAX_CARDS = 8;
 
 const fmtDate = (d) => { try { return d ? new Date(d).toLocaleDateString('pt-BR') : null; } catch { return null; } };
@@ -172,7 +172,7 @@ registerTool({
 // ─── imobiliarias_cadastros ──────────────────────────────────────────────────
 registerTool({
     name: 'imobiliarias_cadastros',
-    description: 'Acompanha os CADASTROS E CONVITES de imobiliárias feitos pelo Office: links públicos gerados (aguardando preenchimento, janela de link multi-uso, submissões), cadastros processando, concluídos ou com erro no CV. Use quando o usuário pergunta "o link que gerei foi preenchido?", "como está o cadastro da imobiliária X?", "tem cadastro com erro?", "quais convites estão pendentes?". Para cadastrar uma NOVA imobiliária ou gerar um novo link, oriente a usar a tela /comercial/imobiliarias (botões "Nova imobiliária" e "Gerar link") — esta ferramenta só CONSULTA.',
+    description: 'Acompanha os CADASTROS E CONVITES de imobiliárias feitos pelo Office: links públicos gerados (aguardando preenchimento, janela de link multi-uso, submissões), cadastros processando, concluídos ou com erro no CV. Use quando o usuário pergunta "o link que gerei foi preenchido?", "como está o cadastro da imobiliária X?", "tem cadastro com erro?", "quais convites estão pendentes?". Para cadastrar uma NOVA imobiliária ou gerar um novo link, oriente a usar a tela /crm/imobiliarias (botões "Nova imobiliária" e "Gerar link") — esta ferramenta só CONSULTA.',
     parameters: {
         type: 'object',
         properties: {

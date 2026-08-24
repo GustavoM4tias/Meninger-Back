@@ -3,7 +3,7 @@
 // Monta o relatório de imobiliárias (backup cv_imobiliarias + vínculos por
 // reservas e por cadastros do Office). Extraído do realEstateController para
 // ser REUSADO pela Eme (RealEstateTools) com exatamente o mesmo comportamento
-// e escopo de acesso da tela /comercial/imobiliarias — não-admin só vê
+// e escopo de acesso da tela /crm/imobiliarias — não-admin só vê
 // imobiliárias das cidades dos empreendimentos do seu escopo
 // (accessScopeService), com herança de cidade dos empreendimentos vinculados.
 

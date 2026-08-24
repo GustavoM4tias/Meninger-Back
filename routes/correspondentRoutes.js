@@ -25,7 +25,7 @@ import {
 
 const router = express.Router();
 
-router.use(authenticate, requireInternal, requireRoutePermission(['/comercial/correspondentes']));
+router.use(authenticate, requireInternal, requireRoutePermission(['/crm/correspondentes']));
 
 router.get('/overview', getOverview);
 router.post('/sync', syncCorrespondents);

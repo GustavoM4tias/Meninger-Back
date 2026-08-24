@@ -42,10 +42,10 @@ const cvPrecadastros = new PrecadastrosSyncController();
 // consomem. Admin tem bypass. Endpoints de sync manual são admin-only (o cron
 // roda em processo pelos schedulers).
 // Ação `sync` da tela de Empreendimentos (lib/screenCapabilities.js).
-const sincronizarTabelas = requireCapability('/comercial/buildings', 'sync');
+const sincronizarTabelas = requireCapability('/crm/buildings', 'sync');
 
 const WORKFLOW_SCREENS = ['/comercial/workflow/groups', ...RELATORIO_SCREENS, '/validator'];
-const ENTERPRISE_SCREENS = ['/comercial/buildings', '/comercial/conditions', '/comercial/projections', ...RELATORIO_SCREENS, '/comercial/reservas-report', '/comercial/precadastros', '/marketing/plano-eventos'];
+const ENTERPRISE_SCREENS = ['/crm/buildings', '/comercial/conditions', '/comercial/projections', ...RELATORIO_SCREENS, '/comercial/reservas-report', '/comercial/precadastros', '/marketing/plano-eventos'];
 
 router.get('/repasses', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasses);
 router.get('/repasse-workflow', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasseWorkflow);

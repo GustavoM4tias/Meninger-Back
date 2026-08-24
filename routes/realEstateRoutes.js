@@ -3,7 +3,7 @@
 // Cadastro de imobiliárias — rotas autenticadas da tela do Office.
 //
 // A permissão de cada rota vem da MESMA linha que o front usa para esconder o
-// botão (lib/screenCapabilities.js → '/comercial/imobiliarias'), no padrão de
+// botão (lib/screenCapabilities.js → '/crm/imobiliarias'), no padrão de
 // capacidades. Ler é `view`, escrever no CV é `register`, e a varredura
 // completa é `sync` (admin).
 
@@ -27,7 +27,7 @@ import {
     testCvPanel,
 } from '../controllers/realEstateController.js';
 
-const TELA = '/comercial/imobiliarias';
+const TELA = '/crm/imobiliarias';
 const podeVer = requireCapability(TELA, 'view');
 const podeCadastrar = requireCapability(TELA, 'register');
 const podeSincronizar = requireCapability(TELA, 'sync');

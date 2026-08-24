@@ -10,7 +10,7 @@
 // Casing das rotas confere com office.routes.js do front:
 //   /marketing/Events           (capital E)
 //   /marketing/leads
-//   /comercial/buildings
+//   /crm/buildings
 //   /comercial/precadastros
 //   /comercial/reservas-report
 //   /comercial/mcmv
@@ -18,8 +18,8 @@
 const TOOL_ROUTES = {
     query_leads:           '/marketing/leads',
     query_events:          '/marketing/Events',
-    query_enterprises:     '/comercial/buildings',
-    get_enterprise_detail: '/comercial/buildings',
+    query_enterprises:     '/crm/buildings',
+    get_enterprise_detail: '/crm/buildings',
     query_precadastros:    '/comercial/precadastros',
     query_reservas:        '/comercial/reservas-report',
     query_mcmv:            '/comercial/mcmv',

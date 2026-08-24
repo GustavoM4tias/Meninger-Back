@@ -63,8 +63,8 @@ const LEGACY_TOOL_ROUTES = {
   query_events: '/marketing/events',
   // ComercialTools
   query_mcmv: '/comercial/mcmv',
-  query_enterprises: '/comercial/buildings',
-  get_enterprise_detail: '/comercial/buildings',
+  query_enterprises: '/crm/buildings',
+  get_enterprise_detail: '/crm/buildings',
   query_precadastros: '/comercial/precadastros',
   query_reservas: '/comercial/reservas-report',
   // ConditionTools
