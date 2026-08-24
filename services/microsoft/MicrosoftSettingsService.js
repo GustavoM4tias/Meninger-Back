@@ -13,6 +13,10 @@ const DEFAULTS = {
     upload_max_mb: 250,
     upload_chunk_mb: 8,
     transcript_app_fallback: true,
+    // O vigia de transcrição: procura sozinho depois da reunião, gera a ata e
+    // avisa. Ligado por padrão - foi por isso que ele foi feito.
+    transcript_auto_report: true,
+    transcript_watch_hours: 48,
     meeting_reminder_enabled: true,
     meeting_reminder_minutes: 15,
     outlook_enabled: true,

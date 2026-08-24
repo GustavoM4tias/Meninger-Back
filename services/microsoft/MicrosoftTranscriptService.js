@@ -4,6 +4,7 @@ import graph from './MicrosoftGraphService.js';
 import microsoftAuthService from './MicrosoftAuthService.js';
 import settingsService from './MicrosoftSettingsService.js';
 import db from '../../models/sequelize/index.js';
+import { MeetingSummaryService } from '../../validatorAI/src/services/MeetingSummaryService.js';
 
 const GRAPH_BASE      = 'https://graph.microsoft.com/v1.0';
 const GRAPH_BASE_BETA = 'https://graph.microsoft.com/beta';
@@ -439,6 +440,206 @@ class MicrosoftTranscriptService {
                 organizer: { name: e.organizer?.emailAddress?.name, email: e.organizer?.emailAddress?.address },
                 attendees: (e.attendees || []).map(a => ({ name: a.emailAddress?.name, email: a.emailAddress?.address })),
             }));
+    }
+
+    // ── Ata pronta sem ninguém pedir ──────────────────────────────────────────
+    //
+    // O caminho antigo era todo puxado: a pessoa abria a tela, clicava na
+    // reunião, esperava a busca, mandava carregar a transcrição e só então
+    // pedia o relatório. Quatro passos manuais depois de a reunião acabar - e
+    // se a transcrição ainda estivesse sendo processada pelo Teams (o que
+    // acontece sempre que a reunião foi GRAVADA, porque o vídeo entra na fila
+    // junto), o resultado era "sem transcrição" e a pessoa desistia.
+    //
+    // Aqui isso vira uma coisa só, que o scheduler repete enquanto a reunião
+    // for recente: achar, baixar e resumir. Quem abrir a tela depois encontra
+    // tudo pronto; quem não abrir recebe a notificação do mesmo jeito.
+
+    /**
+     * Gera o relatório de IA para um registro que já tem transcrição.
+     * Reaproveita relatório de outro participante quando existe: a transcrição
+     * é a mesma, e pagar duas vezes pelo mesmo texto é desperdício.
+     */
+    async gerarRelatorio(record, user, { forcar = false } = {}) {
+        if (record.report_json && !forcar) return { report: record.report_json, reaproveitado: true };
+
+        if (!forcar) {
+            const origem = await this.findShared(record.transcript_id, user, 'relatorio');
+            if (origem) {
+                await this.copiarDeCompartilhado(record, origem, { comRelatorio: true });
+                return { report: record.report_json, reaproveitado: true, de: record.shared_from_name };
+            }
+        }
+
+        if (!record.parsed_transcript) throw new Error('Transcrição ainda não baixada.');
+
+        const cues = JSON.parse(record.parsed_transcript);
+        const { report, tokensUsed, model } = await MeetingSummaryService.summarize(cuesToText(cues), {
+            subject: record.subject,
+            date: record.meeting_date
+                ? new Date(record.meeting_date).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+                : null,
+            durationMin: record.duration_min,
+            attendees: (record.attendees_json || []).map(a => a.name || a.email).filter(Boolean),
+        });
+
+        await record.update({
+            report_json: report,
+            tokens_used: tokensUsed,
+            ai_model: model,
+            report_generated_at: new Date(),
+            status: 'summarized',
+        });
+
+        return { report, reaproveitado: false };
+    }
+
+    /**
+     * Achar, baixar e resumir a transcrição de UMA reunião do calendário.
+     *
+     * @param {object} user    dono do token
+     * @param {object} reuniao item de getRecentTeamsMeetings
+     * @returns {{estado: string, record?: object, gerado?: boolean}}
+     *   estado: 'sem-link' | 'sem-reuniao' | 'sem-transcricao' | 'pronto'
+     */
+    async garantirAta(user, reuniao, { gerarRelatorio = true } = {}) {
+        if (!reuniao?.joinUrl) return { estado: 'sem-link' };
+
+        // 1) A reunião, pelo caminho da pessoa e depois pelo do organizador.
+        let meetingId = await this.getMeetingIdByJoinUrl(user, reuniao.joinUrl);
+        let organizerId = null;
+
+        if (!meetingId) {
+            const { transcript_app_fallback } = await settingsService.get();
+            const email = reuniao.organizer?.email;
+            if (transcript_app_fallback && email) {
+                organizerId = await this.resolveOrganizerId(email);
+                if (organizerId) meetingId = await this.getMeetingIdByJoinUrlApp(organizerId, reuniao.joinUrl);
+            }
+        }
+        if (!meetingId) return { estado: 'sem-reuniao' };
+
+        // 2) As transcrições.
+        const transcricoes = organizerId
+            ? await this.listTranscriptsApp(organizerId, meetingId)
+            : await this.listTranscripts(user, meetingId);
+        if (!transcricoes.length) return { estado: 'sem-transcricao' };
+
+        // A mais recente é a que interessa: reunião que parou e voltou gera mais de uma.
+        const alvo = transcricoes.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
+
+        const [record] = await db.MeetingTranscript.findOrCreate({
+            where: { user_id: user.id, transcript_id: alvo.id },
+            defaults: {
+                meeting_id:      meetingId,
+                user_id:         user.id,
+                transcript_id:   alvo.id,
+                subject:         reuniao.subject || null,
+                meeting_date:    reuniao.start ? new Date(reuniao.start) : null,
+                duration_min:    reuniao.start && reuniao.end
+                    ? Math.round((new Date(reuniao.end) - new Date(reuniao.start)) / 60000) : null,
+                join_url:        reuniao.joinUrl,
+                web_link:        reuniao.webLink || null,
+                organizer_name:  reuniao.organizer?.name || null,
+                organizer_email: reuniao.organizer?.email || null,
+                attendees_json:  reuniao.attendees || null,
+                status:          'pending',
+            },
+        });
+
+        // 3) O conteúdo.
+        if (!record.parsed_transcript) {
+            const cues = organizerId
+                ? await this.getTranscriptContentApp(organizerId, meetingId, alvo.id)
+                : await this.getTranscriptContent(user, meetingId, alvo.id);
+            const json = JSON.stringify(cues);
+            await record.update({
+                parsed_transcript: json,
+                transcript_char_count: json.length,
+                status: 'transcribed',
+            });
+        }
+
+        // 4) O relatório.
+        let gerado = false;
+        if (gerarRelatorio && !record.report_json) {
+            const r = await this.gerarRelatorio(record, user);
+            gerado = !r.reaproveitado;
+        }
+
+        return { estado: 'pronto', record, gerado };
+    }
+
+    /**
+     * Espelha a ata para os OUTROS participantes que têm conta no Office.
+     *
+     * Linha leve de propósito: só o relatório e os metadados, sem copiar o
+     * texto da transcrição. Ele é grande e a pessoa talvez nunca abra; se
+     * abrir, o caminho compartilhado copia na hora.
+     *
+     * @returns {number[]} ids de quem passou a ter a ata agora
+     */
+    async espelharParaParticipantes(record) {
+        const emails = [
+            ...(record.attendees_json || []).map(a => a?.email),
+            record.organizer_email,
+        ].map(e => String(e || '').trim().toLowerCase()).filter(Boolean);
+
+        if (!emails.length) return [];
+
+        const pessoas = await db.User.findAll({
+            where: {
+                status: true,
+                id: { [db.Sequelize.Op.ne]: record.user_id },
+                email: { [db.Sequelize.Op.in]: [...new Set(emails)] },
+            },
+            attributes: ['id', 'email'],
+        });
+
+        const novos = [];
+        for (const p of pessoas) {
+            const [linha, criada] = await db.MeetingTranscript.findOrCreate({
+                where: { user_id: p.id, transcript_id: record.transcript_id },
+                defaults: {
+                    meeting_id:      record.meeting_id,
+                    user_id:         p.id,
+                    transcript_id:   record.transcript_id,
+                    subject:         record.subject,
+                    meeting_date:    record.meeting_date,
+                    duration_min:    record.duration_min,
+                    join_url:        record.join_url,
+                    web_link:        record.web_link,
+                    organizer_name:  record.organizer_name,
+                    organizer_email: record.organizer_email,
+                    attendees_json:  record.attendees_json,
+                    report_json:     record.report_json,
+                    ai_model:        record.ai_model,
+                    report_generated_at: record.report_generated_at,
+                    tokens_used:     0,
+                    shared_from_id:  record.id,
+                    shared_from_name: record.organizer_name || null,
+                    status:          record.report_json ? 'summarized' : 'pending',
+                },
+            });
+
+            if (criada) { novos.push(p.id); continue; }
+
+            // Já existia sem relatório (a pessoa abriu a tela antes de a ata
+            // ficar pronta): completa em vez de deixar pela metade.
+            if (!linha.report_json && record.report_json) {
+                await linha.update({
+                    report_json: record.report_json,
+                    ai_model: record.ai_model,
+                    report_generated_at: record.report_generated_at,
+                    shared_from_id: record.id,
+                    shared_from_name: record.organizer_name || null,
+                    status: 'summarized',
+                });
+                novos.push(p.id);
+            }
+        }
+
+        return novos;
     }
 
     // ── Reaproveitar o que outro participante já baixou ───────────────────────
