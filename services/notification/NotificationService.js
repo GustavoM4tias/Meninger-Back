@@ -389,9 +389,17 @@ async function listForUser(userId, { unreadOnly = false, limit = 30, offset = 0 
         ],
     }];
 
+    // Caixa de entrada é CRONOLÓGICA: o que chegou por último aparece primeiro.
+    //
+    // A ordem anterior era ['read_at' ASC, 'importance' DESC, 'created_at' DESC]
+    // e fazia o contrário do que parece: no Postgres, ASC ordena NULLS LAST, então
+    // as NÃO lidas (read_at nulo) iam para o FIM e a primeira página trazia as
+    // lidas mais ANTIGAS — com 327 avisos, a tela ficava presa em junho e nada
+    // novo aparecia. Quem quer só o pendente usa o filtro `unreadOnly`; a marca
+    // visual de não lida continua na lista.
     const { rows, count } = await Notification.findAndCountAll({
         where,
-        order: [['read_at', 'ASC'], ['importance', 'DESC'], ['created_at', 'DESC']],
+        order: [['created_at', 'DESC'], ['id', 'DESC']],
         limit,
         offset,
     });

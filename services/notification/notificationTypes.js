@@ -27,6 +27,7 @@ export const NotificationType = {
 
     // Microsoft — agenda
     MEETING_STARTING:        'meeting.starting',
+    MEETING_REPORT_READY:    'meeting.report.ready',
 
     // Alertas — compartilhamento entre usuários
     ALERT_SHARED:            'alert.shared',
@@ -140,6 +141,22 @@ export const NOTIFICATION_CATALOG = {
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
     },
+    [NotificationType.MEETING_REPORT_READY]: {
+        label: 'Ata da reunião pronta',
+        group: 'Microsoft',
+        description: 'Aviso quando a transcrição de uma reunião que você participou vira relatório, com resumo, decisões e ações.',
+        // Este vale por e-mail, ao contrário do "começa em 15 minutos": chega
+        // quando a pessoa não está no Office e continua útil horas depois.
+        emailType: 'meeting.report.ready',
+        whatsapp: {
+            template: 'meeting_report_ready_v1',
+            language: 'pt_BR',
+            category: 'UTILITY',
+            variables: ['userName', 'subject', 'meetingDate'],
+        },
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
     [NotificationType.SUPPORT_OPENED]: {
         label: 'Chamado aberto',
         group: 'Suporte',
@@ -168,8 +185,6 @@ export const NOTIFICATION_CATALOG = {
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },
-    [NotificationType.MEETING_STARTING]: ['/microsoft/teams'],
-
     [NotificationType.CONDITION_AUTHORIZATION_REQUESTED]: {
         label: 'Ficha comercial aguardando autorização',
         group: 'Comercial',
@@ -627,6 +642,8 @@ export function listCatalog() {
 const SCREENS_BY_TYPE = {
     [NotificationType.EVENT_CREATED]:  ['/marketing/events'],
     [NotificationType.EVENT_REMINDER]: ['/marketing/events'],
+
+    [NotificationType.MEETING_STARTING]: ['/microsoft/teams'],
 
     [NotificationType.CONDITION_AUTHORIZATION_REQUESTED]: ['/comercial/conditions'],
 
