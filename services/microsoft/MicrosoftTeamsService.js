@@ -11,6 +11,44 @@ const EVENT_SELECT = [
     'type', 'seriesMasterId', 'isOrganizer',
 ].join(',');
 
+// O Graph devolve horário no fuso do evento; sem este cabeçalho a resposta vem
+// em UTC e a mesma reunião aparece três horas fora do lugar. A listagem já usava
+// isto — leitura avulsa e edição passaram a usar também.
+const TZ_PREFER = { Prefer: 'outlook.timezone="America/Sao_Paulo"' };
+
+/**
+ * O campo de descrição da tela é texto puro, mas o corpo do evento é HTML:
+ * mandar o texto cru colapsa as quebras de linha do convite. Texto vira HTML de
+ * verdade; se já vier com marcação, passa direto.
+ */
+function toHtml(texto) {
+    const s = String(texto ?? '');
+    if (!s.trim()) return '';
+    if (/<[a-z][\s\S]*>/i.test(s)) return s;
+    return s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\r?\n/g, '<br>');
+}
+
+/**
+ * Recorta o bloco "Ingressar na reunião do Microsoft Teams" que a Microsoft
+ * escreve DENTRO do corpo do convite.
+ *
+ * Um PATCH de `body` substitui o corpo inteiro e o Graph NÃO regenera esse
+ * bloco: quem editava a descrição de uma reunião perdia o link de entrada no
+ * convite que já estava na caixa de todo mundo. Aqui o bloco é separado para ser
+ * recolado depois do texto novo.
+ */
+function extractTeamsBlock(html) {
+    if (!html) return '';
+    const hit = String(html).search(/class="[^"]*me-email-text|_{20,}|<div[^>]*id="meeting-join/i);
+    if (hit < 0) return '';
+    const abre = String(html).lastIndexOf('<div', hit);
+    return String(html).slice(abre >= 0 ? abre : hit);
+}
+
 // Converte o objeto recurrence do Graph para o shape simplificado usado pela UI
 // ({ type, interval, endType, endDate, occurrences }). Padrões fora do subset
 // suportado (relativeMonthly, yearly, múltiplos dias da semana) retornam
@@ -162,7 +200,7 @@ class MicrosoftTeamsService {
     }
 
     async getEvent(user, eventId) {
-        const data = await graph.get(user, `/me/events/${eventId}?$select=${EVENT_SELECT}`);
+        const data = await graph.get(user, `/me/events/${eventId}?$select=${EVENT_SELECT}`, undefined, TZ_PREFER);
         return normalizeEvent(data);
     }
 
@@ -177,7 +215,7 @@ class MicrosoftTeamsService {
     async createScheduledMeeting(user, { subject, start, end, attendees = [], body = '', isOnlineMeeting = true, location = '', isAllDay = false, recurrence = null }) {
         const payload = {
             subject,
-            body: { contentType: 'html', content: body || '' },
+            body: { contentType: 'html', content: toHtml(body) },
             start: { dateTime: start, timeZone: 'America/Sao_Paulo' },
             end:   { dateTime: end,   timeZone: 'America/Sao_Paulo' },
             isAllDay,
@@ -216,11 +254,36 @@ class MicrosoftTeamsService {
         return { pattern, range };
     }
 
-    /** Atualiza um evento existente (patch) */
+    /**
+     * Atualiza um evento existente (patch).
+     *
+     * Editar uma reunião do Teams NÃO pode rebaixá-la a evento simples. Três
+     * coisas garantem isso aqui:
+     *   1. O corpo novo é colado antes do bloco de entrada do Teams, que o Graph
+     *      não regenera depois de um PATCH de `body`.
+     *   2. `isOnlineMeeting` só vai quando o evento AINDA NÃO é reunião — pedir
+     *      de novo o que já existe faz o Graph recusar a edição inteira.
+     *   3. A resposta do PATCH vem sem `$select` e sem o Prefer de fuso, ou
+     *      seja, sem `onlineMeeting` (o joinUrl) e com horário em UTC. Por isso
+     *      o retorno é uma releitura, com o mesmo contrato da listagem: era daí
+     *      que vinha a reunião virar "evento", sem copiar link nem participante.
+     */
     async updateEvent(user, eventId, { subject, start, end, attendees, body, isOnlineMeeting, location, isAllDay, recurrence }) {
+        const atual = await graph.get(user, `/me/events/${eventId}?$select=${EVENT_SELECT}`, undefined, TZ_PREFER);
+
         const payload = {};
         if (subject !== undefined) payload.subject = subject;
-        if (body !== undefined)    payload.body = { contentType: 'html', content: body || '' };
+        if (body !== undefined) {
+            const bloco = extractTeamsBlock(atual?.body?.content);
+            payload.body = { contentType: 'html', content: toHtml(body) + bloco };
+        }
+        // Evento simples pode virar reunião do Teams. O caminho inverso o Graph
+        // não desfaz (o convite já saiu com link), então o pedido é ignorado —
+        // e a tela nem oferece a troca na edição.
+        if (isOnlineMeeting === true && atual?.isOnlineMeeting !== true) {
+            payload.isOnlineMeeting = true;
+            payload.onlineMeetingProvider = 'teamsForBusiness';
+        }
         if (start !== undefined)   payload.start = { dateTime: start, timeZone: 'America/Sao_Paulo' };
         if (end !== undefined)     payload.end   = { dateTime: end,   timeZone: 'America/Sao_Paulo' };
         if (isAllDay !== undefined) payload.isAllDay = isAllDay;
@@ -233,8 +296,8 @@ class MicrosoftTeamsService {
         if (recurrence !== undefined) {
             payload.recurrence = recurrence ? this._buildRecurrence(recurrence, start) : null;
         }
-        const data = await graph.patch(user, `/me/events/${eventId}`, payload);
-        return normalizeEvent(data);
+        await graph.patch(user, `/me/events/${eventId}`, payload);
+        return this.getEvent(user, eventId);
     }
 
     // ── Reunião instantânea (online meeting, sem evento no calendário) ────────
