@@ -107,12 +107,39 @@ router.put('/flows/:id', wrap(async (req, res) => {
     res.json(await row.reload());
 }));
 
+// Excluir fluxo: APAGA de verdade quando ninguém depende dele, e apenas
+// desativa quando há conversa ou lead apontando.
+//
+// Antes desativava sempre, e fluxo criado por engano ficava pra sempre na tela
+// sem jeito de sumir. Apagar com conversa referenciando é que não dá: o
+// transcript perderia o contexto de quem atendeu.
 router.delete('/flows/:id', wrap(async (req, res) => {
     const row = await db.EmeAtendeFlow.findByPk(req.params.id);
     if (!row) return res.status(404).json({ error: 'não encontrado' });
-    await row.update({ active: false });
+    if (row.is_default) {
+        return res.status(409).json({ error: 'O fluxo default não pode ser removido - é ele que atende quem chega sem empreendimento identificado.' });
+    }
+
+    const [conversas, leads] = await Promise.all([
+        db.EmeAtendeConversation.count({ where: { flow_id: row.id } }),
+        db.EmeAtendeLead.count({ where: { flow_id: row.id } }),
+    ]);
+
+    if (conversas || leads) {
+        await row.update({ active: false });
+        EmeAtendeFlowService.invalidate();
+        return res.json({
+            ok: true, removido: false,
+            aviso: `Fluxo desativado, não apagado: ${conversas} conversa(s) e ${leads} lead(s) apontam pra ele. `
+                + 'Apagar tiraria o contexto de quem já foi atendido.',
+        });
+    }
+
+    // Sem dependência: some de vez, junto das regras que só existiam por causa dele.
+    const regras = await db.EmeAtendeFlowRule.destroy({ where: { flow_id: row.id } });
+    await row.destroy();
     EmeAtendeFlowService.invalidate();
-    res.json({ ok: true, aviso: 'Fluxo desativado (não apagado - conversas antigas referenciam).' });
+    res.json({ ok: true, removido: true, regras_removidas: regras, aviso: 'Fluxo excluído.' });
 }));
 
 // ── Flow rules (segmentação) ─────────────────────────────────────────────────
