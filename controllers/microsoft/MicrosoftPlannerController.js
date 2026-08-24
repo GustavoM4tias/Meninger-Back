@@ -36,14 +36,15 @@ class MicrosoftPlannerController {
                     microsoft_id: { [db.Sequelize.Op.ne]: null },
                     status: true,
                 },
-                attributes: ['id', 'microsoft_id', 'username', 'name', 'email'],
+                // `users` tem username, nao name.
+                attributes: ['id', 'microsoft_id', 'username', 'email'],
                 order: [['username', 'ASC']],
                 raw: true,
             });
 
             return res.json(rows.map(r => ({
                 microsoftId: r.microsoft_id,
-                name: r.name || r.username || r.email,
+                name: r.username || r.email,
                 email: r.email,
             })));
         } catch (err) { return this._err(res, err, 'getPeople'); }

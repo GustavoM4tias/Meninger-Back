@@ -44,7 +44,9 @@ class MicrosoftOutlookController {
      */
     async _resolveMailbox(req) {
         const user = await db.User.findByPk(req.user.id, {
-            attributes: ['id', 'email', 'microsoft_id', 'username', 'name'],
+            // A tabela `users` tem `username`, não `name` — pedir `name` aqui
+            // derrubava com 500 em toda rota do módulo.
+            attributes: ['id', 'email', 'microsoft_id', 'username'],
         });
         if (!user?.microsoft_id) {
             const e = new Error('Sua conta Microsoft não está vinculada. Conecte em Minha Conta para usar o e-mail.');
