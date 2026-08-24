@@ -67,7 +67,7 @@ setInterval(() => {
 // ── POST /api/office-chat/stream ──────────────────────────────────────────────
 // SSE: envia a mensagem e recebe a resposta em streaming
 router.post('/stream', authenticate, rateLimitChat, async (req, res) => {
-  const { message, session_id, via_voice } = req.body;
+  const { message, session_id, via_voice, screen } = req.body;
 
   if (!message?.trim()) {
     return res.status(400).json({ error: 'Mensagem obrigatória.' });
@@ -95,6 +95,7 @@ router.post('/stream', authenticate, rateLimitChat, async (req, res) => {
       sessionId: session_id || null,
       userMessage: message.trim(),
       viaVoice: !!via_voice,
+      screen,
     });
   } catch (err) {
     // Headers SSE já foram enviados — não dá para responder status HTTP; emite

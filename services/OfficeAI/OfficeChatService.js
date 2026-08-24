@@ -36,6 +36,7 @@ import './ChecklistTools.js';
 import './MicrosoftTools.js';
 import { getToolsFor, toGeminiDeclarations, findTool, userHasPermissions } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
+import { buildScreenContextBlock } from './screenContext.js';
 
 // Registry: nome → { declaration, executor }
 const TOOLS = new Map();
@@ -562,7 +563,7 @@ async function getLastBridgeContext(sessionId) {
  *   {type:"done", sessionId, msgId}  — stream concluído
  *   {type:"error", message:"..."}    — erro
  */
-export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE', viaVoice = false }) {
+export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE', viaVoice = false, screen = null }) {
   // Contexto do Eme: OFFICE (operacional) ou ACADEMY (tutor de estudos).
   // É determinado pela ROTA — nunca pelo cliente.
   const ctx = String(context || 'OFFICE').toUpperCase() === 'ACADEMY' ? 'ACADEMY' : 'OFFICE';
@@ -652,6 +653,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     const academyOfficeTools = await getToolsFor(fullUser, 'OFFICE');
     activeDeclarations = activeDeclarations.concat(toGeminiDeclarations(academyOfficeTools));
   }
+  // Onde a pessoa está e o que ela marcou na tela (Ctrl+clique). Vale nos dois
+  // contextos: no Academy ela também pergunta "o que é isso aqui". O bloco é
+  // montado com teto e com aviso de que aquilo é DADO, nunca instrução.
+  systemPrompt += buildScreenContextBlock(screen);
+
   const history = await buildHistory(session.id);
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
   const historyWithoutLast = history.slice(0, -1);
