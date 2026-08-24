@@ -1110,7 +1110,19 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // tentativas com os dados reais em mãos (o usuário acompanha pela timeline).
   // Se a divergência persistir E houver dado autoritativo, o texto suspeito NÃO
   // é entregue: entra um resumo determinístico montado direto do tool result.
-  let hallucinationReport = detectHallucinations(fullAssistantText, actionResult, lastBridge);
+  // O detector só faz sentido quando o turno TROUXE dado: ele compara o que o
+  // texto diz com o que a consulta devolveu. Sem tool result não há com o que
+  // comparar, e aí o conjunto autoritativo fica vazio - qualquer número acima
+  // de 10 vira "suspeito". Foi assim que um turno de AÇÃO ("agendo às 08:30,
+  // 20 minutos cada?") saiu marcado como não confiável por causa do 30, e com
+  // um aviso que ainda mandava a pessoa "usar a tabela abaixo", que não existia.
+  //
+  // Turno de conversa, de confirmação e de escrita passam direto. Quem protege
+  // esses é a trava de confirmação da própria tool, não este detector.
+  const temDadoDoTurno = !!actionResult;
+  let hallucinationReport = temDadoDoTurno
+    ? detectHallucinations(fullAssistantText, actionResult, lastBridge, userMessage)
+    : { suspicious: [] };
   let selfCorrected = false;
   let blockedUnreliable = false;
   let correctionAttempts = 0;
@@ -1157,7 +1169,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           fixedText = stripPseudoToolCalls(fixedText).trim();
           if (!fixedText) break;
 
-          const recheck = detectHallucinations(fixedText, actionResult, lastBridge);
+          const recheck = detectHallucinations(fixedText, actionResult, lastBridge, userMessage);
           // Só adota a reescrita se ela ficou melhor (menos suspeitas). Se não
           // melhorou, insistir com o mesmo prompt só queimaria tokens: para.
           if (recheck.suspicious.length < hallucinationReport.suspicious.length) {
@@ -1409,7 +1421,10 @@ function buildSafeFallbackText(result) {
  * Conservador: ignora datas (1900-2100), CPFs (11 dígitos), IDs longos,
  * percentuais óbvios (0-100 quando seguidos de %).
  */
-function detectHallucinations(text, actionResult, bridgeStr) {
+// O que o USUÁRIO escreveu no turno também é autoritativo: quando ele diz
+// "começando às 08:30, 20 minutos cada", esses números são o pedido dele, e
+// repetir o pedido de volta não é inventar dado.
+function detectHallucinations(text, actionResult, bridgeStr, userMessage = '') {
   if (!text || typeof text !== 'string') return { suspicious: [] };
 
   // Conjunto de valores numéricos autoritativos
@@ -1458,7 +1473,14 @@ function detectHallucinations(text, actionResult, bridgeStr) {
     }
   }
 
-  // 2. Valores do bridge (ultimo_total, categorias)
+  // 2. Valores que vieram da PERGUNTA. Sem isto, "reunião às 08:30 de 20
+  //    minutos" era acusada de citar 30 e 20 fora dos dados - números que o
+  //    próprio usuário acabou de escrever.
+  if (userMessage) {
+    (String(userMessage).match(/\d+(?:[.,]\d+)?/g) || []).forEach(addNum);
+  }
+
+  // 3. Valores do bridge (ultimo_total, categorias)
   if (bridgeStr) {
     const numbers = bridgeStr.match(/\b\d+(?:[.,]\d+)?\b/g) || [];
     numbers.forEach(addNum);
@@ -1517,6 +1539,12 @@ function detectHallucinations(text, actionResult, bridgeStr) {
       if (new RegExp(`^\\s*(?:e\\s+\\d{1,2}\\s*)?(?:de\\s+)?(?:${MESES})\\b`, 'i').test(after)) continue;
       if (new RegExp(`\\bdias?\\s+(?:\\d{1,2}\\s+(?:e|a|até)\\s+)?$`, 'i').test(before)) continue;
     }
+    // Ignora: HORÁRIO. "08:30" virava dois números (8 e 30) e o 30 era
+    // acusado de inventado - foi assim que a Eme levou "resposta não
+    // confiável" ao propor uma reunião às 08:30.
+    if (/[:h]\s*$/i.test(before)) continue;      // depois de "08:" ou "8h"
+    if (/^\s*[:h]\d/i.test(after)) continue;     // antes de ":30" ou "h30"
+    if (/^\s*h\b/i.test(after)) continue;        // "14h"
     // Ignora: "X horas", "X dias", etc.
     if (/^\s*(hor[a]?s?|min(uto)?s?|dias?|meses?|anos?|sem(ana)?s?)\b/i.test(after)) continue;
     // Ignora: "R$ 123" — valores monetários grandes (admin verifica via tabela)
