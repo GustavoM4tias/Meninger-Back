@@ -80,13 +80,23 @@ export async function listRegistrations(req, res) {
         const where = {};
         if (!isAdmin(req)) where.created_by = req.user.id;
 
+        // Teto alto o bastante para caber o histórico real (convite multi-uso
+        // gera um registro-FILHO por preenchimento, então a lista cresce
+        // rápido). Se um dia estourar, a tela AVISA em vez de omitir calado.
+        const LIMITE = 2000;
+        const total = await RealEstateRegistration.count({ where });
         const rows = await RealEstateRegistration.findAll({
             where,
             include: db.User ? [{ model: db.User, as: 'creator', attributes: ['id', 'username'] }] : [],
             order: [['id', 'DESC']],
-            limit: 300,
+            limit: LIMITE,
         });
-        return res.json({ ok: true, registrations: rows.map(toListItem) });
+        return res.json({
+            ok: true,
+            registrations: rows.map(toListItem),
+            total,
+            truncated: total > rows.length,
+        });
     } catch (err) {
         console.error('[realestate] listRegistrations:', err);
         return res.status(500).json({ ok: false, error: 'Erro ao listar cadastros.' });
@@ -251,10 +261,21 @@ export async function parseCardAuthenticated(req, res) {
 // A montagem vive em services/realestate/realEstateReportService.js — reusada
 // pela Eme (RealEstateTools) com o mesmo escopo de acesso desta tela.
 
+// Freio do botão "Sincronizar": a varredura é uma chamada ao CV que devolve a
+// lista inteira. Sem freio, dois cliques (ou dois usuários) disparavam duas
+// varreduras simultâneas contra a API do CV. Quem chega durante uma varredura
+// em curso ESPERA a mesma e recebe o resultado dela.
+let syncEmVoo = null;
+
 export async function syncImobiliarias(req, res) {
     try {
-        const { default: ImobiliariaSyncService } = await import('../services/bulkData/cv/ImobiliariaSyncService.js');
-        const count = await new ImobiliariaSyncService().syncAll();
+        if (!syncEmVoo) {
+            const { default: ImobiliariaSyncService } = await import('../services/bulkData/cv/ImobiliariaSyncService.js');
+            const { invalidarCacheDoRelatorio } = await import('../services/realestate/realEstateReportService.js');
+            syncEmVoo = new ImobiliariaSyncService().syncAll()
+                .finally(() => { syncEmVoo = null; invalidarCacheDoRelatorio(); });
+        }
+        const count = await syncEmVoo;
         return res.json({ ok: true, count });
     } catch (err) {
         console.error('[realestate] syncImobiliarias:', err);

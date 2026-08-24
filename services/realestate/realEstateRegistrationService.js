@@ -303,10 +303,14 @@ export async function processRegistration(registration) {
             completed_at: new Date(),
         });
 
-        // Atualiza o backup local (cv_imobiliarias) com o registro recém-criado.
+        // Atualiza o backup local (cv_imobiliarias) com o registro recém-criado
+        // e derruba o cache do relatório, para a imobiliária nova aparecer na
+        // tela já no próximo carregamento, e não só quando o cache expirar.
         try {
             const { default: ImobiliariaSyncService } = await import('../bulkData/cv/ImobiliariaSyncService.js');
             await new ImobiliariaSyncService().syncOne(result.idimobiliaria_cv);
+            const { invalidarCacheDoRelatorio } = await import('./realEstateReportService.js');
+            invalidarCacheDoRelatorio();
         } catch (syncErr) {
             console.error('[realestate] falha ao sincronizar backup da imobiliária:', syncErr?.message);
         }

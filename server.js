@@ -57,6 +57,7 @@ import realEstatePublicRoutes from './routes/realEstatePublicRoutes.js';
 import correspondentRoutes from './routes/correspondentRoutes.js';
 import correspondentPublicRoutes from './routes/correspondentPublicRoutes.js';
 import correspondentCvScheduler from './scheduler/correspondentCvScheduler.js';
+import imobiliariaCvScheduler from './scheduler/imobiliariaCvScheduler.js';
 import emeReportsRoutes from './routes/emeReportsRoutes.js';
 import emeReportsPublicRoutes from './routes/emeReportsPublicRoutes.js';
 import marketingWebhookRoutes from './routes/marketingWebhookRoutes.js';
@@ -639,6 +640,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_SUPABASE_KEEPALIVE')) supabaseKeepAliveScheduler.start();
   if (schedulerOn('ENABLE_CV_EXTRAS_SCHEDULE')) cvExtrasScheduler.start(); // extras do CV
   if (schedulerOn('ENABLE_CV_CORRESPONDENT_SCHEDULE')) correspondentCvScheduler.start(); // espelho de correspondentes + empresas
+  if (schedulerOn('ENABLE_CV_IMOBILIARIA_SCHEDULE')) imobiliariaCvScheduler.start();   // espelho de imobiliárias do CV
   if (schedulerOn('ENABLE_CONDITION_AUTOGEN')) conditionAutoGenerateScheduler.start(); // auto-geração mensal de fichas (com e sem CV)
   if (schedulerOn('ENABLE_EVENT_PLAN_CYCLE')) eventPlanCycleScheduler.start(); // Plano de Eventos: abre o mês seguinte + cobra o prazo
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase

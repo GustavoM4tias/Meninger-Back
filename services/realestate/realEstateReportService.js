@@ -22,23 +22,60 @@ export const cityMatches = (value, needle) => {
     return n.trim() ? normCity(value).includes(n) : true;
 };
 
+// Idade máxima do espelho antes de ele ser considerado velho. O cron horário
+// (scheduler/imobiliariaCvScheduler.js) é quem mantém tudo em dia; isto aqui é
+// a rede de segurança para quando o cron está desligado ou o processo acabou de
+// subir — sem ela, o espelho ficou parado 4 dias em agosto/2026 e as
+// imobiliárias novas do CV não existiam para o Office.
+const ESPELHO_VALIDO_MS = 2 * 60 * 60 * 1000;   // 2h
+let syncEmVoo = null;
+
+async function sincronizar() {
+    const { default: ImobiliariaSyncService } = await import('../bulkData/cv/ImobiliariaSyncService.js');
+    return new ImobiliariaSyncService().syncAll();
+}
+
 /**
- * Relatório completo de imobiliárias, já escopado ao usuário.
- * @param {object} opts
- * @param {object} opts.user           req.user ({ id, role, city })
- * @param {string} [opts.q]            busca livre (nome/razão/cnpj/gerente)
- * @param {string} [opts.cidade]       filtro por cidade
- * @param {string} [opts.empreendimento] filtro por id ou nome de empreendimento
- * @returns {Promise<{ total:number, last_sync:Date|null, imobiliarias:Array }>}
+ * Garante que existe espelho utilizável antes de montar o relatório.
+ *   - vazio  → sincroniza e ESPERA (senão a tela abre em branco)
+ *   - velho  → dispara em segundo plano e devolve o que já tem (a tela não
+ *              trava por causa da latência do CV; o refresh seguinte já vê)
+ * `syncEmVoo` evita que dois usuários abrindo a tela ao mesmo tempo disparem
+ * duas varreduras.
  */
-export async function buildImobiliariasReport({ user, q = '', cidade = '', empreendimento = '' }) {
-    // Primeira visita sem backup: sincroniza na hora (uma chamada ao CV).
-    const total = await db.CvImobiliaria.count();
-    if (!total) {
-        const { default: ImobiliariaSyncService } = await import('../bulkData/cv/ImobiliariaSyncService.js');
-        await new ImobiliariaSyncService().syncAll().catch(e =>
-            console.error('[realestate] sync inicial falhou:', e?.message));
+async function garantirEspelho() {
+    const [{ n, ultimo } = {}] = await db.sequelize.query(
+        'SELECT COUNT(*)::int AS n, MAX(synced_at) AS ultimo FROM cv_imobiliarias',
+        { type: db.Sequelize.QueryTypes.SELECT }
+    );
+
+    if (!n) {
+        syncEmVoo = syncEmVoo || sincronizar().finally(() => { syncEmVoo = null; invalidarCacheDoRelatorio(); });
+        await syncEmVoo.catch(e => console.error('[realestate] sync inicial falhou:', e?.message));
+        return;
     }
+
+    const velho = !ultimo || (Date.now() - new Date(ultimo).getTime()) > ESPELHO_VALIDO_MS;
+    if (velho && !syncEmVoo) {
+        syncEmVoo = sincronizar()
+            .then(t => console.log(`[realestate] espelho revalidado em segundo plano: ${t} imobiliária(s)`))
+            .catch(e => console.warn('[realestate] revalidação do espelho falhou:', e?.message))
+            .finally(() => { syncEmVoo = null; invalidarCacheDoRelatorio(); });
+    }
+}
+
+// O insumo do relatório é o MESMO para todo mundo — só o recorte por cidade
+// depende de quem pergunta. A varredura das reservas (DISTINCT sobre a tabela
+// inteira) custa ~2s, e antes ela rodava a cada abertura da tela, por usuário.
+// Cache curto: quem abre a tela em seguida usa o mesmo insumo, e um vínculo
+// novo aparece no máximo 5 minutos depois.
+const BASE_TTL_MS = 5 * 60 * 1000;
+let baseCache = null;   // { em: timestamp, dados }
+
+export function invalidarCacheDoRelatorio() { baseCache = null; }
+
+async function carregarBase() {
+    if (baseCache && (Date.now() - baseCache.em) < BASE_TTL_MS) return baseCache.dados;
 
     const [imobs, links, ents, regs] = await Promise.all([
         db.CvImobiliaria.findAll({ order: [['nome', 'ASC']], raw: true }),
@@ -55,6 +92,24 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
         // Vínculo por cadastro do Office: associações escolhidas na criação.
         db.RealEstateRegistration.findAll({ where: { status: 'completed' }, raw: true }),
     ]);
+
+    baseCache = { em: Date.now(), dados: { imobs, links, ents, regs } };
+    return baseCache.dados;
+}
+
+/**
+ * Relatório completo de imobiliárias, já escopado ao usuário.
+ * @param {object} opts
+ * @param {object} opts.user           req.user ({ id, role, city })
+ * @param {string} [opts.q]            busca livre (nome/razão/cnpj/gerente)
+ * @param {string} [opts.cidade]       filtro por cidade
+ * @param {string} [opts.empreendimento] filtro por id ou nome de empreendimento
+ * @returns {Promise<{ total:number, last_sync:Date|null, imobiliarias:Array }>}
+ */
+export async function buildImobiliariasReport({ user, q = '', cidade = '', empreendimento = '' }) {
+    await garantirEspelho();
+
+    const { imobs, links, ents, regs } = await carregarBase();
 
     const entById = new Map(ents.map(e => [Number(e.idempreendimento), e]));
     const entByName = new Map(ents.map(e => [normCity(e.nome).trim(), e]));
@@ -172,4 +227,4 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
     return { total: rows.length, last_sync: lastSync, imobiliarias: rows };
 }
 
-export default { buildImobiliariasReport, normCity, cityMatches };
+export default { buildImobiliariasReport, invalidarCacheDoRelatorio, normCity, cityMatches };
