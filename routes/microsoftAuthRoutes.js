@@ -89,6 +89,9 @@ router.patch('/planner/tasks/:taskId/details',              authenticate, pc.upd
 // como se fosse um siteId.
 router.get('/sharepoint/my-drive', authenticate, sharepointController.myDrive);
 router.get('/sharepoint/shared-with-me', authenticate, sharepointController.sharedWithMe);
+// Busca global: uma chamada no índice do SharePoint, em vez de varrer
+// biblioteca por biblioteca. Vem ANTES das rotas com :param.
+router.get('/sharepoint/search', authenticate, sharepointController.searchAll);
 router.get('/sharepoint/sites', authenticate, sharepointController.sites);
 router.get('/sharepoint/sites/:siteId/drives', authenticate, sharepointController.drives);
 router.get('/sharepoint/drives/:driveId/root', authenticate, sharepointController.driveRoot);

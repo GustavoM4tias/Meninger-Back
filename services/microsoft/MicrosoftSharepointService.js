@@ -141,6 +141,67 @@ class MicrosoftSharepointService {
         return { items: this._normalizeItems(items), truncated };
     }
 
+    /**
+     * Busca em TUDO que a pessoa alcança, numa chamada só.
+     *
+     * A busca de sempre (acima) é por biblioteca: para procurar "o contrato do
+     * Ibitinga" sem saber onde ele está, era preciso varrer site por site e
+     * biblioteca por biblioteca - a tool da Eme chegava a 24 chamadas por
+     * pergunta, e ainda assim só olhava os 8 primeiros sites.
+     *
+     * A Search API do Graph faz isso de uma vez, com o índice do SharePoint:
+     * mesma permissão (a pessoa só acha o que já podia abrir), um décimo do
+     * custo e resultado por relevância, não por ordem de pasta.
+     *
+     * Ela também procura DENTRO do arquivo, não só no nome - que é o que a
+     * pessoa espera quando digita um número de contrato.
+     */
+    async searchEverywhere(user, query, { size = 25 } = {}) {
+        const termo = String(query || '').trim();
+        if (!termo) return { items: [], truncated: false };
+
+        const data = await graphService.post(user, '/search/query', {
+            requests: [{
+                entityTypes: ['driveItem'],
+                query: { queryString: termo },
+                from: 0,
+                size: Math.min(Number(size) || 25, 100),
+                fields: [
+                    'id', 'name', 'webUrl', 'size', 'lastModifiedDateTime',
+                    'parentReference', 'createdBy', 'lastModifiedBy', 'file',
+                ],
+            }],
+        });
+
+        const container = data?.value?.[0]?.hitsContainers?.[0];
+        const hits = container?.hits || [];
+
+        return {
+            items: hits.map(h => {
+                const r = h.resource || {};
+                const pai = r.parentReference || {};
+                return {
+                    id: r.id,
+                    driveId: pai.driveId || null,
+                    name: r.name,
+                    webUrl: r.webUrl,
+                    size: r.size || 0,
+                    lastModified: r.lastModifiedDateTime || null,
+                    isFolder: !r.file,
+                    // O "onde" é o que falta na busca por biblioteca: sem ele a
+                    // pessoa acha o arquivo e não sabe de que site ele veio.
+                    caminho: pai.path ? String(pai.path).replace(/^\/drive\/root:?/, '') || '/' : null,
+                    site: pai.siteId ? (pai.name || null) : null,
+                    alteradoPor: r.lastModifiedBy?.user?.displayName || null,
+                    // Trecho do arquivo onde o termo apareceu, quando o índice devolve.
+                    trecho: h.summary ? String(h.summary).replace(/<\/?c0>/g, '') : null,
+                };
+            }),
+            total: container?.total ?? hits.length,
+            truncated: !!container?.moreResultsAvailable,
+        };
+    }
+
     // ── Mutações ──────────────────────────────────────────────────────────────
 
     /** Exclui um item (arquivo ou pasta) permanentemente */

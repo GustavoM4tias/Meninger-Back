@@ -153,6 +153,20 @@ export default class MicrosoftSharepointController {
     };
 
     // ── GET /api/microsoft/sharepoint/drives/:driveId/search?q=...
+    // Busca em tudo que a pessoa alcança, sem escolher biblioteca antes.
+    searchAll = async (req, res) => {
+        try {
+            const user = await this._getUser(req.user.id);
+            if (!user?.microsoft_id) return this._notConnected(res);
+            const { q, size } = req.query;
+            if (!q?.trim()) return res.status(400).json({ error: "Parâmetro q é obrigatório." });
+            return res.json(await sharepointService.searchEverywhere(user, q.trim(), { size }));
+        } catch (err) {
+            console.error("❌ [SharePoint] searchAll:", err?.response?.data || err.message);
+            return res.status(err?.response?.status || 500).json({ error: err.message, permissao: err.permissao || null });
+        }
+    };
+
     search = async (req, res) => {
         try {
             const user = await this._getUser(req.user.id);

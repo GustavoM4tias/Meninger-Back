@@ -221,7 +221,7 @@ registerTool({
 
 registerTool({
     name: 'find_in_sharepoint',
-    description: 'Procura ARQUIVO no SharePoint da empresa por nome ou conteúdo, e devolve o link para abrir. Use quando pedirem "acha o contrato do Ibitinga", "onde está a planilha de custos", "me manda o arquivo X", "procura no SharePoint". Busca em todas as bibliotecas dos sites que a pessoa alcança. Devolve nome, biblioteca, data da última alteração e link.',
+    description: 'Procura ARQUIVO no SharePoint e no OneDrive da pessoa, por nome E por conteúdo de dentro do arquivo, e devolve o link para abrir. Use quando pedirem "acha o contrato do Ibitinga", "onde está a planilha de custos", "me manda o arquivo X", "procura no SharePoint", "que arquivo cita o CNPJ tal". Cobre tudo que a pessoa alcança, com um trecho do arquivo onde o termo apareceu.',
     parameters: {
         type: 'object',
         properties: {
@@ -240,44 +240,33 @@ registerTool({
         if (!termo) return { result: { erro: 'Diga o que devo procurar.' } };
         const limite = Math.min(Number(args?.limite) || 10, 25);
 
-        const { items: sites } = await sharepointService.getSites(u);
-        const achados = [];
+        // Uma chamada no índice do SharePoint. Antes eram até 24 (8 sites x 3
+        // bibliotecas) por pergunta, e mesmo assim só olhava os 8 primeiros
+        // sites - o arquivo do nono site simplesmente não existia para a Eme.
+        const { items, total, truncated } = await sharepointService.searchEverywhere(u, termo, { size: limite });
 
-        // Varre biblioteca por biblioteca até juntar o limite. Para na primeira
-        // vez que enche, para não fazer dezenas de chamadas por uma pergunta.
-        for (const site of sites.slice(0, 8)) {
-            if (achados.length >= limite) break;
-            let drives = [];
-            try { ({ items: drives } = await sharepointService.getSiteDrives(u, site.id)); } catch { continue; }
-
-            for (const drive of drives.slice(0, 3)) {
-                if (achados.length >= limite) break;
-                try {
-                    const { items } = await sharepointService.search(u, drive.id, termo);
-                    for (const it of items) {
-                        if (it.isFolder) continue;
-                        achados.push({
-                            nome: it.name,
-                            site: site.name,
-                            biblioteca: drive.name,
-                            tamanhoKb: Math.round((it.size || 0) / 1024),
-                            alteradoEm: it.lastModified,
-                            link: it.webUrl,
-                        });
-                        if (achados.length >= limite) break;
-                    }
-                } catch { /* biblioteca sem acesso: segue */ }
-            }
-        }
+        const achados = items
+            .filter(it => !it.isFolder)
+            .map(it => ({
+                nome: it.name,
+                onde: it.caminho || it.site || null,
+                tamanhoKb: Math.round((it.size || 0) / 1024),
+                alteradoEm: it.lastModified,
+                alteradoPor: it.alteradoPor,
+                trecho: it.trecho,
+                link: it.webUrl,
+            }));
 
         return {
             result: {
                 termo,
                 total: achados.length,
+                totalNoIndice: total,
+                temMais: truncated,
                 arquivos: achados,
                 resumo: achados.length
-                    ? `${achados.length} arquivo(s) para "${termo}". Primeiro: ${achados[0].nome} (${achados[0].site} / ${achados[0].biblioteca}).`
-                    : `Nenhum arquivo encontrado para "${termo}" nas bibliotecas que você alcança.`,
+                    ? `${achados.length} arquivo(s) para "${termo}"${total > achados.length ? ` (de ${total} no total)` : ''}. Primeiro: ${achados[0].nome}${achados[0].onde ? ` em ${achados[0].onde}` : ''}.`
+                    : `Nenhum arquivo encontrado para "${termo}" no que você alcança - a busca cobre SharePoint e OneDrive, por nome e por conteúdo.`,
             },
         };
     },
