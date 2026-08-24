@@ -77,7 +77,7 @@ export function invalidarCacheDoRelatorio() { baseCache = null; }
 async function carregarBase() {
     if (baseCache && (Date.now() - baseCache.em) < BASE_TTL_MS) return baseCache.dados;
 
-    const [imobs, links, ents, regs] = await Promise.all([
+    const [imobs, links, ents, regs, assoc] = await Promise.all([
         db.CvImobiliaria.findAll({ order: [['nome', 'ASC']], raw: true }),
         // Vínculo por atividade: reservas ligam imobiliária (cnpj) a empreendimento (nome).
         db.sequelize.query(`
@@ -91,9 +91,12 @@ async function carregarBase() {
         ),
         // Vínculo por cadastro do Office: associações escolhidas na criação.
         db.RealEstateRegistration.findAll({ where: { status: 'completed' }, raw: true }),
+        // Vínculo REAL, como está no CV (v3). É a fonte boa: não depende de a
+        // imobiliária já ter vendido alguma coisa.
+        db.CvImobiliariaEmpreendimento.findAll({ raw: true }),
     ]);
 
-    baseCache = { em: Date.now(), dados: { imobs, links, ents, regs } };
+    baseCache = { em: Date.now(), dados: { imobs, links, ents, regs, assoc } };
     return baseCache.dados;
 }
 
@@ -109,7 +112,7 @@ async function carregarBase() {
 export async function buildImobiliariasReport({ user, q = '', cidade = '', empreendimento = '' }) {
     await garantirEspelho();
 
-    const { imobs, links, ents, regs } = await carregarBase();
+    const { imobs, links, ents, regs, assoc } = await carregarBase();
 
     const entById = new Map(ents.map(e => [Number(e.idempreendimento), e]));
     const entByName = new Map(ents.map(e => [normCity(e.nome).trim(), e]));
@@ -133,6 +136,17 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
         if (!linksByCnpj.has(key)) linksByCnpj.set(key, new Map());
         linksByCnpj.get(key).set(ent.id ?? normCity(ent.nome).trim(), ent);
     };
+
+    // Associação de verdade (CV v3), indexada pelo ID da imobiliária - sem
+    // passar por CNPJ, que é o join frágil (imobiliária sem CNPJ, CNPJ repetido).
+    const linksByImobId = new Map();
+    for (const a of assoc) {
+        const idImob = Number(a.idimobiliaria);
+        const hit = entById.get(Number(a.idempreendimento));
+        if (!hit) continue;   // empreendimento fora do espelho local
+        if (!linksByImobId.has(idImob)) linksByImobId.set(idImob, new Map());
+        linksByImobId.get(idImob).set(Number(a.idempreendimento), { ...entCard(hit), via: 'cv' });
+    }
 
     for (const l of links) {
         const hit = entByName.get(normCity(l.empreendimento).trim());
@@ -158,7 +172,14 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
 
     const rows = [];
     for (const i of imobs) {
-        const vinculos = [...(linksByCnpj.get(onlyDigits(i.cnpj)) || new Map()).values()];
+        // Une a associação do CV com o vínculo deduzido da atividade. As duas
+        // importam: o CV diz com quem a imobiliária PODE trabalhar hoje, e a
+        // atividade mostra onde ela de fato já vendeu (inclusive em
+        // empreendimento de onde já foi desassociada).
+        const doCv = linksByImobId.get(Number(i.idimobiliaria)) || new Map();
+        const porAtividade = linksByCnpj.get(onlyDigits(i.cnpj)) || new Map();
+        // Ordem importa: em empate de empreendimento, a versão do CV vence.
+        const vinculos = [...new Map([...porAtividade, ...doCv]).values()];
         // Cidade efetiva: a da própria imobiliária; sem endereço, herda as
         // cidades dos empreendimentos vinculados.
         const cidades = i.cidade

@@ -272,7 +272,12 @@ export async function syncImobiliarias(req, res) {
         if (!syncEmVoo) {
             const { default: ImobiliariaSyncService } = await import('../services/bulkData/cv/ImobiliariaSyncService.js');
             const { invalidarCacheDoRelatorio } = await import('../services/realestate/realEstateReportService.js');
-            syncEmVoo = new ImobiliariaSyncService().syncAll()
+            const svc = new ImobiliariaSyncService();
+            // O botão faz a varredura completa: cadastro + associação com os
+            // empreendimentos. A associação é a que responde "essa imobiliária
+            // trabalha com quais empreendimentos" - o cadastro sozinho não diz.
+            syncEmVoo = svc.syncAll()
+                .then(async (count) => { await svc.syncAssociacoes().catch(e => console.warn('[realestate] associações:', e.message)); return count; })
                 .finally(() => { syncEmVoo = null; invalidarCacheDoRelatorio(); });
         }
         const count = await syncEmVoo;

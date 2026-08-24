@@ -261,6 +261,7 @@ import EventPlanSettingsDefine     from './eventPlan/eventPlanSettings.js';
 
 import RealEstateRegistrationDefine from './realestate/registration.js';
 import CvImobiliariaDefine from './cv/imobiliaria.js';
+import CvImobiliariaEmpreendimentoDefine from './cv/imobiliariaEnterprise.js';
 
 // Correspondentes (CV): cadastro local de empresas + log de cadastros
 import CorrespondentCompanyDefine from './correspondent/company.js';
@@ -550,6 +551,7 @@ db.EventPlanSettings    = EventPlanSettingsDefine(sequelize, DataTypes);
 // Cadastro de imobiliárias (CV CRM)
 db.RealEstateRegistration = RealEstateRegistrationDefine(sequelize, DataTypes);
 db.CvImobiliaria = CvImobiliariaDefine(sequelize, DataTypes);
+db.CvImobiliariaEmpreendimento = CvImobiliariaEmpreendimentoDefine(sequelize, DataTypes);
 
 // Correspondentes (CV CRM)
 db.CorrespondentCompany = CorrespondentCompanyDefine(sequelize, DataTypes);
