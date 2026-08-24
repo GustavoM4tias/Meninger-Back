@@ -18,6 +18,7 @@ import { registerTool } from './ToolRegistry.js';
 import db from '../../models/sequelize/index.js';
 import teamsService from '../microsoft/MicrosoftTeamsService.js';
 import transcriptService from '../microsoft/MicrosoftTranscriptService.js';
+import chatService from '../microsoft/MicrosoftChatService.js';
 import sharepointService from '../microsoft/MicrosoftSharepointService.js';
 import outlookService from '../microsoft/MicrosoftOutlookService.js';
 
@@ -89,6 +90,7 @@ registerTool({
         const eventos = items
             .filter(e => !e.isCancelled)
             .map(e => ({
+                id: e.id,
                 assunto: e.subject,
                 dia: dia(e.start),
                 inicio: hora(e.start),
@@ -162,6 +164,16 @@ registerTool({
             descricao:     { type: 'string', description: 'Texto do convite (opcional).' },
             local:         { type: 'string', description: 'Local físico, se houver (opcional).' },
             online:        { type: 'boolean', description: 'Cria link do Teams. Padrão: true.' },
+            repetir:       {
+                type: 'object',
+                description: 'Para compromisso que se repete ("toda terça", "todo dia 5", "diariamente"). Sem isto, é evento único.',
+                properties: {
+                    tipo:      { type: 'string', description: 'diario | semanal | mensal' },
+                    intervalo: { type: 'number', description: 'De quantos em quantos. 1 = todo, 2 = a cada dois. Padrão 1.' },
+                    ate:       { type: 'string', description: 'Data final (AAAA-MM-DD), quando o usuário disse até quando.' },
+                    vezes:     { type: 'number', description: 'Quantas ocorrências, quando ele disse um número de vezes.' },
+                },
+            },
             confirmado:    { type: 'boolean', description: 'Passe true SÓ depois de o usuário confirmar. Sem isso, a tool devolve a prévia sem agendar nada.' },
         },
         required: ['assunto', 'inicio', 'fim'],
@@ -185,12 +197,27 @@ registerTool({
                     fim: args.fim,
                     participantes: convidados,
                     online: args?.online !== false,
+                    repete: args?.repetir?.tipo || null,
                     resumo: `Confirme antes de eu agendar: "${args.assunto}", de ${args.inicio} a ${args.fim}`
                           + (convidados.length ? `, convidando ${convidados.join(', ')}.` : ', sem convidados.')
                           + ' O convite sai no seu nome.',
                 },
             };
         }
+
+        // "Toda terça às 10" vira recorrência de verdade no Outlook, não sete
+        // eventos soltos: quem cancela a série depois agradece.
+        const r = args?.repetir;
+        const TIPOS = { diario: 'daily', semanal: 'weekly', mensal: 'monthly' };
+        const recorrencia = r?.tipo && TIPOS[String(r.tipo).toLowerCase()]
+            ? {
+                type: TIPOS[String(r.tipo).toLowerCase()],
+                interval: Number(r.intervalo) || 1,
+                endType: r.ate ? 'endDate' : (r.vezes ? 'count' : 'noEnd'),
+                endDate: r.ate || undefined,
+                occurrences: Number(r.vezes) || undefined,
+            }
+            : null;
 
         const evento = await teamsService.createScheduledMeeting(u, {
             subject: args.assunto,
@@ -200,6 +227,7 @@ registerTool({
             body: args?.descricao || '',
             location: args?.local || '',
             isOnlineMeeting: args?.online !== false,
+            recurrence: recorrencia,
         });
 
         return {
@@ -584,5 +612,401 @@ registerTool({
                     : `Ninguém falou "${args.termo}" nas reuniões com transcrição que você alcança nesse período.`,
             },
         };
+    },
+});
+
+// ─── Agenda: mexer, não só olhar ─────────────────────────────────────────────
+//
+// Até aqui a Eme só lia a agenda e criava reunião nova. Editar, cancelar,
+// convidar mais gente e repetir toda semana continuava sendo trabalho de tela -
+// e é justamente o que a pessoa pede em voz alta ("empurra a de amanhã para as
+// 4", "chama o Marcus também", "cancela a de sexta").
+//
+// TODA ESCRITA TEM TRAVA DE CONFIRMAÇÃO. O padrão é o mesmo do schedule_meeting:
+// sem `confirmado: true` a tool devolve a PRÉVIA do que faria e não toca em
+// nada. Isso não é burocracia: editar reunião dispara convite atualizado para
+// todo mundo, e cancelar avisa a empresa inteira. O modelo erra o alvo às vezes;
+// a confirmação é onde esse erro morre.
+//
+// Reunião é achada por ID (que vem do my_agenda) ou por termo do assunto. Termo
+// que casa com mais de uma NÃO escolhe sozinho: devolve as candidatas e pede
+// para a pessoa dizer qual.
+
+/** Acha a reunião pelo id ou pelo assunto, dentro de uma janela de dias. */
+async function acharEvento(u, { id, termo, dias = 30 }) {
+    if (id) {
+        try { return { evento: await teamsService.getEvent(u, id) }; }
+        catch { return { erro: 'Não encontrei esse compromisso na sua agenda.' }; }
+    }
+
+    const t = String(termo || '').trim().toLowerCase();
+    if (!t) return { erro: 'Diga qual compromisso: o assunto ou o id.' };
+
+    const inicio = new Date(); inicio.setDate(inicio.getDate() - 7);
+    const fim = new Date(); fim.setDate(fim.getDate() + dias);
+    const { items } = await teamsService.getCalendarView(u, inicio.toISOString(), fim.toISOString());
+
+    const achados = items.filter(e => !e.isCancelled && String(e.subject || '').toLowerCase().includes(t));
+
+    if (!achados.length) return { erro: `Não achei nenhum compromisso com "${termo}" entre 7 dias atrás e ${dias} dias à frente.` };
+    if (achados.length > 1) {
+        return {
+            ambiguo: achados.slice(0, 6).map(e => ({
+                id: e.id, assunto: e.subject, dia: dia(e.start), inicio: hora(e.start),
+            })),
+        };
+    }
+    return { evento: achados[0] };
+}
+
+function resumoDoEvento(e) {
+    return {
+        id: e.id,
+        assunto: e.subject,
+        dia: dia(e.start),
+        inicio: hora(e.start),
+        fim: hora(e.end),
+        local: e.location,
+        online: e.isOnlineMeeting,
+        linkEntrada: e.joinUrl,
+        organizador: e.organizer?.name,
+        souOrganizador: e.isOrganizer,
+        participantes: (e.attendees || []).map(a => a.name || a.email),
+        recorrente: e.isRecurring,
+    };
+}
+
+registerTool({
+    name: 'update_meeting',
+    description: 'EDITA um compromisso que já existe na agenda do usuário: muda horário, assunto, local, descrição ou a lista de convidados. Use para "empurra a reunião de amanhã para as 16h", "muda o assunto da reunião X", "chama o Marcus também na reunião de sexta", "tira a Ana da reunião". Identifique a reunião pelo id (vindo de my_agenda) ou pelo assunto. SEMPRE confirme com o usuário antes de aplicar: editar dispara convite atualizado para todos os participantes.',
+    parameters: {
+        type: 'object',
+        properties: {
+            id:            { type: 'string', description: 'Id do evento, quando você já tem (de my_agenda).' },
+            termo:         { type: 'string', description: 'Parte do assunto, quando não tem o id.' },
+            assunto:       { type: 'string', description: 'Novo assunto.' },
+            inicio:        { type: 'string', description: 'Novo início, ISO local sem Z. Ex: 2026-08-26T16:00:00' },
+            fim:           { type: 'string', description: 'Novo fim, ISO local sem Z.' },
+            local:         { type: 'string', description: 'Novo local.' },
+            descricao:     { type: 'string', description: 'Nova descrição. Só mande se o usuário pediu para mudar o texto - mandar em branco apaga o que estava lá.' },
+            adicionar:     { type: 'array', items: { type: 'string' }, description: 'E-mails para ACRESCENTAR aos convidados.' },
+            remover:       { type: 'array', items: { type: 'string' }, description: 'E-mails para TIRAR dos convidados.' },
+            confirmado:    { type: 'boolean', description: 'Passe true SÓ depois de o usuário confirmar. Sem isso, devolve a prévia e não altera nada.' },
+        },
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u?.microsoft_id) return { result: semConta };
+
+        const alvo = await acharEvento(u, { id: args?.id, termo: args?.termo });
+        if (alvo.erro) return { result: { erro: alvo.erro } };
+        if (alvo.ambiguo) {
+            return { result: {
+                precisaEscolher: true,
+                candidatos: alvo.ambiguo,
+                resumo: `Achei ${alvo.ambiguo.length} compromissos com esse nome. Pergunte ao usuário qual deles.`,
+            } };
+        }
+
+        const e = alvo.evento;
+        if (!e.isOrganizer) {
+            return { result: { erro: `Você não organiza "${e.subject}" - quem organiza é ${e.organizer?.name || 'outra pessoa'}. Só o organizador pode editar.` } };
+        }
+
+        // Lista final de convidados: a base é a atual, e o modelo só acrescenta
+        // ou tira. Mandar a lista inteira seria convite para apagar gente sem
+        // querer.
+        const atuais = (e.attendees || []).map(a => a.email).filter(Boolean);
+        const somar  = (args?.adicionar || []).map(x => String(x).trim()).filter(Boolean);
+        const tirar  = (args?.remover || []).map(x => String(x).trim().toLowerCase()).filter(Boolean);
+        const mexeuNosConvidados = somar.length || tirar.length;
+        const finais = [...new Set([...atuais, ...somar])].filter(x => !tirar.includes(String(x).toLowerCase()));
+
+        const mudancas = {};
+        if (args?.assunto)   mudancas.subject   = args.assunto;
+        if (args?.inicio)    mudancas.start     = args.inicio;
+        if (args?.fim)       mudancas.end       = args.fim;
+        if (args?.local !== undefined) mudancas.location = args.local;
+        if (args?.descricao !== undefined) mudancas.body = args.descricao;
+        if (mexeuNosConvidados) mudancas.attendees = finais;
+
+        if (!Object.keys(mudancas).length) {
+            return { result: { erro: 'Diga o que mudar: horário, assunto, local, descrição ou convidados.' } };
+        }
+
+        // Mudar só o início sem o fim encolheria ou esticaria a reunião sem
+        // ninguém pedir: mantém a duração original.
+        if (mudancas.start && !mudancas.end && e.start && e.end) {
+            const duracao = new Date(e.end) - new Date(e.start);
+            const novoFim = new Date(new Date(mudancas.start).getTime() + duracao);
+            mudancas.end = novoFim.toISOString().slice(0, 19);
+        }
+
+        if (args?.confirmado !== true) {
+            return { result: {
+                previa: true,
+                reuniao: resumoDoEvento(e),
+                mudancas: {
+                    assunto: args?.assunto || null,
+                    horario: mudancas.start ? `${mudancas.start} até ${mudancas.end}` : null,
+                    local: args?.local ?? null,
+                    convidadosAdicionados: somar,
+                    convidadosRemovidos: args?.remover || [],
+                },
+                resumo: `Confirme antes de eu alterar "${e.subject}" (${dia(e.start)} às ${hora(e.start)}). `
+                      + 'Todos os participantes recebem o convite atualizado.',
+            } };
+        }
+
+        const atualizado = await teamsService.updateEvent(u, e.id, mudancas);
+        return { result: {
+            alterado: true,
+            reuniao: resumoDoEvento(atualizado),
+            resumo: `"${atualizado.subject}" atualizada para ${dia(atualizado.start)} às ${hora(atualizado.start)}. Os participantes foram avisados.`,
+        } };
+    },
+});
+
+registerTool({
+    name: 'cancel_meeting',
+    description: 'CANCELA (se o usuário organiza) ou REMOVE da agenda dele (se ele só participa) um compromisso. Use para "cancela a reunião de sexta", "desmarca o alinhamento de amanhã", "tira isso da minha agenda". SEMPRE confirme antes: cancelar avisa todos os participantes. Em reunião que se repete, pergunte se é só aquele dia ou a série inteira.',
+    parameters: {
+        type: 'object',
+        properties: {
+            id:         { type: 'string', description: 'Id do evento (de my_agenda).' },
+            termo:      { type: 'string', description: 'Parte do assunto, quando não tem o id.' },
+            motivo:     { type: 'string', description: 'Motivo, enviado aos participantes (opcional).' },
+            alcance:    { type: 'string', description: 'Para reunião que se repete: "ocorrencia" (só aquele dia) ou "serie" (todas). Pergunte ao usuário.' },
+            confirmado: { type: 'boolean', description: 'Passe true SÓ depois de o usuário confirmar.' },
+        },
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u?.microsoft_id) return { result: semConta };
+
+        const alvo = await acharEvento(u, { id: args?.id, termo: args?.termo });
+        if (alvo.erro) return { result: { erro: alvo.erro } };
+        if (alvo.ambiguo) {
+            return { result: { precisaEscolher: true, candidatos: alvo.ambiguo,
+                resumo: 'Mais de um compromisso com esse nome. Pergunte qual.' } };
+        }
+
+        const e = alvo.evento;
+        const souDono = e.isOrganizer;
+
+        // Série sem escolha declarada não é chute: a diferença entre apagar um
+        // dia e apagar o compromisso de todo mês é grande demais.
+        if (e.isRecurring && !['ocorrencia', 'serie'].includes(String(args?.alcance || ''))) {
+            return { result: {
+                precisaEscolher: true,
+                reuniao: resumoDoEvento(e),
+                resumo: `"${e.subject}" se repete. Pergunte ao usuário se é só o dia ${dia(e.start)} ou a série inteira, e chame de novo com alcance "ocorrencia" ou "serie".`,
+            } };
+        }
+
+        if (args?.confirmado !== true) {
+            return { result: {
+                previa: true,
+                reuniao: resumoDoEvento(e),
+                acao: souDono ? 'cancelar e avisar os participantes' : 'remover da sua agenda (sem avisar ninguém)',
+                resumo: souDono
+                    ? `Confirme: cancelar "${e.subject}" de ${dia(e.start)} às ${hora(e.start)} avisa ${(e.attendees || []).length} participante(s).`
+                    : `Confirme: remover "${e.subject}" da sua agenda. Você não organiza, então ninguém é avisado.`,
+            } };
+        }
+
+        const scope = e.isRecurring
+            ? (args.alcance === 'serie' ? 'series' : 'occurrence')
+            : (souDono ? 'single' : 'occurrence');
+
+        if (souDono) {
+            await teamsService.cancelEvent(u, e.id, {
+                comment: args?.motivo || '', scope, seriesMasterId: e.seriesMasterId,
+            });
+        } else {
+            await teamsService.deleteEvent(u, e.id, { scope, seriesMasterId: e.seriesMasterId });
+        }
+
+        return { result: {
+            cancelado: true,
+            assunto: e.subject,
+            resumo: souDono
+                ? `"${e.subject}" cancelada${scope === 'series' ? ' (série inteira)' : ''}. Os participantes foram avisados.`
+                : `"${e.subject}" saiu da sua agenda. Ninguém foi avisado.`,
+        } };
+    },
+});
+
+// ─── Conversas do Teams ──────────────────────────────────────────────────────
+//
+// Ler é livre; ESCREVER passa pela mesma trava das outras ações: mensagem sai no
+// nome da pessoa, para outra pessoa, e não tem desfazer.
+
+/** Acha a conversa pelo id ou pelo nome de quem está nela. */
+async function acharConversa(u, termo) {
+    const { items } = await chatService.listChats(u, { top: 40 });
+    const t = String(termo || '').trim().toLowerCase();
+
+    if (!t) return { lista: items };
+    const exato = items.find(c => c.id === termo);
+    if (exato) return { conversa: exato };
+
+    const achados = items.filter(c =>
+        String(c.titulo || '').toLowerCase().includes(t) ||
+        (c.participantes || []).some(p => `${p.nome || ''} ${p.email || ''}`.toLowerCase().includes(t))
+    );
+
+    if (!achados.length) return { erro: `Não achei conversa com "${termo}" nas suas 40 mais recentes.` };
+    if (achados.length > 1) {
+        return { ambiguo: achados.slice(0, 6).map(c => ({ id: c.id, titulo: c.titulo, ultima: c.ultimaMensagem?.texto })) };
+    }
+    return { conversa: achados[0] };
+}
+
+registerTool({
+    name: 'my_teams_chats',
+    description: 'Lista as CONVERSAS do Teams do usuário, com quem é, a última mensagem e quais têm mensagem nova. Use para "tenho mensagem no Teams?", "quem me chamou hoje", "o que o fulano me mandou", "estou devendo resposta para alguém?".',
+    parameters: {
+        type: 'object',
+        properties: {
+            somenteNaoLidas: { type: 'boolean', description: 'Só as conversas com mensagem nova.' },
+            limite: { type: 'number', description: 'Quantas no máximo. Padrão 15.' },
+        },
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u?.microsoft_id) return { result: semConta };
+
+        const { items, naoLidos } = await chatService.listChats(u, { top: 30 });
+        const lista = (args?.somenteNaoLidas ? items.filter(c => c.naoLido) : items)
+            .slice(0, Math.min(Number(args?.limite) || 15, 30))
+            .map(c => ({
+                id: c.id,
+                com: c.titulo,
+                tipo: c.tipo === 'oneOnOne' ? 'conversa de dois' : c.tipo === 'group' ? 'grupo' : 'reunião',
+                naoLido: c.naoLido,
+                ultimaMensagem: c.ultimaMensagem ? `${c.ultimaMensagem.de || 'alguém'}: ${c.ultimaMensagem.texto}` : null,
+                quando: c.atualizadoEm,
+            }));
+
+        return { result: {
+            total: lista.length,
+            naoLidas: naoLidos,
+            conversas: lista,
+            resumo: naoLidos
+                ? `${naoLidos} conversa(s) com mensagem nova. Mais recente: ${lista[0]?.com}.`
+                : lista.length ? `Nenhuma mensagem nova. A conversa mais recente é com ${lista[0]?.com}.` : 'Nenhuma conversa no Teams.',
+        } };
+    },
+});
+
+registerTool({
+    name: 'read_teams_chat',
+    description: 'LÊ as mensagens de uma conversa do Teams, para você poder resumir, interpretar ou responder o que foi dito. Use para "o que o Marcus falou?", "resume a conversa do grupo de vendas", "me explica o que ficou combinado no chat com a Ana". Identifique a conversa pelo nome da pessoa/grupo ou pelo id vindo de my_teams_chats.',
+    parameters: {
+        type: 'object',
+        properties: {
+            conversa: { type: 'string', description: 'Nome da pessoa, do grupo, ou id da conversa.' },
+            limite:   { type: 'number', description: 'Quantas mensagens. Padrão 30.' },
+        },
+        required: ['conversa'],
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u?.microsoft_id) return { result: semConta };
+
+        const alvo = await acharConversa(u, args?.conversa);
+        if (alvo.erro) return { result: { erro: alvo.erro } };
+        if (alvo.ambiguo) {
+            return { result: { precisaEscolher: true, candidatos: alvo.ambiguo,
+                resumo: 'Mais de uma conversa com esse nome. Pergunte qual.' } };
+        }
+
+        const { items } = await chatService.listMessages(u, alvo.conversa.id, {
+            top: Math.min(Number(args?.limite) || 30, 50),
+        });
+
+        return { result: {
+            conversa: alvo.conversa.titulo,
+            conversaId: alvo.conversa.id,
+            total: items.length,
+            mensagens: items.map(m => ({
+                de: m.minha ? 'você' : m.de.nome,
+                texto: m.previa,
+                em: m.em,
+            })),
+            resumo: items.length
+                ? `${items.length} mensagem(ns) com ${alvo.conversa.titulo}. A última é de ${items[items.length - 1].minha ? 'você' : items[items.length - 1].de.nome}.`
+                : `A conversa com ${alvo.conversa.titulo} está vazia.`,
+        } };
+    },
+});
+
+registerTool({
+    name: 'send_teams_message',
+    description: 'ENVIA uma mensagem no Teams, no nome do usuário. Use quando ele pedir "responde para o Marcus que...", "manda no Teams para a Ana...", "avisa o grupo que a reunião mudou". SEMPRE mostre o texto exato e confirme antes de enviar - mensagem enviada não tem desfazer, e sai como se ele tivesse escrito. Se a conversa não existir, ela é criada com o e-mail informado.',
+    parameters: {
+        type: 'object',
+        properties: {
+            conversa:   { type: 'string', description: 'Nome da pessoa/grupo ou id da conversa (de my_teams_chats).' },
+            email:      { type: 'string', description: 'E-mail da pessoa, para começar uma conversa que ainda não existe.' },
+            texto:      { type: 'string', description: 'A mensagem, exatamente como vai sair.' },
+            confirmado: { type: 'boolean', description: 'Passe true SÓ depois de o usuário aprovar o texto.' },
+        },
+        required: ['texto'],
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u?.microsoft_id) return { result: semConta };
+
+        const texto = String(args?.texto || '').trim();
+        if (!texto) return { result: { erro: 'Escreva a mensagem.' } };
+
+        let conversa = null;
+        if (args?.conversa) {
+            const alvo = await acharConversa(u, args.conversa);
+            if (alvo.ambiguo) {
+                return { result: { precisaEscolher: true, candidatos: alvo.ambiguo,
+                    resumo: 'Mais de uma conversa com esse nome. Pergunte para qual mandar.' } };
+            }
+            if (alvo.conversa) conversa = alvo.conversa;
+            if (alvo.erro && !args?.email) return { result: { erro: alvo.erro } };
+        }
+
+        if (!conversa && !args?.email) {
+            return { result: { erro: 'Diga para quem: o nome de uma conversa existente ou o e-mail da pessoa.' } };
+        }
+
+        if (args?.confirmado !== true) {
+            return { result: {
+                previa: true,
+                para: conversa?.titulo || args.email,
+                texto,
+                resumo: `Confirme antes de eu enviar para ${conversa?.titulo || args.email}: "${texto}". A mensagem sai no seu nome e não dá para desfazer.`,
+            } };
+        }
+
+        // Conversa nova só é criada na hora do envio confirmado: criar antes
+        // deixaria conversa vazia na lista de duas pessoas por causa de um
+        // pedido que a pessoa talvez cancele.
+        if (!conversa) conversa = await chatService.chatCom(u, args.email);
+
+        const msg = await chatService.sendMessage(u, conversa.id, texto);
+        return { result: {
+            enviado: true,
+            para: conversa.titulo,
+            em: msg.em,
+            resumo: `Mensagem enviada para ${conversa.titulo}.`,
+        } };
     },
 });
