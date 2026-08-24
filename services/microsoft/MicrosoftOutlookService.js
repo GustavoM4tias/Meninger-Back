@@ -105,20 +105,54 @@ class MicrosoftOutlookService {
 
     // ── Pastas ───────────────────────────────────────────────────────────────
 
+    /**
+     * Árvore de pastas da caixa.
+     *
+     * `/mailFolders` devolve SÓ O PRIMEIRO NÍVEL. Como quase toda pasta de
+     * trabalho é criada dentro da Caixa de Entrada, listar só a raiz fazia o
+     * Office mostrar as pastas do sistema e mais nada - de fora, parecia que o
+     * módulo não conhecia pastas. Aqui a árvore é percorrida por
+     * `childFolders`, só onde o Graph diz que existe filha
+     * (`childFolderCount > 0`), com teto de profundidade e de total para uma
+     * caixa muito ramificada não virar dezenas de chamadas.
+     *
+     * Devolve lista achatada, na ordem de exibição, com `parentId` e `depth`:
+     * a tela desenha a indentação, e mover mensagem continua sendo por id.
+     */
     async listFolders(mailbox) {
-        const { items } = await graph.appGetAllPages(
-            `/users/${mailbox}/mailFolders?$top=100&$select=id,displayName,totalItemCount,unreadItemCount,wellKnownName`,
-            undefined,
-            { max: 300 }
-        );
+        const MAX_DEPTH = 3;
+        const MAX_TOTAL = 200;
 
-        return items.map(f => ({
-            id: f.id,
-            wellKnownName: f.wellKnownName || null,
-            name: f.displayName,
-            total: f.totalItemCount ?? 0,
-            unread: f.unreadItemCount ?? 0,
-        }));
+        const select = 'id,displayName,totalItemCount,unreadItemCount,wellKnownName,childFolderCount,parentFolderId';
+        const pagina = async (path) => {
+            const { items } = await graph.appGetAllPages(`${path}?$top=100&$select=${select}`, undefined, { max: 300 });
+            return items;
+        };
+
+        const out = [];
+        const visitar = async (pastas, parentId, depth) => {
+            for (const f of pastas) {
+                if (out.length >= MAX_TOTAL) return;
+                out.push({
+                    id: f.id,
+                    wellKnownName: f.wellKnownName || null,
+                    name: f.displayName,
+                    total: f.totalItemCount ?? 0,
+                    unread: f.unreadItemCount ?? 0,
+                    parentId,
+                    depth,
+                    hasChildren: (f.childFolderCount ?? 0) > 0,
+                });
+
+                if ((f.childFolderCount ?? 0) > 0 && depth < MAX_DEPTH) {
+                    const filhas = await pagina(`/users/${mailbox}/mailFolders/${f.id}/childFolders`);
+                    await visitar(filhas, f.id, depth + 1);
+                }
+            }
+        };
+
+        await visitar(await pagina(`/users/${mailbox}/mailFolders`), null, 0);
+        return out;
     }
 
     /** Contagem da Caixa de Entrada — barata, serve ao contador do menu. */

@@ -55,6 +55,22 @@ export default (sequelize, DataTypes) => {
         ai_model: { type: DataTypes.STRING(100), allowNull: true },
         report_generated_at: { type: DataTypes.DATE, allowNull: true },
 
+        // Reaproveitamento entre participantes: a transcrição é a MESMA para
+        // todo mundo que esteve na reunião, então o segundo participante copia
+        // do primeiro em vez de baixar de novo e pagar outro relatório de IA.
+        // A linha continua sendo por pessoa (é a lista "meus relatórios"); o que
+        // muda é a origem do conteúdo.
+        shared_from_id: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            comment: 'id do meeting_transcripts de onde a transcrição/relatório foi copiada',
+        },
+        shared_from_name: {
+            type: DataTypes.STRING(255),
+            allowNull: true,
+            comment: 'Nome de quem gerou primeiro - a tela diz de quem veio',
+        },
+
         // Estado do registro
         status: {
             type: DataTypes.ENUM('pending', 'transcribed', 'summarized', 'error'),

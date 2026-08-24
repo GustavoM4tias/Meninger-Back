@@ -103,6 +103,44 @@ class MicrosoftTranscriptController {
                 }
             }
 
+            // 3) Ainda não achou. Pode ser que outro participante já tenha
+            //    baixado esta mesma reunião aqui dentro - e aí não é preciso
+            //    permissão nova nenhuma: a transcrição é a mesma para todos que
+            //    estiveram na sala, e o direito de ver vem de ter participado.
+            if (!meetingId) {
+                const compartilhadas = await transcriptService.findSharedByJoinUrl(joinUrl, req.user);
+                if (compartilhadas.length) {
+                    const meus = await db.MeetingTranscript.findAll({
+                        where: {
+                            user_id: req.user.id,
+                            transcript_id: compartilhadas.map(c => c.transcript_id),
+                        },
+                        attributes: ['transcript_id', 'status', 'report_generated_at'],
+                    });
+                    const meuMap = Object.fromEntries(meus.map(r => [r.transcript_id, r]));
+                    const quem = compartilhadas[0].user?.username
+                              || compartilhadas[0].organizer_name || 'outro participante';
+
+                    return res.json({
+                        available: true,
+                        viaShared: true,
+                        meetingId: compartilhadas[0].meeting_id,
+                        transcripts: compartilhadas.map(c => ({
+                            id:                c.transcript_id,
+                            createdAt:         c.createdAt,
+                            meetingId:         c.meeting_id,
+                            cached:            !!meuMap[c.transcript_id],
+                            status:            meuMap[c.transcript_id]?.status || null,
+                            reportReady:       meuMap[c.transcript_id]?.status === 'summarized' || !!c.report_json,
+                            reportGeneratedAt: meuMap[c.transcript_id]?.report_generated_at || c.report_generated_at,
+                            sharedFrom:        c.user?.username || c.organizer_name || null,
+                            sharedReportReady: !!c.report_json,
+                        })),
+                        hint: `Você participou desta reunião e ${quem} já carregou a transcrição no Office. Abrir daqui não baixa nada de novo nem gera outro relatório.`,
+                    });
+                }
+            }
+
             if (!meetingId) {
                 return res.json({
                     available: false,
@@ -212,8 +250,32 @@ class MicrosoftTranscriptController {
                 const organizerId = transcript_app_fallback && organizerEmail
                     ? await transcriptService.resolveOrganizerId(organizerEmail)
                     : null;
-                if (!organizerId) throw err;
-                cues = await transcriptService.getTranscriptContentApp(organizerId, meetingId, transcriptId);
+
+                let viaApp = false;
+                if (organizerId) {
+                    try {
+                        cues = await transcriptService.getTranscriptContentApp(organizerId, meetingId, transcriptId);
+                        viaApp = true;
+                    } catch { /* cai no caminho compartilhado abaixo */ }
+                }
+
+                // Terceiro caminho: outro participante já baixou esta mesma
+                // transcrição. Não custa permissão nova, e é o que faz quem só
+                // participou ter relatório hoje, sem esperar liberação no Azure.
+                if (!viaApp) {
+                    const origem = await transcriptService.findShared(transcriptId, req.user, 'transcricao');
+                    if (!origem) throw err;
+
+                    await transcriptService.copiarDeCompartilhado(record, origem, { comRelatorio: true });
+                    return res.json({
+                        id:          record.id,
+                        cues:        JSON.parse(record.parsed_transcript),
+                        status:      record.status,
+                        reportReady: record.status === 'summarized',
+                        cached:      true,
+                        sharedFrom:  record.shared_from_name,
+                    });
+                }
             }
             const parsedJson = JSON.stringify(cues);
 
@@ -251,7 +313,28 @@ class MicrosoftTranscriptController {
 
             // Retorna cache se já foi gerado e não está forçando regeneração
             if (record.status === 'summarized' && record.report_json && !force) {
-                return res.json({ report: record.report_json, cached: true });
+                return res.json({
+                    report: record.report_json,
+                    cached: true,
+                    sharedFrom: record.shared_from_name || null,
+                });
+            }
+
+            // Outro participante já pagou este relatório? A transcrição tem id
+            // próprio e é a MESMA para todo mundo que esteve na reunião: gerar
+            // de novo é queimar token de IA pelo mesmo conteúdo. `force` continua
+            // regerando de propósito, para quando o relatório saiu ruim.
+            if (!force) {
+                const origem = await transcriptService.findShared(transcriptId, req.user, 'relatorio');
+                if (origem) {
+                    await transcriptService.copiarDeCompartilhado(record, origem, { comRelatorio: true });
+                    return res.json({
+                        report:     record.report_json,
+                        cached:     true,
+                        sharedFrom: record.shared_from_name,
+                        sharedAt:   record.report_generated_at,
+                    });
+                }
             }
 
             if (!record.parsed_transcript) {

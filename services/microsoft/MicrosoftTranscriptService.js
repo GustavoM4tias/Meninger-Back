@@ -440,6 +440,109 @@ class MicrosoftTranscriptService {
                 attendees: (e.attendees || []).map(a => ({ name: a.emailAddress?.name, email: a.emailAddress?.address })),
             }));
     }
+
+    // ── Reaproveitar o que outro participante já baixou ───────────────────────
+    //
+    // A transcrição tem id próprio no Graph e é a MESMA para todo mundo que
+    // esteve na reunião. Sem o que vem abaixo, cada participante baixava de novo
+    // e pagava outro relatório de IA pelo mesmo conteúdo - quando conseguia,
+    // porque o caminho delegado só alcança reunião que a própria pessoa
+    // ORGANIZOU, e a de aplicação depende de liberação no tenant que ainda não
+    // saiu.
+    //
+    // A regra de acesso aqui é PARTICIPAÇÃO, não posse: quem está na lista de
+    // participantes do registro já salvo (ou é o organizador dele) enxerga o que
+    // está lá. Quem não está não enxerga nada, mesmo com o id na mão - o id vem
+    // da URL e nunca é credencial.
+
+    /** A pessoa esteve nesta reunião, segundo o registro já salvo? */
+    participou(record, user) {
+        if (!record) return false;
+        if (record.user_id === user.id) return true;
+
+        const meu = String(user?.email || '').trim().toLowerCase();
+        if (!meu) return false;
+        if (String(record.organizer_email || '').trim().toLowerCase() === meu) return true;
+
+        const lista = Array.isArray(record.attendees_json) ? record.attendees_json : [];
+        return lista.some(a => String(a?.email || '').trim().toLowerCase() === meu);
+    }
+
+    /**
+     * Registro de OUTRA pessoa para a mesma transcrição, quando o solicitante
+     * participou da reunião.
+     * @param {'transcricao'|'relatorio'} exige - o que o registro precisa ter
+     */
+    async findShared(transcriptId, user, exige = 'transcricao') {
+        const linhas = await db.MeetingTranscript.findAll({
+            where: { transcript_id: transcriptId },
+            include: [{ model: db.User, as: 'user', attributes: ['id', 'username'] }],
+            order: [['report_generated_at', 'ASC'], ['created_at', 'ASC']],
+        });
+
+        for (const l of linhas) {
+            if (l.user_id === user.id) continue;
+            if (exige === 'relatorio' ? !l.report_json : !l.parsed_transcript) continue;
+            if (!this.participou(l, user)) continue;
+            return l;
+        }
+        return null;
+    }
+
+    /**
+     * Reunião já salva por alguém, achada pelo link de entrada.
+     *
+     * É o caminho de quem só PARTICIPOU: o Graph não devolve a reunião para ela,
+     * mas o organizador já baixou a transcrição aqui dentro. O link é comparado
+     * sem a query string, que muda de convite para convite.
+     */
+    async findSharedByJoinUrl(joinUrl, user) {
+        const base = String(joinUrl || '').split('?')[0];
+        if (!base) return [];
+
+        const linhas = await db.MeetingTranscript.findAll({
+            where: {
+                join_url: { [db.Sequelize.Op.like]: `${base}%` },
+                parsed_transcript: { [db.Sequelize.Op.ne]: null },
+            },
+            include: [{ model: db.User, as: 'user', attributes: ['id', 'username'] }],
+            order: [['created_at', 'ASC']],
+        });
+
+        return linhas.filter(l => l.user_id !== user.id && this.participou(l, user));
+    }
+
+    /**
+     * Copia para o registro da pessoa o que outro participante já tem.
+     * Não chama o Graph e não gasta token de IA: é o mesmo conteúdo.
+     */
+    async copiarDeCompartilhado(destino, origem, { comRelatorio = false } = {}) {
+        const patch = {
+            parsed_transcript:     origem.parsed_transcript,
+            transcript_char_count: origem.transcript_char_count,
+            status:                'transcribed',
+            shared_from_id:        origem.id,
+            shared_from_name:      origem.user?.username || origem.organizer_name || null,
+        };
+
+        if (comRelatorio && origem.report_json) {
+            patch.report_json         = origem.report_json;
+            patch.ai_model            = origem.ai_model;
+            patch.report_generated_at = origem.report_generated_at;
+            patch.tokens_used         = 0;   // não foi esta pessoa que pagou
+            patch.status              = 'summarized';
+        }
+
+        // Metadados da reunião: quem chegou pelo caminho compartilhado costuma
+        // ter menos do que quem organizou.
+        for (const campo of ['subject', 'meeting_date', 'duration_min', 'join_url',
+                             'web_link', 'organizer_name', 'organizer_email', 'attendees_json']) {
+            if (destino[campo] == null && origem[campo] != null) patch[campo] = origem[campo];
+        }
+
+        await destino.update(patch);
+        return destino;
+    }
 }
 
 export default new MicrosoftTranscriptService();

@@ -17,6 +17,7 @@
 import { registerTool } from './ToolRegistry.js';
 import db from '../../models/sequelize/index.js';
 import teamsService from '../microsoft/MicrosoftTeamsService.js';
+import transcriptService from '../microsoft/MicrosoftTranscriptService.js';
 import sharepointService from '../microsoft/MicrosoftSharepointService.js';
 import outlookService from '../microsoft/MicrosoftOutlookService.js';
 
@@ -373,6 +374,225 @@ registerTool({
                 resumo: contagem.unread
                     ? `${contagem.unread} não lido(s) de ${contagem.total} na caixa. Quem mais escreveu: ${remetentes.slice(0, 3).map(r => `${r.nome} (${r.quantidade})`).join(', ')}.`
                     : 'Caixa de entrada em dia, nenhum e-mail não lido.',
+            },
+        };
+    },
+});
+
+// ─── Reuniões: transcrição e relatório ───────────────────────────────────────
+//
+// É o que faz a Eme responder SOBRE reunião, e não só sobre agenda: ela lê a
+// transcrição que já está no Office e cita quem falou o quê.
+//
+// Duas regras valem aqui:
+//   - O direito de ver vem de ter PARTICIPADO, não de ter organizado. A mesma
+//     transcrição fica visível para todo mundo que estava na sala, e o
+//     `participou()` do serviço decide linha a linha.
+//   - Nenhuma tool destas gera relatório novo. Relatório custa token de IA e a
+//     transcrição é a mesma para todos: se ninguém gerou ainda, a Eme diz isso
+//     e manda para a tela, em vez de pagar de novo pelo mesmo conteúdo.
+
+const DIAS_REUNIAO = 60;
+
+/** Reuniões com transcrição que a pessoa pode ver (dela ou de quem ela participou). */
+async function reunioesVisiveis(u, { dias = DIAS_REUNIAO, exigeRelatorio = false } = {}) {
+    const desde = new Date();
+    desde.setDate(desde.getDate() - dias);
+    const { Op } = db.Sequelize;
+
+    const linhas = await db.MeetingTranscript.findAll({
+        where: {
+            parsed_transcript: { [Op.ne]: null },
+            [Op.or]: [
+                { meeting_date: { [Op.gte]: desde } },
+                { meeting_date: null },
+            ],
+        },
+        include: [{ model: db.User, as: 'user', attributes: ['id', 'username'] }],
+        order: [['meeting_date', 'DESC']],
+        limit: 300,
+    });
+
+    // A MESMA reunião pode estar salva por várias pessoas. Fica uma linha por
+    // transcrição, preferindo a que já tem relatório.
+    const porTranscricao = new Map();
+    for (const l of linhas) {
+        if (!transcriptService.participou(l, u)) continue;
+        const atual = porTranscricao.get(l.transcript_id);
+        if (!atual || (!atual.report_json && l.report_json)) porTranscricao.set(l.transcript_id, l);
+    }
+
+    const out = [...porTranscricao.values()];
+    return exigeRelatorio ? out.filter(l => l.report_json) : out;
+}
+
+function casaComTermo(linha, termo) {
+    if (!termo) return true;
+    const t = String(termo).toLowerCase();
+    return String(linha.subject || '').toLowerCase().includes(t)
+        || String(linha.organizer_name || '').toLowerCase().includes(t)
+        || (linha.attendees_json || []).some(a => String(a?.name || a?.email || '').toLowerCase().includes(t));
+}
+
+function resumoDaReuniao(l) {
+    return {
+        transcricaoId: l.transcript_id,
+        assunto:       l.subject || '(sem título)',
+        data:          l.meeting_date ? new Date(l.meeting_date).toLocaleString('pt-BR', { timeZone: TZ }) : null,
+        duracaoMin:    l.duration_min,
+        organizador:   l.organizer_name || l.organizer_email,
+        participantes: (l.attendees_json || []).map(a => a.name || a.email).filter(Boolean),
+        temRelatorio:  !!l.report_json,
+        relatorioPor:  l.report_json ? (l.user?.username || l.shared_from_name || null) : null,
+    };
+}
+
+registerTool({
+    name: 'my_meetings',
+    description: 'Lista as REUNIÕES do Teams que já têm transcrição no Office e que o usuário pode ver (as que ele organizou e as que apenas participou). Use para "quais reuniões eu tive", "teve reunião sobre o Ibitinga?", "minhas reuniões da semana passada", "quais reuniões já têm relatório". Devolve assunto, data, participantes e se o relatório de IA já existe.',
+    parameters: {
+        type: 'object',
+        properties: {
+            termo: { type: 'string', description: 'Filtra por assunto, organizador ou participante.' },
+            dias:  { type: 'number', description: 'Quantos dias para trás. Padrão 60.' },
+            somenteComRelatorio: { type: 'boolean', description: 'Só as que já têm relatório pronto.' },
+        },
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u) return { result: { erro: 'Usuário não encontrado.' } };
+
+        const linhas = await reunioesVisiveis(u, {
+            dias: Math.min(Number(args?.dias) || DIAS_REUNIAO, 365),
+            exigeRelatorio: args?.somenteComRelatorio === true,
+        });
+        const achadas = linhas.filter(l => casaComTermo(l, args?.termo)).map(resumoDaReuniao);
+
+        return {
+            result: {
+                total: achadas.length,
+                reunioes: achadas.slice(0, 25),
+                resumo: achadas.length
+                    ? `${achadas.length} reunião(ões) com transcrição. Mais recente: "${achadas[0].assunto}"${achadas[0].data ? ` (${achadas[0].data})` : ''}.`
+                    : 'Nenhuma reunião com transcrição carregada no Office nesse período. A transcrição precisa ter sido ligada durante a reunião no Teams, e alguém precisa ter aberto a reunião na Central Microsoft.',
+            },
+        };
+    },
+});
+
+registerTool({
+    name: 'meeting_report',
+    description: 'Traz o RELATÓRIO de uma reunião: resumo, pauta, decisões, ações com responsável e prazo, pontos de atenção e próximos passos. Use quando perguntarem "o que ficou decidido na reunião X", "quais foram as ações da reunião de ontem", "me resume a reunião com o Marcus", "quem ficou responsável pelo quê". Vale para reunião que a pessoa apenas participou. NÃO gera relatório novo: se ainda não existe, diga que é preciso gerar na Central Microsoft, aba Reuniões.',
+    parameters: {
+        type: 'object',
+        properties: {
+            termo:         { type: 'string', description: 'Assunto, organizador ou participante da reunião.' },
+            transcricaoId: { type: 'string', description: 'Id da transcrição, quando já veio de my_meetings.' },
+        },
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u) return { result: { erro: 'Usuário não encontrado.' } };
+
+        const linhas = await reunioesVisiveis(u);
+        const alvo = args?.transcricaoId
+            ? linhas.find(l => l.transcript_id === args.transcricaoId)
+            : linhas.find(l => casaComTermo(l, args?.termo) && l.report_json)
+              || linhas.find(l => casaComTermo(l, args?.termo));
+
+        if (!alvo) {
+            return { result: { erro: `Não achei reunião com transcrição para "${args?.termo || args?.transcricaoId || ''}". Use my_meetings para ver o que existe.` } };
+        }
+
+        if (!alvo.report_json) {
+            return {
+                result: {
+                    ...resumoDaReuniao(alvo),
+                    relatorio: null,
+                    resumo: `A reunião "${alvo.subject}" tem transcrição, mas ninguém gerou o relatório ainda. Gerar custa processamento de IA, então isso é feito na Central Microsoft > Reuniões, e depois vale para todos os participantes.`,
+                },
+            };
+        }
+
+        const r = alvo.report_json;
+        return {
+            result: {
+                ...resumoDaReuniao(alvo),
+                relatorio: {
+                    resumo:         r.resumo,
+                    pauta:          r.pauta,
+                    decisoes:       r.decisoes,
+                    acoes:          r.acoes,
+                    checklist:      r.checklist,
+                    proximosPassos: r.proximos_passos,
+                    pontosAtencao:  r.pontos_atencao,
+                    kpis:           r.kpis,
+                    sentimento:     r.sentimento_geral,
+                },
+                resumo: `Relatório de "${alvo.subject}": ${(r.decisoes || []).length} decisão(ões) e ${(r.acoes || []).length} ação(ões).`,
+            },
+        };
+    },
+});
+
+registerTool({
+    name: 'search_meetings',
+    description: 'Procura o que foi DITO nas reuniões: busca o termo dentro das transcrições que o usuário pode ver e devolve os trechos, com quem falou e em que minuto. Use quando perguntarem "o que falaram sobre o repasse da Caixa", "alguém comentou do prazo do Ibitinga em reunião?", "quem citou o meu nome". É a fonte para responder sobre reunião citando a fala, em vez de chutar.',
+    parameters: {
+        type: 'object',
+        properties: {
+            termo:  { type: 'string', description: 'Palavra ou expressão a procurar na fala.' },
+            dias:   { type: 'number', description: 'Quantos dias para trás. Padrão 60.' },
+            limite: { type: 'number', description: 'Máximo de trechos. Padrão 15.' },
+        },
+        required: ['termo'],
+    },
+    requiredPermissions: ['/microsoft/teams'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u) return { result: { erro: 'Usuário não encontrado.' } };
+
+        const termo = String(args?.termo || '').trim().toLowerCase();
+        if (!termo) return { result: { erro: 'Diga o que devo procurar nas reuniões.' } };
+
+        const limite = Math.min(Number(args?.limite) || 15, 40);
+        const linhas = await reunioesVisiveis(u, { dias: Math.min(Number(args?.dias) || DIAS_REUNIAO, 365) });
+
+        const trechos = [];
+        for (const l of linhas) {
+            if (trechos.length >= limite) break;
+            let cues = [];
+            try { cues = JSON.parse(l.parsed_transcript) || []; } catch { continue; }
+
+            for (let i = 0; i < cues.length && trechos.length < limite; i++) {
+                if (!String(cues[i]?.text || '').toLowerCase().includes(termo)) continue;
+                // Uma fala antes e uma depois: sem contexto, a citação engana.
+                trechos.push({
+                    reuniao: l.subject || '(sem título)',
+                    data:    l.meeting_date ? new Date(l.meeting_date).toLocaleDateString('pt-BR', { timeZone: TZ }) : null,
+                    minuto:  cues[i].startStr || null,
+                    quem:    cues[i].speaker || null,
+                    fala:    cues[i].text,
+                    antes:   cues[i - 1]?.text || null,
+                    depois:  cues[i + 1]?.text || null,
+                    transcricaoId: l.transcript_id,
+                });
+            }
+        }
+
+        return {
+            result: {
+                termo: args.termo,
+                total: trechos.length,
+                trechos,
+                resumo: trechos.length
+                    ? `${trechos.length} trecho(s) sobre "${args.termo}" em ${new Set(trechos.map(t => t.reuniao)).size} reunião(ões).`
+                    : `Ninguém falou "${args.termo}" nas reuniões com transcrição que você alcança nesse período.`,
             },
         };
     },
