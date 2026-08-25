@@ -44,7 +44,7 @@ const cvPrecadastros = new PrecadastrosSyncController();
 // Ação `sync` da tela de Empreendimentos (lib/screenCapabilities.js).
 const sincronizarTabelas = requireCapability('/crm/buildings', 'sync');
 
-const WORKFLOW_SCREENS = ['/comercial/workflow/groups', ...RELATORIO_SCREENS, '/validator'];
+const WORKFLOW_SCREENS = ['/crm/workflow/groups', ...RELATORIO_SCREENS, '/validator'];
 const ENTERPRISE_SCREENS = ['/crm/buildings', '/comercial/conditions', '/comercial/projections', ...RELATORIO_SCREENS, '/comercial/reservas-report', '/comercial/precadastros', '/marketing/plano-eventos'];
 
 router.get('/repasses', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasses);
@@ -98,8 +98,8 @@ router.get('/empreendimento/:id/unidades', authenticate, requireRoutePermission(
 
 router.get('/workflow-grupos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchWorkflowGroups);
 // ?tipo=repasses
-router.post('/workflow-grupos', authenticate, requireRoutePermission(['/comercial/workflow/groups']), createOrUpdateWorkflowGroup);
-router.delete('/workflow-grupos/:id', authenticate, requireRoutePermission(['/comercial/workflow/groups']), removeWorkflowGroup);
+router.post('/workflow-grupos', authenticate, requireRoutePermission(['/crm/workflow/groups']), createOrUpdateWorkflowGroup);
+router.delete('/workflow-grupos/:id', authenticate, requireRoutePermission(['/crm/workflow/groups']), removeWorkflowGroup);
 router.get('/workflow-grupos/segments', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchListSegments);
 // ...
 router.get('/workflow-grupos/:id/projecoes', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchGroupProjections);
