@@ -103,28 +103,35 @@ async function heldByCampaign({ cutoff }) {
     });
 
     // Consolida por campanha (um campaign_id pode aparecer com forms diferentes).
-    const byCampaign = new Map();   // campaign_id | '__noca__' → { count, last_at, form_ids:Set }
+    const byCampaign = new Map();   // campaign_id → { count, last_at, form_ids:Set, byForm:Map }
     let heldNoCampaign = 0;
     const formOnly = new Map();      // form_id → count  (held sem campaign_id)
+    const allFormIds = new Set();    // todo form citado (com ou sem campanha)
 
     for (const g of grouped) {
         const cid = g.meta_campaign_id ? String(g.meta_campaign_id) : null;
+        const fid = g.meta_form_id ? String(g.meta_form_id) : null;
         const count = Number(g.count) || 0;
+        if (fid) allFormIds.add(fid);
         if (cid) {
-            const cur = byCampaign.get(cid) || { count: 0, last_at: null, form_ids: new Set() };
+            const cur = byCampaign.get(cid) || { count: 0, last_at: null, form_ids: new Set(), byForm: new Map() };
             cur.count += count;
             if (!cur.last_at || g.last_at > cur.last_at) cur.last_at = g.last_at;
-            if (g.meta_form_id) cur.form_ids.add(String(g.meta_form_id));
+            if (fid) {
+                cur.form_ids.add(fid);
+                cur.byForm.set(fid, (cur.byForm.get(fid) || 0) + count);
+            }
             byCampaign.set(cid, cur);
         } else {
             heldNoCampaign += count;
-            if (g.meta_form_id) {
-                formOnly.set(String(g.meta_form_id), (formOnly.get(String(g.meta_form_id)) || 0) + count);
-            }
+            if (fid) formOnly.set(fid, (formOnly.get(fid) || 0) + count);
         }
     }
 
-    // Enxerta metadados + status de vínculo das campanhas.
+    // Enxerta metadados + status de vínculo de campanhas E forms.
+    // Os forms entram AQUI (não só os sem campanha) porque o resolveLeadBinding
+    // cai no mapping do form quando a campanha não tem vínculo — sem isso a conta
+    // dava lead "em risco" que o disparo recuperaria numa boa.
     const campIds = [...byCampaign.keys()];
     const campsById = new Map();
     if (campIds.length) {
@@ -132,31 +139,40 @@ async function heldByCampaign({ cutoff }) {
         for (const c of camps) campsById.set(String(c.id), c.get({ plain: true }));
     }
 
+    const formsById = new Map();
+    if (allFormIds.size) {
+        const rows = await MetaLeadForm.findAll({ where: { id: { [Op.in]: [...allFormIds] } } });
+        for (const f of rows) formsById.set(String(f.id), f.get({ plain: true }));
+    }
+
     const campaigns = campIds.map(cid => {
         const agg = byCampaign.get(cid);
         const camp = campsById.get(cid) || null;
+        const bound = isBound(camp);
+        // Recuperável hoje = campanha vinculada (tudo) OU form do lead vinculado.
+        const resolvable = bound
+            ? agg.count
+            : [...agg.byForm.entries()].reduce((sum, [fid, n]) => sum + (isBound(formsById.get(fid)) ? n : 0), 0);
         return {
             campaign_id: cid,
             name: camp?.name || null,
             account_name: camp?.account_name || null,
             effective_status: camp?.effective_status || camp?.status || null,
             not_synced: !camp,                       // held aponta pra campanha fora do cache
-            is_bound: isBound(camp),                 // já tem vínculo? held é só rotear
+            is_bound: bound,                         // já tem vínculo? held é só rotear
             midia_slug: camp?.midia_slug || null,
             mapping_active: camp?.mapping_active ?? null,
             held_count: agg.count,
+            resolvable_count: resolvable,            // sai HOJE se disparar
+            blocked_count: agg.count - resolvable,   // ainda preso por falta de vínculo
+            resolvable_via_form: !bound && resolvable > 0,
             last_held_at: agg.last_at,
             form_ids: [...agg.form_ids],
         };
     }).sort((a, b) => b.held_count - a.held_count);
 
-    // Enxerta nome dos forms held-sem-campanha.
+    // Forms held-sem-campanha (o vínculo do form é o único caminho deles).
     const formIds = [...formOnly.keys()];
-    const formsById = new Map();
-    if (formIds.length) {
-        const forms = await MetaLeadForm.findAll({ where: { id: { [Op.in]: formIds } } });
-        for (const f of forms) formsById.set(String(f.id), f.get({ plain: true }));
-    }
     const forms = formIds.map(fid => {
         const form = formsById.get(fid) || null;
         return {
@@ -174,8 +190,8 @@ async function heldByCampaign({ cutoff }) {
         campaigns,                       // campanhas com leads represados
         forms,                           // forms (sem campanha) com leads represados
         held_no_campaign: heldNoCampaign,
-        unbound_campaigns: campaigns.filter(c => !c.is_bound).length,
-        recoverable_campaigns: campaigns.filter(c => c.is_bound).length,
+        unbound_campaigns: campaigns.filter(c => c.blocked_count > 0).length,
+        recoverable_campaigns: campaigns.filter(c => c.resolvable_count > 0).length,
     };
 }
 
@@ -227,16 +243,13 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
         previewBacklogSince({ cutoff }).catch(() => null),
     ]);
 
-    // Total de leads represados por falta de vínculo (campanha ainda sem binding).
-    const leadsAtRisk = held.campaigns
-        .filter(c => !c.is_bound)
-        .reduce((s, c) => s + c.held_count, 0)
-        + held.forms.filter(f => !f.is_bound).reduce((s, f) => s + f.held_count, 0);
+    // Represados recuperáveis = o que o disparo resolveria HOJE (vínculo da
+    // campanha OU fallback do form). Um lead só é "em risco" se nem um nem outro.
+    const leadsRecoverable = held.campaigns.reduce((s, c) => s + c.resolvable_count, 0)
+        + held.forms.filter(f => f.is_bound).reduce((s, f) => s + f.held_count, 0);
 
-    // Represados recuperáveis (campanha já tem vínculo → é só rotear/re-disparar).
-    const leadsRecoverable = held.campaigns
-        .filter(c => c.is_bound)
-        .reduce((s, c) => s + c.held_count, 0);
+    const leadsAtRisk = held.campaigns.reduce((s, c) => s + c.blocked_count, 0)
+        + held.forms.filter(f => !f.is_bound).reduce((s, f) => s + f.held_count, 0);
 
     return {
         period: since && until ? { since, until } : null,
@@ -248,7 +261,8 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
         summary: {
             leads_at_risk: leadsAtRisk,               // held por falta de vínculo
             leads_recoverable: leadsRecoverable,      // held mas já vinculável
-            unbound_campaigns_with_leads: held.campaigns.filter(c => !c.is_bound).length,
+            unbound_campaigns_with_leads: held.campaigns.filter(c => c.blocked_count > 0).length,
+            recoverable_campaigns_with_leads: held.campaigns.filter(c => c.resolvable_count > 0).length,
             active_unbound_campaigns: activeUnbound.length,
             coverage_pct: funnel.coverage_pct,
         },
@@ -261,14 +275,14 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
  */
 export async function getAlertSignal({ cutoff = DEFAULT_CUTOFF } = {}) {
     const held = await heldByCampaign({ cutoff });
-    const unbound = held.campaigns.filter(c => !c.is_bound);
-    const leadsAtRisk = unbound.reduce((s, c) => s + c.held_count, 0)
+    const unbound = held.campaigns.filter(c => c.blocked_count > 0);
+    const leadsAtRisk = unbound.reduce((s, c) => s + c.blocked_count, 0)
         + held.forms.filter(f => !f.is_bound).reduce((s, f) => s + f.held_count, 0);
     return {
         should_alert: unbound.length > 0 && leadsAtRisk > 0,
         unbound_count: unbound.length,
         leads_at_risk: leadsAtRisk,
-        top: unbound.slice(0, 5).map(c => ({ name: c.name || c.campaign_id, held: c.held_count })),
+        top: unbound.slice(0, 5).map(c => ({ name: c.name || c.campaign_id, held: c.blocked_count })),
     };
 }
 

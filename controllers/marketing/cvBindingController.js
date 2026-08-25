@@ -26,10 +26,20 @@ export async function overview(req, res) {
     }
 }
 
+/** Aceita `campaign_id` (um) ou `campaign_ids` (lista); devolve lista de strings. */
+function idList(one, many) {
+    const out = [];
+    if (Array.isArray(many)) out.push(...many);
+    else if (many != null && many !== '') out.push(many);
+    if (one != null && one !== '') out.push(one);
+    return [...new Set(out.map(v => String(v).trim()).filter(Boolean))];
+}
+
 /**
  * POST /marketing/cv-binding/dispatch-recoverable
  * Envia ao CV os represados (held) que já têm vínculo resolvível.
- * Body: { preview?: boolean, limit?: number, concurrency?: number, cutoff?: 'YYYY-MM-DD' }
+ * Body: { preview?, limit?, concurrency?, cutoff?, campaign_id?/campaign_ids?, form_id?/form_ids? }
+ * Sem campanha/form no corpo, envia TODOS os recuperáveis (comportamento antigo).
  */
 export async function dispatchRecoverable(req, res) {
     try {
@@ -37,7 +47,14 @@ export async function dispatchRecoverable(req, res) {
         const limit = Math.min(Math.max(Number(req.body?.limit) || 500, 1), 1000);
         const concurrency = Math.min(Math.max(Number(req.body?.concurrency) || 5, 1), 10);
         const cutoff = req.body?.cutoff || undefined;
-        const result = await CvBacklogDispatchService.dispatchRecoverableHeld({ preview, limit, concurrency, ...(cutoff ? { cutoff } : {}) });
+        const campaignIds = idList(req.body?.campaign_id, req.body?.campaign_ids);
+        const formIds = idList(req.body?.form_id, req.body?.form_ids);
+        const result = await CvBacklogDispatchService.dispatchRecoverableHeld({
+            preview, limit, concurrency,
+            ...(cutoff ? { cutoff } : {}),
+            ...(campaignIds.length ? { campaignIds } : {}),
+            ...(formIds.length ? { formIds } : {}),
+        });
         if (result?.blocked) return res.status(409).json({ ok: false, error: result.reason, ...result });
         return res.json({ ok: true, ...result });
     } catch (err) {

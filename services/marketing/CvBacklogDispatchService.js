@@ -223,19 +223,29 @@ export async function dispatchBacklogSince({ cutoff = DEFAULT_CUTOFF, preview = 
  * Pra cada held: resolve o vínculo (campanha/form), e se resolver, promove
  * held → routed e dispara. Se não resolver (campanha ainda sem vínculo), pula.
  *
+ * Com `campaignIds`/`formIds` o recorte é cirúrgico: o caso real é vincular UMA
+ * campanha e querer soltar só os leads dela, sem tocar no resto do represado.
+ *
  * @param {object}  opts
  * @param {string}  opts.cutoff      'YYYY-MM-DD' (default cutover)
  * @param {boolean} opts.preview     true = só conta quantos são recuperáveis
  * @param {number}  opts.limit       teto por execução (resumível)
  * @param {number}  opts.concurrency envios simultâneos ao CV
+ * @param {string[]} opts.campaignIds recorte por campanha (vazio/omitido = todas)
+ * @param {string[]} opts.formIds     recorte por formulário (held sem campanha)
  */
-export async function dispatchRecoverableHeld({ cutoff = DEFAULT_CUTOFF, preview = false, limit = 500, concurrency = 5 } = {}) {
+export async function dispatchRecoverableHeld({ cutoff = DEFAULT_CUTOFF, preview = false, limit = 500, concurrency = 5, campaignIds = null, formIds = null } = {}) {
     const cutoffDate = cutoffToDate(cutoff);
     const shadow = await isShadowMode();
+
+    const camps = (Array.isArray(campaignIds) ? campaignIds : []).map(String).filter(Boolean);
+    const forms = (Array.isArray(formIds) ? formIds : []).map(String).filter(Boolean);
+    const scoped = camps.length > 0 || forms.length > 0;
 
     const summary = {
         cutoff,
         shadow_mode: shadow,
+        scope: scoped ? { campaign_ids: camps, form_ids: forms } : null,
         scanned: 0,
         recoverable: 0,        // held que resolveram vínculo
         no_binding: 0,         // held cuja campanha ainda não tem vínculo
@@ -256,12 +266,21 @@ export async function dispatchRecoverableHeld({ cutoff = DEFAULT_CUTOFF, preview
         };
     }
 
+    const where = {
+        channel: 'meta_lead_ads',
+        status: 'held',
+        created_at: { [Op.gte]: cutoffDate },
+    };
+    // Recorte: campanha OU form (o held sem campanha só casa por form).
+    if (scoped) {
+        const or = [];
+        if (camps.length) or.push({ meta_campaign_id: { [Op.in]: camps } });
+        if (forms.length) or.push({ meta_campaign_id: null, meta_form_id: { [Op.in]: forms } });
+        where[Op.or] = or;
+    }
+
     const leads = await InboundLead.findAll({
-        where: {
-            channel: 'meta_lead_ads',
-            status: 'held',
-            created_at: { [Op.gte]: cutoffDate },
-        },
+        where,
         order: [['created_at', 'ASC']],
         limit,
     });
