@@ -27,8 +27,13 @@ class ContractAnalysisService {
     /**
      * Método principal para executar a análise automática
      */
-    async executeAutomaticAnalysis() {
+    async executeAutomaticAnalysis(origem = 'agendado') {
         console.log('🚀 Iniciando análise automática de contratos...');
+
+        // Toda execução deixa rastro, inclusive a que não acha nada e a que
+        // morre no meio: sem isso, "o job não rodou" e "o job rodou e falhou"
+        // ficam idênticos vistos do banco.
+        const execucao = await this._abrirExecucao(origem);
 
         try {
             // Buscar repasses que precisam de análise
@@ -37,11 +42,14 @@ class ContractAnalysisService {
 
             if (repasses.length === 0) {
                 console.log('✅ Nenhum repasse encontrado para análise');
+                await this._sincronizarParados([]);
+                await this._fecharExecucao(execucao, { found: 0, processed: 0, errors: 0 });
                 return { success: true, processed: 0, message: 'Nenhum repasse para processar' };
             }
 
             let processed = 0;
             let errors = 0;
+            const desfechos = new Map();
 
             // Processar cada repasse
             for (const repasse of repasses) {
@@ -49,17 +57,26 @@ class ContractAnalysisService {
                     console.log(`🔄 Processando repasse ID: ${repasse.ID} - Reserva: ${repasse.idreserva}`);
                     const analysisResult = await this.processRepasse(repasse);
                     processed++;
-                    if (analysisResult?.status?.toUpperCase?.() === 'ERRO') {
+                    const deuErro = analysisResult?.status?.toUpperCase?.() === 'ERRO';
+                    if (deuErro) {
                         errors++;
                     }
+                    desfechos.set(Number(repasse.ID), {
+                        ok: !deuErro,
+                        erro: deuErro ? this._motivo(analysisResult) : null,
+                    });
 
                     console.log(`✅ Repasse ${repasse.ID} processado com sucesso`);
                 } catch (error) {
                     errors++;
+                    desfechos.set(Number(repasse.ID), { ok: false, erro: error.message });
                     console.error(`❌ Erro ao processar repasse ${repasse.ID}:`, error.message);
                     await this.logErrorToRepasse(repasse.ID, error.message);
                 }
             }
+
+            await this._sincronizarParados(repasses, desfechos);
+            await this._fecharExecucao(execucao, { found: repasses.length, processed, errors });
 
             console.log(`🎉 Análise concluída. Processados: ${processed}, Erros: ${errors}`);
             return {
@@ -71,6 +88,7 @@ class ContractAnalysisService {
 
         } catch (error) {
             console.error('💥 Erro geral na análise automática:', error.message);
+            await this._fecharExecucao(execucao, { message: error.message });
             return {
                 success: false,
                 error: error.message,
@@ -185,20 +203,46 @@ class ContractAnalysisService {
      */
     async downloadDocuments(docs) {
         const downloaded = {};
+        const PRAZO_MS = Number(process.env.CONTRACT_DOWNLOAD_TIMEOUT_MS || 120000);
 
         for (const [tipo, doc] of Object.entries(docs)) {
             try {
-                const response = await axios.get(doc.link, { responseType: 'stream' });
+                const response = await axios.get(doc.link, { responseType: 'stream', timeout: PRAZO_MS });
 
                 const fileName = `${Date.now()}_${tipo.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
                 const filePath = path.join(this.tempDir, fileName);
 
-                const writer = fs.createWriteStream(filePath);
-                response.data.pipe(writer);
-
+                // O download PRECISA terminar de um jeito ou de outro. Antes a
+                // Promise só resolvia no 'finish' do writer e ignorava erro do
+                // lado da resposta: um corpo que estancava no meio pendurava a
+                // execução para sempre e, como o job só roda uma de cada vez, a
+                // fila inteira parava calada até o próximo deploy.
                 await new Promise((resolve, reject) => {
-                    writer.on('finish', resolve);
-                    writer.on('error', reject);
+                    const writer = fs.createWriteStream(filePath);
+                    let terminou = false;
+                    let prazo = null;
+
+                    const encerrar = (err) => {
+                        if (terminou) return;
+                        terminou = true;
+                        if (prazo) clearTimeout(prazo);
+                        if (err) {
+                            response.data.destroy();
+                            writer.destroy();
+                            return reject(err);
+                        }
+                        return resolve();
+                    };
+
+                    prazo = setTimeout(
+                        () => encerrar(new Error(`download de ${tipo} passou de ${PRAZO_MS}ms`)),
+                        PRAZO_MS
+                    );
+
+                    response.data.on('error', encerrar);
+                    writer.on('error', encerrar);
+                    writer.on('finish', () => encerrar());
+                    response.data.pipe(writer);
                 });
 
                 downloaded[tipo] = {
@@ -350,6 +394,137 @@ class ContractAnalysisService {
         }
     }
 
+
+    // ── Rastro da execução e quadro do que ficou preso ──────────────────────
+    // Tudo daqui para baixo é best-effort: registrar não pode derrubar análise.
+
+    async _db() {
+        const { default: db } = await import('../models/sequelize/index.js');
+        return db;
+    }
+
+    async _abrirExecucao(origem) {
+        try {
+            const db = await this._db();
+            return await db.ContractValidatorRun.create({
+                origin: origem === 'manual' ? 'manual' : 'agendado',
+                started_at: new Date(),
+            });
+        } catch (error) {
+            console.warn('[validador] não consegui registrar o início da execução:', error.message);
+            return null;
+        }
+    }
+
+    async _fecharExecucao(execucao, dados) {
+        if (!execucao) return;
+        try {
+            await execucao.update({ ...dados, finished_at: new Date() });
+        } catch (error) {
+            console.warn('[validador] não consegui fechar o registro da execução:', error.message);
+        }
+    }
+
+    /** A primeira mensagem da análise já diz por que ela não passou. */
+    _motivo(analysisResult) {
+        const msgs = Array.isArray(analysisResult?.mensagens) ? analysisResult.mensagens : [];
+        return msgs[0]?.descricao || analysisResult?.resultado || 'erro sem detalhe';
+    }
+
+    /**
+     * O CV devolve 'YYYY-MM-DD HH:MM:SS' no horário de Brasília, sem fuso
+     * escrito. Deixar o Node adivinhar daria 3 horas de erro no servidor (que
+     * roda em UTC) e nenhuma na máquina de quem testa - o tipo de conta errada
+     * que só aparece em produção.
+     */
+    _desdeQuando(repasse) {
+        const bruto = repasse?.data_status_repasse;
+        if (!bruto) return null;
+        const data = new Date(`${String(bruto).replace(' ', 'T')}-03:00`);
+        return Number.isNaN(data.getTime()) ? null : data;
+    }
+
+    /**
+     * Espelha em contract_validator_stuck quem continua em "Analise Contratos".
+     * Quem saiu da etapa andou e some do quadro; quem ficou acumula tentativa e
+     * o motivo da última falha.
+     */
+    async _sincronizarParados(repasses, desfechos = new Map()) {
+        try {
+            const db = await this._db();
+            const { Op } = await import('sequelize');
+            const naEtapa = repasses.map(r => Number(r.ID)).filter(Boolean);
+
+            await db.ContractValidatorStuck.destroy({
+                where: naEtapa.length ? { idrepasse: { [Op.notIn]: naEtapa } } : {},
+            });
+
+            for (const repasse of repasses) {
+                const id = Number(repasse.ID);
+                const desfecho = desfechos.get(id);
+
+                if (desfecho?.ok) {
+                    await db.ContractValidatorStuck.destroy({ where: { idrepasse: id } });
+                    continue;
+                }
+
+                const [linha] = await db.ContractValidatorStuck.findOrCreate({
+                    where: { idrepasse: id },
+                    defaults: { idrepasse: id, attempts: 0 },
+                });
+
+                await linha.update({
+                    idreserva: repasse.idreserva || null,
+                    cliente: repasse.nome_cliente || null,
+                    empreendimento: repasse.empreendimento || null,
+                    status_since: this._desdeQuando(repasse) || linha.status_since,
+                    last_error: desfecho?.erro ? String(desfecho.erro).slice(0, 1000) : linha.last_error,
+                    attempts: (linha.attempts || 0) + (desfecho ? 1 : 0),
+                });
+
+                await this._avisarSeParado(linha);
+            }
+        } catch (error) {
+            console.warn('[validador] não consegui atualizar o quadro de parados:', error.message);
+        }
+    }
+
+    /** Um aviso por episódio: o registro sai do quadro quando o repasse anda. */
+    async _avisarSeParado(linha) {
+        const limiteHoras = Number(process.env.CONTRACT_STUCK_ALERT_HOURS || 4);
+        if (linha.alerted_at || !linha.status_since) return;
+
+        const horasParado = (Date.now() - new Date(linha.status_since).getTime()) / 3600000;
+        if (horasParado < limiteHoras) return;
+
+        try {
+            const [{ default: NotificationService }, { NotificationType }, db] = await Promise.all([
+                import('./notification/NotificationService.js'),
+                import('./notification/notificationTypes.js'),
+                this._db(),
+            ]);
+
+            const users = (await db.User.findAll({
+                where: { role: 'admin' }, attributes: ['id'], raw: true,
+            })).map(u => u.id);
+            if (!users.length) return;
+
+            await NotificationService.notify({
+                type: NotificationType.CONTRACT_VALIDATOR_STUCK,
+                recipients: { users },
+                title: 'Contrato parado na análise automática',
+                body: `${linha.cliente || 'Um cliente'} (${linha.empreendimento || 'empreendimento não identificado'}) `
+                    + `está em "Analise Contratos" há ${Math.floor(horasParado)}h. `
+                    + `Último erro: ${linha.last_error || 'não registrado'}.`,
+                link: '/validator',
+                importance: 7,
+            });
+
+            await linha.update({ alerted_at: new Date() });
+        } catch (error) {
+            console.warn('[validador] não consegui avisar sobre o contrato parado:', error.message);
+        }
+    }
 
     /**
      * Limpar arquivos temporários

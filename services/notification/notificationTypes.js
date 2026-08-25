@@ -33,6 +33,10 @@ export const NotificationType = {
     // senha, e sem aviso o dado só envelhece calado.
     CV_PANEL_CREDENTIAL_FAILED: 'integracao.cv.credencial',
 
+    // Validador de contratos — o contrato que a automação NÃO conseguiu
+    // resolver fica parado de propósito, e sem aviso ninguém percebe.
+    CONTRACT_VALIDATOR_STUCK: 'validador.contrato.parado',
+
     // Alertas — compartilhamento entre usuários
     ALERT_SHARED:            'alert.shared',
 
@@ -143,6 +147,18 @@ export const NOTIFICATION_CATALOG = {
             variables: ['userName', 'subject', 'startTime'],
         },
         defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CONTRACT_VALIDATOR_STUCK]: {
+        label: 'Contrato parado na análise automática',
+        group: 'Sistema',
+        description: 'Quando um repasse fica em "Analise Contratos" além do prazo esperado - '
+            + 'normalmente porque a análise falhou e o repasse continua na mesma etapa, esperando alguém.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        // Vale e-mail: a venda para de andar até alguém agir, e quem age pode
+        // estar fora do Office.
+        defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },
     [NotificationType.CV_PANEL_CREDENTIAL_FAILED]: {

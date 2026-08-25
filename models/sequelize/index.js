@@ -12,6 +12,8 @@ import EventDefine from './event.js';
 import config from '../../config/config.cjs';
 import TokenUsageDefine from './tokenUsage.js';
 import ValidationHistoryDefine from './validationHistory.js';
+import ContractValidatorRunDefine from './contractValidatorRun.js';
+import ContractValidatorStuckDefine from './contractValidatorStuck.js';
 
 // Singe imports
 import SalesContractDefine from './sienge/salesContract.js';
@@ -288,6 +290,8 @@ db.Favorite = FavoriteDefine(sequelize, DataTypes);
 db.Event = EventDefine(sequelize, DataTypes);
 db.TokenUsage = TokenUsageDefine(sequelize, DataTypes);
 db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
+db.ContractValidatorRun = ContractValidatorRunDefine(sequelize, DataTypes);
+db.ContractValidatorStuck = ContractValidatorStuckDefine(sequelize, DataTypes);
 
 // sienge db 
 db.SalesContract = SalesContractDefine(sequelize, DataTypes);

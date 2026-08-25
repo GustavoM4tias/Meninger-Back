@@ -1,11 +1,10 @@
 // routes/contractAutomationRoutes.js
 import express from 'express';
-import ContractAutomationController from '../controllers/contractAutomationController.js';
+import controller from '../controllers/contractAutomationController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
 
 const router = express.Router();
-const controller = new ContractAutomationController();
 
 // Gatilhos manuais da análise automática de repasses. A execução recorrente é
 // feita em processo pelo contractValidatorScheduler; estas rotas existem só
@@ -31,9 +30,14 @@ router.get('/pending', authenticate, requireAdmin, async (req, res) => {
     await controller.listPendingRepasses(req, res);
 });
 
-// Configurar análise agendada
-router.post('/schedule', authenticate, requireAdmin, async (req, res) => {
-    await controller.configureScheduledAnalysis(req, res);
-}); // ainda sem funcionamento
+// Configurar análise agendada: a janela vive em CONTRACT_CRON_EXPRESSION /
+// ENABLE_CONTRACT_SCHEDULE. A rota existia chamando um método comentado, ou
+// seja, estourava TypeError em quem chamasse - melhor dizer o que é.
+router.post('/schedule', authenticate, requireAdmin, (req, res) => {
+    res.status(501).json({
+        success: false,
+        message: 'Agendamento não é configurável por aqui: use CONTRACT_CRON_EXPRESSION e ENABLE_CONTRACT_SCHEDULE.',
+    });
+});
 
 export default router;

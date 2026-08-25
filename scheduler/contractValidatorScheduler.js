@@ -1,10 +1,10 @@
 // scheduler/contractValidatorScheduler.js
 import cron from 'node-cron';
-import ContractAutomationController from '../controllers/contractAutomationController.js';
+import contractAutomationController from '../controllers/contractAutomationController.js';
 
 class ContractValidatorScheduler {
     constructor() {
-        this.controller = new ContractAutomationController();
+        this.controller = contractAutomationController;
         this.task = null;
         this.enabled = false;
         this.cronExpression = process.env.CONTRACT_CRON_EXPRESSION || '0 9-17 * * 1-5'; // padrão: de hora em hora, das 9h às 17h, seg a sex
@@ -16,7 +16,7 @@ class ContractValidatorScheduler {
         }
 
         this.task = cron.schedule(cronExp, async () => {
-            if (this.controller.isRunning) {
+            if (this.controller.estaRodando()) {
                 console.log('⏳ Execução ainda em andamento, agendamento ignorado.');
                 return;
             }

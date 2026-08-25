@@ -4,12 +4,26 @@ import { TokenUsage } from '../utils/db.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
-function isQuotaOrTransient(err) {
+// Quota e sobrecarga NÃO são a mesma falha e não se resolvem do mesmo jeito:
+// 429 é a CHAVE que estourou (precisa esfriar e rodar para outra), 503 é o
+// MODELO sobrecarregado (passa em segundos, e esfriar a chave só piora).
+// Tratar os dois como "transiente" custou caro: com uma chave só, um 503 do
+// gemini-2.5-pro punha a chave em cooldown, o fallback para o flash encontrava
+// a mesma chave gelada e a análise morria em 2 segundos - deixando o contrato
+// parado em "Analise Contratos" até alguém reparar na mão.
+function classificaErro(err) {
   const code = err?.status ?? err?.code ?? err?.response?.status;
-  // 403 pode ser billing/disable (não transiente) ou quota (às vezes apresentado como 403).
-  // Se quiser ser mais estrito, deixe só 429/500/502/503 como transientes:
-  return code === 429 || code === 503 || code === 500 || code === 502;
+  if (code === 429) return 'quota';
+  if (code === 500 || code === 502 || code === 503) return 'sobrecarga';
+  if (code === 404) return 'modelo';
+  return 'fatal';
 }
+
+const esperar = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Espera entre tentativas no MESMO modelo, crescente.
+const ESPERAS_MS = [1000, 4000, 10000];
+const TENTATIVAS_MIN = Math.max(1, Number(process.env.GEMINI_MAX_RETRIES || 3));
 
 export class AIService {
   // ── Helpers internos ────────────────────────────────────────────────────────
@@ -27,8 +41,10 @@ export class AIService {
     let lastErr;
 
     for (const modelToUse of modelsToTry) {
-      const maxAttempts = Math.max(1, getKeyCount());
+      // Uma chave só não pode significar uma tentativa só.
+      const maxAttempts = Math.max(getKeyCount(), TENTATIVAS_MIN);
       let attempts = 0;
+      let sobrecargas = 0;
       while (attempts < maxAttempts) {
         const { client, index } = nextClient();
         if (!client) {
@@ -58,19 +74,29 @@ export class AIService {
 
         } catch (err) {
           lastErr = err;
-          const code = err?.status ?? err?.code ?? err?.response?.status;
+          const tipo = classificaErro(err);
           const msg = err?.message || String(err);
 
-          console.error(`[Debug] Tentativa ${attempts}/${maxAttempts} para modelo ${modelToUse}`);
+          console.error(`[Debug] Tentativa ${attempts}/${maxAttempts} para modelo ${modelToUse} (${tipo})`);
 
-          if (code === 404) {
+          if (tipo === 'modelo') {
             console.warn(`Pulando modelo ${modelToUse} por 404 (não suportado/não encontrado).`);
             break;
           }
 
-          if (isQuotaOrTransient(err)) {
+          if (tipo === 'quota') {
+            // A chave estourou o limite: esfria ELA e roda para a próxima.
             markCooldown(index);
-            await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 300)));
+            await esperar(400 + Math.floor(Math.random() * 300));
+            continue;
+          }
+
+          if (tipo === 'sobrecarga') {
+            // O modelo está cheio, a chave está boa: repete com a mesma chave,
+            // esperando um pouco mais a cada rodada. Sem cooldown aqui.
+            const espera = ESPERAS_MS[Math.min(sobrecargas++, ESPERAS_MS.length - 1)];
+            console.warn(`Modelo ${modelToUse} sobrecarregado; nova tentativa em ${espera}ms.`);
+            await esperar(espera + Math.floor(Math.random() * 300));
             continue;
           }
 

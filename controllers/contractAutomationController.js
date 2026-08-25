@@ -2,11 +2,31 @@
 import ContractAnalysisService from '../services/contractAnalysisService.js'; 
 import apiCv from '../lib/apiCv.js';
 
-class ContractAutomationController {
+// Uma execução que passa disso não está rodando: está pendurada. Sem prazo,
+// bastava um download estancado para deixar isRunning=true para sempre - e daí
+// todo ciclo seguinte era pulado calado, com o servidor no ar e a fila parada.
+const PRAZO_EXECUCAO_MS = Number(process.env.CONTRACT_RUN_MAX_MS || 20 * 60 * 1000);
+
+export class ContractAutomationController {
     constructor() {
         this.contractService = new ContractAnalysisService();
         this.isRunning = false;
+        this.runningSince = null;
         this.lastExecution = null;
+    }
+
+    /** Está rodando de verdade? Execução vencida conta como morta. */
+    estaRodando() {
+        if (!this.isRunning) return false;
+
+        const ha = this.runningSince ? Date.now() - this.runningSince : Infinity;
+        if (ha > PRAZO_EXECUCAO_MS) {
+            console.warn(`⚠️ Execução anterior passou de ${Math.round(ha / 60000)} min sem terminar; liberando o job.`);
+            this.isRunning = false;
+            this.runningSince = null;
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -15,7 +35,7 @@ class ContractAutomationController {
     async executeAnalysis(req, res) {
         try {
             // Verificar se já está executando
-            if (this.isRunning) {
+            if (this.estaRodando()) {
                 return res.status(409).json({
                     success: false,
                     message: 'Análise já está em execução',
@@ -24,12 +44,14 @@ class ContractAutomationController {
             }
 
             this.isRunning = true;
+            this.runningSince = Date.now();
             const startTime = new Date();
 
             console.log('🚀 Iniciando análise automática via API...');
 
             // Executar análise
-            const result = await this.contractService.executeAutomaticAnalysis();
+            const origem = req?.method === 'SCHEDULED' ? 'agendado' : 'manual';
+            const result = await this.contractService.executeAutomaticAnalysis(origem);
 
             const endTime = new Date();
             const duration = Math.round((endTime - startTime) / 1000);
@@ -42,6 +64,7 @@ class ContractAutomationController {
             };
 
             this.isRunning = false;
+            this.runningSince = null;
 
             res.status(200).json({
                 ...result,
@@ -54,6 +77,7 @@ class ContractAutomationController {
 
         } catch (error) {
             this.isRunning = false;
+            this.runningSince = null;
             console.error('💥 Erro na análise automática:', error.message);
 
             res.status(500).json({
@@ -69,9 +93,21 @@ class ContractAutomationController {
      */
     async getAnalysisStatus(req, res) {
         try {
+            // O que está na memória vale para a execução de agora; o histórico
+            // e o quadro de parados vêm do banco, que é o único lugar onde a
+            // resposta sobrevive a um restart do processo.
+            const { default: db } = await import('../models/sequelize/index.js');
+            const [execucoes, parados] = await Promise.all([
+                db.ContractValidatorRun.findAll({ order: [['started_at', 'DESC']], limit: 10, raw: true }),
+                db.ContractValidatorStuck.findAll({ order: [['status_since', 'ASC']], raw: true }),
+            ]);
+
             const status = {
-                isRunning: this.isRunning,
+                isRunning: this.estaRodando(),
+                runningSince: this.runningSince ? new Date(this.runningSince).toISOString() : null,
                 lastExecution: this.lastExecution,
+                execucoes,
+                parados,
                 service: 'Contract Analysis Automation',
                 timestamp: new Date().toISOString()
             };
@@ -215,4 +251,11 @@ class ContractAutomationController {
     // }
 }
 
-export default ContractAutomationController;
+// Instância ÚNICA: o scheduler e as rotas precisam enxergar o mesmo estado.
+// Com um `new` em cada lugar, /status respondia sempre "isRunning: false,
+// lastExecution: null" mesmo com o job rodando, e um disparo manual entrava em
+// paralelo com o agendado - dois processos analisando o mesmo repasse.
+const contractAutomationController = new ContractAutomationController();
+
+export default contractAutomationController;
+

@@ -13,13 +13,27 @@ export const INTERNAL_JOB_TOKEN =
 
 export const INTERNAL_JOB_HEADER = 'x-internal-job-token';
 
+// timingSafeEqual EXIGE buffers do mesmo tamanho, e comparar o header cru
+// estourava (500 em vez de 401) sempre que o tamanho não batia. Comparando o
+// sha256 dos dois, o tamanho é sempre 32 bytes e a comparação continua em
+// tempo constante.
+const digest = (valor) => crypto.createHash('sha256').update(String(valor)).digest();
+
+/** O pedido traz o token interno deste processo? Não responde nada. */
+export function hasValidInternalJobToken(req) {
+    const got = req?.headers?.[INTERNAL_JOB_HEADER];
+    if (!got) return false;
+    return crypto.timingSafeEqual(digest(got), digest(INTERNAL_JOB_TOKEN));
+}
+
 export function requireInternalJobToken(req, res, next) {
-    const got = req.headers[INTERNAL_JOB_HEADER];
-    if (got && crypto.timingSafeEqual(
-        Buffer.from(String(got)),
-        Buffer.from(INTERNAL_JOB_TOKEN)
-    )) return next();
+    if (hasValidInternalJobToken(req)) return next();
     return res.status(401).json({ error: 'Token interno inválido.' });
 }
 
-export default { INTERNAL_JOB_TOKEN, INTERNAL_JOB_HEADER, requireInternalJobToken };
+export default {
+    INTERNAL_JOB_TOKEN,
+    INTERNAL_JOB_HEADER,
+    hasValidInternalJobToken,
+    requireInternalJobToken,
+};
