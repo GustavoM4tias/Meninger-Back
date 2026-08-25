@@ -15,6 +15,12 @@ function filtrosDaQuery(req) {
         idreserva: req.query.idreserva,
         dateFrom: req.query.dateFrom,
         dateTo: req.query.dateTo,
+        // 'created_at' (emissão, padrão) | 'paid_at' (pagamento)
+        dateField: req.query.dateField,
+        // Etapa CV (reserva / repasse): a tela manda desde sempre, e o
+        // histórico unificado vinha ignorando - filtro que não filtra.
+        cvSituacao: req.query.cvSituacao,
+        cvRepasse: req.query.cvRepasse,
         q: req.query.q,
         page: req.query.page,
         limit: req.query.limit,
