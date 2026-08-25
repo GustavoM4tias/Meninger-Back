@@ -253,6 +253,9 @@ export default class MicrosoftAuthController {
 
             const token = await microsoftAuthService.getValidToken(user);
 
+            // `null` aqui só acontece quando a Microsoft DISSE que a autorização
+            // morreu (o serviço já apagou os tokens). Passageiro não chega aqui:
+            // vira exceção com `microsoftTemporario` e cai no catch abaixo.
             if (!token) {
                 return res.status(401).json({
                     error: 'Token Microsoft inválido ou expirado. Por favor, reconecte sua conta Microsoft.',
@@ -263,8 +266,22 @@ export default class MicrosoftAuthController {
             return res.json({ success: true, message: 'Token renovado com sucesso.' });
 
         } catch (err) {
+            // PASSAGEIRO NÃO É MOTIVO PARA RELOGIN, e a resposta precisa dizer
+            // isso de forma que a tela consiga distinguir sem ler prosa. Um 500
+            // genérico fazia o front tratar uma piscada de rede exatamente como
+            // uma autorização revogada - e o modal de reconectar aparecia por
+            // nada, que é a queixa que originou esta separação.
+            if (err?.microsoftTemporario) {
+                console.warn('⚠️  [Microsoft] refresh temporariamente indisponível:', err.message);
+                return res.status(503).json({
+                    error: err.message,
+                    temporary: true,
+                    requiresReauth: false,
+                });
+            }
+
             console.error('❌ [Microsoft] refresh error:', err.message);
-            return res.status(500).json({ error: 'Erro ao renovar token Microsoft.' });
+            return res.status(500).json({ error: 'Erro ao renovar token Microsoft.', requiresReauth: false });
         }
     };
 }

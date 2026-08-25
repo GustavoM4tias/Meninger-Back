@@ -29,6 +29,15 @@ export const NotificationType = {
     MEETING_STARTING:        'meeting.starting',
     MEETING_REPORT_READY:    'meeting.report.ready',
 
+    // Assistente pessoal — o dia da pessoa, não o trabalho da equipe
+    ASSISTANT_DAILY:         'assistente.resumo',
+    ASSISTANT_DEADLINE:      'assistente.prazo',
+    ASSISTANT_STALLED:       'assistente.parado',
+
+    // Parceria — gente pedindo a gente. Exige RESPOSTA, não só leitura.
+    PARTNERSHIP_INVITE:      'parceria.convite',
+    PARTNERSHIP_ANSWERED:    'parceria.resposta',
+
     // Integrações — a credencial do CV para de valer quando o CV rotaciona a
     // senha, e sem aviso o dado só envelhece calado.
     CV_PANEL_CREDENTIAL_FAILED: 'integracao.cv.credencial',
@@ -172,6 +181,51 @@ export const NOTIFICATION_CATALOG = {
         // integração fica parada até alguém agir.
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
+    },
+
+    // ── Assistente pessoal ───────────────────────────────────────────────────
+    [NotificationType.ASSISTANT_DAILY]: {
+        label: 'Resumo do meu dia',
+        group: 'Assistente',
+        description: 'Uma vez por dia, de manhã: os compromissos de hoje, o que está esperando decisão sua e as tarefas com prazo.',
+        // Push ligado: é o aviso que faz sentido chegar antes de a pessoa abrir
+        // o Office - é justamente para ela saber o que a espera.
+        defaults: { inapp: true, email: false, whatsapp: false },
+        emailType: 'generic.notification',
+    },
+    [NotificationType.ASSISTANT_DEADLINE]: {
+        label: 'Prazo chegando',
+        group: 'Assistente',
+        description: 'Aviso quando uma tarefa ou um prazo encontrado num e-mail está para vencer.',
+        defaults: { inapp: true, email: false, whatsapp: false },
+        emailType: 'generic.notification',
+    },
+    [NotificationType.ASSISTANT_STALLED]: {
+        label: 'Coisa parada',
+        group: 'Assistente',
+        description: 'Aviso quando algo esperando você (e-mail, aprovação, cobrança) passa dias sem andar.',
+        // Sem push: é cobrança de coisa antiga, não urgência. Vibrar o celular
+        // por algo parado há três dias é interromper sem motivo.
+        push: false,
+        defaults: { inapp: true, email: false, whatsapp: false },
+    },
+
+    // ── Parceria ─────────────────────────────────────────────────────────────
+    [NotificationType.PARTNERSHIP_INVITE]: {
+        label: 'Convite para entrar numa tarefa',
+        group: 'Assistente',
+        description: 'Quando alguém do seu nível ou acima pede para você entrar junto numa tarefa dele. Exige que você aceite ou recuse - ignorar não encerra.',
+        // NÃO desligável na prática: quem ignora deixa outra pessoa esperando.
+        // O aviso volta com espaçamento crescente até ser respondido.
+        defaults: { inapp: true, email: true, whatsapp: false },
+        emailType: 'generic.notification',
+    },
+    [NotificationType.PARTNERSHIP_ANSWERED]: {
+        label: 'Resposta ao seu convite',
+        group: 'Assistente',
+        description: 'Quando alguém aceita ou recusa entrar numa tarefa que você pediu.',
+        push: false,
+        defaults: { inapp: true, email: false, whatsapp: false },
     },
 
     [NotificationType.MEETING_REPORT_READY]: {

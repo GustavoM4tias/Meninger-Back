@@ -54,6 +54,26 @@ export default (sequelize, DataTypes) => {
             comment: 'Quantas mensagens a lista traz por vez.',
         },
 
+        // ── IA da caixa ──────────────────────────────────────────────────────
+        outlook_ai_enabled: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: true,
+            comment: 'Liga a IA do e-mail (triagem, leitura, rascunho). Desligada, a aba Caixa continua funcionando normalmente.',
+        },
+        outlook_ai_auto_enabled: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false,
+            comment: 'Permite a IA AGIR sozinha (arquivar, responder). Nasce desligado: instalar a feature não pode fazer e-mail sair.',
+        },
+        outlook_ai_triage_size: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 40,
+            comment: 'Quantas mensagens a triagem classifica por passada. É o teto de custo de IA por caixa.',
+        },
+
         // ── Lembrete de reunião ──────────────────────────────────────────────
         meeting_reminder_enabled: {
             type: DataTypes.BOOLEAN,

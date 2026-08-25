@@ -22,6 +22,11 @@ const DEFAULTS = {
     outlook_enabled: true,
     outlook_send_enabled: true,
     outlook_page_size: 25,
+    // IA da caixa. `outlook_ai_auto_enabled` nasce FALSE de proposito: instalar
+    // a feature nao pode fazer e-mail sair sozinho. Ligar e decisao de alguem.
+    outlook_ai_enabled: true,
+    outlook_ai_auto_enabled: false,
+    outlook_ai_triage_size: 40,
 };
 
 const CACHE_TTL_MS = 60 * 1000;

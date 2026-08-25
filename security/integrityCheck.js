@@ -101,6 +101,14 @@ const NO_SCREEN_PERMISSION = [
     // ToolRegistry recusa a que o usuário não tem (fail-closed).
     ['/api/office-chat', 'alçada é validada tool a tool no ToolRegistry'],
     ['/api/reports', 'Relatórios da Eme: tela livre; builder e escrita já exigem admin'],
+    // Assistente pessoal: TODA rota devolve só o que é da PRÓPRIA pessoa, e o
+    // id sai do token - nenhuma delas aceita user_id do cliente. Exigir alçada
+    // criaria o absurdo de alguém não poder anotar um lembrete para si mesmo,
+    // pelo mesmo motivo que as preferências de notificação não exigem. A tela
+    // é permissionManaged:false no navRegistry, coerente com isto.
+    // Se alguém acrescentar aqui uma rota que leia a lista de OUTRA pessoa, é
+    // regressão e esta justificativa deixa de valer.
+    ['/api/assistente', 'lista da própria pessoa; o id vem do token, nunca do cliente'],
     // Casos pontuais herdados
     ['/api/sienge/contracts/sync/status', 'status de sync, sem dado de negócio'],
     ['/api/cv/banners', 'banners de campanha exibidos na home'],

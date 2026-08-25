@@ -145,6 +145,21 @@ import UseredeLinkEventDefine from './userede/useredeLinkEvent.js';
 // Microsoft 365 (integração)
 import MicrosoftSettingsDefine from './microsoft/microsoftSettings.js';
 import MicrosoftSubscriptionDefine from './microsoft/microsoftSubscription.js';
+// IA do Outlook (triagem, automações, fila de aprovação, histórico)
+import OutlookAiSettingsDefine from './microsoft/outlookAiSettings.js';
+import OutlookAiRuleDefine from './microsoft/outlookAiRule.js';
+import OutlookAiTriageDefine from './microsoft/outlookAiTriage.js';
+import OutlookAiActionDefine from './microsoft/outlookAiAction.js';
+import OutlookAiQueueDefine from './microsoft/outlookAiQueue.js';
+import OutlookAiFeedbackDefine from './microsoft/outlookAiFeedback.js';
+
+// Assistente pessoal (tarefas, lembretes e o que ja foi avisado)
+import AssistantTaskDefine from './assistant/assistantTask.js';
+import AssistantNoticeDefine from './assistant/assistantNotice.js';
+import AssistantSettingsDefine from './assistant/assistantSettings.js';
+import AssistantTaskItemDefine from './assistant/assistantTaskItem.js';
+import AssistantTaskPartnerDefine from './assistant/assistantTaskPartner.js';
+import PartnershipInviteDefine from './collab/partnershipInvite.js';
 
 // Cancelamento de Reservas (CV × Sienge)
 import ReservaCancelSettingsDefine from './reservaCancel/reservaCancelSettings.js';
@@ -425,6 +440,18 @@ db.UseredeLinkEvent    = UseredeLinkEventDefine(sequelize, DataTypes);
 // Microsoft 365 (integração)
 db.MicrosoftSettings = MicrosoftSettingsDefine(sequelize, DataTypes);
 db.MicrosoftSubscription = MicrosoftSubscriptionDefine(sequelize, DataTypes);
+db.OutlookAiSettings = OutlookAiSettingsDefine(sequelize, DataTypes);
+db.OutlookAiRule = OutlookAiRuleDefine(sequelize, DataTypes);
+db.OutlookAiTriage = OutlookAiTriageDefine(sequelize, DataTypes);
+db.OutlookAiAction = OutlookAiActionDefine(sequelize, DataTypes);
+db.OutlookAiQueue = OutlookAiQueueDefine(sequelize, DataTypes);
+db.OutlookAiFeedback = OutlookAiFeedbackDefine(sequelize, DataTypes);
+db.AssistantTask = AssistantTaskDefine(sequelize, DataTypes);
+db.AssistantNotice = AssistantNoticeDefine(sequelize, DataTypes);
+db.AssistantSettings = AssistantSettingsDefine(sequelize, DataTypes);
+db.AssistantTaskItem = AssistantTaskItemDefine(sequelize, DataTypes);
+db.AssistantTaskPartner = AssistantTaskPartnerDefine(sequelize, DataTypes);
+db.PartnershipInvite = PartnershipInviteDefine(sequelize, DataTypes);
 
 // Cancelamento de Reservas (CV × Sienge)
 db.ReservaCancelSettings = ReservaCancelSettingsDefine(sequelize, DataTypes);

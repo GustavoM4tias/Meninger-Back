@@ -34,6 +34,9 @@ import './ChecklistTools.js';
 // Microsoft: agenda, disponibilidade, agendamento, busca no SharePoint e e-mail.
 // A Eme nao conhecia nada do Graph antes disto.
 import './MicrosoftTools.js';
+import './OutlookAiTools.js';
+import './AssistantTools.js';
+import { escolherTools, tosRecentes } from './ToolPreselect.js';
 import { getToolsFor, toGeminiDeclarations, findTool, userHasPermissions } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
 import { buildScreenContextBlock } from './screenContext.js';
@@ -271,6 +274,11 @@ function auditOfficeTool({ user, sessionId, toolName, args, result, ms, ip, user
 // tools; o validador de integridade confere o mapa de alçada das legadas)
 export { executeTool, TOOLS, TOOL_DECLARATIONS, LEGACY_TOOL_ROUTES };
 
+// Expostos só para conferência: a validação anti-alucinação já bloqueou
+// resposta CERTA três vezes, e não havia como testá-la sem subir um turno
+// inteiro contra o Gemini. Nada aqui é usado pelo fluxo normal.
+export const __testables = { detectHallucinations, buildAuthoritativeBlock };
+
 dotenv.config();
 
 const STORAGE_LIMIT_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -292,19 +300,47 @@ function getGeminiClient(keyIndex = null) {
 function parseList(env) {
   return (env || '').split(',').map(m => m.trim()).filter(Boolean);
 }
+/**
+ * O pool RÁPIDO. O nome é o contrato: a primeira posição tem que ser um modelo
+ * rápido.
+ *
+ * DOIS DEFEITOS MORAVAM AQUI, e juntos faziam toda pergunta simples rodar no
+ * modelo caro:
+ *
+ * 1. `GEMINI_MODELS` é a lista GERAL de fallback, e no .env ela começa por
+ *    `gemini-2.5-pro`. Usada crua como pool rápido, o "fast" virava o pro -
+ *    ~10s de latência de base em vez de ~3s, em toda pergunta. Medido: um turno
+ *    de "quais minhas tarefas de hoje?" rodando no pro. Por isso a lista geral
+ *    agora é FILTRADA: dela só entram os modelos que se anunciam rápidos.
+ *
+ * 2. `parseList(x) || [...]` nunca caía no default: `parseList` devolve array,
+ *    e `[] || y` é `[]`, não `y`. Sem a env, o pool ficava vazio e o modelo
+ *    escolhido era `undefined`.
+ */
 function getFastModels(settings = null) {
   // Override do cérebro (settings.model_pools.fast) tem prioridade; senão env/default.
   const fromDb = settings?.model_pools?.fast;
   if (Array.isArray(fromDb) && fromDb.length) return fromDb;
+
   const fast = parseList(process.env.GEMINI_FAST_MODELS);
   if (fast.length) return fast;
-  return parseList(process.env.GEMINI_MODELS) || ['gemini-2.5-flash'];
+
+  // Da lista geral, só o que é rápido - e ela pode nem ter um.
+  const geral = parseList(process.env.GEMINI_MODELS);
+  const rapidos = geral.filter(m => /flash|lite/i.test(m));
+  if (rapidos.length) return rapidos;
+
+  return ['gemini-2.5-flash'];
 }
 function getSmartModels(settings = null) {
   const fromDb = settings?.model_pools?.smart;
   if (Array.isArray(fromDb) && fromDb.length) return fromDb;
   const smart = parseList(process.env.GEMINI_SMART_MODELS);
   if (smart.length) return smart;
+  // A lista geral serve inteira aqui: o pool esperto pode começar pelo pro, e
+  // o que sobrar dela vira degrau de fallback.
+  const geral = parseList(process.env.GEMINI_MODELS);
+  if (geral.length) return [...new Set([...geral, ...getFastModels(settings)])];
   // Default: pro com fallback para flash se pro indisponível
   return ['gemini-2.5-pro', ...getFastModels(settings)];
 }
@@ -606,6 +642,12 @@ async function getLastBridgeContext(sessionId) {
  *   {type:"error", message:"..."}    — erro
  */
 export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE', viaVoice = false, screen = null }) {
+  // O relógio do turno começa AQUI, não depois do preparo. Medir a partir do
+  // momento em que o modelo entra em cena escondia o que a pessoa mais sente:
+  // sessão, histórico, cérebro e alçadas rodam antes, e num banco remoto
+  // ocupado isso sozinho passava de 20 segundos.
+  const turnoT0 = Date.now();
+
   // Contexto do Eme: OFFICE (operacional) ou ACADEMY (tutor de estudos).
   // É determinado pela ROTA — nunca pelo cliente.
   const ctx = String(context || 'OFFICE').toUpperCase() === 'ACADEMY' ? 'ACADEMY' : 'OFFICE';
@@ -704,6 +746,40 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
   const historyWithoutLast = history.slice(0, -1);
 
+  // ── Quais tools vão NESTE turno ──────────────────────────────────────────
+  //
+  // Declarar as 81 em toda pergunta custava ~21 mil tokens de entrada por turno
+  // - e o laço de tool call reenvia isso a cada passo. Além do tempo, era a
+  // causa de o modelo ESCREVER o nome da tool em vez de chamá-la: com 81
+  // opções a escolha degrada. Ver ToolPreselect.js.
+  //
+  // `todasDeclaracoes` continua inteiro de propósito: o detector de vazamento e
+  // o retry mais abaixo usam ELE, para que uma tool cortada aqui volte no
+  // segundo tiro em vez de virar um "não consegui".
+  const todasDeclaracoes = activeDeclarations;
+  try {
+    const ultimas = await db.ChatMessage.findAll({
+      where: { session_id: session.id },
+      attributes: ['metadata'],
+      order: [['id', 'DESC']],
+      limit: 8,
+    });
+    const escolha = escolherTools(
+      todasDeclaracoes,
+      userMessage,
+      tosRecentes(ultimas.map(m => m.get({ plain: true })).reverse()),
+    );
+    activeDeclarations = escolha.declaracoes;
+    if (escolha.cortou > 0) {
+      console.log(`🧰 [Eme] tools do turno: ${escolha.motivo} (${escolha.cortou} fora)`);
+    }
+  } catch (err) {
+    // Pré-seleção é otimização, nunca requisito: se ela falhar, o turno segue
+    // com o conjunto inteiro - lento como antes, mas correto.
+    console.warn('[OfficeChatService] pré-seleção de tools falhou:', err?.message);
+    activeDeclarations = todasDeclaracoes;
+  }
+
   let fullAssistantText = '';
   let actionResult = null;
   let lastFinishReason = null; // finishReason do último candidate (main + follow-up)
@@ -758,7 +834,19 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // ACADEMY: força 'smart' (Gemini Pro) — segue muito melhor a regra de só
   // responder com dados vindos de ferramenta, evitando o tutor alucinar conteúdo.
   // Voz → SEMPRE flash (latência manda). Academy → smart. Resto → heurística.
-  const pool = isAcademy ? 'smart' : (viaVoice ? 'fast' : selectModelPool(userMessage, activeSettings.escalation_keywords || []));
+  // Voz → sempre flash. Academy → smart. Assistente pessoal → flash, porque
+  // "quais minhas tarefas de hoje?" não tem nada a arbitrar: a resposta é a
+  // lista que a tool devolveu. A heurística mandava para o `pro` sempre que
+  // aparecia um nome próprio ("CV de Naviraí"), e o pro custa dezenas de
+  // segundos numa pergunta que o flash responde em poucos.
+  const soAssistente = Array.isArray(activeDeclarations)
+    && activeDeclarations.length > 0
+    && activeDeclarations.every(d => /^(meu_dia|criar_tarefa|minhas_tarefas|concluir_tarefa|atualizar_tarefa|marcar_subtarefa|adicionar_parceiro|meus_convites|responder_convite|configurar_assistente)$/.test(d?.name || ''));
+
+  const pool = isAcademy
+    ? 'smart'
+    : ((viaVoice || soAssistente) ? 'fast'
+      : selectModelPool(userMessage, activeSettings.escalation_keywords || []));
   const modelList = pool === 'smart' ? getSmartModels(activeSettings) : getFastModels(activeSettings);
   let geminiModel = modelList[0];
 
@@ -1011,18 +1099,49 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   //    preventiva.
   // 2) Se não der para recuperar, o vazamento nunca é entregue como resposta:
   //    vira uma mensagem honesta de falha (blindagem final, mais abaixo).
-  const declaredToolNames = new Set((activeDeclarations || []).map(d => d?.name).filter(Boolean));
-  if (!toolCalls.length && findLeakedToolName(fullAssistantText, declaredToolNames)) {
-    const leaked = findLeakedToolName(fullAssistantText, declaredToolNames);
-    console.warn(`[OfficeChatService] Pseudo-tool-call em texto ("${leaked}") no modelo ${geminiModel}; refazendo com toolConfig ANY.`);
+  // O conjunto CHEIO, não o do turno: se a pré-seleção cortou a tool que o
+  // modelo tentou usar, é exatamente aqui que ela precisa reaparecer. Detectar
+  // o vazamento com a lista podada deixaria o nome passar como texto comum.
+  const declaredToolNames = new Set((todasDeclaracoes || []).map(d => d?.name).filter(Boolean));
+
+  // ── Dois jeitos de o turno terminar sem consulta ─────────────────────────
+  //
+  // VAZAMENTO   o modelo ESCREVEU o nome da tool em vez de chamar.
+  // MUDEZ       o modelo não chamou nada E não escreveu nada.
+  //
+  // A mudez é o modo de falhar do `flash`, e medindo dá para ver que não é
+  // burrice dele: com `mode: AUTO` ele devolve texto vazio em 1,2s; com `ANY`
+  // ele chama a tool certa em 1,7s. Era isso que fazia o pool rápido parecer
+  // inutilizável e empurrava toda pergunta para o `pro`, dez vezes mais lento.
+  //
+  // Resposta vazia é um sinal limpo: não existe pergunta cuja resposta certa
+  // seja o silêncio. Então ela vira o gatilho do mesmo retry do vazamento.
+  const leaked = !toolCalls.length ? findLeakedToolName(fullAssistantText, declaredToolNames) : null;
+  const mudo = !toolCalls.length && !fullAssistantText.trim();
+
+  if (leaked || mudo) {
+    const cortada = leaked && !(activeDeclarations || []).some(d => d?.name === leaked);
+    console.warn(leaked
+      ? `[OfficeChatService] Pseudo-tool-call em texto ("${leaked}"${cortada ? ', cortada pela pré-seleção' : ''}) no modelo ${geminiModel}; refazendo com toolConfig ANY.`
+      : `[OfficeChatService] Turno mudo (nem tool, nem texto) no modelo ${geminiModel}; refazendo com toolConfig ANY.`);
     sendSSE(res, { type: 'status', stage: 'retrying', message: 'Refazendo a consulta…' });
     try {
+      // `ANY` sozinho manda "chame ALGUMA" e o modelo pode escolher outra - ou
+      // devolver 400 quando a lista é grande demais para o modo. Quando se sabe
+      // QUAL ele tentou chamar, o pedido é nominal: força aquela, e o payload
+      // do segundo tiro fica mínimo. No turno mudo não há nome, então vai o
+      // conjunto do turno e o modelo escolhe.
+      const soAQueVazou = leaked ? todasDeclaracoes.filter(d => d?.name === leaked) : [];
       const forcedChat = getGeminiClient()
         .getGenerativeModel({
           model: geminiModel,
           systemInstruction: systemPrompt,
-          tools: [{ functionDeclarations: activeDeclarations }],
-          toolConfig: { functionCallingConfig: { mode: 'ANY' } },
+          tools: [{ functionDeclarations: soAQueVazou.length ? soAQueVazou : (mudo ? activeDeclarations : todasDeclaracoes) }],
+          toolConfig: {
+            functionCallingConfig: soAQueVazou.length
+              ? { mode: 'ANY', allowedFunctionNames: [leaked] }
+              : { mode: 'ANY' },
+          },
         })
         .startChat({ history: historyWithoutLast });
       const forced = await forcedChat.sendMessage(userMessage);
@@ -1030,6 +1149,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         .find(p => p.functionCall)?.functionCall;
 
       if (forcedCall && declaredToolNames.has(forcedCall.name)) {
+        // Recuperado: o turno tem dado de verdade em vez de silêncio.
         const name = forcedCall.name;
         const args = forcedCall.args || {};
         // Some a narração da tela — a resposta de verdade vem do dado real.
@@ -1096,7 +1216,12 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         console.warn('[OfficeChatService] Retry com ANY não devolveu function call válida.');
       }
     } catch (retryErr) {
-      console.warn('[OfficeChatService] Falha ao refazer o turno com ANY:', retryErr?.status || retryErr?.message);
+      // O motivo importa: era só o status que ia para o log, e "400" não diz se
+      // foi a lista de tools, o histórico ou o modo. Sem isso a recuperação
+      // ficou quebrada sem ninguém saber.
+      console.warn('[OfficeChatService] Falha ao refazer o turno com ANY:',
+        retryErr?.status || '', retryErr?.message || retryErr,
+        retryErr?.errorDetails ? JSON.stringify(retryErr.errorDetails).slice(0, 400) : '');
     }
   }
 
@@ -1401,12 +1526,35 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     ? JSON.stringify({ text: fullAssistantText, action: actionResult })
     : fullAssistantText;
 
+  // ── Onde foi o tempo ──────────────────────────────────────────────────────
+  //
+  // A queixa "está demorando muito" não tinha como ser respondida: o log não
+  // dizia o modelo, o tamanho do prompt nem quantas idas ao Gemini o turno fez.
+  // Uma linha por turno resolve isso sem depender de reproduzir o problema.
+  const totalMs = Date.now() - turnoT0;
+  const msPreparo = startedAt - turnoT0;   // sessão, histórico, cérebro, alçadas
+  const msEmTools = toolCalls.reduce((acc, c) => acc + (c.ms || 0), 0);
+  const tokensEntrada = Math.round(
+    (systemPrompt.length + JSON.stringify(activeDeclarations || []).length) / 4);
+  console.log(
+    `⏱️  [Eme] ${(totalMs / 1000).toFixed(1)}s · ${geminiModel} (${pool}) · ` +
+    `${(activeDeclarations || []).length}/${(todasDeclaracoes || []).length} tools · ` +
+    `~${tokensEntrada.toLocaleString()} tok de prompt · ` +
+    `${(msPreparo / 1000).toFixed(1)}s de preparo · ` +
+    `${toolCalls.length} tool call(s) somando ${(msEmTools / 1000).toFixed(1)}s · ` +
+    `${((totalMs - msEmTools - msPreparo) / 1000).toFixed(1)}s no modelo`);
+
   const savedMsg = await saveMessage(session.id, 'assistant', contentToSave, responseType, {
     model: geminiModel,
     pool,
     hasAction: !!actionResult,
     tool_calls: toolCalls,
-    latency_ms: Date.now() - startedAt,
+    latency_ms: totalMs,
+    preparo_ms: msPreparo,
+    // Guardado junto da mensagem: dá para investigar lentidão depois do fato,
+    // sem precisar que o problema aconteça de novo com o log aberto.
+    prompt_tokens_aprox: tokensEntrada,
+    tools_declaradas: (activeDeclarations || []).length,
   });
 
   // Persiste o incidente de validação (nunca derruba o chat se falhar).
@@ -1453,6 +1601,13 @@ function sendSSE(res, data) {
 function buildAuthoritativeBlock(result) {
   if (!result || typeof result !== 'object' || result.error) return '';
   const lines = [];
+
+  // Guarda embaixo, no fim da função: quando os extratores específicos não
+  // reconhecem o formato, o bloco saía VAZIO - e bloco vazio desliga o loop de
+  // autocorreção inteiro (`if (authoritative)`), mandando a resposta direto para
+  // "não confiável" sem NENHUMA tentativa de refazer. Era o que acontecia com o
+  // assistente: 0 tentativas, aviso na cara do usuário, e um "recarreguei e
+  // voltou rápido" que provava que o dado estava lá o tempo todo.
 
   if (result.title) lines.push(`Consulta: ${result.title}`);
   if (result.subtitle) lines.push(`Filtros: ${result.subtitle}`);
@@ -1503,6 +1658,22 @@ function buildAuthoritativeBlock(result) {
     } else if (typeof result[k] === 'string') {
       lines.push(`${k}: ${result[k]}`);
     }
+  }
+
+  // ── Rede de segurança: formato que ninguém acima reconheceu ──────────────
+  //
+  // Tudo acima nomeia campos conhecidos (tabela, gráfico, os KPIs de
+  // pré-cadastro, `fonte`, `ficha`...). Uma tool com formato próprio - como o
+  // `meu_dia`, que devolve `numeros` e `pendencias` - passava por todos os
+  // ramos sem casar com nenhum, e o bloco saía VAZIO.
+  //
+  // E bloco vazio não é detalhe: o loop de autocorreção é guardado por
+  // `if (authoritative)`. Sem bloco ele nem tenta, e a resposta ia direto para
+  // "não confiável" com ZERO tentativas de refazer - tendo o dado certo em mãos
+  // o tempo todo. Aqui o resultado inteiro, compactado, vira o bloco.
+  if (!lines.length) {
+    lines.push('Resultado completo da consulta (única fonte válida):');
+    lines.push(JSON.stringify(compactForModel(result, 0, { maxArray: 20, maxStr: 200, maxDepth: 4 }), null, 1));
   }
 
   const block = lines.join('\n');
@@ -1597,6 +1768,39 @@ function detectHallucinations(text, actionResult, bridgeStr, userMessage = '') {
                       'tempo_medio_ate_contrato', 'tempo_medio_ate_venda']) {
       if (actionResult[k] != null) addNum(actionResult[k]);
     }
+  }
+
+  // 1b. TODO O RESTO DO RESULTADO, em profundidade.
+  //
+  // A lista acima nomeia campo por campo (`total`, `labels`, `rows`, os KPIs de
+  // pré-cadastro e reserva) e por isso só funcionava para tabela e gráfico.
+  // Qualquer tool com formato próprio ficava invisível: o `meu_dia` devolve
+  // `numeros: { pendencias: 26, urgentes: 15 }`, o modelo citava 26 e 15
+  // CORRETAMENTE, e o detector acusava os dois de inventados - a resposta certa
+  // era bloqueada e trocada pelo aviso de "não confiável". Aconteceu três vezes
+  // seguidas com "quais minhas tarefas de hoje".
+  //
+  // O critério honesto não depende do nome do campo: um número que ESTÁ no
+  // resultado da consulta não foi inventado, esteja ele onde estiver. O detector
+  // continua pegando o que importa - número que não aparece em lugar nenhum.
+  if (actionResult) {
+    const vistos = new WeakSet();
+    const varrer = (v, profundidade = 0) => {
+      if (v == null || profundidade > 6) return;
+      if (typeof v === 'number') { addNum(v); return; }
+      if (typeof v === 'string') {
+        if (/^-?\d+(?:[.,]\d+)?$/.test(v.trim())) addNum(v.trim().replace(',', '.'));
+        // Texto curto vira label autoritativo (nome de tarefa, de pessoa...).
+        else if (v.length <= 80) { labelsList.push(v); labelsNormalized.add(normLabel(v)); }
+        return;
+      }
+      if (typeof v !== 'object') return;
+      if (vistos.has(v)) return;          // resultado com ciclo não trava a checagem
+      vistos.add(v);
+      if (Array.isArray(v)) { for (const x of v.slice(0, 200)) varrer(x, profundidade + 1); return; }
+      for (const x of Object.values(v)) varrer(x, profundidade + 1);
+    };
+    varrer(actionResult);
   }
 
   // 2. Valores que vieram da PERGUNTA. Sem isto, "reunião às 08:30 de 20

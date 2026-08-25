@@ -14,6 +14,7 @@ import siengeRoutes from './routes/siengeRoutes.js';
 import validatorAI from './validatorAI/index.js';
 import contractAutomationRoutes from './routes/contractAutomationRoutes.js';
 import microsoftAuthRoutes from './routes/microsoftAuthRoutes.js';
+import assistantRoutes from './routes/assistantRoutes.js';
 import externalRoutes from './routes/externalRoutes.js'
 import admin from './routes/admin.js'; 
 import supportRoutes from './routes/supportRoutes.js'; 
@@ -111,6 +112,10 @@ import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureUseredeSchema } from './lib/ensureUseredeSchema.js';
 import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
 import { ensureMicrosoftSchema } from './lib/ensureMicrosoftSchema.js';
+import { ensureOutlookAiSchema } from './lib/ensureOutlookAiSchema.js';
+import { ensureAssistantSchema } from './lib/ensureAssistantSchema.js';
+import { ensureCorrespondentSchema } from './lib/ensureCorrespondentSchema.js';
+import { ensureParceriaSchema } from './lib/ensureParceriaSchema.js';
 import { ensureRepasseIndexes } from './lib/ensureRepasseIndexes.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
@@ -141,6 +146,9 @@ import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
 import microsoftMeetingReminderScheduler from './scheduler/microsoftMeetingReminderScheduler.js';
 import microsoftTranscriptWatcherScheduler from './scheduler/microsoftTranscriptWatcherScheduler.js';
+import outlookAiScheduler from './scheduler/outlookAiScheduler.js';
+import microsoftTokenKeepAliveScheduler from './scheduler/microsoftTokenKeepAliveScheduler.js';
+import assistantScheduler from './scheduler/assistantScheduler.js';
 import microsoftSubscriptionScheduler from './scheduler/microsoftSubscriptionScheduler.js';
 import bolaoLiveScheduler from './scheduler/bolaoLiveScheduler.js';
 import reportPublicExpiryScheduler from './scheduler/reportPublicExpiryScheduler.js';
@@ -243,6 +251,7 @@ app.use('/api/favorite', favoriteRoutes);
 app.use('/api/cv', cvRoutes);
 app.use('/api/sienge', siengeRoutes); // Sienge api, db and cron
 app.use('/api/microsoft', microsoftAuthRoutes);// Microsoft for archives
+app.use('/api/assistente', assistantRoutes); // Assistente pessoal: meu dia, tarefas, rotinas
 app.use('/api/ai', validatorAI);// chatbot ai
 app.use('/api/contracts', contractAutomationRoutes);
 app.use('/api/external', externalRoutes);
@@ -489,6 +498,10 @@ async function syncModelsAndPatches(fingerprint) {
     ['Userede', ensureUseredeSchema],
     ['ReservaCancel', ensureReservaCancelSchema],
     ['Microsoft', ensureMicrosoftSchema],
+    ['OutlookAI', ensureOutlookAiSchema],
+    ['Assistente', ensureAssistantSchema],
+    ['Correspondentes', ensureCorrespondentSchema],
+    ['Parceria', ensureParceriaSchema],
     ['RepasseIndexes', ensureRepasseIndexes],
     ['AcademyPostSync', ensureAcademyPostSync],
     ['MarketingCapture', ensureMarketingCaptureSchema],
@@ -637,6 +650,12 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
   if (schedulerOn('ENABLE_MEETING_REMINDER')) microsoftMeetingReminderScheduler.start();
   if (schedulerOn('ENABLE_TRANSCRIPT_WATCHER')) microsoftTranscriptWatcherScheduler.start(); // 10min: procura a transcrição da reunião que acabou, gera a ata e avisa quem participou
+  // Mantem a sessao Microsoft viva para ninguem precisar relogar. Ligado por
+  // padrao em producao: e o que faz "logar uma vez" ser verdade.
+  if (schedulerOn('ENABLE_MICROSOFT_KEEPALIVE')) microsoftTokenKeepAliveScheduler.start();
+  // Assistente pessoal: resumo do dia, prazos, sync com o e-mail e cobranca do parado.
+  if (schedulerOn('ENABLE_ASSISTANT')) assistantScheduler.start();
+  if (schedulerOn('ENABLE_OUTLOOK_AI')) outlookAiScheduler.start(); // 15min (6h-21h, dias uteis): classifica a caixa de quem ja abriu a tela; so AGE se outlook_ai_auto_enabled estiver ligado
   if (schedulerOn('ENABLE_GRAPH_SUBSCRIPTIONS')) microsoftSubscriptionScheduler.start(); // 1h: renova assinatura de mudanca do Graph antes de vencer (ela morre em silencio) // 5min: avisa reunião do Teams que está começando (push chega com o Office fechado)
   if (schedulerOn('ENABLE_REPORT_PUBLIC_EXPIRY')) reportPublicExpiryScheduler.start(); // links públicos de relatórios: aviso D-3 + revoga vencidos (08:00)
   if (schedulerOn('ENABLE_ACADEMY_DEADLINE')) startAcademyDeadlineScheduler(); // lembretes de trilhas obrigatórias (D-3/D-1/D0/OVERDUE)

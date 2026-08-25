@@ -8,6 +8,7 @@ import MicrosoftTranscriptController from '../controllers/microsoft/MicrosoftTra
 import MicrosoftOrgUsersController from '../controllers/microsoft/MicrosoftOrgUsersController.js';
 import MicrosoftPlannerController from '../controllers/microsoft/MicrosoftPlannerController.js';
 import MicrosoftOutlookController from '../controllers/microsoft/MicrosoftOutlookController.js';
+import MicrosoftOutlookAiController from '../controllers/microsoft/MicrosoftOutlookAiController.js';
 import MicrosoftWebhookController from '../controllers/microsoft/MicrosoftWebhookController.js';
 import InPersonMeetingController from '../controllers/InPersonMeetingController.js';
 import authenticate from '../middlewares/authMiddleware.js';
@@ -139,6 +140,14 @@ router.patch('/outlook/messages/:id/categories',  ...olOrganiza, oc.setCategorie
 router.post('/outlook/messages/:id/move',         ...olOrganiza, oc.move);
 router.delete('/outlook/messages/:id',            ...olOrganiza, oc.remove);
 
+// Ferramentas do menu de contexto. Todas mexem na caixa, entao vao por
+// 'organize' - a mesma capacidade de marcar, mover e excluir.
+router.patch('/outlook/messages/:id/importance',  ...olOrganiza, oc.setImportance);
+router.get('/outlook/messages/:id/download',      ...olVer,      oc.download);
+router.post('/outlook/folders',                   ...olOrganiza, oc.createFolder);
+router.patch('/outlook/folders/:id',              ...olOrganiza, oc.renameFolder);
+router.delete('/outlook/folders/:id',             ...olOrganiza, oc.deleteFolder);
+
 router.post('/outlook/drafts',                    ...olEnvia, oc.createDraft);
 router.patch('/outlook/drafts/:id',               ...olEnvia, oc.updateDraft);
 router.post('/outlook/messages/:id/:kind(reply|replyAll|forward)', ...olEnvia, oc.replyDraft);
@@ -146,6 +155,58 @@ router.post('/outlook/drafts/:id/attachments',    ...olEnvia, oc.addAttachment);
 router.delete('/outlook/drafts/:id/attachments/:attachmentId', ...olEnvia, oc.removeAttachment);
 router.post('/outlook/drafts/:id/send',           ...olEnvia, oc.send);
 router.post('/outlook/send',                      ...olEnvia, oc.send);
+
+// ── Outlook · IA da caixa ─────────────────────────────────────────────────────
+// Mesma caixa, mesma trava: o endereço sai do usuário autenticado, nunca da
+// requisição. As capacidades separam LER a leitura da IA (view) de MEXER no que
+// ela pode fazer (automate) e de APROVAR, que é enviar de verdade (send).
+const oai = MicrosoftOutlookAiController;
+const olAutomatiza = [authenticate, requireCapability('/microsoft/outlook', 'automate')];
+
+router.get('/outlook/ai/triagem',                 ...olVer, oai.triagem);
+// A classificacao (Graph + Gemini) fica FORA da abertura da tela: a rota acima
+// responde do cache em milissegundos, esta aqui e a que custa.
+router.post('/outlook/ai/triagem/atualizar',      ...olVer, oai.atualizarTriagem);
+router.get('/outlook/ai/leitura/:id',             ...olVer, oai.leitura);
+router.get('/outlook/ai/trilho',                  ...olVer, oai.trilho);
+router.get('/outlook/ai/fila',                    ...olVer, oai.fila);
+router.get('/outlook/ai/historico',               ...olVer, oai.historico);
+router.get('/outlook/ai/relatorio',               ...olVer, oai.relatorio);
+router.get('/outlook/ai/settings',                ...olVer, oai.settings);
+router.get('/outlook/ai/regras',                  ...olVer, oai.regras);
+
+router.post('/outlook/ai/leitura/:id/adiar',      ...olVer, oai.adiar);
+// Tirar da lista com justificativa: é arrumação da lista do Office, não da
+// caixa de e-mail, então vai por 'view' como o adiar.
+router.post('/outlook/ai/leitura/:id/resolver',   ...olVer, oai.resolver);
+
+// Aprendizado: o que a pessoa achou do que a IA escreveu. Vai por 'view' —
+// comentar não faz nada sair, e quem não pode comentar não teria como corrigir
+// uma IA que escreve no nome dele.
+router.get('/outlook/ai/feedback',                ...olVer, oai.feedback);
+router.post('/outlook/ai/feedback',               ...olVer, oai.comentar);
+router.patch('/outlook/ai/feedback/:id',          ...olVer, oai.aposentarFeedback);
+
+router.put('/outlook/ai/settings',                ...olAutomatiza, oai.salvarSettings);
+router.post('/outlook/ai/regras',                 ...olAutomatiza, oai.criarRegra);
+router.patch('/outlook/ai/regras/:id',            ...olAutomatiza, oai.atualizarRegra);
+router.delete('/outlook/ai/regras/:id',           ...olAutomatiza, oai.excluirRegra);
+router.post('/outlook/ai/contexto/analisar',      ...olAutomatiza, oai.analisarContexto);
+router.post('/outlook/ai/contexto/aceitar',       ...olAutomatiza, oai.aceitarContexto);
+router.post('/outlook/ai/contexto/descartar',     ...olAutomatiza, oai.descartarContexto);
+router.post('/outlook/ai/historico/:id/desfazer', ...olAutomatiza, oai.desfazer);
+
+// Escrever e editar rascunho da IA já é ação de envio: o texto sai no nome da
+// pessoa no passo seguinte.
+router.post('/outlook/ai/redigir/:id',            ...olEnvia, oai.redigir);
+router.patch('/outlook/ai/fila/:id',              ...olEnvia, oai.editarFila);
+router.post('/outlook/ai/fila/:id/aprovar',       ...olEnvia, oai.aprovar);
+router.post('/outlook/ai/fila/:id/descartar',     ...olEnvia, oai.descartar);
+
+// Interruptores da EMPRESA (kill-switch da IA, execução automática, teto de
+// mensagens por passada). Admin de verdade: valem para todas as caixas.
+router.get('/outlook/ai/config-empresa',  authenticate, requireAdmin, oai.configEmpresa);
+router.put('/outlook/ai/config-empresa',  authenticate, requireAdmin, oai.salvarConfigEmpresa);
 
 // ── Teams / Calendário ────────────────────────────────────────────────────────
 router.get('/teams/calendar',                           authenticate, teamsController.calendarView.bind(teamsController));

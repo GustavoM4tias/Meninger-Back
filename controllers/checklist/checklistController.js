@@ -144,6 +144,22 @@ const checklistController = {
         try { return res.status(201).json(await taskService.createTask({ checklistId: req.params.id, payload: req.body || {}, userId: req.user?.id })); }
         catch (err) { return fail(res, err, 400, 'createTask'); }
     },
+    /**
+     * Somar alguém a uma tarefa, pela regra da hierarquia. Diferente de
+     * updateTask: aqui a pessoa comum pode, porque a regra é quem decide.
+     */
+    async convidarParceiro(req, res) {
+        try {
+            return res.json(await taskService.convidarParceiro({
+                taskId: req.params.id,
+                alvoId: Number(req.body?.userId),
+                euId: req.user?.id,
+                mensagem: req.body?.mensagem || '',
+                isAdmin: isAdminReq(req),
+            }));
+        } catch (err) { return fail(res, err, 400, 'convidarParceiro'); }
+    },
+
     async updateTask(req, res) {
         try { return res.json(await taskService.updateTask({ id: req.params.id, payload: req.body || {}, userId: req.user?.id, isAdmin: isAdminReq(req) })); }
         catch (err) { return fail(res, err, 400, 'updateTask'); }

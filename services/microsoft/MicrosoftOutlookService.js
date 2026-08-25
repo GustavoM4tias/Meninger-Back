@@ -25,7 +25,7 @@ const LIST_SELECT = [
     'id', 'subject', 'from', 'sender', 'toRecipients', 'ccRecipients',
     'receivedDateTime', 'sentDateTime', 'bodyPreview', 'hasAttachments',
     'isRead', 'isDraft', 'importance', 'flag', 'categories',
-    'conversationId', 'webLink',
+    'conversationId', 'webLink', 'parentFolderId',
 ].join(',');
 
 // Campos do DETALHE: acrescenta o corpo e os destinatários completos.
@@ -87,6 +87,7 @@ function normalizeMessage(m, { withBody = false } = {}) {
         categories: m.categories || [],
         conversationId: m.conversationId || null,
         webLink: m.webLink || null,
+        folderId: m.parentFolderId || null,
     };
 
     if (withBody) {
@@ -123,7 +124,17 @@ class MicrosoftOutlookService {
         const MAX_DEPTH = 3;
         const MAX_TOTAL = 200;
 
-        const select = 'id,displayName,totalItemCount,unreadItemCount,wellKnownName,childFolderCount,parentFolderId';
+        // ATENCAO: `wellKnownName` NAO existe no $select de mailFolder na API
+        // v1.0 - so na beta. Pedi-lo fazia o Graph responder
+        // "Could not find a property named 'wellKnownName'" com 400, e como o
+        // MESMO select era usado na raiz e nos filhos, a arvore de pastas
+        // inteira falhava. O sintoma na tela era a caixa parecer ter so a
+        // Caixa de Entrada, mesmo com dezenas de pastas do lado da pessoa.
+        //
+        // O apelido das pastas do sistema agora vem de _apelidosDePasta(), que
+        // pergunta o id de cada uma pelo nome conhecido.
+        const select = 'id,displayName,totalItemCount,unreadItemCount,childFolderCount,parentFolderId';
+        const apelidos = await this._apelidosDePasta(mailbox);
         const pagina = async (path) => {
             const { items } = await graph.appGetAllPages(`${path}?$top=100&$select=${select}`, undefined, { max: 300 });
             return items;
@@ -135,7 +146,9 @@ class MicrosoftOutlookService {
                 if (out.length >= MAX_TOTAL) return;
                 out.push({
                     id: f.id,
-                    wellKnownName: f.wellKnownName || null,
+                    wellKnownName: apelidos.get(f.id)
+                        || apelidos.get(`nome:${String(f.displayName || '').toLowerCase()}`)
+                        || null,
                     name: f.displayName,
                     total: f.totalItemCount ?? 0,
                     unread: f.unreadItemCount ?? 0,
@@ -172,15 +185,85 @@ class MicrosoftOutlookService {
      *   top, skip - paginação simples; `skip` é número, nunca caminho vindo do
      *               cliente, para não virar injeção de rota
      */
+    /**
+     * Mapa id -> apelido ('inbox', 'sentitems', ...) das pastas do sistema.
+     *
+     * Existe porque o $select de `wellKnownName` da 400 na v1.0 (ver o
+     * comentario em listFolders). Perguntar o id de cada apelido conhecido
+     * custa algumas chamadas pequenas e devolve a mesma informacao.
+     *
+     * Em cache por caixa: sao ids estaveis.
+     */
+    async _apelidosDePasta(mailbox) {
+        this.__apelidoCache = this.__apelidoCache || new Map();
+        const emCache = this.__apelidoCache.get(mailbox);
+        if (emCache && emCache.expira > Date.now()) return emCache.mapa;
+
+        const mapa = new Map();
+        const nomes = [
+            'inbox', 'drafts', 'sentitems', 'archive', 'junkemail',
+            'deleteditems', 'outbox', 'conversationhistory', 'clutter',
+            'msgfolderroot', 'searchfolders', 'syncissues', 'scheduled',
+        ];
+        await Promise.all(nomes.map(async (nome) => {
+            try {
+                const f = await graph.appGet(`/users/${mailbox}/mailFolders/${nome}?$select=id,displayName`);
+                if (f?.id) mapa.set(f.id, nome);
+                // O Graph as vezes devolve a MESMA pasta com id codificado de
+                // outro jeito conforme o caminho da chamada, e ai o casamento
+                // por id falha (aconteceu com Itens Excluidos). O nome de
+                // exibicao e a segunda chave, e ela nao erra.
+                if (f?.displayName) mapa.set(`nome:${f.displayName.toLowerCase()}`, nome);
+            } catch { /* caixa que nao tem a pasta nao e erro */ }
+        }));
+
+        this.__apelidoCache.set(mailbox, { mapa, expira: Date.now() + 30 * 60 * 1000 });
+        return mapa;
+    }
+
+    /**
+     * Ids das pastas que NÃO são correspondência recebida.
+     *
+     * Quem organiza a caixa em pastas tem a Caixa de Entrada quase vazia: o
+     * trabalho já foi arquivado por regra do Outlook. Para ler "tudo" é preciso
+     * varrer a caixa inteira - mas sem Enviados, Rascunhos, Lixeira e Lixo
+     * Eletrônico, senão a triagem classificaria o que a própria pessoa mandou.
+     *
+     * Em cache por caixa: são ids estáveis e a alternativa é quatro chamadas a
+     * cada listagem.
+     */
+    async _pastasForaDoEscopo(mailbox) {
+        this.__foraCache = this.__foraCache || new Map();
+        const emCache = this.__foraCache.get(mailbox);
+        if (emCache && emCache.expira > Date.now()) return emCache.ids;
+
+        const fora = new Set(['sentitems', 'drafts', 'deleteditems', 'junkemail', 'outbox']);
+        const apelidos = await this._apelidosDePasta(mailbox);
+        const ids = [...apelidos.entries()]
+            .filter(([chave, nome]) => fora.has(nome) && !String(chave).startsWith('nome:'))
+            .map(([id]) => id);
+        this.__foraCache.set(mailbox, { ids, expira: Date.now() + 30 * 60 * 1000 });
+        return ids;
+    }
+
     async listMessages(mailbox, {
         folder = 'inbox', search = '', unreadOnly = false, withAttachments = false,
-        flaggedOnly = false, from = '', top = 25, skip = 0,
+        flaggedOnly = false, from = '', top = 25, skip = 0, escopo = null,
     } = {}) {
-        const base = `/users/${mailbox}/mailFolders/${encodeURIComponent(folder)}/messages`;
+        // escopo 'tudo' varre a caixa inteira em vez de uma pasta só.
+        const tudo = escopo === 'tudo';
+        const base = tudo
+            ? `/users/${mailbox}/messages`
+            : `/users/${mailbox}/mailFolders/${encodeURIComponent(folder)}/messages`;
 
+        let ordenarAqui = false;
+        const pedido = Math.min(Number(top) || 25, 100);
         const params = {
             $select: LIST_SELECT,
-            $top: Math.min(Number(top) || 25, 100),
+            // Varrendo a caixa inteira, boa parte do que vem é Enviados e
+            // Rascunhos, que caem no filtro logo abaixo. Pedir com folga evita
+            // devolver 3 itens quando foram pedidos 25.
+            $top: tudo ? Math.min(pedido * 3, 200) : pedido,
             $skip: Math.max(Number(skip) || 0, 0),
         };
 
@@ -195,7 +278,16 @@ class MicrosoftOutlookService {
             if (flaggedOnly)     filters.push("flag/flagStatus eq 'flagged'");
             if (from)            filters.push(`contains(from/emailAddress/address,'${String(from).replace(/'/g, "''")}')`);
             if (filters.length) params.$filter = filters.join(' and ');
-            params.$orderby = 'receivedDateTime desc';
+
+            // Varrendo a CAIXA INTEIRA, o Exchange recusa alguns filtros junto
+            // com ordenacao: "The restriction or sort order is too complex for
+            // this operation" (400). Acontece com hasAttachments, sinalizador e
+            // remetente - nao com isRead. Nesses casos a ordenacao sai do
+            // pedido e acontece aqui, o que e barato porque este caminho ja
+            // pede com folga.
+            const filtroPesado = tudo && (withAttachments || flaggedOnly || !!from);
+            if (!filtroPesado) params.$orderby = 'receivedDateTime desc';
+            else ordenarAqui = true;
         }
 
         const data = await graph.appCall('get', base, {
@@ -203,11 +295,26 @@ class MicrosoftOutlookService {
             headers: search ? { ConsistencyLevel: 'eventual' } : undefined,
         });
 
-        const items = (data.value || []).map(m => normalizeMessage(m));
+        let items = (data.value || []).map(m => normalizeMessage(m));
+
+        // O Graph não aceita "todas as pastas menos estas" num $filter que valha
+        // a pena, então o corte é aqui. Por isso a busca pede mais do que o topo
+        // pedido (abaixo) - senão uma página cheia de Enviados voltaria vazia.
+        if (tudo) {
+            const fora = new Set(await this._pastasForaDoEscopo(mailbox));
+            items = items.filter(m => !m.folderId || !fora.has(m.folderId));
+        }
+
+        // A lista precisa chegar na tela em ordem de chegada, sempre - tenha o
+        // Graph ordenado ou nao.
+        if (ordenarAqui) {
+            items.sort((a, b) => String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')));
+        }
+
         return {
             items,
             // Sem total confiável no Graph: "tem mais" é ter vindo página cheia.
-            hasMore: items.length === params.$top,
+            hasMore: (data.value || []).length === params.$top,
             skip: params.$skip,
         };
     }
@@ -295,27 +402,129 @@ class MicrosoftOutlookService {
 
     // ── Organização ──────────────────────────────────────────────────────────
 
+    /**
+     * Escreve na mensagem sobrevivendo ao id envelhecido.
+     *
+     * O id de uma mensagem no Graph carrega uma CHANGE KEY. Quando a mensagem
+     * muda por qualquer motivo (você abriu no celular, uma regra do Outlook a
+     * moveu, outro cliente marcou como lida), a chave vira outra e o id que a
+     * tela tem na mão fica velho. O PATCH então falha com
+     * `ErrorIrresolvableConflict`, que é o erro mais confuso possível para quem
+     * só clicou num sinalizador.
+     *
+     * Isso ficou comum aqui porque a triagem GUARDA o id no banco e a tela usa
+     * ele horas depois. A saída é reler a mensagem (o GET resolve o id velho) e
+     * repetir a escrita com o id atual - uma vez só, para um conflito de
+     * verdade não virar laço.
+     */
+    async _escrevendo(mailbox, id, aplicar) {
+        try {
+            return await aplicar(id);
+        } catch (err) {
+            const code = err?.response?.data?.error?.code;
+            if (code !== 'ErrorIrresolvableConflict') throw err;
+
+            const atual = await graph.appGet(`/users/${mailbox}/messages/${id}?$select=id`);
+            if (!atual?.id || atual.id === id) throw err;
+
+            console.log('🔁 [Outlook] id da mensagem estava velho, repetindo com o atual.');
+            return aplicar(atual.id);
+        }
+    }
+
     async setRead(mailbox, id, isRead) {
-        const m = await graph.appPatch(`/users/${mailbox}/messages/${id}`, { isRead: !!isRead });
+        const m = await this._escrevendo(mailbox, id, (mid) =>
+            graph.appPatch(`/users/${mailbox}/messages/${mid}`, { isRead: !!isRead }));
         return normalizeMessage(m);
     }
 
     async setFlag(mailbox, id, flagged) {
-        const m = await graph.appPatch(`/users/${mailbox}/messages/${id}`, {
-            flag: { flagStatus: flagged ? 'flagged' : 'notFlagged' },
-        });
+        const m = await this._escrevendo(mailbox, id, (mid) =>
+            graph.appPatch(`/users/${mailbox}/messages/${mid}`, {
+                flag: { flagStatus: flagged ? 'flagged' : 'notFlagged' },
+            }));
         return normalizeMessage(m);
     }
 
     async setCategories(mailbox, id, categories) {
-        const m = await graph.appPatch(`/users/${mailbox}/messages/${id}`, {
-            categories: Array.isArray(categories) ? categories : [],
-        });
+        const m = await this._escrevendo(mailbox, id, (mid) =>
+            graph.appPatch(`/users/${mailbox}/messages/${mid}`, {
+                categories: Array.isArray(categories) ? categories : [],
+            }));
         return normalizeMessage(m);
     }
 
+    /**
+     * Importância da mensagem (alta / normal / baixa).
+     *
+     * Não é o sinalizador: sinalizador é "eu tenho que fazer algo com isto",
+     * importância é "isto pesa". O Outlook mostra os dois em lugares diferentes,
+     * e a triagem da IA lê a importância como um dos sinais.
+     */
+    async setImportance(mailbox, id, importance) {
+        const valor = ['high', 'normal', 'low'].includes(importance) ? importance : 'normal';
+        const m = await this._escrevendo(mailbox, id, (mid) =>
+            graph.appPatch(`/users/${mailbox}/messages/${mid}`, { importance: valor }));
+        return normalizeMessage(m);
+    }
+
+    // ── Pastas: criar, renomear, excluir ─────────────────────────────────────
+    //
+    // Tudo aqui depende de Mail.ReadWrite. O cache de apelidos e o de pastas
+    // fora do escopo são invalidados a cada mudança: uma pasta nova que não
+    // aparece até o processo reiniciar é pior do que não ter o botão.
+
+    async createFolder(mailbox, { name, parentId = null }) {
+        const nome = String(name || '').trim();
+        if (!nome) { const e = new Error('A pasta precisa de um nome.'); e.expose = 400; throw e; }
+
+        const caminho = parentId
+            ? `/users/${mailbox}/mailFolders/${encodeURIComponent(parentId)}/childFolders`
+            : `/users/${mailbox}/mailFolders`;
+
+        const f = await graph.appPost(caminho, { displayName: nome });
+        this._esquecerPastas(mailbox);
+        return { id: f.id, name: f.displayName, parentId: f.parentFolderId || null };
+    }
+
+    async renameFolder(mailbox, folderId, name) {
+        const nome = String(name || '').trim();
+        if (!nome) { const e = new Error('A pasta precisa de um nome.'); e.expose = 400; throw e; }
+
+        const f = await graph.appPatch(
+            `/users/${mailbox}/mailFolders/${encodeURIComponent(folderId)}`,
+            { displayName: nome },
+        );
+        this._esquecerPastas(mailbox);
+        return { id: f.id, name: f.displayName };
+    }
+
+    async deleteFolder(mailbox, folderId) {
+        await graph.appDelete(`/users/${mailbox}/mailFolders/${encodeURIComponent(folderId)}`);
+        this._esquecerPastas(mailbox);
+        return { ok: true };
+    }
+
+    /** Some com o cache de pastas desta caixa. */
+    _esquecerPastas(mailbox) {
+        this.__apelidoCache?.delete(mailbox);
+        this.__foraCache?.delete(mailbox);
+    }
+
+    /**
+     * A mensagem inteira em .eml, como o Outlook exporta.
+     *
+     * Baixar o e-mail é o jeito de guardar prova: ele sai com cabeçalho,
+     * anexos e assinatura, e abre em qualquer cliente. Anexo solto já dava para
+     * baixar; a mensagem, não.
+     */
+    streamMessage(mailbox, id) {
+        return graph.appStream(`/users/${mailbox}/messages/${id}/$value`);
+    }
+
     async move(mailbox, id, destinationId) {
-        const m = await graph.appPost(`/users/${mailbox}/messages/${id}/move`, { destinationId });
+        const m = await this._escrevendo(mailbox, id, (mid) =>
+            graph.appPost(`/users/${mailbox}/messages/${mid}/move`, { destinationId }));
         return normalizeMessage(m);
     }
 

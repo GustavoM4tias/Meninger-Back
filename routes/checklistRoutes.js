@@ -71,6 +71,10 @@ router.get('/tasks/:id(\\d+)', ...internal, checklistController.getTask);
 router.patch('/tasks/:id(\\d+)', ...internal, checklistController.updateTask);
 router.delete('/tasks/:id(\\d+)', ...admin, checklistController.removeTask);
 router.post('/tasks/:id(\\d+)/status', ...internal, checklistController.setTaskStatus);
+// Somar alguem a uma tarefa pela regra da hierarquia: abaixo entra direto,
+// igual ou acima vira convite. E `internal` (nao admin) de proposito - quem
+// decide e a regra, nao o papel. Mesma regra do assistente pessoal.
+router.post('/tasks/:id(\\d+)/parceiro', ...internal, checklistController.convidarParceiro);
 router.post('/tasks/:id(\\d+)/submit-approval', ...internal, checklistController.submitApproval);
 router.post('/tasks/:id(\\d+)/decision', ...internal, checklistController.decideApproval);
 router.post('/tasks/:id(\\d+)/cancel-approval', ...internal, checklistController.cancelApproval);

@@ -2,6 +2,7 @@
 import { Op } from 'sequelize';
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
+import parceria, { registrarAplicador } from '../collab/ParceriaService.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 import { loadStatusMap, recomputeProgress, logActivity, parseMentions } from './lib.js';
@@ -635,8 +636,89 @@ export async function pendingApprovalsFor({ userId }) {
     });
 }
 
+/**
+ * Coloca outra pessoa como responsável junto, seguindo a regra da hierarquia.
+ *
+ * POR QUE ISTO NÃO É `updateTask`
+ *
+ * Ali `assignee_user_ids` é campo de ADMIN: quem não é admin nunca pôde mexer
+ * em responsável, e afrouxar aquele caminho abriria a edição inteira. Aqui a
+ * pessoa comum ganha exatamente UMA coisa - somar alguém a uma tarefa que já é
+ * dela - e sob a mesma regra do assistente:
+ *
+ *   abaixo dela no organograma  →  entra direto
+ *   igual ou acima              →  vira convite, e a pessoa aceita ou recusa
+ *
+ * Ninguém é removido por aqui: tirar responsável continua sendo do admin, pelo
+ * caminho de sempre. Somar é reversível conversando; remover, não.
+ */
+export async function convidarParceiro({ taskId, alvoId, euId, mensagem = '', isAdmin = false }) {
+    const task = await db.ChecklistTask.findByPk(Number(taskId));
+    if (!task) throw new Error('Tarefa não encontrada.');
+
+    // O de sempre: só mexe em tarefa sua ou associada (admin em qualquer uma).
+    await assertCanWriteTask(task, { userId: euId, isAdmin });
+
+    return parceria.adicionar({
+        escopo: 'checklist',
+        escopoId: String(task.id),
+        titulo: task.title,
+        link: `/checklist/${task.checklist_id}`,
+        euId,
+        alvoId,
+        mensagem,
+    });
+}
+
+// O Checklist já guarda responsável em `assignee_user_ids`; o aplicador só
+// acrescenta ali. É por isso que a regra não precisou de tabela nova aqui.
+registrarAplicador('checklist', {
+    async aplicar(taskId, userId, via, porId) {
+        const task = await db.ChecklistTask.findByPk(Number(taskId));
+        if (!task) return;
+
+        const atuais = (Array.isArray(task.assignee_user_ids) ? task.assignee_user_ids : [])
+            .map(Number).filter(Boolean);
+        if (atuais.includes(Number(userId))) return;
+
+        const novos = [...atuais, Number(userId)];
+        task.assignee_user_ids = novos;
+        // O primário só é definido quando não havia nenhum: entrar como parceiro
+        // não pode roubar a titularidade de quem já era o responsável.
+        if (!task.assignee_user_id) task.assignee_user_id = novos[0];
+        await task.save();
+
+        await logActivity({
+            checklistId: task.checklist_id, taskId: task.id, userId: porId,
+            action: 'task.partner.added', meta: { userId: Number(userId), via },
+        }).catch(() => {});
+    },
+
+    /**
+     * O convite ainda faz sentido? Aqui "pronto" é status com
+     * `state_class = DONE` - o Checklist não tem um estado fixo, cada
+     * checklist nomeia os seus, e é a CLASSE que diz o que significam.
+     */
+    async situacao(taskId) {
+        const task = await db.ChecklistTask.findByPk(Number(taskId), {
+            attributes: ['id', 'status_id', 'due_date'],
+        });
+        if (!task) return { vivo: false, motivo: 'a tarefa foi apagada' };
+
+        if (task.status_id) {
+            const st = await db.ChecklistStatus.findByPk(task.status_id, { attributes: ['state_class'] });
+            const classe = String(st?.state_class || '').toUpperCase();
+            if (classe === 'DONE') return { vivo: false, motivo: 'a tarefa já foi concluída' };
+            if (classe === 'CANCELLED') return { vivo: false, motivo: 'a tarefa foi cancelada' };
+        }
+
+        return { vivo: true, prazo: task.due_date };
+    },
+});
+
 export default {
     getTask, createTask, updateTask, setTaskStatus, reorderTasks, removeTask, nudgeTask, bulkUpdate,
+    convidarParceiro,
     listComments, addComment, removeComment,
     addAttachment, removeAttachment,
     submitForApproval, decideApproval, cancelApproval, pendingApprovalsFor,

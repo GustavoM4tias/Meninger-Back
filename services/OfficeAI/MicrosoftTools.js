@@ -191,6 +191,11 @@ registerTool({
         if (args?.confirmado !== true) {
             return {
                 result: {
+                    // Prévia também é cartão: ler "de 2026-08-26T15:00:00 a
+                    // 2026-08-26T15:30:00" numa frase é onde a pessoa erra de
+                    // horário e confirma a reunião errada.
+                    type: 'meeting_card',
+                    title: 'Confirme antes de eu agendar',
                     previa: true,
                     assunto: args.assunto,
                     inicio: args.inicio,
@@ -198,6 +203,7 @@ registerTool({
                     participantes: convidados,
                     online: args?.online !== false,
                     repete: args?.repetir?.tipo || null,
+                    message: 'A prévia JÁ está na tela. Pergunte a confirmação em UMA frase, sem repetir data e hora.',
                     resumo: `Confirme antes de eu agendar: "${args.assunto}", de ${args.inicio} a ${args.fim}`
                           + (convidados.length ? `, convidando ${convidados.join(', ')}.` : ', sem convidados.')
                           + ' O convite sai no seu nome.',
@@ -232,12 +238,22 @@ registerTool({
 
         return {
             result: {
+                // O LINK DE ENTRADA É UM BOTÃO, e não uma URL de 300 caracteres
+                // colada no meio do texto - que foi como ela saiu antes, e é
+                // impossível de clicar no celular sem selecionar errado.
+                type: 'meeting_card',
+                title: 'Reunião agendada',
                 agendado: true,
                 id: evento.id,
                 assunto: evento.subject,
                 inicio: evento.start,
                 fim: evento.end,
                 linkEntrada: evento.joinUrl,
+                atalhos: [
+                    { label: 'Ver na agenda', icon: 'fas fa-calendar-days', link: '/microsoft/teams?tab=agenda' },
+                    { label: 'Meu dia', icon: 'fas fa-compass', link: '/assistente' },
+                ],
+                message: 'O cartão da reunião JÁ está na tela, com o botão de entrar. Confirme em uma frase e NÃO escreva a URL no texto.',
                 resumo: `Reunião "${evento.subject}" agendada para ${dia(evento.start)} às ${hora(evento.start)}`
                       + (convidados.length ? `, convite enviado para ${convidados.length} pessoa(s).` : '.'),
             },

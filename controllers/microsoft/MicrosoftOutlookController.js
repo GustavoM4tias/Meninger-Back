@@ -105,6 +105,10 @@ class MicrosoftOutlookController {
 
             return res.json(await outlook.listMessages(mailbox, {
                 folder:          req.query.folder || 'inbox',
+                // 'tudo' varre a caixa inteira em vez de uma pasta so. Quem
+                // organiza e-mail em pastas tem a Caixa de Entrada com o que
+                // SOBROU - a lista precisava de um jeito de mostrar o resto.
+                escopo:          req.query.escopo === 'tudo' ? 'tudo' : null,
                 search:          req.query.search || '',
                 unreadOnly:      req.query.unread === '1',
                 withAttachments: req.query.attachments === '1',
@@ -240,6 +244,59 @@ class MicrosoftOutlookController {
             const { mailbox } = await this._resolveMailbox(req);
             return res.json(await outlook.setCategories(mailbox, req.params.id, req.body?.categories || []));
         } catch (err) { return this._guard(res, err) || fail(res, err, 'setCategories'); }
+    };
+
+    setImportance = async (req, res) => {
+        try {
+            if (!await this._enabled()) return res.status(503).json({ error: 'O módulo de e-mail está desligado.' });
+            const { mailbox } = await this._resolveMailbox(req);
+            return res.json(await outlook.setImportance(mailbox, req.params.id, req.body?.importance));
+        } catch (err) { return this._guard(res, err) || fail(res, err, 'setImportance'); }
+    };
+
+    // ── Pastas ───────────────────────────────────────────────────────────────
+
+    createFolder = async (req, res) => {
+        try {
+            if (!await this._enabled()) return res.status(503).json({ error: 'O módulo de e-mail está desligado.' });
+            const { mailbox } = await this._resolveMailbox(req);
+            return res.json(await outlook.createFolder(mailbox, {
+                name: req.body?.name,
+                parentId: req.body?.parentId || null,
+            }));
+        } catch (err) { return this._guard(res, err) || fail(res, err, 'createFolder'); }
+    };
+
+    renameFolder = async (req, res) => {
+        try {
+            if (!await this._enabled()) return res.status(503).json({ error: 'O módulo de e-mail está desligado.' });
+            const { mailbox } = await this._resolveMailbox(req);
+            return res.json(await outlook.renameFolder(mailbox, req.params.id, req.body?.name));
+        } catch (err) { return this._guard(res, err) || fail(res, err, 'renameFolder'); }
+    };
+
+    deleteFolder = async (req, res) => {
+        try {
+            if (!await this._enabled()) return res.status(503).json({ error: 'O módulo de e-mail está desligado.' });
+            const { mailbox } = await this._resolveMailbox(req);
+            return res.json(await outlook.deleteFolder(mailbox, req.params.id));
+        } catch (err) { return this._guard(res, err) || fail(res, err, 'deleteFolder'); }
+    };
+
+    /** Baixa a mensagem inteira em .eml. */
+    download = async (req, res) => {
+        try {
+            if (!await this._enabled()) return res.status(503).json({ error: 'O módulo de e-mail está desligado.' });
+            const { mailbox } = await this._resolveMailbox(req);
+
+            const stream = await outlook.streamMessage(mailbox, req.params.id);
+            // Nome do arquivo sem caractere que o Windows recusa - senão o
+            // download falha em silêncio no cliente.
+            const nome = String(req.query.nome || 'mensagem').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80);
+            res.setHeader('Content-Type', 'message/rfc822');
+            res.setHeader('Content-Disposition', `attachment; filename="${nome}.eml"`);
+            return stream.pipe(res);
+        } catch (err) { return this._guard(res, err) || fail(res, err, 'download'); }
     };
 
     move = async (req, res) => {

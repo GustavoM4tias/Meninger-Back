@@ -87,6 +87,24 @@ function readSecret(stored) {
 // qualquer usuário sem exigir login delegado.
 let appTokenCache = null; // { token, expiresAt }
 
+// ── Renovação em andamento, por usuário ─────────────────────────────────────
+//
+// O REFRESH TOKEN DA MICROSOFT ROTACIONA: cada renovação bem-sucedida devolve um
+// token novo e INVALIDA o anterior. Duas renovações simultâneas do mesmo usuário
+// não são duas tentativas - são uma que funciona e uma que recebe
+// `invalid_grant` por usar um token que acabou de morrer.
+//
+// E o Office dispara várias chamadas à Microsoft ao mesmo tempo o tempo todo:
+// agenda, Teams, Outlook, o "meu dia" do assistente (que lê agenda E caixa),
+// mais os schedulers. Bastava a pessoa abrir o Office para duas dessas correrem
+// juntas, a segunda levar `invalid_grant`, e o código apagar o token achando que
+// a autorização tinha morrido - obrigando a relogar. Um minuto depois de entrar,
+// que é exatamente o sintoma relatado.
+//
+// Aqui, quem chega durante uma renovação em curso ESPERA por ela e usa o mesmo
+// resultado, em vez de abrir uma segunda corrida contra a primeira.
+const renovacoesEmCurso = new Map(); // userId → Promise<string|null>
+
 class MicrosoftAuthService {
 
     // ── State (CSRF) ─────────────────────────────────────────────────────────
@@ -292,10 +310,37 @@ class MicrosoftAuthService {
 
         if (isValid) return accessTokenPlain;
 
-        // Precisa de refresh
+        // Precisa de refresh - mas só UMA por usuário de cada vez (ver o mapa
+        // `renovacoesEmCurso` lá em cima: o token rotaciona, então a segunda
+        // corrida simultânea sempre perde).
+        const emCurso = renovacoesEmCurso.get(u.id);
+        if (emCurso) return emCurso;
+
+        const promessa = this._renovar(u, refreshTokenPlain)
+            .finally(() => renovacoesEmCurso.delete(u.id));
+        renovacoesEmCurso.set(u.id, promessa);
+        return promessa;
+    }
+
+    /**
+     * A renovação em si. Só é chamada por `getValidToken`, e sempre uma por
+     * usuário - o controle de concorrência fica lá.
+     */
+    async _renovar(u, refreshTokenPlain) {
+        // Precisa de refresh.
+        //
+        // ATÉ 24/08/2026 QUALQUER falha aqui apagava o refresh_token da pessoa e
+        // exigia relogin. Bastava uma piscada de rede, um 503 da Microsoft ou um
+        // 429 para a conta ser desconectada de vez, em silêncio - e é a
+        // explicação mais provável para os 19 usuários que estavam com o token
+        // vazio sem ninguém ter desvinculado nada.
+        //
+        // Agora: TENTA DE NOVO no que é passageiro, e só zera quando a Microsoft
+        // diz que a autorização morreu (invalid_grant e companhia). Desconectar
+        // é a última coisa a fazer, não a primeira.
         try {
             console.log(`🔄 [Microsoft] Refreshing token para user ${u.id}...`);
-            const refreshed = await this._doRefresh(refreshTokenPlain);
+            const refreshed = await this._refreshComTentativas(refreshTokenPlain, u.id);
 
             const newExpiresAt = Date.now() + refreshed.expires_in * 1000;
 
@@ -312,13 +357,106 @@ class MicrosoftAuthService {
             return refreshed.access_token;
 
         } catch (err) {
+            if (err?.microsoftTemporario) {
+                // Passageiro: o vínculo continua de pé e a próxima chamada tenta
+                // de novo. NÃO apaga o token e NÃO manda a pessoa relogar.
+                console.warn(`⚠️  [Microsoft] Renovação temporariamente indisponível (user ${u.id}): ${err.message}`);
+                const e = new Error('A Microsoft não respondeu agora. O Office tenta de novo sozinho em instantes.');
+                e.microsoftTemporario = true;
+                throw e;
+            }
+
+            // ── Última checagem antes de desconectar alguém ──────────────
+            //
+            // `invalid_grant` também é o que a Microsoft responde quando o token
+            // usado já foi trocado por outro - e isso acontece de verdade: outra
+            // instância do backend, ou o scheduler, pode ter renovado enquanto
+            // esta chamada estava no ar. O mutex acima resolve dentro de UM
+            // processo; isto cobre o resto.
+            //
+            // Então antes de apagar, relê o banco: se o token guardado mudou, a
+            // sessão está viva e quem morreu foi só a cópia velha desta chamada.
+            const agora = await db.User.findByPk(u.id, {
+                attributes: ['microsoft_refresh_token', 'microsoft_access_token', 'microsoft_token_expires_at'],
+            });
+            const guardado = agora ? readSecret(agora.microsoft_refresh_token) : null;
+
+            if (guardado && guardado !== refreshTokenPlain) {
+                console.warn(`↩️  [Microsoft] O token do user ${u.id} já tinha sido renovado por outra chamada - usando o novo em vez de desconectar.`);
+                const acessoAtual = readSecret(agora.microsoft_access_token);
+                const validoAte = Number(agora.microsoft_token_expires_at || 0);
+                if (acessoAtual && validoAte > Date.now() + REFRESH_MARGIN_MS) return acessoAtual;
+
+                // O token novo existe mas o acesso já venceu: tenta com ele.
+                try {
+                    const refeito = await this._refreshComTentativas(guardado, u.id);
+                    const expira = Date.now() + refeito.expires_in * 1000;
+                    await db.User.update({
+                        microsoft_access_token:     writeSecret(refeito.access_token),
+                        microsoft_refresh_token:    writeSecret(refeito.refresh_token || guardado),
+                        microsoft_token_expires_at: expira,
+                    }, { where: { id: u.id } });
+                    return refeito.access_token;
+                } catch {
+                    // Aí sim: nem o token novo serve.
+                }
+            }
+
             console.warn(
-                `⚠️  [Microsoft] Falha ao renovar token do user ${u.id}:`,
+                `⚠️  [Microsoft] Autorização morreu para o user ${u.id}:`,
                 err?.response?.data || err.message
             );
             await this._clearTokens(u.id);
             return null;
         }
+    }
+
+    /**
+     * Renova com tentativas, separando o que é passageiro do que é definitivo.
+     *
+     * Definitivo (zera e pede relogin): a Microsoft respondeu dizendo que a
+     * autorização não vale mais - senha trocada, consentimento revogado, acesso
+     * condicional, MFA exigido. Só isso justifica desconectar alguém.
+     *
+     * Passageiro (tenta de novo): rede, 5xx, 429. Erro do caminho, não do
+     * vínculo.
+     */
+    async _refreshComTentativas(refreshTokenValue, userId, tentativas = 3) {
+        // Códigos em que a Microsoft está dizendo "esta autorização acabou".
+        const DEFINITIVOS = new Set([
+            'invalid_grant', 'invalid_client', 'unauthorized_client', 'interaction_required',
+        ]);
+
+        let ultimo = null;
+        for (let i = 0; i < tentativas; i++) {
+            try {
+                return await this._doRefresh(refreshTokenValue);
+            } catch (err) {
+                ultimo = err;
+                const code = err?.response?.data?.error;
+                const status = err?.response?.status;
+
+                // A Microsoft respondeu e disse que o vínculo morreu: não
+                // adianta insistir, e insistir só atrasa o aviso.
+                if (code && DEFINITIVOS.has(code)) throw err;
+
+                // 4xx que não é dos acima também é definitivo: pedido malformado
+                // não melhora repetindo.
+                if (status && status >= 400 && status < 500 && status !== 429) throw err;
+
+                if (i < tentativas - 1) {
+                    const espera = 400 * (i + 1);
+                    console.warn(`🔁 [Microsoft] Renovação do user ${userId} falhou (${status || err.code || 'rede'}), tentando de novo em ${espera}ms...`);
+                    await new Promise(r => setTimeout(r, espera));
+                }
+            }
+        }
+
+        // Acabaram as tentativas e nunca foi definitivo: é passageiro.
+        const e = new Error(ultimo?.message || 'Microsoft indisponível');
+        e.microsoftTemporario = true;
+        e.original = ultimo;
+        throw e;
     }
 
     /**
