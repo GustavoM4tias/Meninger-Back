@@ -92,12 +92,6 @@ function cacheSet(chave, v) {
   _cache.set(chave, { t: Date.now(), v });
 }
 
-const diasAntes = (iso, dias) => {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - dias);
-  return d.toISOString().slice(0, 10);
-};
-
 /**
  * GET respeitando o rate limit do Sienge (200 req/min, COMPARTILHADO com os
  * crons do Office). Sem isto a tela quebrava em produção e funcionava no
@@ -325,19 +319,16 @@ export async function getFilterOptions(scope) {
 }
 
 /** Relatório completo do recorte: totais, quebra por dia e as linhas. */
-export async function getReport(filtros, scope, { sort, dir, folgaDias = 0 } = {}) {
+export async function getReport(filtros, scope, { sort, dir } = {}) {
   // Uma empresa só → deixa a API filtrar (resposta ~20x menor).
   const companyId = filtros.empresas.length === 1 ? filtros.empresas[0] : null;
 
-  // Com a conciliação ligada, busca já a janela ESTENDIDA (período + folga) e
-  // devolve as linhas cruas junto: a conciliação precisa exatamente disso para
-  // não acusar ato já lançado antes do período. Antes eram DUAS chamadas
-  // grandes à API para janelas sobrepostas - o dobro de tempo e o dobro de
-  // pressão no rate limit, que é o que derrubava a tela em produção.
-  const de = folgaDias > 0 ? diasAntes(filtros.startDate, folgaDias) : filtros.startDate;
-  const { rows: bills, buscadoEm, doCache } = await fetchIncome({
-    startDate: de, endDate: filtros.endDate, companyId,
-  });
+  // SÓ o período. Já buscou a janela estendida aqui (período + 90 dias de
+  // folga) para servir também à conciliação, e foi um erro: sem filtro de
+  // empresa a resposta ia de 16 MB para 66,8 MB (20.329 registros) e derrubava
+  // a tela em produção com 500. A folga hoje é resolvida no espelho, com uma
+  // consulta que devolve nomes (conciliacaoAtoService).
+  const { rows: bills, buscadoEm, doCache } = await fetchIncome({ ...filtros, companyId });
 
   const linhas = ordenar(achatar(bills, filtros, scope), sort, dir);
 
@@ -352,10 +343,6 @@ export async function getReport(filtros, scope, { sort, dir, folgaDias = 0 } = {
     fonte: 'api',
     consultadoEm: buscadoEm,
     doCache,
-    // Uso INTERNO (conciliação). O controller remove antes de responder: são
-    // milhares de registros crus, não podem trafegar para a tela.
-    _billsJanela: bills,
-    _janelaDe: de,
   };
 }
 

@@ -39,6 +39,7 @@
 // Já a CONTAGEM dos grupos respeita o período que o usuário escolheu.
 
 import db from '../../models/sequelize/index.js';
+import { siengeQuery } from '../../lib/siengeReadDb.js';
 
 const Q = { type: db.Sequelize.QueryTypes.SELECT };
 
@@ -179,23 +180,53 @@ async function carregarAtos(deISO, ateISO) {
 }
 
 /**
- * Achata os recebimentos AVC da janela estendida (só para casar).
- * Recebe os registros JÁ BUSCADOS pelo relatório: a janela dele passou a ser a
- * estendida justamente para servir aos dois, em uma chamada só à API.
+ * Nomes de clientes que JÁ tiveram recebimento de ato no espelho do Sienge
+ * dentro da janela de folga. Serve só para NÃO acusar de pendente um ato que já
+ * foi lançado antes do período consultado.
+ *
+ * Vem do BACKUP, e não da API, por uma razão medida: pedir a janela estendida à
+ * API sem filtro de empresa devolve 66,8 MB e 20.329 registros (contra 16 MB do
+ * período), e isso derrubava a tela em produção com 500 - o processo do Office
+ * roda ~25 schedulers e não tem memória sobrando para segurar esse JSON. Aqui a
+ * resposta é uma lista de nomes.
+ *
+ * O atraso do espelho (~24h) é inofensivo NESTE uso: recebimento lançado nas
+ * últimas horas cai dentro do próprio período consultado, que é lido ao vivo e
+ * entra no conjunto por outro caminho (ver `chavesJaLancadas`).
  */
-function achatarAvcDaFolga(bills) {
-  const linhas = [];
-  for (const b of (bills || [])) {
-    if (String(b.documentIdentificationId || '').trim() !== 'AVC') continue;
-    for (const r of (b.receipts || [])) {
-      linhas.push({
-        chave: normalizar(b.clientName),
-        valor: Number(r.grossAmount || 0),
-        data: String(r.paymentDate || '').slice(0, 10),
-      });
-    }
+async function nomesComAvcNoEspelho(deISO, ateISO, { ccs, empresas, scope }) {
+  const params = [deISO, ateISO];
+  let extra = '';
+  const add = (v) => { params.push(v); return '$' + params.length; };
+
+  if (empresas) extra += `
+      AND emp.cdempresaview = ANY(${add([...empresas])}::int[])`;
+  if (ccs)      extra += `
+      AND e.cdempreendview  = ANY(${add([...ccs])}::int[])`;
+  if (!scope.all) {
+    // Mesma regra dos dois lados: centro de custo OU código da empresa.
+    const permitidos = add(scope.erpIds || []);
+    extra += `
+      AND (e.cdempreendview = ANY(${permitidos}::int[]) OR emp.cdempresaview = ANY(${permitidos}::int[]))`;
   }
-  return linhas;
+
+  const sql = `
+    SELECT DISTINCT c.nmcliente
+      FROM ecrcbaixa bx
+      INNER JOIN ecrctitulo  t   ON t.nutitulo = bx.nutitulo
+      INNER JOIN ecadempresa emp ON emp.cdempresa = t.cdempresa
+      LEFT  JOIN ecadcliente c   ON c.cdcliente = t.cdcliente
+      LEFT  JOIN LATERAL (
+        SELECT un.cdempreend FROM ecrcunidade un
+        WHERE un.nutitulo = t.nutitulo
+        ORDER BY (un.flprincipal = 'S') DESC, un.nuunidade LIMIT 1
+      ) u ON true
+      LEFT JOIN ecadempreend e ON e.cdempreend = u.cdempreend
+     WHERE TRIM(t.cddocumento) = 'AVC'
+       AND bx.dtrecto BETWEEN $1::date AND $2::date${extra}
+  `;
+  const { rows } = await siengeQuery(sql, params);
+  return rows.map(r => normalizar(r.nmcliente)).filter(Boolean);
 }
 
 /**
@@ -226,7 +257,7 @@ const RESUMO_ZERO = {
  * @param scope    { all } ou { erpIds }
  * @returns { resumo, atosSemAvc[], porLinha: Map<idLinha, marcacao> }
  */
-export async function conciliar(linhas, filtros, scope, { folgaDias, billsJanela } = {}) {
+export async function conciliar(linhas, filtros, scope, { folgaDias } = {}) {
   const { startDate, endDate } = filtros;
   const folga = resolverFolga(folgaDias);
   const de = diasAntes(startDate, folga);
@@ -298,13 +329,24 @@ export async function conciliar(linhas, filtros, scope, { folgaDias, billsJanela
   resumo.atosPagosNoPeriodo = noPeriodo.length;
 
   const naoCasados = noPeriodo.filter(a => !usados.has(a.uid));
-  // `billsJanela` vem do relatório, que já buscou a janela estendida. Sem ela
-  // não dá para saber o que foi lançado antes do período, e aí preferimos NÃO
-  // acusar ninguém: a lista sai vazia e a tela avisa.
-  const avcFolga = (naoCasados.length && Array.isArray(billsJanela))
-    ? achatarAvcDaFolga(billsJanela)
-    : null;
-  const chavesAvcFolga = avcFolga ? new Set(avcFolga.map(r => r.chave)) : null;
+
+  // Quem já foi lançado alguma vez na janela de folga. Duas fontes somadas:
+  // o espelho (barato, cobre até ~24h atrás) e as próprias linhas do período
+  // (ao vivo, cobrem o que o espelho ainda não tem). Sem esse conjunto NÃO
+  // acusamos ninguém: a lista sai vazia e a tela avisa.
+  let chavesJaLancadas = null;
+  if (naoCasados.length) {
+    try {
+      chavesJaLancadas = new Set([
+        ...await nomesComAvcNoEspelho(de, endDate, { ccs, empresas, scope }),
+        ...linhas.map(l => normalizar(l.cliente)),
+      ]);
+    } catch (e) {
+      console.error('[conciliacao-ato] folga indisponível (espelho):', e.message);
+      chavesJaLancadas = null;
+    }
+  }
+  const chavesAvcFolga = chavesJaLancadas;
 
   const atosSemAvc = [];
   if (chavesAvcFolga) {
