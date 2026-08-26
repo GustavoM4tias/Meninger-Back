@@ -20,6 +20,7 @@ import { findUnsupported } from '../services/emeAtende/emeAtendeGuard.js';
 import { buildInstructions, mergeStandards, HARD_RULES } from '../services/emeAtende/emeAtendeRules.js';
 import EmeAtendeSiteSyncService from '../services/emeAtende/EmeAtendeSiteSyncService.js';
 import Scoring from '../services/emeAtende/emeAtendeLeadScoring.js';
+import EmeAtendeLeadService from '../services/emeAtende/EmeAtendeLeadService.js';
 import { fetchSite, resolveSource, resolveSiteUrl, buildSiteContext } from '../services/emeAtende/emeAtendeSiteSource.js';
 
 const router = express.Router();
@@ -396,20 +397,55 @@ router.get('/conversations/:id', wrap(async (req, res) => {
 }));
 
 /** Muda o estado (bot|closed) - pausa/encerra ou devolve pro bot. */
+// Encerrar/reabrir conversa pela tela.
+//
+// Encerrar mexia SÓ na conversa, e o lead ficava órfão no funil: nem ativo,
+// nem perdido, sem motivo e sem data de volta. Como fechar na mão é o caminho
+// normal de quem administra, era a maior fonte de lead parado no limbo.
+// Agora o encerramento registra a perda; reabrir desfaz.
 router.put('/conversations/:id/state', wrap(async (req, res) => {
     const state = String(req.body?.state || '');
     if (!['bot', 'closed'].includes(state)) {
         return res.status(400).json({ error: 'state deve ser bot|closed.' });
     }
-    const row = await db.EmeAtendeConversation.findByPk(req.params.id);
+    const row = await db.EmeAtendeConversation.findByPk(req.params.id, {
+        include: [{ model: db.EmeAtendeLead, as: 'lead' }],
+    });
     if (!row) return res.status(404).json({ error: 'não encontrada' });
+
+    const quem = req.user?.username || req.user?.email || `user#${req.user?.id}`;
     await row.update({ state });
+
+    if (state === 'closed' && row.lead) {
+        // Motivo escolhido na tela; sem escolha, o padrão sai do que aconteceu:
+        // lead que nunca respondeu é "parou de responder", não "sem interesse".
+        const motivo = req.body?.motivo
+            || (row.last_inbound_at ? 'sem_interesse' : 'nao_responde');
+        await EmeAtendeLeadService.registrarPerda({
+            lead: row.lead, conversation: row,
+            motivo, observacao: `Encerrada na tela por ${quem}`,
+        });
+    }
+
+    if (state === 'bot' && row.lead && ['perdido', 'opt_out'].includes(row.lead.estagio)) {
+        // Reabrir devolve o lead ao funil - menos quem pediu opt-out, que não
+        // volta por decisão de tela nenhuma.
+        if (row.lead.estagio === 'opt_out') {
+            return res.status(409).json({ error: 'Este lead pediu para não receber mais mensagens. Reabrir exigiria novo consentimento dele.' });
+        }
+        await row.lead.update({
+            estagio: 'engajado', status: 'engaged',
+            motivo_perda: null, reconversao: null, recontatar_em: null, perdido_em: null,
+        });
+        await EmeAtendeLeadService.registrarInteracao({ lead: row.lead, conversation: row });
+    }
+
     await db.EmeAtendeEvent.create({
         lead_id: row.lead_id, conversation_id: row.id,
         type: 'state_changed_by_admin',
-        detail: { state, by: req.user?.username || req.user?.email || `user#${req.user?.id}` },
+        detail: { state, by: quem, motivo: req.body?.motivo || null },
     });
-    res.json(row);
+    res.json(await row.reload());
 }));
 
 // ── Sandbox: testa o prompt de um fluxo SEM enviar nada ──────────────────────
