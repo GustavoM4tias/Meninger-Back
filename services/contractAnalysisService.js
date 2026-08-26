@@ -15,6 +15,13 @@ const __dirname = path.dirname(__filename);
 // só existe no histórico, de quando isto rodava em cron.
 const ORIGENS_VALIDAS = new Set(['webhook', 'manual', 'agendado']);
 
+// Repasses em análise AGORA, não importa por qual porta. As duas portas
+// (webhook e varredura manual) escrevem no MESMO repasse no CV: sem este
+// registro, uma varredura disparada no meio de um webhook analisaria o mesmo
+// contrato duas vezes — duas mensagens no protocolo, dois gastos de modelo e
+// duas trocas de etapa em cima da mesma reserva.
+const emAnalise = new Set();
+
 class ContractAnalysisService {
     constructor() {
         this.targetStatus = 'Analise Contratos';
@@ -61,6 +68,11 @@ class ContractAnalysisService {
                 try {
                     console.log(`🔄 Processando repasse ID: ${repasse.ID} - Reserva: ${repasse.idreserva}`);
                     const analysisResult = await this.processRepasse(repasse);
+
+                    // O webhook pegou este primeiro: não conta como processado
+                    // nem como erro, e o quadro de parados é dele.
+                    if (analysisResult?.ignorado) continue;
+
                     processed++;
                     const deuErro = analysisResult?.status?.toUpperCase?.() === 'ERRO';
                     if (deuErro) {
@@ -127,6 +139,13 @@ class ContractAnalysisService {
 
             try {
                 const analysisResult = await this.processRepasse(repasse);
+
+                if (analysisResult?.ignorado) {
+                    const aviso = `Repasse ${idrepasse} já estava em análise por outra porta.`;
+                    await this._fecharExecucao(execucao, { found: 1, processed: 0, errors: 0, message: aviso });
+                    return { success: true, ignorado: 'em_analise', message: aviso };
+                }
+
                 const deuErro = analysisResult?.status?.toUpperCase?.() === 'ERRO';
 
                 await this._registrarParado(repasse, { ok: !deuErro, erro: deuErro ? this._motivo(analysisResult) : null });
@@ -197,6 +216,16 @@ class ContractAnalysisService {
      * Processar um repasse específico
      */
     async processRepasse(repasse) {
+        const idRepasse = Number(repasse.ID);
+
+        // Porta única: quem já está sendo analisado não entra de novo, venha a
+        // segunda chamada do webhook ou da varredura.
+        if (emAnalise.has(idRepasse)) {
+            console.log(`⏭️  Repasse ${idRepasse} já está em análise por outra porta; não vou analisar duas vezes.`);
+            return { status: 'IGNORADO', ignorado: 'em_analise', mensagens: [] };
+        }
+        emAnalise.add(idRepasse);
+
         try {
             // 1. Buscar documentos da reserva
             const documentos = await this.getReservaDocuments(repasse.idreserva);
@@ -226,6 +255,8 @@ class ContractAnalysisService {
         } catch (error) {
             console.error(`Erro ao processar repasse ${repasse.ID}:`, error.message);
             throw error;
+        } finally {
+            emAnalise.delete(idRepasse);
         }
     }
 

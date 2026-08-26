@@ -12,10 +12,13 @@
 //      (situação, reserva, cliente) é relido do CV. Chamada forjada, no pior
 //      caso, manda analisar um repasse que de fato está na etapa — que é
 //      exatamente o que o job faria sozinho.
-//   2. NÃO REPETIR. Gatilho de painel dispara mais de uma vez (ida e volta de
-//      etapa, clique duplo, retry do CV). Análise repetida gasta modelo e
-//      escreve mensagem repetida no CRM, então a mesma chave é ignorada por
-//      uma janela curta, e um repasse em voo nunca entra duas vezes.
+//   2. NÃO REPETIR — MAS SEM JANELA DE TEMPO. Chamada duplicada enquanto a
+//      análise roda é barrada pelo registro de "em voo". Depois que ela termina
+//      bem, o próprio CV faz a dedupe: o repasse SAI de "Analise Contratos", e
+//      a chamada seguinte não acha nada para analisar. Ignorar por tempo, como
+//      eu tinha feito, quebraria o caso mais comum da operação: contrato
+//      reprovado, corrigido e devolvido para reanálise em poucos minutos seria
+//      descartado calado.
 //   3. RESPONDER RÁPIDO. O CV corta a conexão e conta como falha se demorar; a
 //      análise leva minutos. Por isso o controller responde 200 na hora e este
 //      serviço roda solto, deixando rastro em contract_validator_runs.
@@ -23,10 +26,8 @@
 import crypto from 'crypto';
 import ContractAnalysisService from './contractAnalysisService.js';
 
-const JANELA_REPETICAO_MS = Number(process.env.CONTRACT_WEBHOOK_DEDUPE_MS || 10 * 60 * 1000);
 
 const emVoo = new Set();          // idrepasse sendo analisado agora
-const ultimaEntrada = new Map();  // idrepasse -> timestamp da última aceita
 
 const service = new ContractAnalysisService();
 
@@ -111,25 +112,18 @@ export async function registrarChamada(idrepasse) {
 export async function processarWebhook(idrepasse, origem = 'webhook') {
     const chave = Number(idrepasse);
 
+    // Chamada duplicada ENQUANTO a análise roda é a única que precisa ser
+    // barrada aqui. Repetição depois que ela termina se resolve sozinha: a
+    // análise bem-sucedida tira o repasse de "Analise Contratos", e a chamada
+    // seguinte não acha nada para fazer.
     if (emVoo.has(chave)) {
         console.log(`[CONTRATOS_IA] repasse ${chave} já está em análise; ignorando a chamada repetida.`);
         return { ignorado: 'em_voo' };
     }
 
-    const visto = ultimaEntrada.get(chave);
-    if (visto && (Date.now() - visto) < JANELA_REPETICAO_MS) {
-        console.log(`[CONTRATOS_IA] repasse ${chave} analisado há pouco; ignorando a chamada repetida.`);
-        return { ignorado: 'repetido' };
-    }
-
     emVoo.add(chave);
     try {
-        const resultado = await service.analisarPorId(chave, origem);
-        // Só segura a janela quando a análise de fato aconteceu: chamada que
-        // não virou análise (repasse fora da etapa) não pode bloquear a
-        // próxima, senão um vai-e-volta de etapa perde o gatilho bom.
-        if (!resultado?.ignorado) ultimaEntrada.set(chave, Date.now());
-        return resultado;
+        return await service.analisarPorId(chave, origem);
     } finally {
         emVoo.delete(chave);
     }
