@@ -92,6 +92,39 @@ function cacheSet(chave, v) {
   _cache.set(chave, { t: Date.now(), v });
 }
 
+const diasAntes = (iso, dias) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - dias);
+  return d.toISOString().slice(0, 10);
+};
+
+/**
+ * GET respeitando o rate limit do Sienge (200 req/min, COMPARTILHADO com os
+ * crons do Office). Sem isto a tela quebrava em produção e funcionava no
+ * desenvolvimento: aqui não há cron concorrendo, lá o landService sozinho faz
+ * ~154 chamadas por varredura. Um 429 virava exceção e a tela devolvia 500.
+ * O erro também passa a sair legível no log — `e.message` de axios só diz
+ * "Request failed with status code 429", que não ajuda ninguém às 7h da manhã.
+ */
+async function getWithRetry(params, tentativas = 3) {
+  for (let i = 1; ; i++) {
+    try {
+      return await apiSienge.get(ENDPOINT, { params });
+    } catch (e) {
+      const status = e.response?.status;
+      const corpo = JSON.stringify(e.response?.data ?? '').slice(0, 300);
+      if (status !== 429 || i >= tentativas) {
+        console.error(`[recebimentos-ato] Sienge ${status ?? 'sem status'}: ${e.message} ${corpo}`);
+        throw e;
+      }
+      const reset = Number(e.response?.headers?.['ratelimit-reset']) || 5;
+      const espera = Math.min(reset + 1, 65) * 1000;
+      console.warn(`[recebimentos-ato] rate limit; aguardando ${espera / 1000}s (tentativa ${i}/${tentativas})`);
+      await new Promise(r => setTimeout(r, espera));
+    }
+  }
+}
+
 /**
  * Busca as parcelas com recebimento no período direto na API do Sienge.
  * Passa companyId quando há UMA empresa filtrada (a resposta cai de ~5.200 para
@@ -108,7 +141,7 @@ async function fetchIncome({ startDate, endDate, companyId = null }) {
   const params = { startDate, endDate, selectionType: 'P' };
   if (companyId) params.companyId = companyId;
 
-  const { data } = await apiSienge.get(ENDPOINT, { params });
+  const { data } = await getWithRetry(params);
   const rows = Array.isArray(data?.data) ? data.data : [];
   cacheSet(chave, rows);
   return { rows, buscadoEm: new Date().toISOString(), doCache: false };
@@ -292,10 +325,19 @@ export async function getFilterOptions(scope) {
 }
 
 /** Relatório completo do recorte: totais, quebra por dia e as linhas. */
-export async function getReport(filtros, scope, { sort, dir } = {}) {
+export async function getReport(filtros, scope, { sort, dir, folgaDias = 0 } = {}) {
   // Uma empresa só → deixa a API filtrar (resposta ~20x menor).
   const companyId = filtros.empresas.length === 1 ? filtros.empresas[0] : null;
-  const { rows: bills, buscadoEm, doCache } = await fetchIncome({ ...filtros, companyId });
+
+  // Com a conciliação ligada, busca já a janela ESTENDIDA (período + folga) e
+  // devolve as linhas cruas junto: a conciliação precisa exatamente disso para
+  // não acusar ato já lançado antes do período. Antes eram DUAS chamadas
+  // grandes à API para janelas sobrepostas - o dobro de tempo e o dobro de
+  // pressão no rate limit, que é o que derrubava a tela em produção.
+  const de = folgaDias > 0 ? diasAntes(filtros.startDate, folgaDias) : filtros.startDate;
+  const { rows: bills, buscadoEm, doCache } = await fetchIncome({
+    startDate: de, endDate: filtros.endDate, companyId,
+  });
 
   const linhas = ordenar(achatar(bills, filtros, scope), sort, dir);
 
@@ -310,6 +352,10 @@ export async function getReport(filtros, scope, { sort, dir } = {}) {
     fonte: 'api',
     consultadoEm: buscadoEm,
     doCache,
+    // Uso INTERNO (conciliação). O controller remove antes de responder: são
+    // milhares de registros crus, não podem trafegar para a tela.
+    _billsJanela: bills,
+    _janelaDe: de,
   };
 }
 

@@ -21,12 +21,23 @@ const ligado = (v) => v === '1' || v === 'true' || v === true;
  * nem toda leitura da tela precisa dela.
  */
 async function montarRelatorio(req, scope, filtros) {
-  const data = await svc.getReport(filtros, scope, { sort: req.query.sort, dir: req.query.dir });
-  if (!ligado(req.query.mesclarAto)) return data;
+  const mesclar = ligado(req.query.mesclarAto);
+  const folgaDias = mesclar ? conciliacao.resolverFolga(req.query.folgaDias) : 0;
 
-  const c = await conciliacao.conciliar(data.linhas, filtros, scope, { folgaDias: req.query.folgaDias });
+  // Com a mesclagem ligada o relatório já busca a janela estendida (período +
+  // folga) numa chamada só, e empresta os registros crus para a conciliação.
+  const data = await svc.getReport(filtros, scope, {
+    sort: req.query.sort, dir: req.query.dir, folgaDias,
+  });
+
+  // Os registros crus são milhares e existem só para o cruzamento — nunca vão
+  // para a resposta.
+  const { _billsJanela: billsJanela, _janelaDe, ...limpo } = data;
+  if (!mesclar) return limpo;
+
+  const c = await conciliacao.conciliar(limpo.linhas, filtros, scope, { folgaDias, billsJanela });
   return {
-    ...data,
+    ...limpo,
     // A marcação viaja junto da linha para a tela não ter que cruzar de novo.
     linhas: data.linhas.map(l => ({ ...l, conciliacao: c.porLinha.get(l.id) || null })),
     conciliacao: {

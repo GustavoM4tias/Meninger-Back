@@ -39,7 +39,6 @@
 // Já a CONTAGEM dos grupos respeita o período que o usuário escolheu.
 
 import db from '../../models/sequelize/index.js';
-import apiSienge from '../../lib/apiSienge.js';
 
 const Q = { type: db.Sequelize.QueryTypes.SELECT };
 
@@ -179,14 +178,14 @@ async function carregarAtos(deISO, ateISO) {
   }));
 }
 
-/** Busca os recebimentos AVC da janela estendida (só para casar). */
-async function carregarAvcDaFolga(deISO, ateISO, companyId) {
-  const params = { startDate: deISO, endDate: ateISO, selectionType: 'P' };
-  if (companyId) params.companyId = companyId;
-  const { data } = await apiSienge.get('/bulk-data/v1/income', { params });
-
+/**
+ * Achata os recebimentos AVC da janela estendida (só para casar).
+ * Recebe os registros JÁ BUSCADOS pelo relatório: a janela dele passou a ser a
+ * estendida justamente para servir aos dois, em uma chamada só à API.
+ */
+function achatarAvcDaFolga(bills) {
   const linhas = [];
-  for (const b of (data?.data || [])) {
+  for (const b of (bills || [])) {
     if (String(b.documentIdentificationId || '').trim() !== 'AVC') continue;
     for (const r of (b.receipts || [])) {
       linhas.push({
@@ -227,7 +226,7 @@ const RESUMO_ZERO = {
  * @param scope    { all } ou { erpIds }
  * @returns { resumo, atosSemAvc[], porLinha: Map<idLinha, marcacao> }
  */
-export async function conciliar(linhas, filtros, scope, { folgaDias } = {}) {
+export async function conciliar(linhas, filtros, scope, { folgaDias, billsJanela } = {}) {
   const { startDate, endDate } = filtros;
   const folga = resolverFolga(folgaDias);
   const de = diasAntes(startDate, folga);
@@ -299,17 +298,12 @@ export async function conciliar(linhas, filtros, scope, { folgaDias } = {}) {
   resumo.atosPagosNoPeriodo = noPeriodo.length;
 
   const naoCasados = noPeriodo.filter(a => !usados.has(a.uid));
-  let avcFolga = null;
-  if (naoCasados.length) {
-    const companyId = filtros.empresas.length === 1 ? filtros.empresas[0] : null;
-    try {
-      avcFolga = await carregarAvcDaFolga(de, endDate, companyId);
-    } catch (e) {
-      // Sem a folga preferimos NÃO acusar: a lista sai vazia e a tela avisa.
-      console.error('[conciliacao-ato] folga AVC indisponível:', e.message);
-      avcFolga = null;
-    }
-  }
+  // `billsJanela` vem do relatório, que já buscou a janela estendida. Sem ela
+  // não dá para saber o que foi lançado antes do período, e aí preferimos NÃO
+  // acusar ninguém: a lista sai vazia e a tela avisa.
+  const avcFolga = (naoCasados.length && Array.isArray(billsJanela))
+    ? achatarAvcDaFolga(billsJanela)
+    : null;
   const chavesAvcFolga = avcFolga ? new Set(avcFolga.map(r => r.chave)) : null;
 
   const atosSemAvc = [];
