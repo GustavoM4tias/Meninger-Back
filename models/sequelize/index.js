@@ -14,6 +14,7 @@ import TokenUsageDefine from './tokenUsage.js';
 import ValidationHistoryDefine from './validationHistory.js';
 import ContractValidatorRunDefine from './contractValidatorRun.js';
 import ContractValidatorStuckDefine from './contractValidatorStuck.js';
+import ContractWebhookSettingDefine from './contractWebhookSetting.js';
 
 // Singe imports
 import SalesContractDefine from './sienge/salesContract.js';
@@ -236,6 +237,8 @@ import MetaCampaignDefine     from './marketing/metaCampaign.js';
 import MetaAdDefine           from './marketing/metaAd.js';
 import MetaAdSetDefine        from './marketing/metaAdSet.js';
 import MetaInsightDailyDefine from './marketing/metaInsightDaily.js';
+import CvLeadQueueDefine       from './marketing/cvLeadQueue.js';
+import CvLeadQueueBindingDefine from './marketing/cvLeadQueueBinding.js';
 // Marketing — Stand de Vendas (modelos/categorias + stands reais)
 import SalesStandModelDefine from './marketing/salesStandModel.js';
 import SalesStandDefine      from './marketing/salesStand.js';
@@ -307,6 +310,7 @@ db.TokenUsage = TokenUsageDefine(sequelize, DataTypes);
 db.ValidationHistory = ValidationHistoryDefine(sequelize, DataTypes);
 db.ContractValidatorRun = ContractValidatorRunDefine(sequelize, DataTypes);
 db.ContractValidatorStuck = ContractValidatorStuckDefine(sequelize, DataTypes);
+db.ContractWebhookSetting = ContractWebhookSettingDefine(sequelize, DataTypes);
 
 // sienge db 
 db.SalesContract = SalesContractDefine(sequelize, DataTypes);
@@ -535,6 +539,8 @@ db.LeadForm         = LeadFormDefine(sequelize, DataTypes);
 db.MarketingConfig  = MarketingConfigDefine(sequelize, DataTypes);
 db.MetaLeadForm     = MetaLeadFormDefine(sequelize, DataTypes);
 db.MetaCampaign     = MetaCampaignDefine(sequelize, DataTypes);
+db.CvLeadQueue        = CvLeadQueueDefine(sequelize, DataTypes);
+db.CvLeadQueueBinding = CvLeadQueueBindingDefine(sequelize, DataTypes);
 db.MetaAd           = MetaAdDefine(sequelize, DataTypes);
 db.MetaAdSet        = MetaAdSetDefine(sequelize, DataTypes);
 db.MetaInsightDaily = MetaInsightDailyDefine(sequelize, DataTypes);

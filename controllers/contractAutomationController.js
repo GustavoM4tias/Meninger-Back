@@ -49,9 +49,9 @@ export class ContractAutomationController {
 
             console.log('🚀 Iniciando análise automática via API...');
 
-            // Executar análise
-            const origem = req?.method === 'SCHEDULED' ? 'agendado' : 'manual';
-            const result = await this.contractService.executeAutomaticAnalysis(origem);
+            // Sem cron, toda varredura é pedido de gente: recuperação de algo
+            // que o webhook perdeu, ou backfill depois de indisponibilidade.
+            const result = await this.contractService.executeAutomaticAnalysis('manual');
 
             const endTime = new Date();
             const duration = Math.round((endTime - startTime) / 1000);
@@ -121,6 +121,64 @@ export class ContractAutomationController {
                 error: error.message,
                 message: 'Erro ao obter status da análise'
             });
+        }
+    }
+
+    /**
+     * Webhook CONTRATOS_IA do CV — o repasse entrou em "Analise Contratos".
+     *
+     * Responde 200 SEMPRE que o segredo confere, inclusive quando a chamada não
+     * vira análise. O CV trata resposta ruim como falha de entrega e repete, e
+     * repetir análise custa modelo; além disso, um 4xx aqui não teria como ser
+     * consertado do lado de lá. O que aconteceu de verdade fica em
+     * contract_validator_runs.
+     */
+    async receiveWebhook(req, res) {
+        const { tokenConfere, extrairIdRepasse, registrarChamada, processarWebhook } =
+            await import('../services/contractWebhookService.js');
+
+        if (!await tokenConfere(req.params?.token)) {
+            console.warn('[CONTRATOS_IA] chamada com segredo inválido — ignorada.');
+            return res.status(401).json({ error: 'Token inválido.' });
+        }
+
+        const idrepasse = extrairIdRepasse(req.body);
+        await registrarChamada(idrepasse);
+
+        if (!idrepasse) {
+            console.warn('[CONTRATOS_IA] corpo sem id de repasse:', JSON.stringify(req.body || {}).slice(0, 500));
+            return res.status(200).json({ received: true, processado: false, motivo: 'corpo sem id de repasse' });
+        }
+
+        res.status(200).json({ received: true, idrepasse });
+
+        processarWebhook(idrepasse)
+            .catch(err => console.error('[CONTRATOS_IA] erro no processamento em background:', err.message));
+    }
+
+    /**
+     * O endereço para colar no painel do CV, e a prova de que ele está sendo
+     * chamado (última chamada e total). Admin — é um segredo.
+     */
+    async getWebhookInfo(req, res) {
+        try {
+            const { obterConfig, montarEndereco } = await import('../services/contractWebhookService.js');
+            const base = `${req.protocol}://${req.get('host')}`;
+            const [config, endereco] = await Promise.all([obterConfig(), montarEndereco(base)]);
+
+            res.status(200).json({
+                nome: 'CONTRATOS_IA',
+                funcionalidade: 'Repasse',
+                gatilho: 'Quando entrar na situação Analise Contratos',
+                endereco,
+                ativo: config.active,
+                ultima_chamada: config.last_call_at,
+                ultimo_idrepasse: config.last_idrepasse,
+                chamadas_total: config.calls_total,
+            });
+        } catch (error) {
+            console.error('❌ Erro ao montar o endereço do webhook:', error.message);
+            res.status(500).json({ success: false, error: error.message });
         }
     }
 
@@ -224,37 +282,12 @@ export class ContractAutomationController {
         }
     }
 
-    /**
-     * Configurar análise automática agendada
-     */
-    // async configureScheduledAnalysis(req, res) {
-    //     try {
-    //         const { enabled, interval } = req.body;
-
-    //         contractValidatorScheduler.updateConfig({ enabled, interval });
-
-    //         res.status(200).json({
-    //             success: true,
-    //             message: 'Configuração de agendamento atualizada com sucesso',
-    //             config: contractValidatorScheduler.getStatus()
-    //         });
-
-    //     } catch (error) {
-    //         console.error('❌ Erro ao configurar análise agendada:', error.message);
-
-    //         res.status(500).json({
-    //             success: false,
-    //             error: error.message,
-    //             message: 'Erro ao configurar análise agendada'
-    //         });
-    //     }
-    // }
 }
 
-// Instância ÚNICA: o scheduler e as rotas precisam enxergar o mesmo estado.
-// Com um `new` em cada lugar, /status respondia sempre "isRunning: false,
-// lastExecution: null" mesmo com o job rodando, e um disparo manual entrava em
-// paralelo com o agendado - dois processos analisando o mesmo repasse.
+// Instância ÚNICA: webhook, varredura manual e /status precisam enxergar o
+// mesmo estado. Com um `new` em cada lugar, /status respondia sempre
+// "isRunning: false, lastExecution: null" mesmo com análise rodando, e dois
+// disparos entravam em paralelo no mesmo repasse.
 const contractAutomationController = new ContractAutomationController();
 
 export default contractAutomationController;

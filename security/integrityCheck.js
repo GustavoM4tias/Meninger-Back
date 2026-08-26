@@ -56,6 +56,9 @@ const PUBLIC_PREFIXES = [
     '/api/correspondents/public', // auto-cadastro de equipe correspondente (token na URL)
     '/api/boleto-caixa/webhook', // webhook do CV (Boleto Caixa)
     '/api/cancelamento-reservas/webhook', // webhook do CV (cancelamento de reservas)
+    '/api/contracts/webhook',    // webhook CONTRATOS_IA do CV (segredo na URL, em
+                                 // contract_webhook_settings; a situação do repasse
+                                 // é relida do CV antes de qualquer análise)
     '/api/meta-app-oauth',       // callback OAuth Meta (state assinado no controller)
     '/api/ai/validator',         // job server-to-server (protegido por token interno — security/internalJobToken)
     '/api/cv/banners',           // banners exibidos na TELA DE LOGIN (pré-autenticação; sem dado de negócio)

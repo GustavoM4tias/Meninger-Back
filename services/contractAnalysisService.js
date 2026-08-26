@@ -10,6 +10,11 @@ import apiValidator from '../lib/apiValidator.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// De onde veio a execução. 'webhook' é o caminho normal desde que o CV passou a
+// avisar na entrada da etapa; 'manual' é a varredura de recuperação; 'agendado'
+// só existe no histórico, de quando isto rodava em cron.
+const ORIGENS_VALIDAS = new Set(['webhook', 'manual', 'agendado']);
+
 class ContractAnalysisService {
     constructor() {
         this.targetStatus = 'Analise Contratos';
@@ -95,6 +100,76 @@ class ContractAnalysisService {
                 message: 'Erro geral durante a análise automática'
             };
         }
+    }
+
+    /**
+     * Analisa UM repasse, avisado pelo webhook CONTRATOS_IA do CV.
+     *
+     * A situação é RELIDA do CV, nunca aceita do corpo do webhook: o endereço
+     * é público e o painel dispara em transições que não são a nossa. Repasse
+     * que não está em "Analise Contratos" na hora da leitura vira registro de
+     * execução e nada mais — não gasta modelo.
+     */
+    async analisarPorId(idrepasse, origem = 'webhook') {
+        const execucao = await this._abrirExecucao(origem);
+
+        try {
+            const repasse = await this.buscarRepasseNaEtapa(idrepasse);
+
+            if (!repasse) {
+                const aviso = `Repasse ${idrepasse} não está em "${this.targetStatus}"; nada a analisar.`;
+                console.log(`↩️  [CONTRATOS_IA] ${aviso}`);
+                await this._fecharExecucao(execucao, { found: 0, processed: 0, errors: 0, message: aviso });
+                return { success: true, ignorado: 'fora_da_etapa', message: aviso };
+            }
+
+            console.log(`🔄 [CONTRATOS_IA] Analisando repasse ${repasse.ID} - Reserva: ${repasse.idreserva}`);
+
+            try {
+                const analysisResult = await this.processRepasse(repasse);
+                const deuErro = analysisResult?.status?.toUpperCase?.() === 'ERRO';
+
+                await this._registrarParado(repasse, { ok: !deuErro, erro: deuErro ? this._motivo(analysisResult) : null });
+                await this._fecharExecucao(execucao, { found: 1, processed: 1, errors: deuErro ? 1 : 0 });
+
+                console.log(`✅ [CONTRATOS_IA] Repasse ${repasse.ID}: ${analysisResult?.status}`);
+                return { success: true, status: analysisResult?.status, idrepasse: Number(idrepasse) };
+
+            } catch (error) {
+                // Mesmo desfecho da varredura: o erro vira mensagem no CRM, o
+                // repasse fica na etapa e entra no quadro de parados.
+                console.error(`❌ [CONTRATOS_IA] Erro no repasse ${repasse.ID}:`, error.message);
+                await this.logErrorToRepasse(repasse.ID, error.message);
+                await this._registrarParado(repasse, { ok: false, erro: error.message });
+                await this._fecharExecucao(execucao, { found: 1, processed: 1, errors: 1 });
+                return { success: false, error: error.message, idrepasse: Number(idrepasse) };
+            }
+
+        } catch (error) {
+            console.error('💥 [CONTRATOS_IA] Falha antes da análise:', error.message);
+            await this._fecharExecucao(execucao, { message: error.message });
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * O repasse, e só se ele estiver mesmo na etapa alvo.
+     *
+     * O CV aceita filtro por ID (medido: 1 item em ~3s, contra 10 MB da lista
+     * inteira), mas filtro ignorado devolve tudo — por isso o ID é procurado
+     * dentro do que voltou, em vez de confiar na primeira linha.
+     */
+    async buscarRepasseNaEtapa(idrepasse) {
+        const id = Number(idrepasse);
+        const response = await apiCv.get(`/v1/financeiro/repasses?ID=${id}`);
+        const lista = response.data?.repasses;
+
+        if (!Array.isArray(lista)) throw new Error('Resposta inválida da API de repasses');
+
+        const repasse = lista.find(r => Number(r.ID) === id);
+        if (!repasse) return null;
+
+        return repasse.status_repasse === this.targetStatus ? repasse : null;
     }
 
     /**
@@ -407,7 +482,7 @@ class ContractAnalysisService {
         try {
             const db = await this._db();
             return await db.ContractValidatorRun.create({
-                origin: origem === 'manual' ? 'manual' : 'agendado',
+                origin: ORIGENS_VALIDAS.has(origem) ? origem : 'webhook',
                 started_at: new Date(),
             });
         } catch (error) {
@@ -460,32 +535,44 @@ class ContractAnalysisService {
             });
 
             for (const repasse of repasses) {
-                const id = Number(repasse.ID);
-                const desfecho = desfechos.get(id);
-
-                if (desfecho?.ok) {
-                    await db.ContractValidatorStuck.destroy({ where: { idrepasse: id } });
-                    continue;
-                }
-
-                const [linha] = await db.ContractValidatorStuck.findOrCreate({
-                    where: { idrepasse: id },
-                    defaults: { idrepasse: id, attempts: 0 },
-                });
-
-                await linha.update({
-                    idreserva: repasse.idreserva || null,
-                    cliente: repasse.nome_cliente || null,
-                    empreendimento: repasse.empreendimento || null,
-                    status_since: this._desdeQuando(repasse) || linha.status_since,
-                    last_error: desfecho?.erro ? String(desfecho.erro).slice(0, 1000) : linha.last_error,
-                    attempts: (linha.attempts || 0) + (desfecho ? 1 : 0),
-                });
-
-                await this._avisarSeParado(linha);
+                await this._registrarParado(repasse, desfechos.get(Number(repasse.ID)));
             }
         } catch (error) {
             console.warn('[validador] não consegui atualizar o quadro de parados:', error.message);
+        }
+    }
+
+    /**
+     * Um repasse no quadro de parados. Separado da varredura porque o webhook
+     * cuida de um repasse só e não pode limpar a linha de quem ele nem olhou.
+     */
+    async _registrarParado(repasse, desfecho) {
+        try {
+            const db = await this._db();
+            const id = Number(repasse.ID);
+
+            if (desfecho?.ok) {
+                await db.ContractValidatorStuck.destroy({ where: { idrepasse: id } });
+                return;
+            }
+
+            const [linha] = await db.ContractValidatorStuck.findOrCreate({
+                where: { idrepasse: id },
+                defaults: { idrepasse: id, attempts: 0 },
+            });
+
+            await linha.update({
+                idreserva: repasse.idreserva || null,
+                cliente: repasse.nome_cliente || null,
+                empreendimento: repasse.empreendimento || null,
+                status_since: this._desdeQuando(repasse) || linha.status_since,
+                last_error: desfecho?.erro ? String(desfecho.erro).slice(0, 1000) : linha.last_error,
+                attempts: (linha.attempts || 0) + (desfecho ? 1 : 0),
+            });
+
+            await this._avisarSeParado(linha);
+        } catch (error) {
+            console.warn('[validador] não consegui registrar o repasse parado:', error.message);
         }
     }
 

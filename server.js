@@ -76,7 +76,6 @@ import organogramRoutes from './routes/organogramRoutes.js';
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
 import { seedSalesStandModels } from './services/marketing/salesStandService.js';
 import seedChecklist from './services/checklist/seedChecklist.js';
-import contractValidatorScheduler from './scheduler/contractValidatorScheduler.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import salesClosingScheduler from './scheduler/salesClosingScheduler.js';
 import contractAdjustmentScheduler from './scheduler/contractAdjustmentScheduler.js';
@@ -598,8 +597,13 @@ async function startBackgroundServices() {
   // Conteúdo dos empreendimentos vindo do site institucional (1x/dia).
   if (schedulerOn('ENABLE_EME_ATENDE_SITE_SYNC')) emeAtendeSiteSyncScheduler.start();
 
+  // A análise automática de contratos NÃO tem cron: quem dispara é o webhook
+  // CONTRATOS_IA do CV, na entrada da etapa "Analise Contratos"
+  // (routes/contractAutomationRoutes.js). A varredura manual continua
+  // disponível em POST /api/contracts/execute para recuperar o que o webhook
+  // perder.
+
   // Crons opt-in (já eram OFF por padrão em qualquer ambiente):
-  if (process.env.ENABLE_CONTRACT_SCHEDULE === 'true') contractValidatorScheduler.start();
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractSiengeScheduler.start();
   // Vigilância dos meses consolidados acompanha o sync de contratos: se os
   // contratos sincronizam, os fechamentos precisam ser conferidos.
