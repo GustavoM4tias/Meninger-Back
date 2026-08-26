@@ -39,6 +39,11 @@ import {
     exportCsv as inadimplenciaExport,
 } from '../controllers/sienge/inadimplenciaController.js';
 import { listCefEnterprises, searchCef } from '../controllers/sienge/cefConsultaController.js';
+import {
+    getFilters as recebimentosAtoFilters,
+    getReport as recebimentosAtoReport,
+    exportCsv as recebimentosAtoExport,
+} from '../controllers/sienge/recebimentosAtoController.js';
 import { RELATORIO_SCREENS } from '../lib/relatorioScreens.js';
 
 
@@ -78,6 +83,17 @@ router.get('/bills', authenticate, requireRoutePermission(['/financeiro/titulos'
 // Escopo de dados aplicado dentro do controller (admin vê tudo).
 router.get('/cef/enterprises', authenticate, requireRoutePermission(['/financeiro/consulta-cef']), listCefEnterprises);
 router.get('/cef/search', authenticate, requireRoutePermission(['/financeiro/consulta-cef']), searchCef);
+
+// ── Conciliação do Ato (documento AVC) — lê a API do Sienge AO VIVO ─────────
+// Espelha o relatório "Contas Recebidas (por Data de Recebimento)" do Sienge e,
+// opcionalmente, confronta com o ato cobrado pelo Office (?mesclarAto=1).
+// Alimenta a ABA Conciliação da tela Ato — por isso a alçada é a da própria
+// tela Ato, e não uma tela separada (a rota antiga virou redirect).
+// Alçada por empreendimento é aplicada dentro do controller (accessScopeService).
+const RECEBIMENTOS_ATO_SCREEN = ['/financeiro/cobranca/ato'];
+router.get('/recebimentos-ato/filters', authenticate, requireRoutePermission(RECEBIMENTOS_ATO_SCREEN), recebimentosAtoFilters);
+router.get('/recebimentos-ato/export',  authenticate, requireRoutePermission(RECEBIMENTOS_ATO_SCREEN), recebimentosAtoExport);
+router.get('/recebimentos-ato',         authenticate, requireRoutePermission(RECEBIMENTOS_ATO_SCREEN), recebimentosAtoReport);
 
 // ── Inadimplência (admin-only) — lê do backup diário do Sienge (sie214801) ────
 // Gate de admin é aplicado dentro do controller (req.user.role).
