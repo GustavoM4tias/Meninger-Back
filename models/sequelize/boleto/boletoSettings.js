@@ -78,29 +78,16 @@ export default (sequelize, DataTypes) => {
             comment: 'idtipo para anexar boleto na reserva do CV (obtido na API de tipos de arquivo)',
         },
 
-        // ── Situações de retorno no CV ─────────────────────────────────────────
-        situacao_sucesso_id: {
-            type: DataTypes.INTEGER,
-            allowNull: true,
-            comment: 'ID situação CV para alterar em caso de emissão bem-sucedida',
-        },
-        situacao_erro_id: {
-            type: DataTypes.INTEGER,
-            allowNull: true,
-            comment: 'ID situação CV para alterar em caso de erro (usa cancelar-reserva)',
-        },
-        situacao_pago_id: {
-            type: DataTypes.INTEGER,
-            allowNull: true,
-            defaultValue: 28,
-            comment: 'ID situação CV quando boleto é detectado como LIQUIDADO no Ecobrança',
-        },
-        situacao_baixado_id: {
-            type: DataTypes.INTEGER,
-            allowNull: true,
-            defaultValue: 29,
-            comment: 'ID situação CV quando boleto é baixado por devolução (vencido sem pagamento)',
-        },
+        // ── Etapa da reserva no CV: NÃO mexemos mais ─────────────────────────
+        // Até 26/08/2026 havia aqui situacao_sucesso_id / erro / pago / baixado e
+        // o delay alinhado ao lote. O Office movia a reserva para Ato Emitido /
+        // Divergente / Pago / Vencido assim que o ato era resolvido - e ao sair de
+        // "Envio Sienge" a venda deixava de ser alcançada pelo lote que a manda ao
+        // ERP: 13% a 16% das vendas do ato ficavam sem contrato no Sienge. Agora a
+        // reserva fica em Envio Sienge e o status do ato vai na MENSAGEM
+        // (lib/atoStatus.js). As colunas seguem no banco, sem uso, para não perder
+        // o histórico; o CV está excluindo as quatro etapas do workflow.
+
         tolerancia_dias_uteis: {
             type: DataTypes.INTEGER,
             allowNull: true,
@@ -113,13 +100,6 @@ export default (sequelize, DataTypes) => {
             allowNull: true,
             defaultValue: 5,
             comment: 'Por quantos dias após a baixa o boleto continua sendo reconsultado no Ecobrança. O banco já devolveu "BAIXADO POR DEVOLUÇÃO" em título que dias depois constava LIQUIDADO no extrato; nessa janela a consulta é só leitura e o único desfecho é promover para pago. 0 desliga.',
-        },
-
-        delay_situacao_sucesso_min: {
-            type: DataTypes.INTEGER,
-            allowNull: true,
-            defaultValue: 2,
-            comment: 'Safety threshold (minutos) até o próximo lote Sienge (5/5min). Se faltam menos que isto, pula pro próximo ciclo. Default 2 → delay efetivo varia entre 3 e 7 min, alinhado a múltiplo de 5 + 1 buffer.',
         },
 
         max_dias_vencimento: {

@@ -74,7 +74,7 @@ export async function updateSettings(req, res) {
         // ── Campos simples ────────────────────────────────────────────────────
         for (const campo of [
             'pv_principal', 'idserie_credito', 'cv_idtipo_documento',
-            'situacao_sucesso_id', 'situacao_erro_id', 'situacao_pago_id', 'active',
+            'active',
         ]) {
             if (body[campo] !== undefined) updates[campo] = body[campo];
         }

@@ -6,6 +6,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import db from './models/sequelize/index.js';
+import { auditarUrlsDeEnv } from './utils/envUrl.js';
 import authRoutes from './routes/authRoutes.js'; 
 import eventRoutes from './routes/eventRoutes.js';
 import favoriteRoutes from './routes/favoriteRoutes.js';
@@ -87,7 +88,6 @@ import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateSch
 import eventPlanCycleScheduler from './scheduler/eventPlanCycleScheduler.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import boletoPaymentCheckScheduler from './scheduler/boletoPaymentCheckScheduler.js';
-import boletoSituacaoApplyScheduler from './scheduler/boletoSituacaoApplyScheduler.js';
 import boletoWindowScheduler from './scheduler/boletoWindowScheduler.js';
 import useredeKeepAliveScheduler from './scheduler/useredeKeepAliveScheduler.js';
 import useredeConciliacaoScheduler from './scheduler/useredeConciliacaoScheduler.js';
@@ -302,6 +302,22 @@ app.use('/api/docusign-oauth', docusignOauthRoutes); // callback público do log
 // checagem de boot roda ao FINAL da fase de schema (ver initBackground) —
 // rodar antes acusava falso "column does not exist" durante os ALTERs.
 registerIntegrityApp(app);
+
+// Variáveis de URL conferidas ANTES de qualquer coisa subir: o que estiver
+// quebrado aparece no log do deploy, e não na tela do usuário (ver utils/envUrl.js).
+auditarUrlsDeEnv([
+  'FRONTEND_URL',
+  'MICROSOFT_REDIRECT_URI',
+  'CV_API_BASE_URL',
+  'SIENGE_API_BASE_URL',
+  'VALIDATOR_API_BASE_URL',
+  'SUPABASE_URL',
+  'SIENGE_BACKUP_URL',
+  'SIENGE_BACKUP_MD5_URL',
+  'SIENGE_PG_URL',
+  'PUBLIC_API_URL',
+  'PUBLIC_BACKEND_URL',
+]);
 
 const PORT = process.env.PORT || 5000;
 
@@ -647,7 +663,6 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_EVENT_PLAN_CYCLE')) eventPlanCycleScheduler.start(); // Plano de Eventos: abre o mês seguinte + cobra o prazo
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase
   if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
-  if (schedulerOn('ENABLE_BOLETO_SITUACAO_APPLY')) boletoSituacaoApplyScheduler.start(); // 1min: aplica situações CV agendadas (delay lote Sienge)
   if (schedulerOn('ENABLE_BOLETO_WINDOW')) boletoWindowScheduler.start(); // 1min: retoma emissões que chegaram fora da janela 06h-23h
   if (schedulerOn('ENABLE_UREDE_KEEPALIVE')) useredeKeepAliveScheduler.start(); // 20min: mantém viva a sessão do portal Userede (evita relogin, que é onde mora o reCAPTCHA)
   if (schedulerOn('ENABLE_UREDE_CONCILIACAO')) useredeConciliacaoScheduler.start(); // 08:10: concilia os links de cartão (pago/expirado/negado/estornado)

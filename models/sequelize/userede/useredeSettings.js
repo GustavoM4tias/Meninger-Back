@@ -107,9 +107,9 @@ export default (sequelize, DataTypes) => {
 
         // ── Retorno no CV ─────────────────────────────────────────────────────
         cv_idtipo_documento: { type: DataTypes.INTEGER, allowNull: true },
-        situacao_sucesso_id: { type: DataTypes.INTEGER, allowNull: true },
-        situacao_erro_id: { type: DataTypes.INTEGER, allowNull: true },
-        situacao_pago_id: { type: DataTypes.INTEGER, allowNull: true },
+        // Etapa da reserva no CV: ver o comentário em boleto/boletoSettings.js.
+        // O ato não move mais a reserva - ela fica em Envio Sienge e o status vai
+        // na mensagem. Colunas mantidas no banco, sem uso.
 
         // ── Controle ──────────────────────────────────────────────────────────
         active: {

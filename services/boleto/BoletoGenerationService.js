@@ -7,7 +7,7 @@ import { validateTitular, formatTitularErrorsMessage } from './titularValidator.
 import { sendBoletoToTitular } from './BoletoNotifyService.js';
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
-import { computeSituacaoTarget } from '../../lib/cvLoteTiming.js';
+import { ATO_STATUS, comStatusAto } from '../../lib/atoStatus.js';
 import { dentroDaJanela, proximaAbertura, ajustarParaJanela, descreverJanela, formatarAgendamento } from '../../lib/boletoJanela.js';
 import { Op } from 'sequelize';
 
@@ -36,50 +36,8 @@ const RETRY_BACKOFF_MIN = [15, 45, 120];
 const MAX_PARCELAS_CARTAO = 12;
 const MAX_REAGENDAMENTOS = RETRY_BACKOFF_MIN.length;
 
-/**
- * Calcula o próximo target sem persistir nada — usado pra preview na mensagem
- * CV (informa pro gestor quando a etapa vai mudar).
- */
-function previewSituacaoTarget(settings) {
-    const safetyMin = Number(settings?.delay_situacao_sucesso_min) || 2;
-    return computeSituacaoTarget(new Date(), safetyMin);
-}
 
-/**
- * Linha pra anexar nas mensagens de erro/sucesso explicando ao gestor
- * que a etapa CV vai mudar automaticamente após o lote do Sienge processar.
- */
-function linhaAvisoMudancaEtapa(settings, situacaoIdAlvo, nomeAmigavel = 'a próxima etapa') {
-    if (!situacaoIdAlvo) return '';
-    const target = previewSituacaoTarget(settings);
-    const horario = target.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const diffMin = Math.max(1, Math.round((target.getTime() - Date.now()) / 60000));
-    return `\n\n🕒 A etapa será atualizada automaticamente para ${nomeAmigavel} em ~${diffMin} min (~${horario}), após o próximo lote do Sienge processar este cliente.`;
-}
 
-/**
- * Agenda mudança de situação CV no histórico (sem chamar a API agora).
- * O scheduler `boletoSituacaoApplyScheduler` aplica quando madura.
- *
- * IMPORTANTE: usado pra TODOS os caminhos (sucesso E erros). Mudar a etapa
- * imediatamente após receber o webhook faz o lote do Sienge (5/5 min) perder
- * o cliente — mesmo nos casos de erro a venda existe e precisa do ERP.
- *
- * @param {BoletoHistory} history  - registro a ser atualizado
- * @param {number} idSituacao      - ID da situação CV a aplicar
- * @param {object} settings        - boleto_settings (pra safetyMin)
- * @returns {Promise<Date>}        - timestamp em que a aplicação vai rolar
- */
-async function agendarSituacaoCv(history, idSituacao, settings) {
-    const safetyMin = Number(settings?.delay_situacao_sucesso_min) || 2;
-    const target = computeSituacaoTarget(new Date(), safetyMin);
-    await history.update({
-        situacao_pendente_id: Number(idSituacao),
-        situacao_pendente_em: target,
-        situacao_pendente_aplicada: false,
-    });
-    return target;
-}
 
 async function acquireEcoLockWithWait(owner, ttlMin = 5) {
     const startedAt = Date.now();
@@ -183,8 +141,19 @@ function sanitizeCvMessage(mensagem) {
     return out.replace(/[ 	]+$/gm, '').trim();
 }
 
-async function sendCvMessage(idreserva, mensagem) {
+/**
+ * Posta mensagem na timeline da reserva.
+ *
+ * @param {number} idreserva
+ * @param {string} mensagem
+ * @param {string} [status] - valor de ATO_STATUS. Vem como primeira linha da
+ *   mensagem: com a etapa do CV fora de uso, é aqui que o gestor lê em que pé
+ *   está o ato. Omitido nas mensagens que não são desfecho do ato (agendamento
+ *   fora da janela, reserva sem série, retentativa do portal).
+ */
+async function sendCvMessage(idreserva, mensagem, status = null) {
     const tag = `[BOLETO][CV-MSG][reserva ${idreserva}]`;
+    if (status) mensagem = comStatusAto(status, mensagem);
     mensagem = sanitizeCvMessage(mensagem);
     console.log(`${tag} Enviando mensagem (${mensagem.length} chars)...`);
     try {
@@ -205,34 +174,6 @@ async function sendCvMessage(idreserva, mensagem) {
     }
 }
 
-/**
- * Altera a situação da reserva para um ID específico via API CV.
- * Usa o endpoint de alteração de situação do workflow.
- */
-async function alterarSituacaoCv(idreserva, idsituacao) {
-    const tag = `[BOLETO][CV-SITUACAO][reserva ${idreserva}]`;
-    console.log(`${tag} Alterando situação para ${idsituacao}...`);
-    try {
-        const resp = await apiCv.post('/v1/comercial/reservas/alterar-situacao', {
-            idreserva_cv: Number(idreserva),
-            idsituacao_destino: Number(idsituacao),
-            comentario: 'Alteração automática — Boleto Caixa',
-        });
-        const body = summarizeCvBody(resp.data);
-        if (!isCvResponseOk(resp.data)) {
-            const detail = resp.data?.error || resp.data?.erro || resp.data?.mensagem || body;
-            console.warn(`${tag} ✗ CV retornou HTTP ${resp.status} mas com erro lógico: ${detail}`);
-            return { ok: false, error: String(detail), httpStatus: resp.status };
-        }
-        console.log(`${tag} ✓ OK (HTTP ${resp.status}) ${body}`);
-        return { ok: true };
-    } catch (err) {
-        const detail = describeCvError(err);
-        const status = err?.response?.status;
-        console.error(`${tag} ✗ Falha (HTTP ${status || '??'}): ${detail}`);
-        return { ok: false, error: detail, httpStatus: status || null };
-    }
-}
 
 async function uploadToSupabase(buffer, historyId, idreserva) {
     const timestamp = Date.now();
@@ -395,8 +336,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         // boleto, postar mensagem ou mexer na situação de uma reserva morta só
         // gera ruído — e o registro entrava nos KPIs como erro. Critério de
         // cancelamento igual ao ReservaCancelService: data_cancelamento ou
-        // data_distrato preenchida. Skip SILENCIOSO: sem mensagem no CV e sem
-        // agendarSituacaoCv (não move etapa de reserva cancelada).
+        // data_distrato preenchida. Skip SILENCIOSO: sem mensagem no CV.
         const dataCancelamento = reservaData.data_cancelamento || reservaData.data_distrato || null;
         if (dataCancelamento) {
             const situacaoNome = reservaData.situacao?.situacao || '?';
@@ -473,7 +413,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 'Nenhuma cobrança nova foi emitida, para evitar cobrança em duplicidade.',
                 'A reserva PERMANECE na situação atual - nenhuma mudança de etapa foi feita.',
             ].filter(Boolean).join('\n');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.PAGO), 'cv_mensagem');
             await history.update({
                 status: 'skipped',
                 error_message: `Ato já pago por ${rotuloForma} (#${atoPago.id}, ${rotuloDoc} ${documento || '-'}${pagoEm ? `, pago em ${pagoEm}` : ''}) - emissão ignorada pra evitar duplicidade.`,
@@ -596,8 +536,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             // Reserva entrou em "Envio Sienge" mas NÃO TEM nenhuma parcela com as
             // séries configuradas pra emissão de Ato. Não é erro do nosso lado —
             // simplesmente não cabe boleto. Decisão deliberada:
-            //   • NÃO chamar agendarSituacaoCv → reserva PERMANECE em Envio Sienge,
-            //     deixando o fluxo Sienge prosseguir normalmente.
+            //   • Reserva PERMANECE em Envio Sienge, deixando o fluxo Sienge
+            //     prosseguir normalmente.
             //   • Postar mensagem informativa na reserva pro gestor saber que o
             //     fluxo de boleto foi pulado (e por quê).
             //   • Marcar history como 'skipped' (status próprio) — distinto de
@@ -641,8 +581,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 '',
                 'Series encontradas:',
                 `- ${detalhe}`,
-            ].join('\n') + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+            ].join('\n');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
             await history.update({
                 status: 'error',
                 error_message: `Multiplas series de entrada (${seriesEncontradas.length}) - deve haver apenas uma.`,
@@ -652,9 +592,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
             });
-            if (settings.situacao_erro_id) {
-                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
-            }
             return;
         }
 
@@ -684,8 +621,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 'Ajuste a condicao de pagamento da reserva.',
                 '',
                 `Serie: ${serieEntrada.serie} - ${qtdParcelas}x de ${formatCurrency(serieEntrada.valor)}`,
-            ].join('\n') + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+            ].join('\n');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
             await history.update({
                 status: 'error',
                 error_message: `Condicao em ${qtdParcelas}x - acima do maximo de ${MAX_PARCELAS_CARTAO}x do cartao.`,
@@ -695,9 +632,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
             });
-            if (settings.situacao_erro_id) {
-                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
-            }
             return;
         }
 
@@ -734,8 +668,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 + titularCheck.errors.map(e => `${e.campo}=${e.motivo}`).join('; ')
             );
             const msg = formatTitularErrorsMessage(titularCheck.errors)
-                + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+               ;
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
 
             const resumoErro = `Divergência nos dados do titular: ${titularCheck.errors.map(e => e.campo).join(', ')}.`;
             await history.update({
@@ -749,9 +683,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
             });
-            if (settings.situacao_erro_id) {
-                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
-            }
             return;
         }
 
@@ -798,8 +729,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         const tetoValor = settings.valor_maximo != null ? Number(settings.valor_maximo) : null;
         if (tetoValor != null && Number.isFinite(tetoValor) && tetoValor > 0 && valorEmitir > tetoValor) {
             const msg = `❌ Boleto não emitido: valor ${formatCurrency(valorEmitir)} excede o teto de ${formatCurrency(tetoValor)}.\nConfira a condição de pagamento da reserva. Se o valor estiver correto, ajuste o teto nas configurações do Boleto Caixa.`
-                + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+               ;
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
 
             console.warn(
                 `[BOLETO] Emissão barrada pelo teto: reserva ${idreserva}, `
@@ -819,9 +750,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
             });
-            if (settings.situacao_erro_id) {
-                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
-            }
             return;
         }
 
@@ -912,8 +840,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                         '',
                         'Nada foi emitido para evitar duas cobrancas vivas ao mesmo tempo.',
                         'Exclua o link no portal e reprocesse pela tela do Ato.',
-                    ].join(String.fromCharCode(10)) + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-                    const okErr = pushWarn(await sendCvMessage(idreserva, msgErr), 'cv_mensagem');
+                    ].join(String.fromCharCode(10));
+                    const okErr = pushWarn(await sendCvMessage(idreserva, msgErr, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
                     await history.update({
                         status: 'error',
                         error_message: `Falha ao excluir o link anterior (${reg.pedido_id}): ${err.message}`,
@@ -923,9 +851,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                         cv_mensagem_enviada: okErr,
                         warnings: warnings.length ? warnings : null,
                     });
-                    if (settings.situacao_erro_id) {
-                        await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
-                    }
                     return;
                 }
             }
@@ -950,7 +875,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                     '',
                     'Provavelmente o lote do Sienge falhou e o CV reagendou o envio. Mantemos o cliente nesta etapa pra que o proximo lote tente novamente.',
                 ].filter(Boolean).join('\n');
-                const msgIgnOk = pushWarn(await sendCvMessage(idreserva, msgIgnore), 'cv_mensagem');
+                const msgIgnOk = pushWarn(await sendCvMessage(idreserva, msgIgnore, ATO_STATUS.EMITIDO), 'cv_mensagem');
 
                 await EventLogger.log({
                     historyId: history.id, idreserva,
@@ -1052,8 +977,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 ? `regra do empreendimento (${empreendimentoRule.max_dias_vencimento} dias)`
                 : `padrão do sistema (${maxDias} dias)`;
             const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} excede o limite máximo de ${maxDias} dias.\nO vencimento deve ser entre hoje e ${limiteStr}.\n(Limite vindo de: ${origemConfig})`
-                + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+               ;
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
 
             await history.update({
                 status: 'error',
@@ -1068,16 +993,13 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
             });
-            if (settings.situacao_erro_id) {
-                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
-            }
             return;
         }
 
         if (vencDate < hoje) {
             const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} está no passado.\nSomente vencimentos a partir de hoje são aceitos.`
-                + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
+               ;
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
 
             await history.update({
                 status: 'error',
@@ -1092,9 +1014,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
             });
-            if (settings.situacao_erro_id) {
-                await agendarSituacaoCv(history, settings.situacao_erro_id, settings);
-            }
             return;
         }
 
@@ -1163,20 +1082,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                     `Vencimento: ${formatDate(vencimentoStr)}`,
                 ].join('\n');
 
-            const situacaoAlvo = ok ? settings.situacao_sucesso_id : settings.situacao_erro_id;
-            const msgFinal = corpo + linhaAvisoMudancaEtapa(settings, situacaoAlvo, ok ? 'a proxima etapa' : 'Erro');
-            const msgOk = pushWarn(await sendCvMessage(idreserva, msgFinal), 'cv_mensagem');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, corpo, ok ? ATO_STATUS.EMITIDO : ATO_STATUS.DIVERGENTE), 'cv_mensagem');
             await registroCartao.update({ cv_mensagem_enviada: msgOk });
-
-            // Modo manual nao move a etapa, igual ao boleto.
-            if (!manual && situacaoAlvo) {
-                const alvo = await agendarSituacaoCv(history, situacaoAlvo, settings);
-                await registroCartao.update({
-                    situacao_pendente_id: Number(situacaoAlvo),
-                    situacao_pendente_em: alvo,
-                    situacao_pendente_aplicada: false,
-                });
-            }
             return;
         }
 
@@ -1373,35 +1280,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             data: { to: envio.whatsapp.to, wamid: envio.whatsapp.wamid },
         });
 
-        // ── 9. Agenda alteração de situação ──────────────────────────────────
-        // ⚠️ NÃO mudamos a situação imediatamente — a etapa "Envio Sienge" é o
-        // gatilho do lote (5/5 min) que envia o cliente pro ERP. Se mudássemos
-        // antes do lote rodar, o cliente nunca seria enviado. Gravamos o ID
-        // alvo + instante alinhado ao próximo múltiplo de 5 min + buffer.
-        // O `boletoSituacaoApplyScheduler` (cron 1 min) processa quando madura.
-        // No modo manual a etapa do CV NÃO é tocada — a reserva já saiu do fluxo
-        // de "Envio Sienge" (boleto foi baixado) e forçar a situação de sucesso
-        // moveria o cliente indevidamente. O admin trata a etapa manualmente.
-        let situacaoAgendadaPara = null;
-        if (!manual && settings.situacao_sucesso_id) {
-            situacaoAgendadaPara = await agendarSituacaoCv(history, settings.situacao_sucesso_id, settings);
-            await EventLogger.log({
-                historyId: history.id, idreserva,
-                type: 'cv_situation_scheduled', severity: 'info',
-                message: `Situação CV ${settings.situacao_sucesso_id} agendada pra ${situacaoAgendadaPara.toLocaleString('pt-BR')} (delay alinhado ao lote Sienge).`,
-                data: {
-                    situacaoId: settings.situacao_sucesso_id,
-                    agendadaPara: situacaoAgendadaPara,
-                    safetyMin: Number(settings.delay_situacao_sucesso_min) || 2,
-                },
-            });
-            console.log(`[BOLETO] Situação CV ${settings.situacao_sucesso_id} agendada pra ${situacaoAgendadaPara.toISOString()} (mantém cliente em "Envio Sienge" pra o lote capturar).`);
-        }
-        // Compatibilidade com o resto do código que usa `situacaoAlteradaSucesso`:
-        // false aqui porque a aplicação será assíncrona (scheduler). Não tem
-        // como saber se vai dar certo agora — o evento `cv_situation` será
-        // gravado quando o scheduler aplicar.
-        const situacaoAlteradaSucesso = false;
 
         // ── 10. Envia mensagem de sucesso com resumo completo do boleto ────────
         const linhaValor = comissaoPercentualAplicada != null
@@ -1412,7 +1290,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         // na timeline da reserva exatamente o que aconteceu em cada canal.
         const warnDe = (etapa) => warnings.find(w => w.etapa === etapa);
         const anexoWarn = warnDe('cv_anexo');
-        const situacaoWarn = warnDe('cv_situacao');
 
         const linhaAnexo = documentoAnexado
             ? '✅ Anexo no CV'
@@ -1420,13 +1297,11 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 ? `⊘ Anexo no CV pulado: ${anexoWarn.erro}`
                 : `❌ Anexo no CV: ${anexoWarn?.erro || 'falhou'}`);
 
-        const linhaSituacao = manual
-            ? '⊘ Etapa no CV mantida (geração interna — situação não alterada)'
-            : !settings.situacao_sucesso_id
-                ? '⊘ Situação não alterada (situacao_sucesso_id não configurado)'
-                : situacaoAgendadaPara
-                    ? `🕒 Situação ${settings.situacao_sucesso_id} agendada para ${situacaoAgendadaPara.toLocaleString('pt-BR')} (mantém cliente em "Envio Sienge" para o lote do ERP capturar)`
-                    : `❌ Situação no CV: ${situacaoWarn?.erro || 'falhou'}`;
+        // A etapa da reserva não é mais tocada pelo Office: ela fica em "Envio
+        // Sienge", a única etapa em que o lote do CV ainda tenta mandar a venda
+        // ao ERP. Quem informa o andamento do ato é o STATUS DO ATO no topo
+        // desta mensagem.
+        const linhaSituacao = '⊘ Etapa mantida em Envio Sienge (o status do ato vai nesta mensagem)';
 
         const linhaEmail = envio.email.ok
             ? `✅ E-mail enviado para ${envio.email.to}`
@@ -1466,7 +1341,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             supabaseUrl ? `🔗 Link do boleto: ${supabaseUrl}` : null,
         ].filter(Boolean).join('\n');
 
-        const msgSucessoResult = await sendCvMessage(idreserva, msgSucesso);
+        const msgSucessoResult = await sendCvMessage(idreserva, msgSucesso, ATO_STATUS.EMITIDO);
         const msgSucessoOk = pushWarn(msgSucessoResult, 'cv_mensagem');
         await EventLogger.log({
             historyId: history.id, idreserva,
@@ -1484,7 +1359,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             status: 'success',
             cv_mensagem_enviada: msgSucessoOk,
             cv_documento_anexado: documentoAnexado,
-            cv_situacao_alterada: situacaoAlteradaSucesso,
+            cv_situacao_alterada: false,
             cliente_email_enviado: envio.email.ok,
             cliente_whatsapp_enviado: envio.whatsapp.ok,
             cliente_envio_em: new Date(),
@@ -1558,8 +1433,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         const esgotou = err.ecoSeguroRepetir && tentativasFeitas >= MAX_REAGENDAMENTOS;
         const msgErro = `❌ Falha na emissão do boleto:\n${err.message}`
             + (esgotou ? `\n\nJá foram ${MAX_REAGENDAMENTOS} tentativas automáticas sem sucesso - o portal segue indisponível para esta reserva.` : '')
-            + linhaAvisoMudancaEtapa(settings, settings.situacao_erro_id, 'Erro');
-        const msgOk = pushWarn(await sendCvMessage(idreserva, msgErro), 'cv_mensagem');
+           ;
+        const msgOk = pushWarn(await sendCvMessage(idreserva, msgErro, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
 
         await history.update({
             status: 'error',
@@ -1569,8 +1444,5 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             cv_mensagem_enviada: msgOk,
             warnings: warnings.length ? warnings : null,
         }).catch(() => {});
-        if (settings.situacao_erro_id) {
-            await agendarSituacaoCv(history, settings.situacao_erro_id, settings).catch(() => {});
-        }
     }
 }

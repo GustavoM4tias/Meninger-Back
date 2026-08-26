@@ -1,9 +1,14 @@
 // services/boleto/BoletoPaymentCheckService.js
 //
 // Verifica diariamente o status dos boletos emitidos no Ecobrança e age:
-//   - LIQUIDADO → marca como `paid`, muda CV pra situacao_pago_id, posta mensagem.
+//   - LIQUIDADO → marca como `paid` e posta mensagem com STATUS DO ATO: ATO PAGO.
 //   - EM ABERTO + passou da janela tolerância → faz baixa, marca `cancelled`,
-//     muda CV pra situacao_baixado_id, posta mensagem.
+//     posta mensagem com STATUS DO ATO: ATO BAIXADO.
+//
+// A etapa da reserva no CV NÃO é tocada por este serviço (nem por nenhum outro
+// do ato): a reserva fica em "Envio Sienge", a única etapa em que o lote do CV
+// ainda tenta mandar a venda ao ERP. O desfecho do ato vive na mensagem - ver
+// lib/atoStatus.js.
 //   - EM ABERTO + dentro da janela → só registra evento "ainda em aberto".
 //   - Outras situações → registra evento bruto (não interfere).
 //
@@ -18,6 +23,7 @@ import apiCv from '../../lib/apiCv.js';
 import { runEcoBatch } from '../../playwright/services/ecoCheckService.js';
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
+import { ATO_STATUS, comStatusAto } from '../../lib/atoStatus.js';
 import { podeConsultarHoje } from '../../lib/businessCalendar.js';
 import { Op } from 'sequelize';
 
@@ -47,8 +53,11 @@ function formatDateBr(isoOrDate) {
     return d.toLocaleDateString('pt-BR');
 }
 
-async function sendCvMessageSafe(idreserva, mensagem, historyId, tag) {
+async function sendCvMessageSafe(idreserva, mensagem, historyId, tag, status = null) {
     try {
+        // Com a etapa do CV fora de uso, o status do ato vem na primeira linha
+        // da mensagem - ver lib/atoStatus.js.
+        if (status) mensagem = comStatusAto(status, mensagem);
         await apiCv.post('/v2/comercial/reservas/mensagens', { idreserva, mensagem });
         await EventLogger.log({
             historyId, idreserva, type: 'cv_message_sent',
@@ -66,28 +75,6 @@ async function sendCvMessageSafe(idreserva, mensagem, historyId, tag) {
     }
 }
 
-async function alterarSituacaoCvSafe(idreserva, idsituacao, historyId, tag) {
-    try {
-        await apiCv.post('/v1/comercial/reservas/alterar-situacao', {
-            idreserva_cv: Number(idreserva),
-            idsituacao_destino: Number(idsituacao),
-            comentario: `Alteração automática — ${tag}`,
-        });
-        await EventLogger.log({
-            historyId, idreserva, type: 'cv_situation_changed',
-            severity: 'success', message: `Situação CV alterada para ${idsituacao} (${tag})`,
-        });
-        return { ok: true };
-    } catch (err) {
-        const detail = err?.response?.data?.error || err?.response?.data?.mensagem || err.message;
-        await EventLogger.log({
-            historyId, idreserva, type: 'cv_situation_failed',
-            severity: 'error', message: `Falha mudando situação pra ${idsituacao} (${tag}): ${detail}`,
-            data: { httpStatus: err?.response?.status },
-        });
-        return { ok: false, error: detail };
-    }
-}
 
 /**
  * Decide a ação pra um boleto baseado em vencimento + tolerância.
@@ -154,8 +141,6 @@ export async function runDailyCheck({ idreservas = null } = {}) {
     }
     const tolerancia = Number(settings.tolerancia_dias_uteis) || 1;
     const revalidacaoDias = Math.max(0, Number(settings.revalidacao_baixado_dias ?? 5) || 0);
-    const situacaoPagoId = settings.situacao_pago_id || 28;
-    const situacaoBaixadoId = settings.situacao_baixado_id || 29;
 
     if (!settings.eco_usuario || !settings.eco_senha) {
         console.warn('[BOLETO_CHECK] Credenciais Ecobrança não configuradas — abortando.');
@@ -266,7 +251,7 @@ export async function runDailyCheck({ idreservas = null } = {}) {
             empresas,
             onResult: async (r) => {
                 try {
-                    await aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId });
+                    await aplicarResultado(r, {});
                 } catch (err) {
                     console.error(`[BOLETO_CHECK] aplicarResultado falhou (hist ${r.historyId}): ${err.message}`);
                 }
@@ -297,7 +282,7 @@ export async function runDailyCheck({ idreservas = null } = {}) {
  * Aplica o resultado de UM boleto: registra evento, atualiza history, dispara
  * mudança de situação + mensagem no CV quando aplicável.
  */
-async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
+async function aplicarResultado(r, _opts = {}) {
     if (!r.historyId) return;
     const history = await BoletoHistory.findByPk(r.historyId);
     if (!history) return;
@@ -371,8 +356,7 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
             eraCancelado ? '' : null,
             'Detecção automática pelo scheduler diário.',
         ].filter(Boolean).join('\n');
-        await sendCvMessageSafe(history.idreserva, msg, history.id, 'pago');
-        if (situacaoPagoId) await alterarSituacaoCvSafe(history.idreserva, situacaoPagoId, history.id, 'pago');
+        await sendCvMessageSafe(history.idreserva, msg, history.id, 'pago', ATO_STATUS.PAGO);
         return;
     }
 
@@ -429,8 +413,7 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
             '',
             'Detectamos que o boleto foi baixado/cancelado diretamente no Ecobrança, fora deste sistema. Marcamos como cancelado no histórico.',
         ].filter(Boolean).join('\n');
-        await sendCvMessageSafe(history.idreserva, msg, history.id, 'baixado externamente');
-        if (situacaoBaixadoId) await alterarSituacaoCvSafe(history.idreserva, situacaoBaixadoId, history.id, 'baixado externamente');
+        await sendCvMessageSafe(history.idreserva, msg, history.id, 'baixado externamente', ATO_STATUS.BAIXADO);
         return;
     }
 
@@ -457,8 +440,7 @@ async function aplicarResultado(r, { situacaoPagoId, situacaoBaixadoId }) {
             'Boleto vencido sem pagamento — baixa automática realizada no Ecobrança.',
             'Caso ainda haja necessidade de cobrança, será preciso gerar novo boleto.',
         ].filter(Boolean).join('\n');
-        await sendCvMessageSafe(history.idreserva, msg, history.id, 'baixado');
-        if (situacaoBaixadoId) await alterarSituacaoCvSafe(history.idreserva, situacaoBaixadoId, history.id, 'baixado');
+        await sendCvMessageSafe(history.idreserva, msg, history.id, 'baixado', ATO_STATUS.BAIXADO);
         return;
     }
 
@@ -639,7 +621,7 @@ export async function baixarBoletoPorCancelamento(idreserva, { motivo = 'cancela
             '',
             `Baixa automática solicitada pelo ${motivo} — o boleto não pode mais ser pago.`,
         ].filter(Boolean).join('\n');
-        await sendCvMessageSafe(idreserva, msg, boleto.id, `baixado por ${motivo}`);
+        await sendCvMessageSafe(idreserva, msg, boleto.id, `baixado por ${motivo}`, ATO_STATUS.BAIXADO);
         return { ok: true, outcome: 'baixado', detalhe: `baixa por devolução confirmada no Ecobrança (Nosso Nº ${boleto.nosso_numero}).` };
     }
 
