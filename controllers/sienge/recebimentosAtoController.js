@@ -42,6 +42,25 @@ async function montarRelatorio(req, scope, filtros) {
   };
 }
 
+/**
+ * Mensagem do erro. O relatório lê o Sienge AO VIVO, então a falha mais comum
+ * não é bug de código: é a API recusando a credencial de integração. Dizer
+ * apenas "falha ao carregar" manda quem lê a tela procurar no lugar errado —
+ * em 26/08/2026 o mesmo recorte respondia no desenvolvimento e devolvia 401
+ * ("Invalid authentication credentials") em produção, e a tela não contava
+ * isso a ninguém.
+ */
+function mensagemDoErro(e, padrao) {
+  const status = e?.response?.status;
+  if (status === 401 || status === 403) {
+    return 'A API do Sienge recusou a credencial de integração. Este relatório lê o Sienge ao vivo, então nada carrega até a credencial ser corrigida no servidor.';
+  }
+  if (status === 429) {
+    return 'A API do Sienge está no limite de requisições agora. Tente de novo em um minuto.';
+  }
+  return padrao;
+}
+
 /** Resolve a alçada do usuário (fail-closed). */
 async function resolveScope(req) {
   const scope = await getScope(req.user);
@@ -83,8 +102,8 @@ export async function getReport(req, res) {
     const data = await montarRelatorio(req, scope, filtros);
     return res.json({ ...data, isAdmin: scope.all });
   } catch (e) {
-    console.error('[recebimentos-ato] getReport:', e.message);
-    return res.status(500).json({ error: 'Falha ao carregar os recebimentos do ato.' });
+    console.error('[recebimentos-ato] getReport:', e.response?.status ?? '', e.message);
+    return res.status(500).json({ error: mensagemDoErro(e, 'Falha ao carregar os recebimentos do ato.') });
   }
 }
 
@@ -212,8 +231,8 @@ export async function exportCsv(req, res) {
       `attachment; filename="recebimentos_ato_${filtros.startDate}_a_${filtros.endDate}.csv"`);
     return res.send(csv);
   } catch (e) {
-    console.error('[recebimentos-ato] exportCsv:', e.message);
-    return res.status(500).json({ error: 'Falha ao exportar os recebimentos do ato.' });
+    console.error('[recebimentos-ato] exportCsv:', e.response?.status ?? '', e.message);
+    return res.status(500).json({ error: mensagemDoErro(e, 'Falha ao exportar os recebimentos do ato.') });
   }
 }
 
