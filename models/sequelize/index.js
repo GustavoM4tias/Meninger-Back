@@ -237,6 +237,8 @@ import MetaCampaignDefine     from './marketing/metaCampaign.js';
 import MetaAdDefine           from './marketing/metaAd.js';
 import MetaAdSetDefine        from './marketing/metaAdSet.js';
 import MetaInsightDailyDefine from './marketing/metaInsightDaily.js';
+import CvLeadQueueDefine        from './marketing/cvLeadQueue.js';
+import CvLeadQueueBindingDefine from './marketing/cvLeadQueueBinding.js';
 // Marketing — Stand de Vendas (modelos/categorias + stands reais)
 import SalesStandModelDefine from './marketing/salesStandModel.js';
 import SalesStandDefine      from './marketing/salesStand.js';
@@ -537,6 +539,8 @@ db.LeadForm         = LeadFormDefine(sequelize, DataTypes);
 db.MarketingConfig  = MarketingConfigDefine(sequelize, DataTypes);
 db.MetaLeadForm     = MetaLeadFormDefine(sequelize, DataTypes);
 db.MetaCampaign     = MetaCampaignDefine(sequelize, DataTypes);
+db.CvLeadQueue        = CvLeadQueueDefine(sequelize, DataTypes);
+db.CvLeadQueueBinding = CvLeadQueueBindingDefine(sequelize, DataTypes);
 db.MetaAd           = MetaAdDefine(sequelize, DataTypes);
 db.MetaAdSet        = MetaAdSetDefine(sequelize, DataTypes);
 db.MetaInsightDaily = MetaInsightDailyDefine(sequelize, DataTypes);

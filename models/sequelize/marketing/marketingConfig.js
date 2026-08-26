@@ -21,6 +21,17 @@ export default (sequelize, DataTypes) => {
     // ── CV CRM ───────────────────────────────────────────────────────────────
     cv_leads_endpoint: { type: DataTypes.STRING(200), defaultValue: '/v1/comercial/leads' },
 
+    // ── Retorno de lead (nova conversão em lead que já existe) ───────────────
+    // Corte da régua de faixas: situação com `ordem` >= este valor é BLINDADA
+    // (não se mexe em etapa nem em dono). 4 = "Lead Qualificado" no CV de hoje.
+    // Ver services/marketing/cvLeadWorkflow.js.
+    lead_return_ordem_blindada: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 4 },
+
+    // Retorno automático quando a pessoa converte num empreendimento novo:
+    // solta o dono, volta para a etapa inicial e manda para a fila do
+    // empreendimento. Só age fora das etapas de qualificação.
+    lead_return_auto: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+
     // ── Meta Lead Ads ────────────────────────────────────────────────────────
     meta_app_id:             { type: DataTypes.STRING(100) },
     meta_app_secret_enc:     { type: DataTypes.TEXT },

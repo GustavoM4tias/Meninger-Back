@@ -44,8 +44,28 @@ async function ensureAlertRecipientsColumn() {
     }
 }
 
+// Corte da régua de faixas do retorno de lead. Mesmo padrão do ensure acima:
+// a coluna nasce sozinha, sem depender do sync nem de script manual.
+// 4 = "Lead Qualificado" na ordem que o CV publica hoje.
+let _reguaColumnEnsured = false;
+async function ensureReguaColumn() {
+    if (_reguaColumnEnsured) return;
+    try {
+        await db.sequelize.query(
+            `ALTER TABLE marketing_configs
+             ADD COLUMN IF NOT EXISTS lead_return_ordem_blindada INTEGER NOT NULL DEFAULT 4`);
+        await db.sequelize.query(
+            `ALTER TABLE marketing_configs
+             ADD COLUMN IF NOT EXISTS lead_return_auto BOOLEAN NOT NULL DEFAULT true`);
+        _reguaColumnEnsured = true;
+    } catch (err) {
+        console.warn('[marketing-config] ensure das colunas de retorno de lead falhou:', err.message);
+    }
+}
+
 async function loadRow() {
     await ensureAlertRecipientsColumn();
+    await ensureReguaColumn();
     let row = await db.MarketingConfig.findByPk(SINGLETON_ID);
     if (!row) row = await db.MarketingConfig.create({ id: SINGLETON_ID });
     return row;
@@ -59,6 +79,8 @@ function rowToConfig(row, { withSecrets = false } = {}) {
         retry_max_attempts: row.retry_max_attempts,
         form_rate_limit_per_min: row.form_rate_limit_per_min,
         cv_leads_endpoint: row.cv_leads_endpoint,
+        lead_return_ordem_blindada: row.lead_return_ordem_blindada,
+        lead_return_auto: row.lead_return_auto,
         alert_recipient_user_ids: row.alert_recipient_user_ids || null,
         meta_app_id: row.meta_app_id,
         meta_graph_api_version: row.meta_graph_api_version,
@@ -89,6 +111,8 @@ function envFallback({ withSecrets }) {
         retry_max_attempts: Number(process.env.MARKETING_DISPATCH_MAX_ATTEMPTS) || 6,
         form_rate_limit_per_min: Number(process.env.MARKETING_FORM_RATE_LIMIT) || 10,
         cv_leads_endpoint: process.env.CV_LEADS_ENDPOINT || '/v1/comercial/leads',
+        lead_return_ordem_blindada: Number(process.env.CV_LEAD_ORDEM_BLINDADA) || 4,
+        lead_return_auto: process.env.MARKETING_LEAD_RETURN_AUTO !== 'false',
         alert_recipient_user_ids: null,
         meta_app_id: process.env.META_APP_ID || '785502081163165',
         meta_graph_api_version: process.env.META_GRAPH_API_VERSION || 'v21.0',
@@ -176,7 +200,8 @@ async function updateConfig(patch = {}) {
 
     const direct = [
         'dry_run', 'retry_max_attempts', 'form_rate_limit_per_min',
-        'cv_leads_endpoint', 'meta_app_id', 'meta_graph_api_version',
+        'cv_leads_endpoint', 'lead_return_ordem_blindada', 'lead_return_auto',
+        'meta_app_id', 'meta_graph_api_version',
     ];
     for (const k of direct) {
         if (patch[k] !== undefined && patch[k] !== null) row[k] = patch[k];

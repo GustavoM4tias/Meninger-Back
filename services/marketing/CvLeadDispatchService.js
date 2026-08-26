@@ -8,7 +8,8 @@
 //  - idintegracao = nosso UUID (carimbo de origem / reconciliação)
 //  - a resposta do POST traz `id` = idlead do CV → reconciliação imediata
 //  - re-entrada (mesma pessoa de novo): permitir_alteracao + conversao
-//  - idsituacao NÃO é enviado — o CV usa "Início" e aplica a fila depois
+//  - idsituacao só é enviado no retorno por segundo interesse (ver
+//    applySecondInterestReturn); no fluxo normal o CV usa "Início" sozinho
 //
 // Estados: routed/failed/rejected/dispatching → dispatching → resultado
 //  - delivered: CV respondeu sucesso + id
@@ -23,6 +24,9 @@ import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 import { recordLeadEvent } from './leadEventLog.js';
 import MarketingConfigService from './MarketingConfigService.js';
+import { classifySituacao, situacaoInicio, FAIXA } from './cvLeadWorkflow.js';
+import { resolveFila } from './CvLeadQueueService.js';
+import { readLiveLead } from './CvLeadReturnService.js';
 
 const { InboundLead } = db;
 
@@ -44,6 +48,15 @@ async function getMaxAttempts() {
     const cfg = await getCfg();
     return cfg?.retry_max_attempts || Number(process.env.MARKETING_DISPATCH_MAX_ATTEMPTS) || 6;
 }
+// Retorno automático por segundo interesse. Nasce ligado porque é a regra de
+// negócio pedida, mas é chave de tela: mexe em dono de lead, e operação precisa
+// poder desligar sem deploy.
+async function isAutoReturnOn() {
+    const cfg = await getCfg();
+    if (cfg && cfg.lead_return_auto != null) return !!cfg.lead_return_auto;
+    return process.env.MARKETING_LEAD_RETURN_AUTO !== 'false';
+}
+
 async function getCvLeadsEndpoint() {
     const cfg = await getCfg();
     return cfg?.cv_leads_endpoint || process.env.CV_LEADS_ENDPOINT || '/v1/comercial/leads';
@@ -140,10 +153,112 @@ function buildInteracaoExtras(lead) {
     return {
         descricao: lines.join('\n'),
         // Tipo opcional — o CV usa "Observação" como default quando não vem idtipo.
-        // Se a empresa quiser categorizar (ex: "Mídia paga"), criar um tipo no CV
-        // e setar via env: CV_INTERACAO_IDTIPO=N.
         ...(process.env.CV_INTERACAO_IDTIPO ? { idtipo: Number(process.env.CV_INTERACAO_IDTIPO) } : {}),
     };
+}
+
+// ── Quem já é lead no CV ────────────────────────────────────────────────────
+// Lê a pessoa no espelho para saber em que etapa ela está e o que já é interesse
+// dela. Só serve ao retorno por segundo interesse — o resto do comportamento do
+// CV (reativação, troca de atendente) fica como sempre foi.
+async function resolveRetorno(lead, payload) {
+    let mirror;
+    try {
+        mirror = await findCvMirrorLead(lead);
+    } catch (err) {
+        console.warn(`[marketing-capture] não deu para ler o espelho do lead ${lead.id}: ${err.message}`);
+        return null;
+    }
+    if (!mirror) return null;   // pessoa nova no CV: não há interesse anterior
+
+    // Nome primeiro: o id do espelho mente para Descartado (ver cvLeadWorkflow).
+    const situacao = await classifySituacao({ id: mirror.situacao_id, nome: mirror.situacao_nome });
+
+    // Etapa de qualificação em diante não se mexe.
+    if (situacao.faixa === FAIXA.BLINDADO) return { ...situacao, acao: 'etapa_qualificada' };
+
+    return { ...situacao, ...(await applySecondInterestReturn(lead, payload, mirror, situacao)) };
+}
+
+// ── Retorno por segundo interesse ───────────────────────────────────────────
+// Pessoa que JÁ é lead no CV converte de novo, agora num empreendimento que ela
+// ainda não tinha: o corretor que a atende hoje foi escalado para outro produto,
+// às vezes em outra praça. Fora das etapas de qualificação, o lead volta para o
+// começo e é redistribuído pela fila do empreendimento novo.
+//
+// Vai tudo no MESMO POST do despacho: o `idempreendimento` já adiciona o
+// interesse, então soltar o dono e voltar a etapa junto evita uma segunda
+// chamada e o intervalo em que o lead ficaria meio movido.
+//
+// Duas recusas, cada uma por um motivo medido:
+//   - sem fila resolvida não mexe. O CV represa em silêncio quando não acha
+//     fila compatível, e aí o lead fica sem etapa E sem dono. O vínculo
+//     empreendimento -> fila é por id e declarado na tela (CvLeadQueueService).
+//   - interesse que a pessoa já tinha não conta como segundo interesse: é
+//     reconversão na mesma coisa, e tirar da corretora seria gratuito.
+async function applySecondInterestReturn(lead, payload, mirror, situacao) {
+    if (!(await isAutoReturnOn())) return { acao: 'auto_desligado' };
+
+    const novos = Array.isArray(lead.bound_empreendimentos) ? lead.bound_empreendimentos.map(Number) : [];
+    if (novos.length !== 1) return { acao: novos.length ? 'multiplos_empreendimentos' : 'sem_empreendimento' };
+    const alvo = novos[0];
+
+    const atuais = (Array.isArray(mirror.empreendimento) ? mirror.empreendimento : [])
+        .map(e => Number(e?.id ?? e?.idempreendimento))
+        .filter(Number.isInteger);
+    if (atuais.includes(alvo)) return { acao: 'interesse_ja_existia' };
+
+    const fila = await resolveFila(alvo);
+    if (!fila) {
+        console.warn(`[marketing-capture] lead ${lead.id}: empreendimento ${alvo} é interesse novo mas não tem fila vinculada — retorno não aplicado.`);
+        return { acao: 'sem_fila', empreendimento: alvo };
+    }
+
+    let inicio;
+    try {
+        inicio = await situacaoInicio();
+    } catch (err) {
+        console.warn(`[marketing-capture] lead ${lead.id}: sem situação de Início no CV (${err.message}) — retorno não aplicado.`);
+        return { acao: 'sem_situacao_inicio' };
+    }
+
+    payload.idsituacao = inicio.id;
+    payload.remover_imobiliaria = true;
+    payload.remover_corretor = true;
+    payload.lead_utilizar_fila = true;
+    payload.idfila_distribuicao_leads = fila.idfila;
+
+    console.log(`[marketing-capture] lead ${lead.id}: segundo interesse (${alvo}) em etapa "${situacao.nome}" — devolvendo para ${fila.nome}.`);
+    return {
+        acao: 'retornado',
+        empreendimento: alvo,
+        fila: { id: fila.idfila, nome: fila.nome, origem: fila.origem },
+        de_situacao: situacao.nome,
+        para_situacao: inicio.nome,
+        dono_anterior: { imobiliaria: mirror.imobiliaria?.nome || null, corretor: mirror.corretor?.nome || null },
+    };
+}
+
+/**
+ * Acha a pessoa no espelho de leads do CV por email ou telefone.
+ * Normaliza dos dois lados: o espelho guarda telefone como "+5514996724204" e
+ * email às vezes em CAIXA ALTA.
+ */
+async function findCvMirrorLead(lead) {
+    const email = lead.email ? String(lead.email).trim().toLowerCase() : null;
+    const digits = lead.telefone ? String(lead.telefone).replace(/\D/g, '') : null;
+    if (!email && !digits) return null;
+
+    const [row] = await db.sequelize.query(
+        `SELECT idlead, situacao_id, situacao_nome, empreendimento, corretor, imobiliaria
+           FROM leads
+          WHERE (CAST(:email AS text) IS NOT NULL AND lower(email) = :email)
+             OR (CAST(:digits AS text) IS NOT NULL AND regexp_replace(coalesce(telefone, ''), '\\D', '', 'g') = :digits)
+          ORDER BY updated_at DESC
+          LIMIT 1`,
+        { replacements: { email, digits }, type: db.sequelize.QueryTypes.SELECT },
+    );
+    return row || null;
 }
 
 function buildCvPayload(lead) {
@@ -207,6 +322,20 @@ function buildCvPayload(lead) {
  * leads despacháveis (routed/failed/rejected/dispatching).
  * @param {string|object} leadOrId  UUID ou a instância InboundLead
  */
+/**
+ * Monta o que seria enviado ao CV para este lead, sem enviar.
+ * É o mesmo caminho que o dispatch usa, exposto para a tela poder mostrar
+ * "o que vai acontecer" antes de acontecer — e para dar como testar a regra de
+ * retorno sem escrever no CRM.
+ *
+ * @returns {Promise<{payload:object, decisao:?object}>}
+ */
+export async function buildDispatchPlan(lead) {
+    const payload = buildCvPayload(lead);
+    const decisao = await resolveRetorno(lead, payload);
+    return { payload, decisao };
+}
+
 export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
     const lead = typeof leadOrId === 'string'
         ? await InboundLead.findByPk(leadOrId)
@@ -232,7 +361,7 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
         lead.conversao_name = await resolveConversaoName(lead);
     }
 
-    const payload    = buildCvPayload(lead);
+    const { payload, decisao } = await buildDispatchPlan(lead);
     const fromStatus = lead.status;
 
     lead.status             = 'dispatching';
@@ -246,7 +375,11 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
         leadId: lead.id, type: 'dispatch_attempt', actor,
         statusFrom: fromStatus, statusTo: 'dispatching',
         message: `Tentativa ${lead.dispatch_attempts} de envio ao CV.`,
-        detail: { dry_run: dryRun },
+        detail: {
+            dry_run: dryRun,
+            ...(decisao ? { situacao_no_cv: decisao.nome, faixa: decisao.faixa, acao: decisao.acao } : {}),
+            ...(decisao?.acao === 'retornado' ? { retorno: decisao } : {}),
+        },
     });
 
     // Modo sombra: pipeline completo, sem POST. O lead volta a 'routed'.
@@ -270,7 +403,9 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
         const body = res?.data || {};
 
         if (body.sucesso === true && body.id != null) {
-            return await markDelivered(lead, body, actor);
+            const r = await markDelivered(lead, body, actor);
+            if (decisao?.acao === 'retornado') await conferirDistribuicao(lead, decisao, actor);
+            return r;
         }
         // HTTP 200 mas sucesso:false → recusa lógica do CV.
         return await markRejected(lead, body, `CV recusou: ${body.mensagem || 'sem mensagem'}`, actor);
@@ -282,6 +417,54 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
         }
         // 5xx / rede / timeout — falha transitória.
         return await markFailed(lead, err, actor);
+    }
+}
+
+// A API não conta se a fila está ativa nem quem está nela por grupo, então não
+// dá para prever se a entrega vai ser distribuída. Depois de um retorno a gente
+// confere lendo o lead ao vivo: fila que não entregou deixa o lead sem dono, e
+// isso tem que virar aviso, não silêncio.
+async function conferirDistribuicao(lead, retorno, actor) {
+    try {
+        const vivo = await readLiveLead(lead.cv_idlead);
+        const corretor = vivo?.corretor?.nome || null;
+        const imobiliaria = vivo?.imobiliaria?.nome || null;
+        const distribuido = !!(corretor || imobiliaria);
+
+        await recordLeadEvent({
+            leadId: lead.id,
+            type: distribuido ? 'retorno_distribuido' : 'retorno_represado',
+            actor,
+            message: distribuido
+                ? `Devolvido para ${retorno.fila.nome} e atribuído a ${corretor || imobiliaria}.`
+                : `Devolvido para ${retorno.fila.nome}, mas o CV não atribuiu ninguém — lead sem dono.`,
+            detail: { fila: retorno.fila, corretor, imobiliaria, situacao: vivo?.situacao || null },
+        });
+
+        if (!distribuido) {
+            console.warn(`[marketing-capture] lead ${lead.id} (CV ${lead.cv_idlead}) devolvido para "${retorno.fila.nome}" e ficou SEM DONO.`);
+            await alertarRepresado(lead, retorno);
+        }
+    } catch (err) {
+        console.error(`[marketing-capture] falha ao conferir distribuição do lead ${lead.id}: ${err.message}`);
+    }
+}
+
+async function alertarRepresado(lead, retorno) {
+    try {
+        const userIds = await MarketingConfigService.getAlertRecipients();
+        if (!userIds.length) return;
+        await NotificationService.notify({
+            type: NotificationType.LEAD_DISPATCH_FAILED,
+            recipients: { users: userIds },
+            title: 'Lead voltou para a fila e ninguém pegou',
+            body: `"${lead.nome || lead.email || lead.telefone}" foi devolvido para ${retorno.fila.nome} e o CV não atribuiu corretor. Confira se a fila está ativa.`,
+            data: { inbound_lead_id: lead.id, cv_idlead: lead.cv_idlead, fila: retorno.fila },
+            link: `/marketing/captacao?lead=${lead.id}`,
+            importance: 7,
+        });
+    } catch (err) {
+        console.error(`[marketing-capture] falha ao alertar retorno represado do lead ${lead.id}: ${err.message}`);
     }
 }
 
@@ -373,4 +556,4 @@ async function alertDeadLetter(lead) {
     }
 }
 
-export default { dispatchLead };
+export default { dispatchLead, buildDispatchPlan };

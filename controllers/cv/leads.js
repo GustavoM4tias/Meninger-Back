@@ -1,18 +1,54 @@
 // src/controllers/cv/leads.js 
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
-import apiCv from '../../lib/apiCv.js';
 import makeLogger from '../../lib/makeLogger.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
+import { listWithBindings, refresh as refreshQueues } from '../../services/marketing/CvLeadQueueService.js';
 
-// Mantém fetchFilas (sem alterações relevantes, mas com log se quiser)
+/**
+ * As filas de distribuição de leads.
+ *
+ * Passou a servir do espelho local (services/marketing/CvLeadQueueService) em
+ * vez de chamar o CV a cada abertura da gaveta: é a MESMA lista que o roteamento
+ * de lead usa para decidir destino, e ter duas leituras da mesma coisa era o
+ * caminho para a tela mostrar uma fila e o despacho usar outra.
+ *
+ * O formato de resposta é o do CV (`filas[].idfila_distribuicao_leads`,
+ * `nome`, `corretores_e_imobiliarias`) porque a tela já consome assim; o que
+ * vem a mais é o vínculo com empreendimento, que só o Office conhece.
+ *
+ * Se o espelho ainda estiver vazio (primeiro boot), busca no CV na hora.
+ */
 export const fetchFilas = async (req, res) => {
     const logger = makeLogger({ enabled: String(req.query?.log || '').toLowerCase() === 'verbose' });
     try {
-        logger.log('LEADS ▶️ GET /cvio/filas_distribuicao_leads iniciando chamada externa');
-        const response = await apiCv.get('/cvio/filas_distribuicao_leads');
-        logger.log(`LEADS ✅ OK - itens: ${Array.isArray(response.data) ? response.data.length : 'n/a'}`);
-        const payload = response.data;
+        let { filas, sem_fila, empreendimentos } = await listWithBindings();
+
+        if (!filas.length) {
+            logger.log('LEADS ▶️ espelho de filas vazio, sincronizando com o CV');
+            await refreshQueues();
+            ({ filas, sem_fila, empreendimentos } = await listWithBindings());
+        }
+
+        const payload = {
+            total_filas: filas.length,
+            filas: filas.map(f => ({
+                idfila_distribuicao_leads: f.idfila,
+                nome: f.nome,
+                corretores_e_imobiliarias: f.corretores,
+                // Extras do Office: quem essa fila atende e se ela recebe alguém.
+                vazia: f.vazia,
+                presente_no_cv: f.presente_no_cv,
+                empreendimentos: f.empreendimentos,
+                synced_at: f.synced_at,
+            })),
+            // Empreendimento sem fila trava o retorno automático de lead.
+            sem_fila,
+            // Lista completa para editar o vínculo a qualquer momento.
+            empreendimentos,
+        };
+        logger.log(`LEADS ✅ OK - filas: ${payload.total_filas}, empreendimentos sem fila: ${sem_fila.length}`);
+
         return res.status(200).json(
             String(req.query?.log || '').toLowerCase() === 'verbose'
                 ? { ok: true, results: payload, logs: logger.getLogs() }
@@ -20,12 +56,10 @@ export const fetchFilas = async (req, res) => {
         );
     } catch (error) {
         logger.log(`LEADS ❌ Erro ao buscar filas: ${error?.message || error}`);
-        const status = error.response?.status || 500;
-        const data = error.response?.data || { error: 'Erro ao buscar filas na API externa' };
-        return res.status(status).json(
+        return res.status(500).json(
             String(req.query?.log || '').toLowerCase() === 'verbose'
-                ? { ...data, logs: logger.getLogs() }
-                : data
+                ? { error: 'Erro ao buscar filas de distribuição', logs: logger.getLogs() }
+                : { error: 'Erro ao buscar filas de distribuição' }
         );
     }
 };

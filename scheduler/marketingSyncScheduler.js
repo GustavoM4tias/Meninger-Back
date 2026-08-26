@@ -26,6 +26,7 @@ import NotificationService from '../services/notification/NotificationService.js
 import { NotificationType } from '../services/notification/notificationTypes.js';
 import LeadCampaignBackfillService from '../services/marketing/LeadCampaignBackfillService.js';
 import MarketingConfigService from '../services/marketing/MarketingConfigService.js';
+import CvLeadQueueService from '../services/marketing/CvLeadQueueService.js';
 import MetaCampaignsTokenService from '../services/meta/MetaCampaignsTokenService.js';
 
 const FULL_CRON  = process.env.MARKETING_FULL_SYNC_CRON  || '20 6-22/2 * * *';
@@ -62,8 +63,21 @@ async function runFullSync(opts = {}) {
 
     const summary = {
         forms: null, campaigns: null, ads: null,
-        backfill: null, historical: null, errors: [],
+        backfill: null, historical: null, filas: null, errors: [],
     };
+
+    // 0a) Filas de distribuição do CV. Vem antes de tudo porque o despacho de
+    //     lead decide destino a partir desse espelho: fila que mudou no CV e não
+    //     chegou aqui vira lead represado, sem aviso. O mapa empreendimento ->
+    //     fila NÃO é recalculado aqui: ele é por id e declarado por gente.
+    try {
+        const { sync } = await CvLeadQueueService.refresh();
+        summary.filas = sync;
+        console.log(`✅ [marketing-full-sync] filas: ${sync.total} (${sync.novas} novas, ${sync.sumiram} sumiram do CV)`);
+    } catch (e) {
+        summary.errors.push({ step: 'filas', error: e.message });
+        console.error(`❌ [marketing-full-sync] filas: ${e.message}`);
+    }
 
     // 0) Token de gestão de campanhas: renova se perto de expirar + alerta se não
     //    der. No-op se não configurado (usa fallback do System User). Não bloqueia.

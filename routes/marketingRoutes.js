@@ -58,6 +58,16 @@ import {
     overview as cvBindingOverview,
     dispatchRecoverable as cvBindingDispatchRecoverable,
 } from '../controllers/marketing/cvBindingController.js';
+import {
+    inspect as inspectLeadReturn,
+    preview as previewLeadReturn,
+    execute as executeLeadReturn,
+    workflow as cvLeadWorkflowList,
+    filas as cvLeadFilas,
+    queues as cvLeadQueues,
+    refreshQueuesNow as cvLeadQueuesRefresh,
+    bindQueue as cvLeadQueueBind,
+} from '../controllers/marketing/leadReturnController.js';
 
 const router = express.Router();
 
@@ -102,11 +112,26 @@ router.get('/meta-forms/:id/leads.csv', metaFormExportCsv);
 router.get('/meta-forms/:id/field-mappings', metaFormFieldMappingEditor);
 router.put('/meta-forms/:id/field-mappings', metaFormUpdateFieldMappings);
 
-// Campanhas Meta (cache local + insights de gasto/leads/CAC)
+// Retorno de lead (nova conversão em quem já é lead no CV)
+// A régua de faixas mora em services/marketing/cvLeadWorkflow.js; só o execute escreve.
+router.get('/lead-return/workflow', cvLeadWorkflowList);
+router.get('/lead-return/filas', cvLeadFilas);
+
+// Filas de distribuição: espelho local + mapa empreendimento -> fila.
+// A leitura para a gaveta de Leads é GET /api/cv/filas (mesma fonte, permissão
+// da tela); estas aqui são a gestão, admin-only.
+router.get('/lead-queues', cvLeadQueues);
+router.post('/lead-queues/refresh', cvLeadQueuesRefresh);
+router.put('/lead-queues/binding/:idempreendimento', cvLeadQueueBind);
+router.get('/lead-return/:idlead', inspectLeadReturn);
+router.post('/lead-return/:idlead/preview', previewLeadReturn);
+router.post('/lead-return/:idlead/execute', executeLeadReturn);
+
 // Central de Vínculos CV (saúde da entrega + campanhas sem vínculo)
 router.get('/cv-binding/overview', cvBindingOverview);
 router.post('/cv-binding/dispatch-recoverable', cvBindingDispatchRecoverable);
 
+// Campanhas Meta (cache local + insights de gasto/leads/CAC)
 // Relatório de desempenho por período (série diária local)
 router.get('/meta-report', metaReport);
 router.get('/meta-report/coverage', metaReportCoverage);
