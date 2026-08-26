@@ -251,6 +251,10 @@ async function sendOpener({ lead, conversation, flow }) {
     const fields = Array.isArray(flow.opener_variables) ? flow.opener_variables : [];
     const missing = [];
     let variables = fields.map(f => {
+        // O nome que o LEAD lê vem do site, não do cadastro: o CV grava em caixa
+        // alta ("RESIDENCIAL DOS ANJOS") e isso vira grito na mensagem. Identidade
+        // continua sendo o id; isto aqui é só rótulo.
+        if (f === 'empreendimento' && flow?.site_snapshot?.nome) return flow.site_snapshot.nome;
         const v = lead[f] !== undefined && lead[f] !== null ? lead[f] : lead.payload?.[f];
         if (v === undefined || v === null || v === '') {
             missing.push(f);
