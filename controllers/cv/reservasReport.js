@@ -3,6 +3,11 @@
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { getScope, isErpAllowed } from '../../services/permissions/accessScopeService.js';
+// A regra do triângulo (venda travada para o ERP) mora em um lugar só, para a
+// tela e o aviso nunca discordarem - ver lib/alertaEnvioErp.js.
+import {
+    ENTRADA_JOIN, ENTRADA_ESTIMADA_SQL, MINUTOS_PARADA_SQL, ALERTA_ERP_SQL, getAlertaConfig,
+} from '../../lib/alertaEnvioErp.js';
 
 const { Reserva } = db;
 
@@ -75,6 +80,7 @@ export const listReservasReport = async (req, res) => {
             documento, nome,
             only_active, only_vendida, with_lead,
             excluir_painel, lead_origem,
+            only_alerta_erp,
             data_inicio, data_fim,
         } = req.query;
 
@@ -87,10 +93,17 @@ export const listReservasReport = async (req, res) => {
 
         // Período sempre sobre a data de CADASTRO da reserva (data_reserva = core.data do CV)
         const whereClauses = [`r.data_reserva BETWEEN :start AND :end`];
+        const alertaCfg = await getAlertaConfig();
         const replacements = {
             start: start.format('YYYY-MM-DD 00:00:00'),
             end:   end.format('YYYY-MM-DD 23:59:59'),
+            ...alertaCfg,
         };
+
+        // "Só as travadas": o filtro que permite buscar e resolver direto.
+        if (String(only_alerta_erp) === 'true') {
+            whereClauses.push(ALERTA_ERP_SQL);
+        }
 
         if (documento) {
             whereClauses.push(`r.documento ILIKE :documento`);
@@ -229,6 +242,11 @@ export const listReservasReport = async (req, res) => {
               WHEN ${REPASSE_SQL} IS NOT NULL AND ${REPASSE_SQL} <> '' THEN 'em_repasse'
               ELSE 'ativa'
             END AS estado_geral,
+            -- Travada para o ERP: entrou em Envio Sienge e não virou contrato no
+            -- Sienge dentro do prazo do lote. É o triângulo da listagem.
+            ${ALERTA_ERP_SQL} AS alerta_erp,
+            ${MINUTOS_PARADA_SQL} AS alerta_erp_minutos,
+            ${ENTRADA_ESTIMADA_SQL} AS alerta_erp_estimado,
             jsonb_array_length(COALESCE(r.leads_associados, '[]'::jsonb)) AS qtd_leads_associados,
             COALESCE((
                 SELECT ARRAY_AGG(DISTINCT l3.origem)
@@ -236,7 +254,7 @@ export const listReservasReport = async (req, res) => {
                 LEFT JOIN leads l3 ON l3.idlead = NULLIF(la3->>'idlead','')::int
                 WHERE l3.origem IS NOT NULL
             ), ARRAY[]::text[]) AS lead_origens
-          FROM reservas r${REPASSE_JOIN}
+          FROM reservas r${REPASSE_JOIN}${ENTRADA_JOIN}
           WHERE ${whereClauses.join(' AND ')}
           ORDER BY r.data_reserva DESC
         `;

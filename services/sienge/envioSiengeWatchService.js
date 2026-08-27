@@ -38,6 +38,9 @@
 // estavam mesmo sem contrato.
 
 import db from '../../models/sequelize/index.js';
+import {
+    ENTRADA_JOIN, ENTRADA_SQL, ENTRADA_ESTIMADA_SQL, MINUTOS_PARADA_SQL,
+} from '../../lib/alertaEnvioErp.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 
@@ -62,47 +65,27 @@ export async function listarPendentes(opts = {}) {
     const idsituacao = String(settings.idsituacao_vigiada ?? 17);
 
     return db.sequelize.query(`
-        WITH entrada AS (
-            -- Acionamento do webhook do ato = momento em que o CV colocou a
-            -- reserva em Envio Sienge. O mais recente, porque a reserva pode ter
-            -- entrado na etapa mais de uma vez.
-            SELECT idreserva::int AS idreserva, MAX(created_at) AS entrou_em
-            FROM boleto_history
-            GROUP BY 1
-        )
         SELECT r.idreserva,
                r.empreendimento,
                r.unidade,
-               r.titular->>'nome'  AS titular_nome,
+               r.titular->>'nome' AS titular_nome,
                r.data_reserva,
-               COALESCE(
-                   e.entrou_em,
-                   -- Último recurso: reserva que nunca acionou o webhook. É a
-                   -- data de criação da reserva, então superestima a espera.
-                   (r.erp_sienge->>'data_cad')::timestamp AT TIME ZONE 'America/Sao_Paulo'
-               ) AS entrou_em,
-               (e.entrou_em IS NULL) AS entrada_estimada,
-               round(EXTRACT(EPOCH FROM (NOW() - COALESCE(
-                   e.entrou_em,
-                   (r.erp_sienge->>'data_cad')::timestamp AT TIME ZONE 'America/Sao_Paulo'
-               ))) / 60) AS minutos_esperando,
+               ${ENTRADA_SQL}           AS entrou_em,
+               ${ENTRADA_ESTIMADA_SQL}  AS entrada_estimada,
+               ${MINUTOS_PARADA_SQL}    AS minutos_esperando,
                EXISTS (
                    SELECT 1 FROM boleto_history h
-                   WHERE h.idreserva::int = r.idreserva AND h.payment_status = 'paid' AND h.ignorado = false
+                   WHERE h.idreserva = r.idreserva AND h.payment_status = 'paid' AND h.ignorado = false
                ) OR EXISTS (
                    SELECT 1 FROM userede_link_history u
-                   WHERE u.idreserva::int = r.idreserva AND u.payment_status = 'paid' AND u.ignorado = false
+                   WHERE u.idreserva = r.idreserva AND u.payment_status = 'paid' AND u.ignorado = false
                ) AS ato_pago
-        FROM reservas r
-        LEFT JOIN entrada e ON e.idreserva = r.idreserva
-        WHERE r.situacao->>'idsituacao' = :idsituacao
+        FROM reservas r${ENTRADA_JOIN}
+        WHERE r.situacao->>'idsituacao' = :alertaSituacao
           AND COALESCE(r.erp_sienge->>'enviado', 'N') <> 'S'
-          AND COALESCE(
-                  e.entrou_em,
-                  (r.erp_sienge->>'data_cad')::timestamp AT TIME ZONE 'America/Sao_Paulo'
-              ) < NOW() - (:minutos * INTERVAL '1 minute')
-        ORDER BY 6 ASC`, {
-        replacements: { idsituacao, minutos },
+          AND ${ENTRADA_SQL} < NOW() - (:alertaMinutos * INTERVAL '1 minute')
+        ORDER BY ${ENTRADA_SQL} ASC`, {
+        replacements: { alertaSituacao: idsituacao, alertaMinutos: minutos },
         type: db.Sequelize.QueryTypes.SELECT,
     });
 }
