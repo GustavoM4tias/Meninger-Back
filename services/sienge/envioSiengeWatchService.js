@@ -2,52 +2,44 @@
 //
 // VIGIA DO ENVIO DA VENDA AO ERP.
 //
-// O problema que ele resolve: entre junho e agosto de 2026, 13% a 16% das vendas
-// que passaram pelo fluxo do ato nunca viraram contrato no Sienge - 28 delas com
-// o ato já PAGO. Ninguém percebia, porque não existia lugar nenhum que dissesse
-// "esta venda não chegou ao ERP".
+// Uma pergunta só: quais reservas entraram em "Envio Sienge" há mais de N
+// minutos e ainda não foram enviadas ao Sienge? Passou do prazo, deu erro - e
+// erro se conserta na hora, não daqui a uma semana.
 //
-// ── O QUE APRENDEMOS MEDINDO (27/08/2026) ───────────────────────────────────
+// Por que existe: entre junho e agosto de 2026, 13% a 16% das vendas que
+// passaram pelo fluxo do ato nunca viraram contrato no Sienge - 28 delas com o
+// ato já PAGO - e não havia lugar nenhum que dissesse isso.
 //
-// 1. O sinal confiável é `reservas.erp_sienge.enviado`. Conferimos as 89
-//    pendentes contra a API do Sienge (por externalId): 89 de 89 realmente sem
-//    contrato. Zero falso positivo.
+// ── O RELÓGIO (a parte que é fácil errar) ───────────────────────────────────
 //
-// 2. O envio NÃO é um lote de minutos, é uma FILA LENTA. Sobre 1274 envios de
-//    2026: p50 20h, p75 116h (~5 dias), p90 605h (~25 dias), vazão de 5 a 13 por
-//    dia. Por isso o vigia NÃO alarma por "não enviado" - alarma por esperar
-//    mais do que a fila costuma levar. Alarmar cedo seria transformar o vigia em
-//    ruído diário.
+// O lote do CV roda de 5 em 5 minutos. Medido em 27/08/2026: os envios caem
+// todos em minuto múltiplo de 5 (259 de 262) e, contando da ENTRADA na etapa,
+// 226 de 238 vendas foram ao ERP em até 5 minutos, com mediana de 2. Por isso
+// 30 minutos (~6 rodadas) já significa erro.
 //
-// 3. O relógio tem que ser nosso. `erp_sienge.data_cad` é quando o CV preparou o
-//    registro, não quando a venda entrou na fila: reservas que passaram meses
-//    fora de "Envio Sienge" apareciam com 110 dias de espera tendo entrado na
-//    fila no dia anterior. O vigia carimba `pendente_desde` quando VÊ a reserva
-//    pendente pela primeira vez.
+// A entrada na etapa vem do acionamento do webhook do ato (`boleto_history`),
+// que é disparado pelo CV justamente quando a reserva entra em Envio Sienge -
+// inclusive quando não há série de ato, caso em que o registro sai como
+// `skipped`.
 //
-// 4. Reserva parada na etapa, sem nenhuma alteração, parece nunca ser
-//    reprocessada: nas 48h seguintes à migração, das 48 paradas há semanas saíram
-//    ZERO, e das 46 que foram mexidas saíram 5 - uma delas esperava 110 dias.
-//    Por isso o vigia sugere o gesto de reprocessar (tirar da etapa e devolver),
-//    mas NÃO o executa sozinho: a volta a "Envio Sienge" redispara o webhook do
-//    ato e pode gerar cobrança nova ao cliente.
+// NÃO use `erp_sienge.data_cad` como relógio: ele é a data de CRIAÇÃO da reserva
+// (710 de 720 batem com `data_reserva`), não a entrada na etapa. Medir por ele
+// dá a impressão de uma fila lenta de ~19 horas, que é o ciclo da venda inteiro,
+// e faz o vigia tolerar erro por horas. Ele fica só como último recurso, para
+// reserva que nunca acionou o webhook.
 //
-// 5. O CV não conta o motivo. `reserva_sienge_descricao_problema` existe no JSON
-//    e nunca é preenchido; a API v1/v3 não expõe nada de integração (405 em todo
-//    caminho de pessoa/ERP); e o motivo só aparece no painel Gestor, que está
-//    atrás de um desafio Cloudflare. Então o vigia aponta o CASO e a pessoa abre
-//    o painel - ele não tem como trazer a causa mastigada.
+// O motivo do erro não dá para trazer: o CV nunca preenche
+// `reserva_sienge_descricao_problema`, a API não expõe nada de integração (405
+// em todos os caminhos) e o painel Gestor está atrás de um desafio Cloudflare.
+// A lista aponta a reserva; o diagnóstico é no painel.
 //
-// O que ele faz, portanto: acompanha, mede a espera com relógio próprio,
-// classifica por severidade e avisa uma vez por mudança de severidade.
+// O sinal, esse, é confiável: as 89 pendentes de agosto foram conferidas uma a
+// uma contra a API do Sienge (`/v1/sales-contracts?externalId=`) e 89 de 89
+// estavam mesmo sem contrato.
 
 import db from '../../models/sequelize/index.js';
-import apiCv from '../../lib/apiCv.js';
-import apiSienge from '../../lib/apiSienge.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
-
-const HORA_MS = 60 * 60 * 1000;
 
 /** Configuração viva; cria a linha singleton no primeiro uso. */
 export async function getSettings() {
@@ -58,70 +50,42 @@ export async function getSettings() {
 }
 
 /**
- * Confirma no CV, AO VIVO, se a reserva já foi ao ERP.
+ * As reservas que passaram do prazo em Envio Sienge sem chegar ao ERP.
  *
- * A tabela local é sincronizada de hora em hora e atrasa mais do que isso
- * (ficou um dia inteiro para trás depois da migração de etapas), então perguntar
- * ao CV evita alarme por dado velho. São dezenas de chamadas, não milhares.
- *
- * @returns {Promise<{enviado: boolean, codigo: string|null}|null>} null = não deu para ler
+ * @param {object} [opts]
+ * @param {number} [opts.minutos] - sobrepõe o limite das settings, para a tela
+ *   experimentar outro corte sem precisar salvar.
  */
-async function conferirNoCv(idreserva) {
-    try {
-        const { data } = await apiCv.get(`/v1/comercial/reservas/${idreserva}/erp/sienge`);
-        return {
-            enviado: String(data?.enviado || '').toUpperCase() === 'S',
-            codigo: data?.codigointerno ?? null,
-        };
-    } catch {
-        return null;
-    }
-}
-
-/**
- * A palavra final: existe contrato ativo no Sienge para esta reserva?
- * O CV grava o idreserva no `externalId` do contrato.
- */
-async function conferirNoSienge(idreserva) {
-    try {
-        const { data } = await apiSienge.get('/v1/sales-contracts', {
-            params: { externalId: String(idreserva), limit: 50, offset: 0 },
-        });
-        const ativos = (data?.results || [])
-            .filter(x => String(x?.situation || '').toUpperCase() !== 'CANCELADO');
-        return { existe: ativos.length > 0, contrato: ativos[0]?.number ?? null };
-    } catch {
-        return null;
-    }
-}
-
-function severidadeDe({ horas, atoPago, settings }) {
-    const dias = horas / 24;
-    if (settings.ato_pago_e_critico && atoPago) return 'critica';
-    if (dias >= Number(settings.dias_critico ?? 15)) return 'critica';
-    if (dias >= Number(settings.dias_atraso ?? 5)) return 'atrasada';
-    return 'na_fila';
-}
-
-/**
- * Uma rodada do vigia.
- *
- * @param {object}  [opts]
- * @param {boolean} [opts.notificar=true] - false roda a varredura sem avisar ninguém
- *   (útil para conferir o efeito de uma mudança de limiar antes de valer).
- */
-export async function runWatch(opts = {}) {
-    const notificar = opts.notificar !== false;
+export async function listarPendentes(opts = {}) {
     const settings = await getSettings();
-    const { EnvioSiengeWatchItem } = db;
-    const t0 = Date.now();
-
+    const minutos = Number(opts.minutos ?? settings.minutos_limite ?? 30);
     const idsituacao = String(settings.idsituacao_vigiada ?? 17);
 
-    // Candidatas: na etapa vigiada e sem envio segundo a última sincronização.
-    const candidatas = await db.sequelize.query(`
-        SELECT r.idreserva, r.empreendimento, r.unidade, r.titular->>'nome' AS titular_nome,
-               (r.erp_sienge->>'data_cad')::timestamp AS data_cad_erp,
+    return db.sequelize.query(`
+        WITH entrada AS (
+            -- Acionamento do webhook do ato = momento em que o CV colocou a
+            -- reserva em Envio Sienge. O mais recente, porque a reserva pode ter
+            -- entrado na etapa mais de uma vez.
+            SELECT idreserva::int AS idreserva, MAX(created_at) AS entrou_em
+            FROM boleto_history
+            GROUP BY 1
+        )
+        SELECT r.idreserva,
+               r.empreendimento,
+               r.unidade,
+               r.titular->>'nome'  AS titular_nome,
+               r.data_reserva,
+               COALESCE(
+                   e.entrou_em,
+                   -- Último recurso: reserva que nunca acionou o webhook. É a
+                   -- data de criação da reserva, então superestima a espera.
+                   (r.erp_sienge->>'data_cad')::timestamp AT TIME ZONE 'America/Sao_Paulo'
+               ) AS entrou_em,
+               (e.entrou_em IS NULL) AS entrada_estimada,
+               round(EXTRACT(EPOCH FROM (NOW() - COALESCE(
+                   e.entrou_em,
+                   (r.erp_sienge->>'data_cad')::timestamp AT TIME ZONE 'America/Sao_Paulo'
+               ))) / 60) AS minutos_esperando,
                EXISTS (
                    SELECT 1 FROM boleto_history h
                    WHERE h.idreserva::int = r.idreserva AND h.payment_status = 'paid' AND h.ignorado = false
@@ -130,176 +94,84 @@ export async function runWatch(opts = {}) {
                    WHERE u.idreserva::int = r.idreserva AND u.payment_status = 'paid' AND u.ignorado = false
                ) AS ato_pago
         FROM reservas r
+        LEFT JOIN entrada e ON e.idreserva = r.idreserva
         WHERE r.situacao->>'idsituacao' = :idsituacao
           AND COALESCE(r.erp_sienge->>'enviado', 'N') <> 'S'
-        ORDER BY r.data_reserva`, {
-        replacements: { idsituacao },
+          AND COALESCE(
+                  e.entrou_em,
+                  (r.erp_sienge->>'data_cad')::timestamp AT TIME ZONE 'America/Sao_Paulo'
+              ) < NOW() - (:minutos * INTERVAL '1 minute')
+        ORDER BY 6 ASC`, {
+        replacements: { idsituacao, minutos },
         type: db.Sequelize.QueryTypes.SELECT,
-    });
-
-    const agora = new Date();
-    const resumo = { verificadas: 0, na_fila: 0, atrasadas: 0, criticas: 0, resolvidas: 0, ilegiveis: 0, avisados: 0 };
-    const paraAvisar = [];
-
-    for (const r of candidatas) {
-        resumo.verificadas++;
-        const vivo = await conferirNoCv(r.idreserva);
-        if (vivo === null) resumo.ilegiveis++;
-
-        let item = await EnvioSiengeWatchItem.findOne({ where: { idreserva: r.idreserva } });
-
-        // Já foi: fecha o acompanhamento e guarda quanto esperou - é esse número
-        // que permite recalibrar os limiares com dado nosso, não com chute.
-        if (vivo?.enviado) {
-            if (item && !item.resolvido_em) {
-                const horas = Math.round((agora - new Date(item.pendente_desde)) / HORA_MS);
-                await item.update({
-                    resolvido_em: agora, espera_horas: horas,
-                    contrato_erp: vivo.codigo, ultima_verificacao: agora, severidade: 'na_fila',
-                });
-                resumo.resolvidas++;
-            }
-            continue;
-        }
-
-        if (!item) {
-            item = await EnvioSiengeWatchItem.create({
-                idreserva: r.idreserva,
-                empreendimento: r.empreendimento,
-                unidade: r.unidade,
-                titular_nome: r.titular_nome,
-                pendente_desde: agora,
-                data_cad_erp: r.data_cad_erp || null,
-                ultima_verificacao: agora,
-                ato_pago: !!r.ato_pago,
-                severidade: 'na_fila',
-            });
-        }
-
-        // Reapareceu depois de resolvida (raro, mas o CV já voltou atrás): recomeça o relógio.
-        if (item.resolvido_em) {
-            await item.update({ resolvido_em: null, espera_horas: null, contrato_erp: null, pendente_desde: agora, avisado_em: null, avisado_severidade: null });
-        }
-
-        const horas = (agora - new Date(item.pendente_desde)) / HORA_MS;
-        const severidade = severidadeDe({ horas, atoPago: !!r.ato_pago, settings });
-
-        // A confirmação no ERP custa uma chamada por reserva: só para quem vai virar
-        // alarme. Se o Sienge disser que o contrato existe, o alarme morre aqui.
-        let confirmado = item.confirmado_sem_contrato;
-        if (settings.confirmar_no_sienge && severidade !== 'na_fila') {
-            const noErp = await conferirNoSienge(r.idreserva);
-            if (noErp) {
-                confirmado = !noErp.existe;
-                if (noErp.existe) {
-                    await item.update({
-                        resolvido_em: agora,
-                        espera_horas: Math.round(horas),
-                        contrato_erp: noErp.contrato,
-                        confirmado_sem_contrato: false,
-                        ultima_verificacao: agora,
-                    });
-                    resumo.resolvidas++;
-                    continue;
-                }
-            }
-        }
-
-        await item.update({
-            severidade,
-            ato_pago: !!r.ato_pago,
-            confirmado_sem_contrato: confirmado,
-            ultima_verificacao: agora,
-            empreendimento: r.empreendimento,
-            unidade: r.unidade,
-            titular_nome: r.titular_nome,
-        });
-
-        if (severidade === 'critica') resumo.criticas++;
-        else if (severidade === 'atrasada') resumo.atrasadas++;
-        else resumo.na_fila++;
-
-        // Avisa uma vez por severidade: quem já foi avisado como crítica não vira
-        // aviso diário. Piorou de atrasada para crítica, avisa de novo.
-        if (severidade !== 'na_fila' && item.avisado_severidade !== severidade) {
-            paraAvisar.push({ item, severidade, horas: Math.round(horas), r });
-        }
-    }
-
-    if (notificar && paraAvisar.length) {
-        const users = Array.isArray(settings.notify_user_ids) ? settings.notify_user_ids.map(Number).filter(Boolean) : [];
-        if (users.length) {
-            const criticas = paraAvisar.filter(p => p.severidade === 'critica');
-            const atrasadas = paraAvisar.filter(p => p.severidade === 'atrasada');
-            const diasDoCv = (d) => (d ? Math.round((Date.now() - new Date(d)) / (24 * HORA_MS)) : null);
-            const linhas = paraAvisar.slice(0, 10).map(p => {
-                const noCv = diasDoCv(p.item.data_cad_erp);
-                return `• Reserva ${p.r.idreserva} - ${p.r.empreendimento || '?'} ${p.r.unidade || ''}`
-                    + ` (${Math.round(p.horas / 24)} dias acompanhada${noCv != null ? `, registro do CV de ${noCv} dias atrás` : ''}`
-                    + `${p.r.ato_pago ? ', ATO JÁ PAGO' : ''})`;
-            });
-            const corpo = [
-                `${paraAvisar.length} venda(s) em "Envio Sienge" sem contrato no ERP.`,
-                criticas.length ? `${criticas.length} crítica(s)${criticas.some(p => p.r.ato_pago) ? ' - há ato já pago sem contrato' : ''}.` : null,
-                atrasadas.length ? `${atrasadas.length} atrasada(s) (acima de ${settings.dias_atraso} dias).` : null,
-                '',
-                ...linhas,
-                paraAvisar.length > 10 ? `... e mais ${paraAvisar.length - 10}.` : null,
-                '',
-                'A fila do CV leva alguns dias; o que está aqui já passou desse prazo.',
-                'Para destravar: abra a reserva no CV, corrija o que o painel apontar e devolva a etapa para Envio Sienge.',
-            ].filter(Boolean).join('\n');
-
-            await NotificationService.notify({
-                type: NotificationType.SIENGE_ENVIO_PENDENTE,
-                recipients: { users },
-                title: criticas.length
-                    ? `${criticas.length} venda(s) sem contrato no ERP - atenção`
-                    : `${paraAvisar.length} venda(s) atrasadas para o ERP`,
-                body: corpo,
-                data: { criticas: criticas.length, atrasadas: atrasadas.length, reservas: paraAvisar.map(p => p.r.idreserva) },
-                importance: criticas.length ? 8 : 5,
-            }).catch(err => console.warn('[ENVIO_SIENGE_WATCH] notify falhou:', err?.message));
-            resumo.avisados = paraAvisar.length;
-        }
-
-        for (const p of paraAvisar) {
-            await p.item.update({ avisado_em: agora, avisado_severidade: p.severidade });
-        }
-    }
-
-    resumo.took_s = ((Date.now() - t0) / 1000).toFixed(1);
-    await settings.update({ last_run_at: agora, last_run_resumo: resumo });
-    console.log(`[ENVIO_SIENGE_WATCH] ${JSON.stringify(resumo)}`);
-    return resumo;
-}
-
-/** O que está aberto agora, para a tela e para conferência rápida. */
-export async function listarPendencias({ severidade = null } = {}) {
-    const where = { resolvido_em: null };
-    if (severidade) where.severidade = severidade;
-    return db.EnvioSiengeWatchItem.findAll({
-        where,
-        order: [['pendente_desde', 'ASC']],
     });
 }
 
 /**
- * Espera real observada, para recalibrar os limiares com dado nosso.
- * Os defaults saíram da distribuição do CV; com o tempo, esta é a fonte melhor.
+ * Olha e avisa. Avisa cada reserva UMA vez: sem isso, rodando de 15 em 15
+ * minutos, a mesma pendência viraria aviso a cada quarto de hora.
+ *
+ * @param {object}  [opts]
+ * @param {boolean} [opts.notificar=true]
  */
-export async function estatisticas() {
-    const [row] = await db.sequelize.query(`
-        SELECT count(*) AS resolvidas,
-               round(avg(espera_horas)) AS media_horas,
-               round(percentile_cont(0.5) WITHIN GROUP (ORDER BY espera_horas)) AS p50_horas,
-               round(percentile_cont(0.9) WITHIN GROUP (ORDER BY espera_horas)) AS p90_horas,
-               max(espera_horas) AS max_horas
-        FROM envio_sienge_watch_items
-        WHERE resolvido_em IS NOT NULL AND espera_horas IS NOT NULL`,
-        { type: db.Sequelize.QueryTypes.SELECT });
-    const abertas = await db.EnvioSiengeWatchItem.count({ where: { resolvido_em: null } });
-    return { ...row, abertas };
+export async function runWatch(opts = {}) {
+    const notificar = opts.notificar !== false;
+    const settings = await getSettings();
+    const pendentes = await listarPendentes();
+
+    const idsAgora = pendentes.map(p => Number(p.idreserva));
+    const jaAvisados = (Array.isArray(settings.avisados_ids) ? settings.avisados_ids : []).map(Number);
+    const novos = pendentes.filter(p => !jaAvisados.includes(Number(p.idreserva)));
+    const comAtoPago = novos.filter(p => p.ato_pago);
+
+    const resumo = {
+        pendentes: pendentes.length,
+        novos: novos.length,
+        com_ato_pago: comAtoPago.length,
+        minutos_limite: Number(settings.minutos_limite ?? 30),
+    };
+
+    const users = Array.isArray(settings.notify_user_ids)
+        ? settings.notify_user_ids.map(Number).filter(Boolean) : [];
+
+    if (notificar && novos.length && users.length) {
+        const tempo = (m) => (m >= 120 ? `${Math.round(m / 60)}h` : `${m} min`);
+        const linhas = novos.slice(0, 15).map(p =>
+            `• Reserva ${p.idreserva} - ${p.empreendimento || '?'} ${p.unidade || ''}`
+            + ` (${tempo(Number(p.minutos_esperando))}${p.ato_pago ? ', ATO JÁ PAGO' : ''})`);
+        const corpo = [
+            `${novos.length} venda(s) em "Envio Sienge" há mais de ${settings.minutos_limite} minutos sem chegar ao Sienge.`,
+            'O lote do CV roda de 5 em 5 minutos, então isto é erro, não demora.',
+            comAtoPago.length ? `${comAtoPago.length} dela(s) com o ato JÁ PAGO.` : null,
+            '',
+            ...linhas,
+            novos.length > 15 ? `... e mais ${novos.length - 15}.` : null,
+            '',
+            'Abra a reserva no CV para ver o que o envio apontou, corrija e devolva a etapa para Envio Sienge.',
+        ].filter(Boolean).join('\n');
+
+        await NotificationService.notify({
+            type: NotificationType.SIENGE_ENVIO_PENDENTE,
+            recipients: { users },
+            title: comAtoPago.length
+                ? `${novos.length} venda(s) travadas para o ERP (${comAtoPago.length} com ato pago)`
+                : `${novos.length} venda(s) travadas para o ERP`,
+            body: corpo,
+            data: { total: pendentes.length, novos: novos.length, comAtoPago: comAtoPago.length, reservas: novos.map(p => p.idreserva) },
+            importance: comAtoPago.length ? 8 : 6,
+        }).catch(err => console.warn('[ENVIO_SIENGE_WATCH] notify falhou:', err?.message));
+        resumo.avisados = novos.length;
+    }
+
+    // Só continuam marcadas as que ainda estão pendentes: quem foi para o ERP sai
+    // da lista e, se um dia voltar a travar, avisa de novo.
+    await settings.update({
+        avisados_ids: notificar ? idsAgora : jaAvisados.filter(id => idsAgora.includes(id)),
+        last_run_at: new Date(),
+        last_run_resumo: resumo,
+    });
+    console.log(`[ENVIO_SIENGE_WATCH] ${JSON.stringify(resumo)}`);
+    return resumo;
 }
 
-export default { runWatch, getSettings, listarPendencias, estatisticas };
+export default { runWatch, getSettings, listarPendentes };
