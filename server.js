@@ -86,6 +86,8 @@ import contractApprovalScheduler from './scheduler/contractApprovalScheduler.js'
 import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.js';
 import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateScheduler.js';
 import eventPlanCycleScheduler from './scheduler/eventPlanCycleScheduler.js';
+import envioSiengeWatchScheduler from './scheduler/envioSiengeWatchScheduler.js';
+import envioSiengeWatchRoutes from './routes/envioSiengeWatchRoutes.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import boletoPaymentCheckScheduler from './scheduler/boletoPaymentCheckScheduler.js';
 import boletoWindowScheduler from './scheduler/boletoWindowScheduler.js';
@@ -110,6 +112,7 @@ import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibili
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensureUseredeSchema } from './lib/ensureUseredeSchema.js';
 import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
+import ensureEnvioSiengeWatchSchema from './lib/ensureEnvioSiengeWatchSchema.js';
 import { ensureMicrosoftSchema } from './lib/ensureMicrosoftSchema.js';
 import { ensureOutlookAiSchema } from './lib/ensureOutlookAiSchema.js';
 import { ensureAssistantSchema } from './lib/ensureAssistantSchema.js';
@@ -269,6 +272,7 @@ app.use('/api/correspondents', correspondentRoutes); // correspondentes (CV)
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/event-plans', eventPlanRoutes); // Plano de Eventos (comercial)
 app.use('/api/boleto-caixa', boletoRoutes);
+app.use('/api/envio-sienge-watch', envioSiengeWatchRoutes);
 app.use('/api/link-cartao', useredeRoutes);
 app.use('/api/cobranca-ato', cobrancaAtoRoutes);
 app.use('/api/cancelamento-reservas', reservaCancelRoutes);
@@ -516,6 +520,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['Boleto', ensureBoletoSchema],
     ['Userede', ensureUseredeSchema],
     ['ReservaCancel', ensureReservaCancelSchema],
+    ['EnvioSiengeWatch', ensureEnvioSiengeWatchSchema],
     ['Microsoft', ensureMicrosoftSchema],
     ['OutlookAI', ensureOutlookAiSchema],
     ['Assistente', ensureAssistantSchema],
@@ -662,6 +667,9 @@ async function startBackgroundServices() {
   }
 
   // Crons que antes ligavam sempre / por padrão — agora gated (prod = igual, dev = off):
+  // Vigia do envio da venda ao ERP: so avisa quem a tela mandar avisar, e so
+  // roda com `active` ligado nas settings do modulo.
+  if (schedulerOn('ENABLE_ENVIO_SIENGE_WATCH')) envioSiengeWatchScheduler.start();
   if (schedulerOn('ENABLE_CREDITOR_POLLING')) creditorPollingScheduler.start();
   if (schedulerOn('ENABLE_CONTRACT_APPROVAL')) contractApprovalScheduler.start();
   if (schedulerOn('ENABLE_SUPABASE_KEEPALIVE')) supabaseKeepAliveScheduler.start();

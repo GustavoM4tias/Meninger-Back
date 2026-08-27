@@ -18,6 +18,7 @@ import ContractWebhookSettingDefine from './contractWebhookSetting.js';
 
 // Singe imports
 import SalesContractDefine from './sienge/salesContract.js';
+import { defineEnvioSiengeWatchSettings } from './sienge/envioSiengeWatch.js';
 import ExpensePersonalizationDefine from './sienge/expensePersonalization.js';
 
 import OrgCompanyDefine from './org/company.js';
@@ -318,6 +319,8 @@ db.ContractWebhookSetting = ContractWebhookSettingDefine(sequelize, DataTypes);
 
 // sienge db 
 db.SalesContract = SalesContractDefine(sequelize, DataTypes);
+// Vigia do envio da venda ao ERP (ver services/sienge/envioSiengeWatchService.js)
+db.EnvioSiengeWatchSettings = defineEnvioSiengeWatchSettings(sequelize, DataTypes);
 db.ExpensePersonalization = ExpensePersonalizationDefine(sequelize, DataTypes);
 
 db.CostCenterOverride = CostCenterOverrideDefine(sequelize, DataTypes);
