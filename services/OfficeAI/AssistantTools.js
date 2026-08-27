@@ -29,19 +29,27 @@ import parceria from '../collab/ParceriaService.js';
 const TZ = 'America/Sao_Paulo';
 
 /**
- * "amanhã", "sexta", "dia 29", "em 2 horas" → data.
+ * "amanhã", "sexta", "dia 29", "em 2 horas" → RELÓGIO DE PAREDE de Brasília.
  *
  * O modelo manda ISO quando sabe a data; o resto é linguagem de gente, e é
  * melhor entender aqui do que devolver "formato inválido" para quem só disse
  * "me lembra amanhã de manhã".
+ *
+ * O que sai daqui ainda NÃO é um instante: é a hora de Brasília vestida de data
+ * local do servidor. Quem grava é `quandoVira`, lá embaixo, depois de converter.
  */
-function quandoVira(texto) {
+function relogioDe(texto) {
     if (!texto) return null;
-    const t = String(texto).trim().toLowerCase();
+    const bruto = String(texto).trim();
+    const t = bruto.toLowerCase();
 
-    // ISO completo com hora: respeita como veio.
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}/.test(t)) {
-        const d = new Date(t);
+    // ISO completo com hora: respeita o dia e a hora como vieram.
+    //
+    // Testa no texto ORIGINAL: o 'T' vira 't' no toLowerCase e a regex nunca
+    // batia - o ramo inteiro estava morto, e "2026-09-01T15:00" caia no leitor
+    // de hora logo abaixo, virando HOJE as 15h.
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}/i.test(bruto)) {
+        const d = new Date(bruto);
         return Number.isNaN(d.getTime()) ? null : d;
     }
 
@@ -119,6 +127,47 @@ function quandoVira(texto) {
     if (t.includes('hoje') || hora !== null) return base;
 
     return null;
+}
+
+/**
+ * Relógio de parede de Brasília → o instante de verdade.
+ *
+ * O truque do `toLocaleString('en-US', { timeZone: TZ })` devolve uma data cujos
+ * campos LOCAIS são a hora de Brasília. Ele é só metade do caminho: falta
+ * desfazer a mentira antes de gravar. Sem isto, num servidor em UTC (o Railway),
+ * `setHours(15)` gravava 15:00Z - e a tela, que mostra em Brasília, exibia
+ * 12:00. Era o "põe 15h" que voltava como meio-dia, e o aviso de "1 hora antes"
+ * saindo três horas cedo junto.
+ *
+ * Duas passadas porque o deslocamento é o do instante FINAL, não o do palpite:
+ * na virada de um horário de verão a primeira conta usaria o offset do dia
+ * errado. Onde o fuso não muda, a segunda passada só confirma a primeira.
+ */
+function paraInstante(relogio) {
+    if (!relogio || Number.isNaN(relogio.getTime())) return null;
+    let d = relogio;
+    for (let i = 0; i < 2; i++) {
+        const desloc = d.getTime() - new Date(d.toLocaleString('en-US', { timeZone: TZ })).getTime();
+        d = new Date(relogio.getTime() + desloc);
+    }
+    return d;
+}
+
+/**
+ * O que a pessoa disse ("terça que vem às 15h") vira o instante que se grava.
+ *
+ * ISO com fuso explícito (Z ou ±hh:mm) JÁ é um instante e passa direto - mexer
+ * nele seria empurrar de novo o que já veio pronto. Todo o resto é lido como
+ * relógio de Brasília, porque é o relógio de quem está falando.
+ */
+function quandoVira(texto) {
+    if (!texto) return null;
+    const t = String(texto).trim();
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}[^\s]*(Z|[+-]\d{2}:?\d{2})$/i.test(t)) {
+        const d = new Date(t);
+        return Number.isNaN(d.getTime()) ? null : d;
+    }
+    return paraInstante(relogioDe(t));
 }
 
 function fmt(d) {
