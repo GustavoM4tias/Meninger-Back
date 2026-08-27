@@ -100,4 +100,21 @@ export function toGeminiDeclarations(tools = []) {
     }));
 }
 
+/**
+ * Argumentos que a tool NÃO declarou.
+ *
+ * O modelo às vezes inventa o nome do parâmetro - `nome` no lugar de `busca`,
+ * `subject` no lugar de `assunto`. A tool lê `undefined`, não reclama, e o
+ * resultado sai errado em silêncio: uma busca sem filtro devolve a empresa
+ * inteira, uma prévia sem assunto sai em branco. Nada disso aparece em log.
+ *
+ * Isto não conserta a chamada - só a torna VISÍVEL. Cada aviso aqui é um
+ * apelido que vale a pena a tool passar a aceitar.
+ */
+export function argsDesconhecidos(tool, args) {
+    const declarados = Object.keys(tool?.parameters?.properties || {});
+    if (!declarados.length || !args || typeof args !== 'object') return [];
+    return Object.keys(args).filter(k => !declarados.includes(k));
+}
+
 export { userHasPermissions };

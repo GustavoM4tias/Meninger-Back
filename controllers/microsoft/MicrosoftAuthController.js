@@ -3,8 +3,23 @@ import crypto from 'crypto';
 import microsoftAuthService, { MAIL_SCOPES } from '../../services/microsoft/MicrosoftAuthService.js';
 import db from '../../models/sequelize/index.js';
 import { issueRefreshToken } from '../../services/auth/refreshTokenService.js';
+import { urlDeEnv, ehProducao } from '../../utils/envUrl.js';
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+// ── Endereço do front ────────────────────────────────────────────────────────
+//
+// Lido a cada uso, e não no import: em 26/08/2026 a variável de produção estava
+// valendo literalmente `"https:` - truncada e com a aspa da colagem - e o `||`
+// de antes aceitava isso numa boa, porque valor quebrado não é valor vazio. O
+// callback da Microsoft mandava a pessoa para um endereço que não existe.
+//
+// urlDeEnv exige URL absoluta de verdade e cai no endereço do Office quando o
+// que veio do ambiente não presta.
+const FRONT_PROD = 'https://office.menin.com.br';
+const FRONT_DEV = 'http://localhost:5173';
+
+function frontendUrl() {
+    return urlDeEnv('FRONTEND_URL', ehProducao() ? FRONT_PROD : FRONT_DEV);
+}
 
 // ── Código de login de uso único (evita expor o JWT na URL do callback) ──────
 // O callback redireciona com ?code=<opaco>; o frontend troca esse code por
@@ -68,18 +83,18 @@ export default class MicrosoftAuthController {
             const wasLink = state ? !!microsoftAuthService.consumeState(state)?.link : false;
             const qs = new URLSearchParams({ error });
             if (wasLink) qs.set('mode', 'link');
-            return res.redirect(`${FRONTEND_URL}/microsoft/callback?${qs}`);
+            return res.redirect(`${frontendUrl()}/microsoft/callback?${qs}`);
         }
 
         if (!code || !state) {
-            return res.redirect(`${FRONTEND_URL}/microsoft/callback?error=missing_params`);
+            return res.redirect(`${frontendUrl()}/microsoft/callback?error=missing_params`);
         }
 
         // Valida o state (anti-CSRF) e descobre em qual fluxo estamos
         const stateEntry = microsoftAuthService.consumeState(state);
         if (!stateEntry) {
             console.warn(`⚠️  [Microsoft] State inválido ou expirado: ${state}`);
-            return res.redirect(`${FRONTEND_URL}/microsoft/callback?error=invalid_state`);
+            return res.redirect(`${frontendUrl()}/microsoft/callback?error=invalid_state`);
         }
         const linkIntent = stateEntry.link; // null = login; objeto = vínculo
 
@@ -105,12 +120,12 @@ export default class MicrosoftAuthController {
                 const mode = isMailConsent ? 'mail' : 'link';
 
                 if (result.ok) {
-                    return res.redirect(`${FRONTEND_URL}/microsoft/callback?mode=${mode}&linked=1`);
+                    return res.redirect(`${frontendUrl()}/microsoft/callback?mode=${mode}&linked=1`);
                 }
                 const qs = new URLSearchParams({ mode, error: result.reason });
                 if (result.expected) qs.set('expected', result.expected);
                 if (result.got)      qs.set('got', result.got);
-                return res.redirect(`${FRONTEND_URL}/microsoft/callback?${qs}`);
+                return res.redirect(`${frontendUrl()}/microsoft/callback?${qs}`);
             }
 
             // 3. Localiza ou cria o usuário na plataforma
@@ -126,11 +141,11 @@ export default class MicrosoftAuthController {
             });
 
             console.log(`✅ [Microsoft] Login concluído para user ${user.id} (isNew=${isNew})`);
-            return res.redirect(`${FRONTEND_URL}/microsoft/callback?code=${oneTimeCode}`);
+            return res.redirect(`${frontendUrl()}/microsoft/callback?code=${oneTimeCode}`);
 
         } catch (err) {
             console.error('❌ [Microsoft] Erro no callback:', err?.response?.data || err.message);
-            return res.redirect(`${FRONTEND_URL}/microsoft/callback?error=auth_failed`);
+            return res.redirect(`${frontendUrl()}/microsoft/callback?error=auth_failed`);
         }
     };
 
@@ -196,13 +211,16 @@ export default class MicrosoftAuthController {
             // só mostrava erro cru, sem caminho de reconexão.
             const linked    = !!user.microsoft_id;
             const hasSession = !!user.microsoft_refresh_token;
-            const connected = linked && hasSession;
+            // A marca é o que pede reconexão. O token pode continuar guardado -
+            // e continua de propósito, para o sistema poder se curar sozinho.
+            const precisaReauth = !!user.microsoft_reauth_required;
+            const connected = linked && hasSession && !precisaReauth;
             const expiresAt = connected ? Number(user.microsoft_token_expires_at || 0) : null;
 
             return res.json({
                 connected,
                 linked,
-                needsReconnect: linked && !hasSession,
+                needsReconnect: linked && (precisaReauth || !hasSession),
                 expiresAt,
                 tokenValid: connected ? expiresAt > Date.now() : false,
                 authProvider: user.auth_provider,

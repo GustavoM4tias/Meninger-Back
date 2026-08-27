@@ -158,14 +158,32 @@ async function prazosChegando() {
 
                 const corpo = tarefas.slice(0, 5).map(t => `· ${t.titulo} (${quandoVence(t, agora)})`).join('\n');
 
+                // ── Qual template do WhatsApp ────────────────────────────
+                //
+                // "está chegando" e "já venceu" são mensagens diferentes, e o
+                // WhatsApp exige template fixo por tipo. Então o TIPO é que
+                // escolhe: se o que motivou o aviso já passou do prazo, é
+                // cobrança; senão, é lembrete.
+                const venceu = atrasadas.length > 0;
+                const primeira = (venceu ? atrasadas : tarefas)[0];
+
                 await NotificationService.notify({
-                    type: NotificationType.ASSISTANT_DEADLINE,
+                    type: venceu ? NotificationType.ASSISTANT_OVERDUE : NotificationType.ASSISTANT_DEADLINE,
                     recipients: { users: [l.user_id] },
                     title: titulo,
                     body: corpo,
                     link: '/assistente',
-                    importance: atrasadas.length ? 2 : 3,
-                    channels: { inapp: true, email: !!l.por_email, whatsapp: false },
+                    importance: venceu ? 2 : 3,
+                    // WhatsApp é opt-in por pessoa (nasce desligado no catálogo).
+                    // Aqui o canal é liberado; quem decide é a preferência dela.
+                    channels: { inapp: true, email: !!l.por_email, whatsapp: true },
+                    // As 4 variáveis do template, na ordem. A terceira é o
+                    // contexto - o template a chama de "checklist".
+                    whatsappData: {
+                        tarefa: primeira?.titulo || 'sua tarefa',
+                        contexto: tarefas.length > 1 ? `Suas tarefas (+${tarefas.length - 1})` : 'Suas tarefas',
+                        prazo: quandoVence(primeira, agora),
+                    },
                 });
 
                 // Marca DEPOIS de avisar: se o envio falhar, a próxima passada

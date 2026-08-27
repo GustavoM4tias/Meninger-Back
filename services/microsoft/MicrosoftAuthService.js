@@ -7,13 +7,37 @@ import db from '../../models/sequelize/index.js';
 import jwtConfig from '../../config/jwtConfig.js';
 import { normalizeEmail, findUserByEmailCI } from '../../utils/userEmail.js';
 import { encrypt, decrypt } from '../../utils/encryption.js';
+import { urlDeEnv, ehProducao } from '../../utils/envUrl.js';
 
 const {
     MICROSOFT_TENANT_ID,
     MICROSOFT_CLIENT_ID,
     MICROSOFT_CLIENT_SECRET,
-    MICROSOFT_REDIRECT_URI,
 } = process.env;
+
+// ── Para onde a Microsoft devolve o usuário ──────────────────────────────────
+//
+// NÃO é lido no import de propósito: em 26/08/2026 a variável sumiu das
+// variáveis do Railway, `process.env.MICROSOFT_REDIRECT_URI` indefinido virou a
+// STRING "undefined" dentro do URLSearchParams, e o login inteiro passou a bater
+// em AADSTS90102 ("redirect_uri value must be a valid absolute URI") para todo
+// mundo - sem um único erro no backend, porque montar a URL nunca falhou.
+//
+// Agora o valor é conferido a cada uso (urlDeEnv descarta vazio, "undefined" e
+// aspas que vieram na colagem) e, quando não presta, cai no endereço que ESTÁ
+// REGISTRADO no Azure: o login segue de pé e o log diz o que corrigir no painel.
+//
+// Mudou o endereço? Ele precisa existir igual em Azure > App registrations >
+// Authentication > Redirect URIs. A Microsoft compara caractere a caractere.
+const REDIRECT_REGISTRADO_PROD = 'https://menin.up.railway.app/api/microsoft/auth/callback';
+const REDIRECT_REGISTRADO_DEV = 'http://localhost:5000/api/microsoft/auth/callback';
+
+function redirectUri() {
+    return urlDeEnv(
+        'MICROSOFT_REDIRECT_URI',
+        ehProducao() ? REDIRECT_REGISTRADO_PROD : REDIRECT_REGISTRADO_DEV,
+    );
+}
 
 // ── Scopes por módulo ────────────────────────────────────────────────────────
 // Módulo 1 (Auth):      openid profile email User.Read offline_access
@@ -150,7 +174,7 @@ class MicrosoftAuthService {
         const params = {
             client_id: MICROSOFT_CLIENT_ID,
             response_type: 'code',
-            redirect_uri: MICROSOFT_REDIRECT_URI,
+            redirect_uri: redirectUri(),
             response_mode: 'query',
             scope,
             state,
@@ -171,7 +195,7 @@ class MicrosoftAuthService {
                 client_id: MICROSOFT_CLIENT_ID,
                 scope,
                 code,
-                redirect_uri: MICROSOFT_REDIRECT_URI,
+                redirect_uri: redirectUri(),
                 grant_type: 'authorization_code',
                 client_secret: MICROSOFT_CLIENT_SECRET,
             }),
@@ -187,7 +211,7 @@ class MicrosoftAuthService {
                 client_id: MICROSOFT_CLIENT_ID,
                 scope,
                 refresh_token: refreshTokenValue,
-                redirect_uri: MICROSOFT_REDIRECT_URI,
+                redirect_uri: redirectUri(),
                 grant_type: 'refresh_token',
                 client_secret: MICROSOFT_CLIENT_SECRET,
             }),
@@ -197,12 +221,61 @@ class MicrosoftAuthService {
     }
 
     /**
+     * O refresh_token novo que a Microsoft devolveu, guardado NA HORA.
+     *
+     * ─────────────────────────────────────────────────────────────────────────
+     * A CAUSA DE "SUA CONEXÃO COM A MICROSOFT CAIU", ENCONTRADA EM 25/08/2026
+     *
+     * O Azure v2 ROTACIONA o refresh_token: toda renovação bem-sucedida devolve
+     * um token novo e INVALIDA o que foi usado. Quem renova e não guarda o novo
+     * deixa no banco um token morto - e envenena a sessão para todo o resto do
+     * sistema.
+     *
+     * Era exatamente o que `getTokenForScopes` fazia. O comentário dele dizia
+     * "não grava nada: é token de uso imediato", partindo da premissa de que
+     * pedir OUTROS escopos não mexia no refresh_token. Mexe.
+     *
+     * O estrago, em ordem: o módulo do Outlook pede os escopos de e-mail →
+     * Microsoft devolve access novo + refresh novo → o refresh novo é
+     * descartado → o refresh guardado está morto → a próxima chamada de
+     * qualquer módulo leva `invalid_grant` → o código classifica como
+     * definitivo → apaga tudo → "sua conexão caiu, entre de novo".
+     *
+     * E a varredura do Outlook roda A CADA 15 MINUTOS. Por isso caía o dia
+     * inteiro, por isso os 19 usuários estavam sem token, e por isso "a versão
+     * anterior era melhor": antes do módulo do Outlook, ninguém chamava este
+     * caminho.
+     *
+     * Regra que fica: QUALQUER renovação que devolva refresh_token novo grava o
+     * novo. Não existe renovação "de uso imediato".
+     */
+    async _guardarRotacao(userId, data, usado) {
+        const novo = data?.refresh_token;
+        if (!userId || !novo || novo === usado) return;
+        try {
+            await db.User.update(
+                { microsoft_refresh_token: writeSecret(novo) },
+                { where: { id: userId } },
+            );
+        } catch (err) {
+            // Não derruba a chamada: o access_token em mãos continua válido. O
+            // preço de falhar aqui é uma renovação a mais depois, não a sessão.
+            console.warn(`⚠️  [Microsoft] Não consegui guardar o refresh rotacionado do user ${userId}:`, err.message);
+        }
+    }
+
+    /**
      * Troca o refresh_token guardado por um access_token com OUTRO conjunto de
      * escopos (ex.: os do Outlook). Funciona porque o refresh_token do Azure v2
      * não é preso a escopo: ele vale para tudo que a pessoa já consentiu.
      *
-     * Não grava nada: é token de uso imediato. E não derruba a sessão quando dá
-     * errado — falta de consentimento é resposta esperada aqui, não incidente.
+     * O access_token daqui é de uso imediato e não é guardado - ele vale para
+     * outros escopos, e sobrescrever o `microsoft_access_token` (que é o dos
+     * escopos base) trocaria um token pelo outro. Mas o refresh_token QUE VEIO
+     * JUNTO é guardado: ver `_guardarRotacao`.
+     *
+     * Não derruba a sessão quando dá errado — falta de consentimento é resposta
+     * esperada aqui, não incidente.
      *
      * @returns {{ token:string }} | {{ error:'not_connected'|'consent_required'|'failed', detail?:string }}
      */
@@ -218,6 +291,8 @@ class MicrosoftAuthService {
 
         try {
             const data = await this._doRefresh(refreshTokenPlain, scope);
+            // O NOVO refresh_token vem aqui dentro, e o antigo já morreu.
+            await this._guardarRotacao(u.id, data, refreshTokenPlain);
             return { token: data.access_token, expiresIn: data.expires_in, scope: data.scope };
         } catch (err) {
             const code = err?.response?.data?.error;
@@ -299,8 +374,12 @@ class MicrosoftAuthService {
         if (!refreshTokenPlain) {
             // Valor ilegível (JWT_SECRET trocado ou registro adulterado): trata como
             // desconectado em vez de mandar lixo para a Microsoft.
+            // Ilegível é o único caso em que o token guardado não serve para
+            // NADA (JWT_SECRET trocado, registro adulterado): aqui apagar não
+            // perde nada, porque não havia o que recuperar.
             console.warn(`⚠️  [Microsoft] refresh_token ilegível do user ${u.id} — exigindo reconexão.`);
             await this._clearTokens(u.id);
+            await this._marcarReauth(u.id, 'refresh_token ilegível (a chave de cifra mudou?)');
             return null;
         }
 
@@ -353,6 +432,14 @@ class MicrosoftAuthService {
                 { where: { id: u.id } }
             );
 
+            // Deu certo: se havia marca de reconexão, ela era falso alarme.
+            // Some sem barulho - a pessoa nem chega a ver o aviso na próxima
+            // vez que a tela consultar o status.
+            await db.User.update(
+                { microsoft_reauth_required: false, microsoft_auth_error: null, microsoft_auth_error_at: null },
+                { where: { id: u.id, microsoft_reauth_required: true } },
+            ).catch(() => {});
+
             console.log(`✅ [Microsoft] Token renovado para user ${u.id} (expira em ${new Date(newExpiresAt).toISOString()})`);
             return refreshed.access_token;
 
@@ -402,11 +489,12 @@ class MicrosoftAuthService {
                 }
             }
 
-            console.warn(
-                `⚠️  [Microsoft] Autorização morreu para o user ${u.id}:`,
-                err?.response?.data || err.message
-            );
-            await this._clearTokens(u.id);
+            // A Microsoft recusou de um jeito que PARECE definitivo. "Parece" é
+            // a palavra: o token fica onde está, a marca é o que acende o aviso
+            // na tela, e a próxima tentativa pode muito bem funcionar.
+            const detalhe = JSON.stringify(err?.response?.data || err.message || '').slice(0, 1500);
+            console.warn(`⚠️  [Microsoft] Renovação recusada para o user ${u.id} — marcando reconexão (token preservado):`, detalhe);
+            await this._marcarReauth(u.id, detalhe);
             return null;
         }
     }
@@ -470,6 +558,39 @@ class MicrosoftAuthService {
                 microsoft_access_token:     null,
                 microsoft_refresh_token:    null,
                 microsoft_token_expires_at: null,
+                microsoft_reauth_required:  false,
+                microsoft_auth_error:       null,
+                microsoft_auth_error_at:    null,
+            },
+            { where: { id: userId } }
+        );
+    }
+
+    /**
+     * Marca a sessão como suspeita de morta - SEM apagar o refresh_token.
+     *
+     * ─────────────────────────────────────────────────────────────────────────
+     * POR QUE MARCAR E NÃO APAGAR
+     *
+     * Apagar é irreversível e se baseia numa INFERÊNCIA nossa sobre o que a
+     * Microsoft quis dizer. Essa inferência já errou várias vezes, e cada erro
+     * ejetava a pessoa de vez, destruindo o único artefato capaz de trazer a
+     * sessão de volta. O usuário passou o dia relogando por causa disso.
+     *
+     * Marcando: a tela pede reconexão igual, mas o token continua no banco e o
+     * sistema SEGUE TENTANDO renovar. Se a recusa era passageira, ou se erramos
+     * a classificação, a sessão volta sozinha e ninguém fica sabendo. O custo do
+     * erro deixa de ser "perdeu a sessão" e passa a ser "viu um aviso à toa".
+     *
+     * O apagar de verdade continua existindo, só que reservado ao caminho em que
+     * a intenção é explícita: desvincular a conta.
+     */
+    async _marcarReauth(userId, motivo) {
+        await db.User.update(
+            {
+                microsoft_reauth_required: true,
+                microsoft_auth_error: String(motivo || '').slice(0, 2000),
+                microsoft_auth_error_at: new Date(),
             },
             { where: { id: userId } }
         );

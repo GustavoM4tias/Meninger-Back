@@ -24,6 +24,46 @@ import outlookService from '../microsoft/MicrosoftOutlookService.js';
 
 const TZ = 'America/Sao_Paulo';
 
+/** "AAAA-MM-DDTHH:mm:ss" no fuso de Brasília - o formato que o Graph espera. */
+function paraIsoLocal(d) {
+    return d.toLocaleString('sv-SE', { timeZone: TZ }).replace(' ', 'T');
+}
+
+/**
+ * "agora", "em 30 minutos", "hoje às 15h" → instante.
+ *
+ * Existe para tirar a conta de horário das mãos do modelo. Ele já errou o fuso
+ * inteiro uma vez (marcou 17h quando eram 14h) e, quando não erra, PERGUNTA -
+ * o usuário teve que dizer "agora" três vezes numa conversa só.
+ *
+ * Devolve null no que não reconhece: aí o caminho normal (`inicio`/`fim`) vale,
+ * e é melhor recusar do que chutar um horário de reunião.
+ */
+function momentoDe(texto) {
+    const t = String(texto || '').trim().toLowerCase();
+    if (!t) return null;
+
+    const agora = new Date(new Date().toLocaleString('en-US', { timeZone: TZ }));
+
+    if (/^(agora|já|ja|neste momento|agora mesmo)$/.test(t)) return agora;
+
+    const emMin = t.match(/em\s+(\d+)\s*min/);
+    if (emMin) return new Date(agora.getTime() + Number(emMin[1]) * 60000);
+
+    const emHoras = t.match(/em\s+(\d+)\s*h(?:ora)?/);
+    if (emHoras) return new Date(agora.getTime() + Number(emHoras[1]) * 3600000);
+
+    // "hoje às 15h", "amanhã às 9h30"
+    const hora = t.match(/(\d{1,2})\s*(?::|h)\s*(\d{2})?/);
+    if (hora) {
+        const d = new Date(agora);
+        if (/amanh/.test(t)) d.setDate(d.getDate() + 1);
+        d.setHours(Number(hora[1]), Number(hora[2] || 0), 0, 0);
+        return d;
+    }
+    return null;
+}
+
 /** Registro completo do usuário (o req.user do middleware não traz os tokens). */
 async function fullUser(user) {
     const id = user?.id ?? user;
@@ -153,13 +193,22 @@ registerTool({
 
 registerTool({
     name: 'schedule_meeting',
-    description: 'AGENDA uma reunião no calendário do usuário, com link do Teams. Use quando pedirem "marca uma reunião com o fulano amanhã às 10", "agenda 30 minutos com o time". SEMPRE confirme com o usuário antes: assunto, dia, horário, duração e participantes. Se não souber se as pessoas estão livres, use check_availability primeiro. A reunião é criada no calendário DELE, com ele como organizador.',
+    description: 'AGENDA uma reunião no calendário do usuário, com link do Teams. Use quando pedirem '
+        + '"marca uma reunião com o fulano amanhã às 10", "gera um link agora de 30 minutos". '
+        + 'RESOLVA em vez de perguntar: se ele disse "agora", passe `quando: "agora"`; se disse a duração, '
+        + 'passe `duracao_min`; se citou uma pessoa pelo nome, ache o e-mail com query_people e use. '
+        + 'Só pergunte o que ele REALMENTE não disse e você não tem como descobrir. '
+        + 'A confirmação já é feita pela própria tool: sem `confirmado: true` ela devolve a prévia e não '
+        + 'agenda nada - então monte a prévia de primeira, não pergunte antes de montá-la. '
+        + 'A reunião é criada no calendário DELE, com ele como organizador.',
     parameters: {
         type: 'object',
         properties: {
             assunto:       { type: 'string', description: 'Assunto da reunião.' },
             inicio:        { type: 'string', description: 'Início, ISO local sem Z. Ex: 2026-08-25T10:00:00' },
             fim:           { type: 'string', description: 'Fim, ISO local sem Z. Ex: 2026-08-25T10:30:00' },
+            quando:        { type: 'string', description: 'Alternativa a inicio/fim quando o usuário falar em linguagem natural: "agora", "em 30 minutos", "hoje às 15h". Com isto, NÃO pergunte a hora - passe o que ele disse.' },
+            duracao_min:   { type: 'number', description: 'Duração em minutos, quando ele disser ("30 minutos", "1 hora"). Padrão 30.' },
             participantes: { type: 'array', items: { type: 'string' }, description: 'E-mails dos convidados.' },
             descricao:     { type: 'string', description: 'Texto do convite (opcional).' },
             local:         { type: 'string', description: 'Local físico, se houver (opcional).' },
@@ -176,7 +225,7 @@ registerTool({
             },
             confirmado:    { type: 'boolean', description: 'Passe true SÓ depois de o usuário confirmar. Sem isso, a tool devolve a prévia sem agendar nada.' },
         },
-        required: ['assunto', 'inicio', 'fim'],
+        required: ['assunto'],
     },
     requiredPermissions: ['/microsoft/teams'],
     contexts: ['OFFICE'],
@@ -184,7 +233,54 @@ registerTool({
         const u = await fullUser(user);
         if (!u?.microsoft_id) return { result: semConta };
 
-        const convidados = (args?.participantes || []).map(e => String(e).trim()).filter(Boolean);
+        // ── Os nomes que o modelo às vezes inventa ───────────────────────────
+        //
+        // Medido: ele chamou com `subject`, `start_time`, `end_time` e
+        // `attendees` - os nomes em inglês, que a declaração não tem. A tool
+        // lia `assunto`/`inicio`/`fim`, achava tudo `undefined` e devolvia uma
+        // PRÉVIA EM BRANCO, que o usuário viu no lugar do cartão. Aceitar o
+        // apelido custa três linhas e evita o cartão vazio.
+        const assunto = args?.assunto || args?.subject || args?.titulo || '';
+        let inicio    = args?.inicio  || args?.start_time || args?.start || '';
+        let fim       = args?.fim     || args?.end_time   || args?.end   || '';
+
+        // ── "agora" é resolvido AQUI, não pelo modelo ────────────────────────
+        //
+        // Pedir "reunião agora de 30 minutos" virava três perguntas de volta
+        // ("qual data? qual horário?") porque a tool exigia ISO. O relógio do
+        // servidor não erra e não pergunta: com `quando`, o horário sai daqui.
+        const dur = Math.min(Math.max(Number(args?.duracao_min) || 30, 5), 480);
+        if (!inicio && args?.quando) {
+            const d = momentoDe(args.quando);
+            if (d) {
+                inicio = paraIsoLocal(d);
+                fim = paraIsoLocal(new Date(d.getTime() + dur * 60000));
+            }
+        }
+        // Só o fim faltando: completa pela duração, em vez de recusar.
+        if (inicio && !fim) {
+            const ini = new Date(inicio);
+            if (!Number.isNaN(ini.getTime())) fim = paraIsoLocal(new Date(ini.getTime() + dur * 60000));
+        }
+
+        // Convidado pode vir como string ou como objeto {name, email}.
+        const brutos = args?.participantes || args?.attendees || args?.convidados || [];
+        const convidados = (Array.isArray(brutos) ? brutos : [brutos])
+            .map(e => (typeof e === 'string' ? e : (e?.email || e?.address || '')))
+            .map(e => String(e).trim())
+            .filter(Boolean);
+
+        // ── Prévia em branco é pior que erro ─────────────────────────────────
+        // Sem assunto ou sem horário não há o que confirmar: o cartão sairia
+        // vazio e a pessoa aprovaria uma reunião que não sabe qual é.
+        if (!assunto || !inicio || !fim) {
+            return { result: {
+                erro: 'Faltou o assunto ou o horário da reunião.',
+                falta: [!assunto && 'assunto', !inicio && 'início', !fim && 'fim'].filter(Boolean),
+                resumo: 'Não consigo montar a reunião: diga o assunto e o horário. '
+                      + 'Use `assunto` mais `inicio`/`fim` em ISO local, OU `quando` ("agora", "hoje às 15h") com `duracao_min`.',
+            } };
+        }
 
         // Agendar dispara convite para outras pessoas: sem confirmação explícita,
         // devolve a prévia e não cria nada.
@@ -197,14 +293,14 @@ registerTool({
                     type: 'meeting_card',
                     title: 'Confirme antes de eu agendar',
                     previa: true,
-                    assunto: args.assunto,
-                    inicio: args.inicio,
-                    fim: args.fim,
+                    assunto,
+                    inicio,
+                    fim,
                     participantes: convidados,
                     online: args?.online !== false,
                     repete: args?.repetir?.tipo || null,
                     message: 'A prévia JÁ está na tela. Pergunte a confirmação em UMA frase, sem repetir data e hora.',
-                    resumo: `Confirme antes de eu agendar: "${args.assunto}", de ${args.inicio} a ${args.fim}`
+                    resumo: `Confirme antes de eu agendar: "${assunto}", de ${inicio} a ${fim}`
                           + (convidados.length ? `, convidando ${convidados.join(', ')}.` : ', sem convidados.')
                           + ' O convite sai no seu nome.',
                 },
@@ -226,9 +322,11 @@ registerTool({
             : null;
 
         const evento = await teamsService.createScheduledMeeting(u, {
-            subject: args.assunto,
-            start: args.inicio,
-            end: args.fim,
+            // Os normalizados, não `args.*`: senão o agendamento cria uma
+            // reunião sem assunto quando o modelo usa os nomes em inglês.
+            subject: assunto,
+            start: inicio,
+            end: fim,
             attendees: convidados,
             body: args?.descricao || '',
             location: args?.local || '',

@@ -109,7 +109,10 @@ registerTool({
     requiredPermissions: [],
     contexts: ['ACADEMY', 'OFFICE'],
     async handler(user, args) {
-        const q = String(args?.query || '').trim();
+        // Mesmos apelidos do query_people: o modelo escreve `busca`, `nome`,
+        // `termo`... e a tool que só lê `query` respondia "forneça um termo"
+        // para um pedido que TINHA o termo.
+        const q = String(args?.query ?? args?.busca ?? args?.termo ?? args?.q ?? args?.nome ?? '').trim();
         const categorySlug = args?.categorySlug ? String(args.categorySlug).trim() : null;
         const onlyWithVideo = args?.onlyWithVideo === true;
         if (!q) return { result: { results: [], message: 'Forneça um termo de busca.' } };
@@ -511,7 +514,10 @@ registerTool({
     contexts: ['ACADEMY', 'OFFICE'],
     async handler(user, args) {
         const communityService = (await import('../academy/communityService.js')).default;
-        const q = String(args?.query || '').trim();
+        // Mesmos apelidos do query_people: o modelo escreve `busca`, `nome`,
+        // `termo`... e a tool que só lê `query` respondia "forneça um termo"
+        // para um pedido que TINHA o termo.
+        const q = String(args?.query ?? args?.busca ?? args?.termo ?? args?.q ?? args?.nome ?? '').trim();
         const data = await communityService.listTopics({
             type: undefined,
             q,

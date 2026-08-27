@@ -88,6 +88,13 @@ export default (sequelize, DataTypes) => {
       type: DataTypes.BIGINT,
       allowNull: true,  // Unix timestamp em ms
     },
+    // Sessão Microsoft suspeita de morta. A marca NÃO apaga o refresh_token:
+    // o sistema continua tentando renovar, e um sucesso limpa a marca sozinho.
+    // Ver o comentário em lib/ensureMicrosoftSchema.js.
+    microsoft_reauth_required: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    microsoft_auth_error: { type: DataTypes.TEXT, allowNull: true },
+    microsoft_auth_error_at: { type: DataTypes.DATE, allowNull: true },
+
     face_enabled: { type: DataTypes.BOOLEAN, defaultValue: false },
     face_template: { type: DataTypes.JSONB },
     face_threshold: { type: DataTypes.FLOAT, defaultValue: 0.6 },

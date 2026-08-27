@@ -87,7 +87,7 @@ registerTool({
     parameters: {
         type: 'object',
         properties: {
-            busca: { type: 'string', description: 'Nome (ou parte do nome) da pessoa procurada.' },
+            busca: { type: 'string', description: 'Nome, parte do nome ou e-mail da pessoa procurada. Use SEMPRE que o usuário citar alguém pelo nome.' },
             departamento: { type: 'string', description: 'Filtra por departamento (ex: Marketing, Comercial, Financeiro).' },
             cargo: { type: 'string', description: 'Filtra por cargo (ex: Gerente, Analista).' },
             cidade: { type: 'string', description: 'Filtra por cidade.' },
@@ -100,7 +100,14 @@ registerTool({
         const { users } = await loadDirectory();
 
         let rows = users;
-        const busca = norm(args?.busca);
+
+        // O modelo escreve `nome`, `name`, `pessoa`, `q`... e a tool declarava
+        // só `busca`. Sem os apelidos, o filtro não era aplicado e a resposta
+        // era a EMPRESA INTEIRA - foi o que aconteceu ao procurar uma pessoa
+        // só, e o usuário recebeu oito cartões.
+        const termo = args?.busca ?? args?.nome ?? args?.name ?? args?.pessoa
+                   ?? args?.termo ?? args?.q ?? args?.email;
+        const busca = norm(termo);
         const dep = norm(args?.departamento);
         const cargo = norm(args?.cargo);
         const cidade = norm(args?.cidade);
@@ -115,6 +122,19 @@ registerTool({
 
         // Gestores primeiro (mais provável de ser a resposta de "quem é o gestor de X")
         rows = [...rows].sort((a, b) => (b.team.length - a.team.length) || a.username.localeCompare(b.username));
+
+        // ── Procurou alguém e não achou? Diga isso. ──────────────────────
+        // Devolver a lista toda quando a busca não casou é pior que devolver
+        // nada: a pessoa pediu UM nome e recebe um catálogo, sem saber que a
+        // busca falhou.
+        if (busca && !rows.length) {
+            return { result: {
+                total: 0,
+                naoAchou: termo,
+                message: `Ninguém com "${termo}" no nome ou no e-mail. `
+                       + 'Confirme a grafia ou peça por departamento/cidade. NÃO liste outras pessoas.',
+            } };
+        }
 
         const total = rows.length;
         const shown = rows.slice(0, MAX_CARDS);

@@ -136,9 +136,48 @@ export function buildOfficeBlocks() {
  * @param {Array}       enterprises
  * @param {string}      ctx        - 'OFFICE' | 'ACADEMY'
  */
+/**
+ * O relógio, dito ao modelo em toda conversa.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * POR QUE ISTO PRECISOU EXISTIR
+ *
+ * O prompt NUNCA informava a data e a hora. O modelo então chutava - e chutava
+ * em UTC. Medido em 27/08/2026: o usuário pediu uma reunião "agora", eram
+ * 14h19 em Maringá, e a Eme agendou para as 17h19. Três horas à frente, que é
+ * exatamente o fuso.
+ *
+ * Não é problema só de reunião: "hoje", "amanhã", "esta semana" e todo prazo
+ * relativo saem errados pelo mesmo motivo. Por isso o relógio fica aqui, no
+ * prompt de todos, e não numa correção dentro de cada tool.
+ */
+function blocoDeAgora() {
+  const TZ = 'America/Sao_Paulo';
+  const agora = new Date();
+  const data = agora.toLocaleDateString('pt-BR', {
+    weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ,
+  });
+  const hora = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: TZ });
+  // O ISO local é o formato que as tools de agenda esperam receber de volta.
+  //
+  // `sv-SE` porque essa localidade já formata como "AAAA-MM-DD HH:mm:ss" - basta
+  // trocar o espaço por T. O caminho "óbvio" (`new Date(toLocaleString(...))`
+  // seguido de `toISOString()`) SOMA o fuso de volta e devolve UTC: seria
+  // entregar ao modelo exatamente o horário errado que este bloco existe para
+  // impedir. Aconteceu na primeira versão desta função.
+  const iso = agora.toLocaleString('sv-SE', { timeZone: TZ }).replace(' ', 'T');
+
+  return `\n\n## AGORA (use SEMPRE isto como referência de tempo)\n`
+    + `Hoje é ${data}, e são ${hora} no horário de Brasília (${TZ}).\n`
+    + `Em ISO local, este instante é ${iso}.\n`
+    + `**Nunca calcule data ou hora de cabeça, e NUNCA use UTC.** "agora", "hoje", `
+    + `"amanhã", "sexta" e "daqui a 30 minutos" são todos contados a partir da linha acima. `
+    + `Ao passar horário para uma tool, mande ISO local SEM "Z" e sem fuso.\n`;
+}
+
 export function assembleSystemPrompt(brain, user, enterprises = [], ctx = 'OFFICE') {
   if (!brain || !Array.isArray(brain.blocks) || !brain.blocks.length) {
-    return buildSystemPrompt(user, enterprises);
+    return buildSystemPrompt(user, enterprises) + blocoDeAgora();
   }
   const context = String(ctx || 'OFFICE').toUpperCase();
   const ordered = brain.blocks

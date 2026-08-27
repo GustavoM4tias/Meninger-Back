@@ -273,7 +273,30 @@ const academyRetrievalService = {
         let kept = scored.filter((s) => s.score > 0);
         if (onlyWithVideo) kept = kept.filter((s) => s.d.videoUrl);
         const top = kept.length ? kept[0].score : 0;
-        kept = kept.filter((s) => s.score >= top * 0.35).slice(0, k);
+
+        // ── Piso ABSOLUTO: nada casou de verdade ─────────────────────────────
+        //
+        // O corte abaixo é RELATIVO ao primeiro lugar, e sozinho ele não sabe
+        // dizer "não existe": quando tudo pontua mal, 35% de um topo baixo
+        // continua deixando lixo passar. Medido: "assunto que nao existe
+        // zeferino xyz" devolvia SEIS artigos - medição, confissão de dívida,
+        // premiação - porque palavras comuns ("assunto", "existe") casam em
+        // meia base.
+        //
+        // Os números vêm da medição, não de palpite: pergunta de verdade dá
+        // topo 13 a 19 ("reserva" 13,9 · "boleto" 19,4 · "como cadastrar uma
+        // reserva no CV" 13,9); a sem sentido deu 6,2. O piso em 8 separa os
+        // dois com folga dos dois lados.
+        const PISO = 8;
+        if (top < PISO) {
+            const vazio = { results: [], count: 0 };
+            cacheSet(searchCache, cacheKey, { data: vazio }, SEARCH_TTL);
+            return vazio;
+        }
+
+        // 45% e não 35%: a cauda fraca entrava junto e enchia a resposta de
+        // "relacionado" que ninguém pediu.
+        kept = kept.filter((s) => s.score >= top * 0.45).slice(0, k);
 
         const results = kept.map((s) => this._toDigestResult(s.d.r));
         const data = { results, count: results.length };
