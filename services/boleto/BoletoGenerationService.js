@@ -265,12 +265,18 @@ async function attachToCV(idreserva, buffer, settings) {
  * @param {boolean} [params.forcarAgora=false] - Ignora a janela de funcionamento
  *   e processa na hora. Usado por ações deliberadas do admin (retry/regerar) e
  *   pelo `boletoWindowScheduler` ao retomar um registro agendado.
+ * @param {object} [params.enderecoCobranca] - Substitui SÓ o endereço usado na
+ *   emissão (endereco, numero, complemento, bairro, cep, cidade, estado). Nome,
+ *   CPF, e-mail e telefone seguem os do cliente, e o cadastro no CV não é
+ *   alterado. Serve para o caso "CEP SACADO INVALIDO": o portal da Caixa recusa
+ *   endereços que o CV aceitou, e sem isso a venda fica sem ato cobrado. Quem
+ *   usa registra o motivo - a substituição aparece na mensagem da reserva.
  * @param {number} [params.historyId] - Reaproveita um registro de histórico já
  *   existente em vez de criar outro. Usado pelo scheduler da janela: o registro
  *   que nasceu 'queued' vira a emissão de verdade, mantendo UMA linha por
  *   acionamento na tela.
  */
-export async function processBoletoWebhook({ idreserva, idtransacao, manual = false, forcarAgora = false, historyId = null }) {
+export async function processBoletoWebhook({ idreserva, idtransacao, manual = false, forcarAgora = false, historyId = null, enderecoCobranca = null }) {
     console.log(`[BOLETO] Iniciando processamento — reserva ${idreserva}${manual ? ' (geração interna manual — sem envio ao cliente)' : ''}${historyId ? ` (retomando histórico #${historyId})` : ''}`);
 
     const settings = await getSettings();
@@ -329,6 +335,15 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         if (!reservaData) throw new Error(`Reserva ${idreserva} não encontrada no CV.`);
 
         const { titular, condicoes, unidade } = reservaData;
+
+        // Endereço de cobrança alternativo (opcional, ver o parâmetro).
+        // Vale SÓ para a validação e para o formulário do Ecobrança: nome, CPF,
+        // e-mail e telefone continuam sendo os do cliente, e o cadastro no CV
+        // não é tocado. Existe porque o portal da Caixa recusa "CEP SACADO
+        // INVALIDO" em endereços que o CV aceitou, e a venda fica sem ato
+        // cobrado até alguém corrigir o cadastro.
+        const { motivo: motivoEnderecoCobranca, ...camposEnderecoCobranca } = enderecoCobranca || {};
+        const titularCobranca = enderecoCobranca ? { ...titular, ...camposEnderecoCobranca } : titular;
 
         // ── 1.5. Reserva cancelada/distratada? Pula tudo ──────────────────────
         // O CV às vezes redispara o webhook pra reservas já canceladas (visto na
@@ -661,7 +676,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         // formulario do Ecobranca recusa endereco malformado.
         const titularCheck = formaPagamento === 'cartao'
             ? { ok: true, errors: [] }
-            : validateTitular(titular);
+            : validateTitular(titularCobranca);
         if (!titularCheck.valid) {
             console.warn(
                 `[BOLETO] Titular com divergências (${titularCheck.errors.length}): `
@@ -1151,13 +1166,13 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 valor: serie.valor,
                 nome: titular.nome,
                 documento: titular.documento,
-                endereco: titular.endereco,
-                numero: titular.numero,
-                complemento: titular.complemento || '',
-                bairro: titular.bairro,
-                cep: titular.cep,
-                cidade: titular.cidade,
-                estado: titular.estado,
+                endereco: titularCobranca.endereco,
+                numero: titularCobranca.numero,
+                complemento: titularCobranca.complemento || '',
+                bairro: titularCobranca.bairro,
+                cep: titularCobranca.cep,
+                cidade: titularCobranca.cidade,
+                estado: titularCobranca.estado,
                 baixaPreviaNossoNumero,    // opcional: se preenchido, baixa antes de emitir
             });
             boletoBuffer = ecoResult.boletoBuffer;
@@ -1201,6 +1216,21 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             nosso_numero: nossoNumero,
             seu_numero: seuNumero,
         });
+
+        // Endereço trocado só para esta emissão: fica registrado com o de origem,
+        // para auditar depois sem depender da memória de ninguém.
+        if (enderecoCobranca) {
+            await EventLogger.log({
+                historyId: history.id, idreserva,
+                type: 'billing_address_override', severity: 'warning',
+                message: `Emitido com endereço de cobrança alternativo (CEP ${titularCobranca.cep}) - ${motivoEnderecoCobranca || 'CEP do cliente recusado pelo portal'}. Cadastro do cliente no CV inalterado.`,
+                data: {
+                    usado: { endereco: titularCobranca.endereco, numero: titularCobranca.numero, bairro: titularCobranca.bairro, cep: titularCobranca.cep, cidade: titularCobranca.cidade, estado: titularCobranca.estado },
+                    original: { endereco: titular.endereco, numero: titular.numero, bairro: titular.bairro, cep: titular.cep, cidade: titular.cidade, estado: titular.estado },
+                    motivo: motivoEnderecoCobranca || null,
+                },
+            });
+        }
 
         // Eventos: emissão + upload — base da timeline.
         await EventLogger.log({
@@ -1327,6 +1357,14 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             `🏠 Unidade: ${unidade.unidade || unidade.bloco || '-'}`,
             `👤 Titular: ${titular.nome}`,
             `🪪 CPF/CNPJ: ${titular.documento}`,
+            // Quem lê a timeline precisa saber que o boleto não saiu com o
+            // endereço do cliente - e que o cadastro dele continua o mesmo.
+            enderecoCobranca
+                ? `📮 Endereço de cobrança substituído: ${titularCobranca.endereco}, ${titularCobranca.numero} - ${titularCobranca.bairro} - ${titularCobranca.cidade}/${titularCobranca.estado} - CEP ${titularCobranca.cep}`
+                : null,
+            enderecoCobranca
+                ? `   Motivo: ${motivoEnderecoCobranca || 'o portal da Caixa recusou o CEP do cliente'}. O cadastro do cliente no CV NÃO foi alterado.`
+                : null,
             linhaValor,
             `📅 Vencimento: ${formatDate(vencimento)}`,
             `🔢 Nosso Número: ${nossoNumero}`,
