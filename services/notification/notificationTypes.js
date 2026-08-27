@@ -25,6 +25,9 @@ export const NotificationType = {
     SUPPORT_UPDATED:         'support.updated',
     GENERIC:                 'generic',
 
+    // Venda que nao chegou ao ERP (vigia do envio ao Sienge)
+    SIENGE_ENVIO_PENDENTE:   'sienge.envio.pendente',
+
     // Microsoft — agenda
     MEETING_STARTING:        'meeting.starting',
     MEETING_REPORT_READY:    'meeting.report.ready',
@@ -33,6 +36,7 @@ export const NotificationType = {
     ASSISTANT_DAILY:         'assistente.resumo',
     ASSISTANT_DEADLINE:      'assistente.prazo',
     ASSISTANT_STALLED:       'assistente.parado',
+    ASSISTANT_OVERDUE:       'assistente.atrasada',
 
     // Parceria — gente pedindo a gente. Exige RESPOSTA, não só leitura.
     PARTNERSHIP_INVITE:      'parceria.convite',
@@ -197,6 +201,36 @@ export const NOTIFICATION_CATALOG = {
         label: 'Prazo chegando',
         group: 'Assistente',
         description: 'Aviso quando uma tarefa ou um prazo encontrado num e-mail está para vencer.',
+        // WhatsApp reaproveitando o template do Checklist: mesma intenção
+        // (lembrar de entrega que está chegando), já APROVADO na Meta. Um
+        // template próprio do assistente diria "tarefa" em vez de "checklist",
+        // mas dependeria de nova aprovação - e esperar por isso adiaria o aviso
+        // que a pessoa pediu para hoje.
+        //
+        // A 3ª variável é o CONTEXTO (o template chama de "checklist"): aqui vai
+        // "Suas tarefas", que é o que dá sentido à frase.
+        whatsapp: {
+            template: 'checklist_due_soon_v1',
+            language: 'pt_BR',
+            category: 'UTILITY',
+            variables: ['userName', 'tarefa', 'contexto', 'prazo'],
+        },
+        defaults: { inapp: true, email: false, whatsapp: false },
+        emailType: 'generic.notification',
+    },
+    [NotificationType.ASSISTANT_OVERDUE]: {
+        label: 'Tarefa atrasada',
+        group: 'Assistente',
+        description: 'Cobrança quando o prazo de uma tarefa sua já passou.',
+        // Separado de "prazo chegando" por causa do WhatsApp: são dois
+        // templates com textos diferentes, e mandar "está chegando" para algo
+        // que já venceu seria mentira dita por engenharia.
+        whatsapp: {
+            template: 'checklist_overdue_v1',
+            language: 'pt_BR',
+            category: 'UTILITY',
+            variables: ['userName', 'tarefa', 'contexto', 'prazo'],
+        },
         defaults: { inapp: true, email: false, whatsapp: false },
         emailType: 'generic.notification',
     },
@@ -462,6 +496,15 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
+    },
+    [NotificationType.SIENGE_ENVIO_PENDENTE]: {
+        label: 'Venda sem contrato no ERP',
+        group: 'Comercial',
+        description: 'Quando uma venda fica em "Envio Sienge" além do prazo normal da fila sem virar contrato no Sienge - e principalmente quando o ato já foi pago.',
+        emailType: null,
+        whatsapp: null,
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: false,
     },
     [NotificationType.ACADEMY_TRACK_COMPLETED]: {
         label: 'Trilha concluída',
