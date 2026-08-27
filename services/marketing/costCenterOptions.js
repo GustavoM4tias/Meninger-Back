@@ -10,6 +10,7 @@
 
 import db from '../../models/sequelize/index.js';
 import { siengeQuery } from '../../lib/siengeReadDb.js';
+import { getScope, isErpAllowed } from '../permissions/accessScopeService.js';
 
 const CC_CACHE_TTL_MS = Number(process.env.COST_CENTER_OPTIONS_TTL_MS || 10 * 60 * 1000);
 let _ccCache = { at: 0, items: null };
@@ -43,4 +44,20 @@ export async function listCostCenters() {
     }
 }
 
-export default { listCostCenters };
+/**
+ * A mesma lista, mas CORTADA pelo escopo do usuário: só os centros de custo dos
+ * empreendimentos liberados para ele (mesma heurística de sub-CC do Custos).
+ * É esta que alimenta select de tela — a de cima serve para traduzir código em
+ * nome no que ele JÁ tem direito de ver, e por isso não filtra.
+ */
+export async function listCostCentersForUser(user) {
+    const { items, unavailable } = await listCostCenters();
+    const scope = await getScope(user);
+    if (scope.all) return { items, unavailable };
+    return {
+        items: (items || []).filter((c) => isErpAllowed(scope, c.code)),
+        unavailable,
+    };
+}
+
+export default { listCostCenters, listCostCentersForUser };

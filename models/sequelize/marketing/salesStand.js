@@ -17,6 +17,10 @@ export default (sequelize, DataTypes) => {
         construction_value: { type: DataTypes.DECIMAL(15, 2), allowNull: true },
         // Fase futura: % do recorrente (manutenção) lançado como custo de marketing.
         maintenance_percent: { type: DataTypes.DECIMAL(6, 2), allowNull: true },
+        // Itens DESTE stand: [{ label, present, custom }]. Nascem do modelo
+        // (present = true) e a tela marca o que o stand realmente tem; item que
+        // não existe no modelo entra com custom = true.
+        items: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         notes: { type: DataTypes.TEXT, allowNull: true },
         is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
         created_by: { type: DataTypes.INTEGER, allowNull: true },
@@ -30,6 +34,8 @@ export default (sequelize, DataTypes) => {
 
     SalesStand.associate = (db) => {
         SalesStand.belongsTo(db.SalesStandModel, { foreignKey: 'model_id', as: 'model' });
+        SalesStand.hasMany(db.SalesStandImage, { foreignKey: 'stand_id', as: 'images' });
+        SalesStand.hasMany(db.SalesStandExpenseClass, { foreignKey: 'stand_id', as: 'expense_classes' });
     };
 
     return SalesStand;

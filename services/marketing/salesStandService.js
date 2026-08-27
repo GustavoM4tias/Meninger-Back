@@ -3,11 +3,39 @@
 // reais vinculados a 1+ centros de custo do Sienge. O custo realizado vem AO
 // VIVO do backup do Sienge (mesma régua de caixa do payableLiveService), mas
 // cortado pelo plano financeiro 20207* — "DESPESAS COM STAND" e filhas.
-// Ao definir um stand, o total apurado vira snapshot de construção; o gasto
-// posterior é recorrente (manutenção — fase futura: % lançado como marketing).
+// Cada lançamento do Sienge é CONSTRUÇÃO ou RECORRÊNCIA: por padrão ele herda
+// isso da categoria da conta, e a tela reclassifica lançamento a lançamento.
+// Definir o stand congela como custo de construção o que está classificado
+// assim — não existe valor digitado à mão.
+// Quem enxerga o stand é quem tem grant do empreendimento (accessScopeService).
 import db from '../../models/sequelize/index.js';
-import { siengeQuery } from '../../lib/siengeReadDb.js';
-import { listCostCenters } from './costCenterOptions.js';
+import { listCostCenters, listCostCentersForUser } from './costCenterOptions.js';
+import {
+    listStandSpendRows,
+    listStandExpenseItems,
+    aggregateSpend,
+    applyClassification,
+    summarize,
+    detectPatterns,
+    listCategories,
+    createCategory,
+    updateCategory,
+    deleteCategory,
+    listContas,
+    normKind,
+    clearSpendCache,
+    getSettings,
+    updateSettings,
+    listDepartments,
+    listDepartmentDivergence,
+    listDivergentBills,
+    checkBillsDepartmentLive,
+    getDataFreshness,
+    seedSalesStandExpenseCategories,
+    seedSalesStandSettings,
+} from './salesStandExpenseService.js';
+import { getScope, isErpAllowed } from '../permissions/accessScopeService.js';
+import supabase from '../../config/supabaseClient.js';
 
 const plain = (r) => (r?.get ? r.get({ plain: true }) : r);
 const normIds = (arr) => (Array.isArray(arr) ? [...new Set(arr.map(Number).filter(Boolean))] : []);
@@ -19,108 +47,24 @@ function httpError(message, status, code = null) {
     return e;
 }
 
-// Plano financeiro raiz do stand no Sienge (2.02.07 — DESPESAS COM STAND).
-const STAND_CONTA_PREFIX = process.env.SALES_STAND_CONTA_PREFIX || '20207';
-
-export { listCostCenters };
-
-// ── Gasto ao vivo no Sienge (cache TTL em memória) ────────────────────────────
-
-const SPEND_TTL_MS = Number(process.env.SALES_STAND_SPEND_TTL_MS || 5 * 60 * 1000);
-let _spendCache = { at: 0, key: '', rows: null };
-
-// Linhas { ym, costCenterId, contaCode, contaName, amount } com rateio
-// proporcional: peparticipacao da apropriação financeira aplicada sobre o
-// líquido desembolsado (baixas de caixa 1/10, sem estorno, mesma régua do
-// payableLiveService; documento PCT bloqueado).
-export async function listStandSpendRows(costCenterIds) {
-    const views = normIds(costCenterIds);
-    if (!views.length) return [];
-    const key = views.slice().sort((a, b) => a - b).join(',');
-    if (_spendCache.rows && _spendCache.key === key && Date.now() - _spendCache.at < SPEND_TTL_MS) {
-        return _spendCache.rows;
-    }
-    const sql = `
-        WITH cc AS (
-            SELECT cdempreend, cdempreendview
-            FROM ecadempreend
-            WHERE cdempreendview = ANY($1::int[])
-        ),
-        aprop AS (
-            SELECT af.nutitulo, TRIM(af.cdconta) AS cdconta,
-                   cc.cdempreendview AS cost_center_id,
-                   COALESCE(af.peparticipacao, 100) AS pct
-            FROM ecpgapropfin af
-            JOIN cc ON cc.cdempreend = af.cdcentrocusto
-            WHERE TRIM(af.cdconta) LIKE $2 || '%'
-        ),
-        pagamentos AS (
-            SELECT b.nutitulo,
-                   to_char(date_trunc('month', b.dtpagto), 'YYYY-MM') AS ym,
-                   SUM(b.vlpagto + COALESCE(b.vljuros,0) + COALESCE(b.vlmulta,0)
-                       + COALESCE(b.vlcormonetaria,0) - COALESCE(b.vldesconto,0)) AS valor_pago
-            FROM ecpgbaixa b
-            WHERE b.nutitulo IN (SELECT DISTINCT nutitulo FROM aprop)
-              AND b.cdtipobaixa IN (1, 10)
-              AND b.nuseqestorno IS NULL
-            GROUP BY b.nutitulo, date_trunc('month', b.dtpagto)
-        )
-        SELECT pg.ym,
-               a.cost_center_id,
-               a.cdconta AS conta_code,
-               MAX(pf.nmconta) AS conta_name,
-               SUM(pg.valor_pago * a.pct / 100.0) AS amount
-        FROM pagamentos pg
-        JOIN aprop a ON a.nutitulo = pg.nutitulo
-        JOIN ecpgtitulo t ON t.nutitulo = pg.nutitulo
-        LEFT JOIN ecadplanofin pf ON TRIM(pf.cdconta) = a.cdconta
-        WHERE TRIM(t.cddocumento) NOT IN ('PCT')
-        GROUP BY 1, 2, 3
-        ORDER BY 1, 2, 3
-    `;
-    const { rows } = await siengeQuery(sql, [views, STAND_CONTA_PREFIX]);
-    const result = rows.map((r) => ({
-        ym: r.ym,
-        costCenterId: Number(r.cost_center_id),
-        contaCode: r.conta_code,
-        contaName: r.conta_name || null,
-        amount: Number(r.amount) || 0,
-    }));
-    _spendCache = { at: Date.now(), key, rows: result };
-    return result;
-}
-
-export function clearSpendCache() {
-    _spendCache = { at: 0, key: '', rows: null };
-}
-
-// Agrega as linhas de um conjunto de CCs em { total, byMonth, byConta, byCostCenter }.
-function aggregateSpend(rows, ccIds) {
-    const set = new Set(normIds(ccIds));
-    const byMonth = new Map();
-    const byConta = new Map();
-    const byCc = new Map();
-    let total = 0;
-    for (const r of rows) {
-        if (!set.has(r.costCenterId)) continue;
-        total += r.amount;
-        byMonth.set(r.ym, (byMonth.get(r.ym) || 0) + r.amount);
-        const conta = byConta.get(r.contaCode) || { code: r.contaCode, name: r.contaName, amount: 0 };
-        conta.amount += r.amount;
-        if (!conta.name && r.contaName) conta.name = r.contaName;
-        byConta.set(r.contaCode, conta);
-        byCc.set(r.costCenterId, (byCc.get(r.costCenterId) || 0) + r.amount);
-    }
-    const round = (v) => Math.round(v * 100) / 100;
-    return {
-        total: round(total),
-        byMonth: [...byMonth.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-            .map(([ym, amount]) => ({ ym, amount: round(amount) })),
-        byConta: [...byConta.values()].sort((a, b) => String(a.code).localeCompare(String(b.code)))
-            .map((c) => ({ ...c, amount: round(c.amount) })),
-        byCostCenter: [...byCc.entries()].map(([costCenterId, amount]) => ({ costCenterId, amount: round(amount) })),
-    };
-}
+// Todo o gasto (leitura do Sienge, classificação e padrões) mora no
+// salesStandExpenseService; aqui fica o cadastro do stand em si.
+export {
+    listStandSpendRows,
+    listStandExpenseItems,
+    clearSpendCache,
+    listCategories,
+    createCategory,
+    updateCategory,
+    deleteCategory,
+    listContas,
+    getSettings,
+    updateSettings,
+    listDepartments,
+    getDataFreshness,
+    seedSalesStandExpenseCategories,
+    seedSalesStandSettings,
+};
 
 // ── Stands modelo (categorias) ────────────────────────────────────────────────
 
@@ -194,47 +138,216 @@ async function ccNameMap() {
     return new Map((items || []).map((c) => [Number(c.code), c.name]));
 }
 
-// Lista stands com o gasto ao vivo agregado. Sienge fora do ar não derruba a
-// tela: devolve spend zerado com spend_unavailable = true.
-export async function listStands() {
-    const rows = await db.SalesStand.findAll({
-        where: { is_active: true },
-        include: [{ model: db.SalesStandModel, as: 'model', attributes: ['id', 'name', 'avg_value_min', 'avg_value_max', 'avg_area_min', 'avg_area_max', 'items'] }],
-        order: [['name', 'ASC']],
-    });
-    const stands = rows.map(plain);
-    const allCcIds = normIds(stands.flatMap((s) => s.cost_center_ids || []));
+const MODEL_ATTRS = ['id', 'name', 'description', 'avg_value_min', 'avg_value_max', 'avg_area_min', 'avg_area_max', 'items'];
+const withModel = () => [{ model: db.SalesStandModel, as: 'model', attributes: MODEL_ATTRS }];
 
-    let spendRows = [];
-    let unavailable = false;
-    let names = new Map();
-    try {
-        [spendRows, names] = await Promise.all([listStandSpendRows(allCcIds), ccNameMap()]);
-    } catch (err) {
-        console.warn('[salesStand.listStands] Sienge indisponível:', err?.message || err);
-        unavailable = true;
-    }
-
-    return {
-        spend_unavailable: unavailable || undefined,
-        items: stands.map((s) => {
-            const spend = aggregateSpend(spendRows, s.cost_center_ids);
-            const construction = s.status === 'defined' ? Number(s.construction_value) || 0 : null;
-            return {
-                ...s,
-                cost_center_names: (s.cost_center_ids || []).map((id) => names.get(Number(id)) || `CC ${id}`),
-                spend_total: spend.total,
-                // Recorrente após a definição = manutenção (nunca negativo).
-                maintenance_value: construction !== null ? Math.max(0, Math.round((spend.total - construction) * 100) / 100) : null,
-            };
-        }),
+// ── Escopo de visualização ──────────────────────────────────────
+// TUDO OU NADA: o stand é o conjunto dos centros de custo dele, e o número da
+// tela só quer dizer alguma coisa somando todos. Quem não tem alçada em TODOS
+// não vê o stand — nem na lista, nem pela URL.
+//
+// A alternativa (mostrar só a parte que a pessoa vê) foi descartada de
+// propósito: metade do custo de um stand não é informação útil, é um número
+// que parece o custo do stand e não é.
+//
+// Régua única do accessScopeService (com a heurística de sub-CC do Custos: quem
+// tem 80001 enxerga 80002). Admin vê tudo.
+async function standScope(user) {
+    const scope = await getScope(user);
+    const canSee = (stand) => {
+        const ccs = normIds(stand?.cost_center_ids);
+        if (!ccs.length) return false;
+        return scope.all || ccs.every((cc) => isErpAllowed(scope, cc));
     };
+    return { scope, canSee };
 }
 
-// Detalhe do gasto de um stand (modal): por mês, por conta e por CC.
-export async function getStandSpend({ id }) {
-    const row = await db.SalesStand.findByPk(Number(id));
-    if (!row) throw httpError('Stand não encontrado.', 404);
+/** Carrega o stand conferindo o escopo. 404 se não existe, 403 se não é dele. */
+async function loadStandForUser(id, user) {
+    const row = await db.SalesStand.findByPk(Number(id), { include: withModel() });
+    if (!row || row.is_active === false) throw httpError('Stand não encontrado.', 404);
+    const { canSee } = await standScope(user);
+    if (!canSee(plain(row))) {
+        throw httpError(
+            'Este stand tem centro de custo fora da sua alçada. O acesso ao stand é por inteiro: sem todos os '
+            + 'centros de custo, ele não abre.',
+            403, 'OUT_OF_SCOPE',
+        );
+    }
+    return row;
+}
+
+// ── Itens do stand ───────────────────────────────────────────────────────────
+
+/**
+ * Itens DESTE stand: os do modelo (com o que a tela marcou como "tem" ou "não
+ * tem") mais os itens próprios. Item que o modelo ganhou depois entra como
+ * presente; item que saiu do modelo continua listado se alguém já respondeu
+ * por ele, com from_model = false.
+ */
+function mergeStandItems(stand, model) {
+    const saved = Array.isArray(stand.items) ? stand.items : [];
+    const savedByLabel = new Map(saved.map((i) => [String(i?.label || '').trim(), i]));
+    const modelItems = Array.isArray(model?.items) ? model.items : [];
+    const out = [];
+    const seen = new Set();
+
+    for (const label of modelItems) {
+        const key = String(label || '').trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        const s = savedByLabel.get(key);
+        out.push({ label: key, present: s ? s.present !== false : true, custom: false, from_model: true });
+    }
+    for (const item of saved) {
+        const key = String(item?.label || '').trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ label: key, present: item.present !== false, custom: item.custom !== false, from_model: false });
+    }
+    return out;
+}
+
+export async function updateStandItems({ id, payload = {}, userId, user }) {
+    const row = await loadStandForUser(id, user);
+    const list = Array.isArray(payload.items) ? payload.items : [];
+    const seen = new Set();
+    row.items = list
+        .map((i) => ({
+            label: String(i?.label || '').trim(),
+            present: i?.present !== false,
+            custom: !!i?.custom,
+        }))
+        .filter((i) => {
+            if (!i.label || seen.has(i.label)) return false;
+            seen.add(i.label);
+            return true;
+        });
+    row.updated_by = userId || null;
+    await row.save();
+    const stand = plain(row);
+    return { items: mergeStandItems(stand, stand.model) };
+}
+
+// ── Gasto classificado ───────────────────────────────────────────────────────
+
+/**
+ * Lançamentos do stand já com tipo (construção × recorrência) e categoria
+ * resolvidos, mais o resumo.
+ */
+async function classifiedSpend(stand, { categories, classesByStand } = {}) {
+    const cats = categories && categories.length ? categories : await listCategories();
+    const overrides = classesByStand
+        ? (classesByStand.get(Number(stand.id)) || [])
+        : (await db.SalesStandExpenseClass.findAll({ where: { stand_id: stand.id }, raw: true }));
+    const alvo = normIds(stand.cost_center_ids);
+    const raw = await listStandExpenseItems(alvo);
+    const ccSet = new Set(alvo);
+    const items = applyClassification(raw.filter((i) => ccSet.has(i.costCenterId)), cats, overrides);
+    return { items, summary: summarize(items), categories: cats };
+}
+
+const currentYm = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+/**
+ * Quanto o stand custa por mês para ficar de pé: média da recorrência nos
+ * últimos meses FECHADOS (o mês corrente entra pela metade no backup e puxaria
+ * a média para baixo).
+ */
+function recurringMonthly(summary, months = 3) {
+    const now = currentYm();
+    const fechados = (summary.byMonth || []).filter((m) => m.ym < now && m.recorrencia > 0);
+    if (!fechados.length) return 0;
+    const ult = fechados.slice(-months);
+    return Math.round((ult.reduce((s, m) => s + m.recorrencia, 0) / ult.length) * 100) / 100;
+}
+
+// Lista stands com o gasto ao vivo agregado. Sienge fora do ar não derruba a
+// tela: devolve spend zerado com spend_unavailable = true.
+export async function listStands({ user } = {}) {
+    const rows = await db.SalesStand.findAll({
+        where: { is_active: true },
+        include: withModel(),
+        order: [['name', 'ASC']],
+    });
+    const { canSee } = await standScope(user);
+    const stands = rows.map(plain).filter(canSee);
+
+    let unavailable = false;
+    let names = new Map();
+    let categories = [];
+    let classesByStand = new Map();
+    try {
+        const classes = stands.length
+            ? await db.SalesStandExpenseClass.findAll({ where: { stand_id: stands.map((s) => s.id) }, raw: true })
+            : [];
+        classesByStand = classes.reduce((map, c) => {
+            const list = map.get(Number(c.stand_id)) || [];
+            list.push(c);
+            map.set(Number(c.stand_id), list);
+            return map;
+        }, new Map());
+        [names, categories] = await Promise.all([ccNameMap(), listCategories()]);
+    } catch (err) {
+        console.warn('[salesStand.listStands] meta indisponível:', err?.message || err);
+    }
+
+    // Capa dos cartões: a primeira foto de cada stand, numa consulta só.
+    const capas = new Map();
+    const fotosPorStand = new Map();
+    if (stands.length) {
+        const fotos = await db.SalesStandImage.findAll({
+            where: { stand_id: stands.map((s) => s.id) },
+            order: [['sort_order', 'ASC'], ['id', 'ASC']],
+            raw: true,
+        });
+        for (const f of fotos) {
+            const sid = Number(f.stand_id);
+            if (!capas.has(sid)) capas.set(sid, f.url);
+            fotosPorStand.set(sid, (fotosPorStand.get(sid) || 0) + 1);
+        }
+    }
+
+    const items = [];
+    for (const s of stands) {
+        let summary = { totals: { construcao: 0, recorrencia: 0, esporadica: 0, sem_classificacao: 0, total: 0 }, byMonth: [] };
+        try {
+            ({ summary } = await classifiedSpend(s, { categories, classesByStand }));
+        } catch (err) {
+            console.warn('[salesStand.listStands] Sienge indisponível:', err?.message || err);
+            unavailable = true;
+        }
+        const snapshot = s.status === 'defined' ? Number(s.construction_value) || 0 : null;
+        items.push({
+            ...s,
+            items: mergeStandItems(s, s.model),
+            cost_center_names: (s.cost_center_ids || []).map((id) => names.get(Number(id)) || `CC ${id}`),
+            spend_total: summary.totals.total,
+            // Construção: o congelado quando o stand está definido, o apurado
+            // enquanto ele está em rascunho.
+            construction_value: snapshot !== null ? snapshot : summary.totals.construcao,
+            construction_live: summary.totals.construcao,
+            // Recorrência é a soma do que está classificado como tal — não é
+            // mais "tudo que entrou depois da definição".
+            maintenance_value: summary.totals.recorrencia,
+            recurring_monthly: recurringMonthly(summary),
+            sporadic_value: summary.totals.esporadica,
+            unclassified_value: summary.totals.sem_classificacao,
+            cover_url: capas.get(Number(s.id)) || null,
+            images_count: fotosPorStand.get(Number(s.id)) || 0,
+            month_series: (summary.byMonth || []).map((m) => m.total),
+        });
+    }
+
+    return { spend_unavailable: unavailable || undefined, items };
+}
+
+// Detalhe do gasto de um stand: por mês, por conta e por CC (visão agregada).
+export async function getStandSpend({ id, user }) {
+    const row = await loadStandForUser(id, user);
     const stand = plain(row);
     const [rows, names] = await Promise.all([
         listStandSpendRows(stand.cost_center_ids),
@@ -250,6 +363,195 @@ export async function getStandSpend({ id }) {
     };
 }
 
+/** A tela de detalhe inteira: stand, itens, fotos, lançamentos, resumo e padrões. */
+export async function getStandDetail({ id, user }) {
+    const row = await loadStandForUser(id, user);
+    const stand = plain(row);
+
+    let names = new Map();
+    let spend = { items: [], summary: summarize([]), categories: [] };
+    let unavailable = false;
+    try {
+        names = await ccNameMap().catch(() => new Map());
+        spend = await classifiedSpend(stand);
+    } catch (err) {
+        console.warn('[salesStand.getStandDetail] Sienge indisponível:', err?.message || err);
+        unavailable = true;
+        spend.categories = await listCategories().catch(() => []);
+    }
+
+    const images = await db.SalesStandImage.findAll({
+        where: { stand_id: stand.id },
+        order: [['sort_order', 'ASC'], ['id', 'ASC']],
+    });
+    const snapshot = stand.status === 'defined' ? Number(stand.construction_value) || 0 : null;
+    const porCc = new Map((spend.summary.byCostCenter || []).map((c) => [Number(c.costCenterId), c.amount]));
+
+    return {
+        spend_unavailable: unavailable || undefined,
+        stand: {
+            ...stand,
+            items: mergeStandItems(stand, stand.model),
+            cost_centers: (stand.cost_center_ids || []).map((cc) => ({
+                code: Number(cc),
+                name: names.get(Number(cc)) || `CC ${cc}`,
+                amount: porCc.get(Number(cc)) || 0,
+            })),
+            cost_center_names: (stand.cost_center_ids || []).map((cc) => names.get(Number(cc)) || `CC ${cc}`),
+            spend_total: spend.summary.totals.total,
+            construction_value: snapshot !== null ? snapshot : spend.summary.totals.construcao,
+            construction_live: spend.summary.totals.construcao,
+            maintenance_value: spend.summary.totals.recorrencia,
+            recurring_monthly: recurringMonthly(spend.summary),
+            sporadic_value: spend.summary.totals.esporadica,
+            unclassified_value: spend.summary.totals.sem_classificacao,
+            images: images.map(plain),
+        },
+        expenses: spend.items,
+        summary: spend.summary,
+        patterns: detectPatterns(spend.items),
+        categories: spend.categories,
+    };
+}
+
+/** Classifica lançamentos em lote: marca como construção ou recorrência e/ou troca a categoria. */
+export async function classifyExpenses({ id, payload = {}, userId, user }) {
+    const row = await loadStandForUser(id, user);
+    const keys = [...new Set((Array.isArray(payload.keys) ? payload.keys : [])
+        .map((k) => String(k || '').trim()).filter(Boolean))];
+    if (!keys.length) throw httpError('Selecione ao menos um lançamento.', 400);
+
+    // reset = o lançamento volta a herdar o tipo da categoria da conta.
+    if (payload.reset) {
+        await db.SalesStandExpenseClass.destroy({ where: { stand_id: row.id, expense_key: keys } });
+        return { ok: true, cleared: keys.length };
+    }
+
+    const kind = normKind(payload.kind);
+    let categoryId = null;
+    if (payload.category_id) {
+        const cat = await db.SalesStandExpenseCategory.findByPk(Number(payload.category_id));
+        if (!cat) throw httpError('Categoria não encontrada.', 400);
+        categoryId = cat.id;
+    }
+    if (!kind && !categoryId) {
+        throw httpError('Escolha o tipo (construção, recorrência ou esporádica) ou uma categoria.', 400);
+    }
+
+    const existentes = await db.SalesStandExpenseClass.findAll({
+        where: { stand_id: row.id, expense_key: keys },
+    });
+    const byKey = new Map(existentes.map((e) => [e.expense_key, e]));
+    const categoria = categoryId ? await db.SalesStandExpenseCategory.findByPk(categoryId) : null;
+
+    for (const key of keys) {
+        const atual = byKey.get(key);
+        // Categoria escolhida sem tipo explícito: o tipo vem dela.
+        const novoKind = kind || (categoria ? categoria.kind : atual?.kind) || 'recorrencia';
+        if (atual) {
+            atual.kind = novoKind;
+            if (payload.category_id !== undefined) atual.category_id = categoryId;
+            atual.classified_by = userId || null;
+            await atual.save();
+        } else {
+            await db.SalesStandExpenseClass.create({
+                stand_id: row.id,
+                expense_key: key,
+                kind: novoKind,
+                category_id: categoryId,
+                classified_by: userId || null,
+            });
+        }
+    }
+    return { ok: true, classified: keys.length };
+}
+
+/**
+ * Conferência do departamento nos centros de custo dos stands que ESTA pessoa
+ * enxerga. É o instrumento para validar a correção dos títulos: mostra o que
+ * está certo, o que está no departamento sem ser conta de stand e o que é conta
+ * de stand sem o departamento.
+ */
+export async function getDepartmentAudit({ user }) {
+    const rows = await db.SalesStand.findAll({ where: { is_active: true }, raw: true });
+    const { canSee } = await standScope(user);
+    const stands = rows.filter(canSee);
+    const ccs = normIds(stands.flatMap((s) => s.cost_center_ids || []));
+
+    const [audit, freshness, names, cfg] = await Promise.all([
+        ccs.length ? listDepartmentDivergence(ccs) : Promise.resolve({ totals: {}, rows: [] }),
+        getDataFreshness().catch(() => ({ lastChange: null })),
+        ccNameMap().catch(() => new Map()),
+        getSettings(),
+    ]);
+
+    const porStand = new Map(stands.map((s) => [s.id, {
+        id: s.id, name: s.name, cost_center_ids: normIds(s.cost_center_ids),
+    }]));
+    const standDoCc = new Map();
+    for (const st of porStand.values()) {
+        for (const cc of st.cost_center_ids) if (!standDoCc.has(cc)) standDoCc.set(cc, st.name);
+    }
+
+    return {
+        settings: cfg,
+        freshness,
+        totals: audit.totals,
+        rows: audit.rows.map((r) => ({
+            ...r,
+            costCenterName: names.get(r.costCenterId) || r.costCenterName || `CC ${r.costCenterId}`,
+            standName: standDoCc.get(r.costCenterId) || null,
+        })),
+    };
+}
+
+/**
+ * Confere AO VIVO, na API do Sienge, os títulos que o espelho aponta como
+ * divergentes. É o "já corrigiram?" sem esperar a carga do dia seguinte.
+ * Nada é escrito no ERP: só leitura, um GET por título.
+ */
+export async function revalidateDepartmentAudit({ user, limit = 40, offset = 0 }) {
+    const rows = await db.SalesStand.findAll({ where: { is_active: true }, raw: true });
+    const { canSee } = await standScope(user);
+    const stands = rows.filter(canSee);
+    const ccs = normIds(stands.flatMap((s) => s.cost_center_ids || []));
+    if (!ccs.length) return { checked: [], total: 0, limit, offset: 0, resolved: 0, pending: 0, errors: 0 };
+
+    // Teto baixo de proposito: a API do Sienge recusa acima de ~100 chamadas por
+    // minuto, e uma conferencia que demora tres minutos e uma conferencia que
+    // ninguem roda. A tela oferece continuar do ponto em que parou.
+    const teto = Math.min(Math.max(Number(limit) || 40, 1), 150);
+    const ini = Math.max(0, Number(offset) || 0);
+    const { bills, total } = await listDivergentBills(ccs, { limit: teto, offset: ini });
+    const checked = await checkBillsDepartmentLive(bills);
+
+    const names = await ccNameMap().catch(() => new Map());
+    const standDoCc = new Map();
+    for (const st of stands) {
+        for (const cc of normIds(st.cost_center_ids)) if (!standDoCc.has(cc)) standDoCc.set(cc, st.name);
+    }
+
+    return {
+        // O teto é dito em voz alta: "conferi 150 de 260" não pode virar
+        // "conferi tudo" por omissão.
+        total,
+        limit: teto,
+        offset: ini,
+        // Quanto ficou de fora e dito em voz alta: "conferi 40 de 134" nao pode
+        // virar "conferi tudo" por omissao.
+        remaining: Math.max(0, total - (ini + bills.length)),
+        truncated: total > ini + bills.length,
+        resolved: checked.filter((c) => c.resolved === true).length,
+        pending: checked.filter((c) => c.resolved === false).length,
+        errors: checked.filter((c) => c.error).length,
+        checked: checked.map((c) => ({
+            ...c,
+            costCenterName: names.get(c.costCenterId) || `CC ${c.costCenterId}`,
+            standName: standDoCc.get(c.costCenterId) || null,
+        })),
+    };
+}
+
 function validateStandPayload(payload) {
     const name = (payload.name || '').trim();
     if (!name) throw httpError('Nome do stand é obrigatório.', 400);
@@ -258,8 +560,19 @@ function validateStandPayload(payload) {
     return { name, ccIds };
 }
 
-export async function createStand({ payload = {}, userId }) {
+// Ninguém cadastra (nem move) um stand para um empreendimento que não enxerga.
+async function assertCcInScope(ccIds, user) {
+    const { scope } = await standScope(user);
+    if (scope.all) return;
+    const fora = ccIds.filter((cc) => !isErpAllowed(scope, cc));
+    if (fora.length) {
+        throw httpError(`Centro de custo fora da sua alçada: ${fora.join(', ')}.`, 403, 'OUT_OF_SCOPE');
+    }
+}
+
+export async function createStand({ payload = {}, userId, user }) {
     const { name, ccIds } = validateStandPayload(payload);
+    await assertCcInScope(ccIds, user);
     if (payload.model_id) {
         const model = await db.SalesStandModel.findByPk(Number(payload.model_id));
         if (!model) throw httpError('Modelo informado não existe.', 400);
@@ -275,9 +588,24 @@ export async function createStand({ payload = {}, userId }) {
     return plain(row);
 }
 
-export async function updateStand({ id, payload = {}, userId }) {
-    const row = await db.SalesStand.findByPk(Number(id));
-    if (!row) throw httpError('Stand não encontrado.', 404);
+export async function updateStand({ id, payload = {}, userId, user }) {
+    const row = await loadStandForUser(id, user);
+
+    // Modelo e centros de custo mudam o que o stand É e de onde vem o dinheiro
+    // dele. Depois de definido, o custo de construção está congelado sobre
+    // aquele conjunto de centros de custo — trocar sem reabrir deixaria o
+    // número congelado falando de um stand que não existe mais.
+    const trocaModelo = 'model_id' in payload
+        && Number(payload.model_id || 0) !== Number(row.model_id || 0);
+    const trocaCcs = 'cost_center_ids' in payload
+        && normIds(payload.cost_center_ids).sort().join(',') !== normIds(row.cost_center_ids).sort().join(',');
+    if (row.status === 'defined' && (trocaModelo || trocaCcs)) {
+        throw httpError(
+            'Este stand está definido: reabra para trocar o modelo ou os centros de custo.',
+            409, 'STAND_DEFINED',
+        );
+    }
+
     if ('name' in payload) row.name = (payload.name || '').trim() || row.name;
     if ('model_id' in payload) {
         if (payload.model_id) {
@@ -291,6 +619,7 @@ export async function updateStand({ id, payload = {}, userId }) {
     if ('cost_center_ids' in payload) {
         const ccIds = normIds(payload.cost_center_ids);
         if (!ccIds.length) throw httpError('Vincule ao menos um centro de custo.', 400);
+        await assertCcInScope(ccIds, user);
         row.cost_center_ids = ccIds;
     }
     if ('notes' in payload) row.notes = payload.notes?.trim() || null;
@@ -303,45 +632,33 @@ export async function updateStand({ id, payload = {}, userId }) {
     return plain(row);
 }
 
-export async function deleteStand({ id }) {
-    const row = await db.SalesStand.findByPk(Number(id));
-    if (!row) throw httpError('Stand não encontrado.', 404);
+export async function deleteStand({ id, user }) {
+    const row = await loadStandForUser(id, user);
     // Soft delete — preserva o histórico de definição.
     row.is_active = false;
     await row.save();
     return { ok: true };
 }
 
-// Define o stand: congela o custo de construção (soma atual do 20207* nos CCs
-// vinculados, ou valor manual informado). O que entrar depois é manutenção.
-export async function defineStand({ id, payload = {}, userId }) {
-    const row = await db.SalesStand.findByPk(Number(id));
-    if (!row) throw httpError('Stand não encontrado.', 404);
+// Define o stand: congela como custo de construção o que ESTÁ CLASSIFICADO
+// como construção. Não existe valor manual — o número é sempre a soma dos
+// lançamentos, e para mudá-lo se reclassifica o lançamento na tela.
+export async function defineStand({ id, userId, user }) {
+    const row = await loadStandForUser(id, user);
     if (row.status === 'defined') throw httpError('Este stand já está definido.', 409, 'ALREADY_DEFINED');
 
-    let construction = null;
-    if (payload.construction_value !== undefined && payload.construction_value !== null && payload.construction_value !== '') {
-        construction = Number(payload.construction_value);
-        if (!Number.isFinite(construction) || construction < 0) {
-            throw httpError('Valor de construção inválido.', 400);
-        }
-    } else {
-        const rows = await listStandSpendRows(row.cost_center_ids);
-        construction = aggregateSpend(rows, row.cost_center_ids).total;
-    }
-
+    const { summary } = await classifiedSpend(plain(row));
     row.status = 'defined';
     row.defined_at = new Date();
-    row.construction_value = construction;
+    row.construction_value = summary.totals.construcao;
     row.updated_by = userId || null;
     await row.save();
     return plain(row);
 }
 
 // Reabre o stand (volta a rascunho e limpa o snapshot).
-export async function undefineStand({ id, userId }) {
-    const row = await db.SalesStand.findByPk(Number(id));
-    if (!row) throw httpError('Stand não encontrado.', 404);
+export async function undefineStand({ id, userId, user }) {
+    const row = await loadStandForUser(id, user);
     if (row.status !== 'defined') throw httpError('Este stand não está definido.', 409);
     row.status = 'draft';
     row.defined_at = null;
@@ -350,6 +667,74 @@ export async function undefineStand({ id, userId }) {
     await row.save();
     return plain(row);
 }
+
+// ── Fotos do stand ───────────────────────────────────────────────────────────
+
+const IMAGE_BUCKET = process.env.SUPABASE_BUCKET || 'Office Bucket';
+const MAX_IMAGES = Number(process.env.SALES_STAND_MAX_IMAGES || 24);
+
+export async function listStandImages({ id, user }) {
+    const row = await loadStandForUser(id, user);
+    const rows = await db.SalesStandImage.findAll({
+        where: { stand_id: row.id },
+        order: [['sort_order', 'ASC'], ['id', 'ASC']],
+    });
+    return { items: rows.map(plain) };
+}
+
+export async function addStandImage({ id, file, caption, userId, user }) {
+    const row = await loadStandForUser(id, user);
+    if (!file?.buffer?.length) throw httpError('Nenhuma imagem recebida.', 400);
+
+    const total = await db.SalesStandImage.count({ where: { stand_id: row.id } });
+    if (total >= MAX_IMAGES) {
+        throw httpError(`Este stand já tem ${MAX_IMAGES} fotos. Apague alguma antes de subir outra.`, 409);
+    }
+
+    const ext = (file.originalname?.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+    const path = `office/stand-vendas/${row.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error } = await supabase.storage
+        .from(IMAGE_BUCKET)
+        .upload(path, file.buffer, { contentType: file.mimetype || 'image/jpeg', upsert: false });
+    if (error) throw httpError(`Falha ao subir a foto: ${error.message}`, 502);
+
+    const { data } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(path);
+    const image = await db.SalesStandImage.create({
+        stand_id: row.id,
+        url: data?.publicUrl || null,
+        path,
+        caption: (caption || '').trim().slice(0, 200) || null,
+        content_type: file.mimetype || null,
+        size_bytes: file.size || file.buffer.length,
+        sort_order: total,
+        uploaded_by: userId || null,
+    });
+    return plain(image);
+}
+
+export async function updateStandImage({ id, imageId, payload = {}, user }) {
+    const row = await loadStandForUser(id, user);
+    const image = await db.SalesStandImage.findOne({ where: { id: Number(imageId), stand_id: row.id } });
+    if (!image) throw httpError('Foto não encontrada.', 404);
+    if ('caption' in payload) image.caption = (payload.caption || '').trim().slice(0, 200) || null;
+    if ('sort_order' in payload) image.sort_order = Number(payload.sort_order) || 0;
+    await image.save();
+    return plain(image);
+}
+
+export async function deleteStandImage({ id, imageId, user }) {
+    const row = await loadStandForUser(id, user);
+    const image = await db.SalesStandImage.findOne({ where: { id: Number(imageId), stand_id: row.id } });
+    if (!image) throw httpError('Foto não encontrada.', 404);
+    if (image.path) {
+        const { error } = await supabase.storage.from(IMAGE_BUCKET).remove([image.path]);
+        // Objeto órfão no bucket não pode travar a tela; o registro sai de qualquer jeito.
+        if (error) console.warn('[salesStand.deleteStandImage] bucket:', error.message);
+    }
+    await image.destroy();
+    return { ok: true };
+}
+
 
 // ── Seed dos 4 modelos padrão (Standard/Medium/Plus/Premium) ─────────────────
 // Faixas propositalmente ambíguas (de/até; máx 0 = aberta "X+").
@@ -480,17 +865,37 @@ export async function seedSalesStandModels() {
 
 export default {
     listCostCenters,
+    listCostCentersForUser,
+    listContas,
+    listDepartments,
+    getSettings,
+    updateSettings,
     listModels,
     createModel,
     updateModel,
     deleteModel,
+    listCategories,
+    createCategory,
+    updateCategory,
+    deleteCategory,
     listStands,
     getStandSpend,
+    getStandDetail,
+    getDepartmentAudit,
+    revalidateDepartmentAudit,
+    classifyExpenses,
+    updateStandItems,
     createStand,
     updateStand,
     deleteStand,
     defineStand,
     undefineStand,
+    listStandImages,
+    addStandImage,
+    updateStandImage,
+    deleteStandImage,
     clearSpendCache,
     seedSalesStandModels,
+    seedSalesStandExpenseCategories,
+    seedSalesStandSettings,
 };

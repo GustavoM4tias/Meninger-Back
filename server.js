@@ -75,7 +75,7 @@ import checklistRoutes from './routes/checklistRoutes.js';
 import organogramRoutes from './routes/organogramRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
-import { seedSalesStandModels } from './services/marketing/salesStandService.js';
+import { seedSalesStandModels, seedSalesStandExpenseCategories, seedSalesStandSettings } from './services/marketing/salesStandService.js';
 import seedChecklist from './services/checklist/seedChecklist.js';
 import contractSiengeScheduler from './scheduler/contractSiengeScheduler.js';
 import salesClosingScheduler from './scheduler/salesClosingScheduler.js';
@@ -488,6 +488,10 @@ async function syncModelsAndPatches(fingerprint) {
     // Stand de Vendas (módulo novo em evolução)
     ['SalesStandModel', db.SalesStandModel],
     ['SalesStand', db.SalesStand],
+    ['SalesStandExpenseCategory', db.SalesStandExpenseCategory],
+    ['SalesStandExpenseClass', db.SalesStandExpenseClass],
+    ['SalesStandImage', db.SalesStandImage],
+    ['SalesStandSetting', db.SalesStandSetting],
   ]) {
     if (!model) continue;
     try {
@@ -537,6 +541,8 @@ async function syncModelsAndPatches(fingerprint) {
     ['PermissionRouteRenames', ensurePermissionRouteRenames],
     ['InitialTypes', seedInitialTypes],
     ['SalesStandModels', seedSalesStandModels],
+    ['SalesStandSettings', seedSalesStandSettings],
+    ['SalesStandExpenseCategories', seedSalesStandExpenseCategories],
     ['Checklist', ensureChecklistSchema],
     ['LegacyDrops', ensureLegacyDrops],
     ['AccessModel', ensureAccessModelSchema],

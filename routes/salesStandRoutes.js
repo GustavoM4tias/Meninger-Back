@@ -1,32 +1,82 @@
 // routes/salesStandRoutes.js
 // Stand de Vendas: stands modelo (categorias) + stands reais com custo ao vivo
 // do Sienge (plano financeiro 20207 — Despesas com Stand).
+//
+// Permissão em dois níveis:
+//   - AÇÃO: capacidades da tela (lib/screenCapabilities.js) — view (ler),
+//     manage (cuidar do stand) e configure (modelos e categorias, admin);
+//   - DADO: o service corta pelos grants de empreendimento do req.user, então
+//     ninguém enxerga (nem edita) stand de empreendimento fora da sua alçada.
 import express from 'express';
+import multer from 'multer';
 import ctrl from '../controllers/marketing/salesStandController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireInternal from '../middlewares/requireInternal.js';
-import requireRoutePermission from '../middlewares/requireRoutePermission.js';
+import requireCapability from '../middlewares/requireCapability.js';
 
 const router = express.Router();
-// Alçada da tela Stand de Vendas (admin bypassa no middleware).
-const internal = [authenticate, requireInternal, requireRoutePermission(['/marketing/stand-vendas'])];
+
+const ROUTE = '/marketing/stand-vendas';
+const canView = [authenticate, requireInternal, requireCapability(ROUTE, 'view')];
+const canManage = [authenticate, requireInternal, requireCapability(ROUTE, 'manage')];
+const canConfigure = [authenticate, requireInternal, requireCapability(ROUTE, 'configure')];
+
+// Fotos do stand: só imagem, até 8 MB, direto para o bucket (sem disco local).
+const imageUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 8 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+        if (!/^image\/(jpeg|png|webp|gif|heic|heif)$/i.test(file.mimetype || '')) {
+            return cb(new Error('Envie uma imagem (JPG, PNG, WEBP ou HEIC).'));
+        }
+        cb(null, true);
+    },
+});
 
 // ── Coleções específicas (antes de /:id) ──
-router.get('/cost-centers', ...internal, ctrl.listCostCenters);
+router.get('/cost-centers', ...canView, ctrl.listCostCenters);
+router.get('/contas', ...canView, ctrl.listContas);
+
+// ── Configuração do módulo (o que conta como gasto de stand) ──
+// Ler faz parte de entender o número da tela; MUDAR reescreve o custo de todos
+// os stands da empresa, então é admin.
+router.get('/settings', ...canView, ctrl.getSettings);
+router.get('/conferencia', ...canView, ctrl.getDepartmentAudit);
+// Bate na API do Sienge (uma chamada por título): ação de quem cuida do stand,
+// não de todo leitor da tela.
+router.post('/conferencia/revalidar', ...canManage, ctrl.revalidateDepartmentAudit);
+router.patch('/settings', ...canConfigure, ctrl.updateSettings);
 
 // ── Stands modelo (categorias) ──
-router.get('/models', ...internal, ctrl.listModels);
-router.post('/models', ...internal, ctrl.createModel);
-router.patch('/models/:id(\\d+)', ...internal, ctrl.updateModel);
-router.delete('/models/:id(\\d+)', ...internal, ctrl.deleteModel);
+router.get('/models', ...canView, ctrl.listModels);
+router.post('/models', ...canConfigure, ctrl.createModel);
+router.patch('/models/:id(\\d+)', ...canConfigure, ctrl.updateModel);
+router.delete('/models/:id(\\d+)', ...canConfigure, ctrl.deleteModel);
+
+// ── Categorias de gasto (construção × recorrência por conta) ──
+router.get('/categories', ...canView, ctrl.listCategories);
+router.post('/categories', ...canConfigure, ctrl.createCategory);
+router.patch('/categories/:id(\\d+)', ...canConfigure, ctrl.updateCategory);
+router.delete('/categories/:id(\\d+)', ...canConfigure, ctrl.deleteCategory);
 
 // ── Stands reais ──
-router.get('/', ...internal, ctrl.listStands);
-router.post('/', ...internal, ctrl.createStand);
-router.get('/:id(\\d+)/spend', ...internal, ctrl.getStandSpend);
-router.patch('/:id(\\d+)', ...internal, ctrl.updateStand);
-router.delete('/:id(\\d+)', ...internal, ctrl.deleteStand);
-router.post('/:id(\\d+)/define', ...internal, ctrl.defineStand);
-router.post('/:id(\\d+)/undefine', ...internal, ctrl.undefineStand);
+router.get('/', ...canView, ctrl.listStands);
+router.post('/', ...canManage, ctrl.createStand);
+router.get('/:id(\\d+)', ...canView, ctrl.getStand);
+router.get('/:id(\\d+)/spend', ...canView, ctrl.getStandSpend);
+router.patch('/:id(\\d+)', ...canManage, ctrl.updateStand);
+router.delete('/:id(\\d+)', ...canManage, ctrl.deleteStand);
+router.post('/:id(\\d+)/define', ...canManage, ctrl.defineStand);
+router.post('/:id(\\d+)/undefine', ...canManage, ctrl.undefineStand);
+
+// Classificação dos lançamentos e itens do stand
+router.post('/:id(\\d+)/expenses/classify', ...canManage, ctrl.classifyExpenses);
+router.put('/:id(\\d+)/items', ...canManage, ctrl.updateStandItems);
+
+// Fotos
+router.get('/:id(\\d+)/images', ...canView, ctrl.listImages);
+router.post('/:id(\\d+)/images', ...canManage, imageUpload.single('file'), ctrl.addImage);
+router.patch('/:id(\\d+)/images/:imageId(\\d+)', ...canManage, ctrl.updateImage);
+router.delete('/:id(\\d+)/images/:imageId(\\d+)', ...canManage, ctrl.deleteImage);
 
 export default router;

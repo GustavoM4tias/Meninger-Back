@@ -242,6 +242,10 @@ import CvLeadQueueBindingDefine from './marketing/cvLeadQueueBinding.js';
 // Marketing — Stand de Vendas (modelos/categorias + stands reais)
 import SalesStandModelDefine from './marketing/salesStandModel.js';
 import SalesStandDefine      from './marketing/salesStand.js';
+import SalesStandExpenseCategoryDefine from './marketing/salesStandExpenseCategory.js';
+import SalesStandExpenseClassDefine    from './marketing/salesStandExpenseClass.js';
+import SalesStandImageDefine           from './marketing/salesStandImage.js';
+import SalesStandSettingDefine         from './marketing/salesStandSetting.js';
 
 // Bolão da Copa
 import BolaoDefine            from './bolao/bolao.js';
@@ -550,6 +554,10 @@ db.MetaInsightDaily = MetaInsightDailyDefine(sequelize, DataTypes);
 // Marketing — Stand de Vendas
 db.SalesStandModel = SalesStandModelDefine(sequelize, DataTypes);
 db.SalesStand      = SalesStandDefine(sequelize, DataTypes);
+db.SalesStandExpenseCategory = SalesStandExpenseCategoryDefine(sequelize, DataTypes);
+db.SalesStandExpenseClass    = SalesStandExpenseClassDefine(sequelize, DataTypes);
+db.SalesStandImage           = SalesStandImageDefine(sequelize, DataTypes);
+db.SalesStandSetting         = SalesStandSettingDefine(sequelize, DataTypes);
 
 // Bolão da Copa
 db.Bolao            = BolaoDefine(sequelize, DataTypes);
