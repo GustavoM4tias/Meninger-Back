@@ -85,6 +85,14 @@ const NO_SCREEN_PERMISSION = [
     ['/api/support', 'reportar problema — qualquer um abre; a leitura é admin'],
     ['/api/uploads', 'upload genérico de anexo do próprio usuário'],
     ['/api/report-exports', 'POST registra a PRÓPRIA exportação; o GET da trilha já é admin'],
+    // Só a data do espelho do Sienge: um carimbo de tempo e um booleano de
+    // "passou do limite de idade", sem nenhuma linha do ERP dentro. Existe para
+    // que TODA tela que lê o backup (Custos/Títulos, Recebimentos do Ato,
+    // Inadimplência, Stand de Vendas) possa dizer de quando é o número que está
+    // mostrando - amarrar isso à alçada de uma tela específica obrigaria a
+    // editar esta rota a cada tela nova que passasse a ler o espelho. As demais
+    // rotas de /api/sienge/backups continuam admin-only.
+    ['/api/sienge/backups/freshness', 'só a data do espelho (carimbo de tempo, sem dado do ERP); toda tela que lê o backup precisa dizer de quando é o número'],
     // Telas declaradas como sempre livres no navRegistry
     ['/api/comunicados', 'Mural de Avisos é permissionManaged:false (broadcast interno)'],
     ['/api/bolao', 'bolão interno, sem dado de negócio'],

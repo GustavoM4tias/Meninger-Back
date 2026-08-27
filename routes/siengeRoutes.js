@@ -31,6 +31,10 @@ import {
     getBackup,
     triggerBackup,
     cancelBackup,
+    getFreshness,
+    getBackupSettings,
+    updateBackupSettings,
+    runWatchdog,
 } from '../controllers/sienge/backupController.js';
 import {
     getFilters as inadimplenciaFilters,
@@ -136,6 +140,13 @@ router.patch('/launch-types/:id', authenticate, configurarPaymentFlow, updateLau
 // ── Backup do banco Sienge (cron + log + pg_restore no Postgres Railway) ──────
 // Tela /settings/backup-sienge é admin-only; as rotas acompanham.
 router.get('/backups', authenticate, requireAdmin, listBackups);
+// Data do espelho: de propósito SEM requireAdmin. Toda tela que lê o backup
+// precisa poder dizer de quando é o número que está mostrando; é leitura de um
+// carimbo de tempo, sem dado de negócio dentro.
+router.get('/backups/freshness', authenticate, getFreshness);
+router.get('/backups/settings', authenticate, requireAdmin, getBackupSettings);
+router.put('/backups/settings', authenticate, requireAdmin, updateBackupSettings);
+router.post('/backups/watchdog', authenticate, requireAdmin, runWatchdog);
 router.get('/backups/:id', authenticate, requireAdmin, getBackup);
 router.post('/backups/trigger', authenticate, requireAdmin, triggerBackup);
 router.post('/backups/:id/cancel', authenticate, requireAdmin, cancelBackup);

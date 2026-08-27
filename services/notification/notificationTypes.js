@@ -28,6 +28,10 @@ export const NotificationType = {
     // Venda que nao chegou ao ERP (vigia do envio ao Sienge)
     SIENGE_ENVIO_PENDENTE:   'sienge.envio.pendente',
 
+    // Carga diária do espelho do Sienge. Quando ela não completa, toda tela que
+    // lê o backup passa a mostrar número velho sem avisar ninguém.
+    SIENGE_BACKUP_FAILED:    'sienge.backup.falhou',
+
     // Microsoft — agenda
     MEETING_STARTING:        'meeting.starting',
     MEETING_REPORT_READY:    'meeting.report.ready',
@@ -505,6 +509,19 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: false,
+    },
+    [NotificationType.SIENGE_BACKUP_FAILED]: {
+        label: 'Carga do espelho do Sienge não completou',
+        group: 'Sistema',
+        description: 'Quando a restauração diária do banco do Sienge falha em todas as tentativas do dia, '
+            + 'ou quando o espelho passa do limite de idade. Enquanto isso, Custos/Títulos, Recebimentos do Ato, '
+            + 'Inadimplência e Stand de Vendas mostram o dado da última carga que deu certo.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        // Vale e-mail: quem conserta isso pode estar fora do Office, e cada dia
+        // sem carga é um dia de número errado em várias telas.
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
     },
     [NotificationType.ACADEMY_TRACK_COMPLETED]: {
         label: 'Trilha concluída',

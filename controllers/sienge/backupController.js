@@ -3,7 +3,10 @@
 
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
-import { runDailyBackup } from '../../services/sienge/SiengeBackupService.js';
+import { runWithRetries, watchdogTick } from '../../services/sienge/siengeBackupRunner.js';
+import { getMirrorFreshness } from '../../services/sienge/siengeMirrorFreshness.js';
+import { getSettings, updateSettings } from '../../services/sienge/siengeBackupSettings.js';
+import siengeBackupScheduler from '../../scheduler/siengeBackupScheduler.js';
 
 /**
  * GET /sienge/backups
@@ -62,8 +65,13 @@ export async function getBackup(req, res) {
  */
 export async function triggerBackup(req, res) {
   const triggeredBy = `manual:${req.user?.id ?? 'unknown'}`;
-  runDailyBackup({ triggeredBy })
-    .then(r => console.log(`✅ [SiengeBackup manual] log=${r.logId} size=${r.size}`))
+  // Via runner: se falhar, a retentativa escalonada assume sozinha, igual à
+  // carga do cron. Um disparo manual não deveria ter menos garantia que o cron.
+  runWithRetries({ triggeredBy, attempt: 1 })
+    .then(r => {
+      if (r?.skipped) console.log('⏭️  [SiengeBackup manual] outra rodada já estava em andamento.');
+      else console.log(`✅ [SiengeBackup manual] log=${r?.logId}`);
+    })
     .catch(e => console.error('❌ [SiengeBackup manual] falhou:', e?.message || e));
 
   res.status(202).json({ ok: true, message: 'Backup iniciado em background' });
@@ -101,6 +109,67 @@ export async function cancelBackup(req, res) {
     res.json({ ok: true, log });
   } catch (err) {
     console.error('[backupController.cancelBackup]', err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/**
+ * GET /sienge/backups/freshness
+ *
+ * De quando é o dado do espelho. Não é admin-only de propósito: qualquer tela
+ * que lê o backup (Custos/Títulos, Recebimentos do Ato, Inadimplência, Stand de
+ * Vendas) precisa poder dizer ao usuário a data do que está mostrando.
+ */
+export async function getFreshness(req, res) {
+  try {
+    const force = req.query.force === 'true';
+    res.json(await getMirrorFreshness({ force }));
+  } catch (err) {
+    console.error('[backupController.getFreshness]', err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** GET /sienge/backups/settings */
+export async function getBackupSettings(req, res) {
+  try {
+    res.json(await getSettings());
+  } catch (err) {
+    console.error('[backupController.getBackupSettings]', err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/**
+ * PUT /sienge/backups/settings
+ *
+ * Recarrega o scheduler na sequência: mudar o horário na tela tem que valer
+ * agora, sem esperar deploy.
+ */
+export async function updateBackupSettings(req, res) {
+  try {
+    const saved = await updateSettings(req.body || {}, req.user?.id ?? null);
+    if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') {
+      await siengeBackupScheduler.reload()
+        .catch(e => console.warn('[backupController] reload do scheduler falhou:', e.message));
+    }
+    res.json(saved);
+  } catch (err) {
+    console.error('[backupController.updateBackupSettings]', err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/**
+ * POST /sienge/backups/watchdog
+ * Roda o vigia de frescor na hora. Serve pra conferir a regra na tela sem
+ * esperar o cron de 30 minutos.
+ */
+export async function runWatchdog(req, res) {
+  try {
+    res.json(await watchdogTick());
+  } catch (err) {
+    console.error('[backupController.runWatchdog]', err);
     res.status(500).json({ error: err.message });
   }
 }

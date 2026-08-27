@@ -28,6 +28,10 @@ import pg from 'pg';
 
 import db from '../../models/sequelize/index.js';
 import { snapshotCustomViews, applyCustomViews } from './siengeCustomViews.js';
+import { probePgRestore } from './pgRestoreBin.js';
+import { getSettings } from './siengeBackupSettings.js';
+import { clearFreshnessCache, probeMirrorLastChange, brasiliaWallClockToInstant } from './siengeMirrorFreshness.js';
+import { withBackupLock, instanceId } from '../../lib/siengeBackupLock.js';
 
 // ── Sienge API ────────────────────────────────────────────────────────────────
 const SIENGE_USER     = process.env.SIENGE_BACKUP_USER;
@@ -40,10 +44,15 @@ const SIENGE_PG_URL          = process.env.SIENGE_PG_URL;
 const SIENGE_PG_DATABASE     = process.env.SIENGE_PG_DATABASE || 'sie214801';
 const SIENGE_PG_STAGING_DB   = process.env.SIENGE_PG_STAGING_DATABASE || `${SIENGE_PG_DATABASE}_staging`;
 const AUTO_RESTORE_ENABLED   = process.env.ENABLE_SIENGE_AUTO_RESTORE !== 'false';
-const PG_RESTORE_JOBS        = Number(process.env.SIENGE_PG_RESTORE_JOBS || 2);
-const PG_RESTORE_TIMEOUT_MS  = Number(process.env.SIENGE_PG_RESTORE_TIMEOUT_MS || 90 * 60 * 1000);
+
+// Paralelismo e timeout do pg_restore vivem em sienge_backup_settings; as env
+// vars continuam existindo só como piso (ver siengeBackupSettings.js).
 
 const TMP_DIR = path.join(tmpdir(), 'sienge-backup');
+
+// Batida do log enquanto a rodada vive. Sem isso não dá pra distinguir uma
+// rodada de 20 minutos em andamento de um log zumbi de container morto.
+const HEARTBEAT_MS = 60_000;
 
 // Caminho do arquivo de GRANTs reaplicado após cada swap. Opcional: se não
 // existir, o stage `applying_grants` é pulado sem falhar.
@@ -307,6 +316,43 @@ async function createDatabase(dbName) {
 }
 
 /**
+ * Dropa os `<target>_old_<timestamp>` deixados para trás.
+ *
+ * O swapDatabases renomeia o banco de produção pra `_old_<ts>` e só depois
+ * dropa. Se a rodada morre entre as duas coisas (container derrubado, deploy),
+ * fica um banco de 16 GB órfão ocupando disco — e ninguém limpa, porque o
+ * pipeline nunca olhou pra trás. A limpeza roda no começo de cada rodada,
+ * quando a trava garante que ninguém mais está mexendo nesses nomes.
+ */
+async function dropLeftoverOldDatabases(targetDb) {
+  assertValidDbName(targetDb);
+  const dropped = [];
+  await withAdminClient(async (c) => {
+    const r = await c.query(
+      `SELECT datname FROM pg_database WHERE datname LIKE $1 AND datistemplate = false`,
+      [`${targetDb}_old_%`]
+    );
+    for (const { datname } of r.rows) {
+      // Confirma o formato antes de interpolar: só `<target>_old_<dígitos>`.
+      if (!new RegExp(`^${targetDb}_old_\\d+$`).test(datname)) continue;
+      try {
+        await c.query(
+          `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+           WHERE datname = $1 AND pid <> pg_backend_pid()`,
+          [datname]
+        );
+        await c.query(`DROP DATABASE IF EXISTS "${datname}" WITH (FORCE)`);
+        dropped.push(datname);
+      } catch (e) {
+        console.warn(`[SiengeBackup] não consegui dropar sobra "${datname}": ${e.message}`);
+      }
+    }
+  });
+  if (dropped.length) console.log(`[SiengeBackup] sobras removidas: ${dropped.join(', ')}`);
+  return dropped;
+}
+
+/**
  * Swap atômico: renomeia o database de produção pra um nome temporário, promove
  * o staging pro nome de produção, depois dropa o antigo. Tudo numa única
  * conexão admin pra reduzir janela de inconsistência (<1s típico).
@@ -471,8 +517,8 @@ export async function ensurePerfIndexes() {
  * frontend pra calcular % de progresso por fase. Devolve os totais — barato
  * (<200ms num dump de 1.5GB).
  */
-function parseTocCounts(dmpcPath) {
-  const r = spawnSync('pg_restore', ['-l', dmpcPath], {
+function parseTocCounts(dmpcPath, pgRestoreBin) {
+  const r = spawnSync(pgRestoreBin, ['-l', dmpcPath], {
     stdio: 'pipe',
     maxBuffer: 200 * 1024 * 1024,
   });
@@ -513,7 +559,7 @@ function buildEmptyPhaseProgress(totals) {
   };
 }
 
-function runPgRestore(dmpcPath, log, totals, targetUrl) {
+function runPgRestore(dmpcPath, log, totals, targetUrl, { bin, jobs, timeoutMs }) {
   return new Promise((resolve, reject) => {
     // Sem --clean --if-exists: o staging é virgem (acabou de ser criado).
     // Banco atual de produção fica intocado — substituição acontece via swap
@@ -523,12 +569,12 @@ function runPgRestore(dmpcPath, log, totals, targetUrl) {
       '--no-privileges',
       '--no-acl',
       '--verbose',                       // emite "processing data for table X" → UI
-      '--jobs', String(PG_RESTORE_JOBS),
+      '--jobs', String(jobs),
       '--dbname', targetUrl,
       dmpcPath,
     ];
 
-    const proc = spawn('pg_restore', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let stderr = '';
     let killed = false;
@@ -544,7 +590,7 @@ function runPgRestore(dmpcPath, log, totals, targetUrl) {
       killed = true;
       killReason = 'timeout';
       try { proc.kill('SIGKILL'); } catch {}
-    }, PG_RESTORE_TIMEOUT_MS);
+    }, timeoutMs);
 
     function markPhase(name, currentName) {
       const ph = phases[name];
@@ -621,7 +667,9 @@ function runPgRestore(dmpcPath, log, totals, targetUrl) {
 
     proc.on('error', err => {
       clearTimeout(timer);
-      reject(new Error(`Não foi possível executar pg_restore (binário disponível?): ${err.message}`));
+      // Não deveria mais acontecer: o stage `preflight` prova o binário antes
+      // de qualquer coisa ser criada. Se acontecer, a mensagem diz o caminho.
+      reject(new Error(`Não foi possível executar pg_restore em "${bin}": ${err.message}`));
     });
 
     proc.on('close', code => {
@@ -635,7 +683,15 @@ function runPgRestore(dmpcPath, log, totals, targetUrl) {
       const finalTail = stderr.slice(-4000);
       if (log) log.update({ restore_log_tail: finalTail, phase_progress: phases }).catch(() => {});
 
-      if (killed) return reject(new Error(`pg_restore abortado: ${killReason || 'timeout'}`));
+      if (killed) {
+        const err = new Error(`pg_restore abortado: ${killReason || 'timeout'}`);
+        // Cascata de erros = as conexões caíram no meio (queda de rede ou, como
+        // acontecia até aqui, outra rodada dropando o staging). Vale tentar de
+        // novo com o arquivo que já está em disco. Timeout, não: repetir os
+        // mesmos 90 minutos não muda nada.
+        err.retryable = killReason?.startsWith('cascata') === true;
+        return reject(err);
+      }
 
       // 0 = success, 1 = warnings (esperado com --no-owner/--no-acl/--clean)
       if (code === 0 || code === 1) {
@@ -662,13 +718,19 @@ function runPgRestore(dmpcPath, log, totals, targetUrl) {
  * A janela entre o RENAME do antigo e o RENAME do staging dura tipicamente
  * <1s (rename é só metadado no catálogo do Postgres).
  */
-async function restoreIntoPostgres(dmpcPath, log) {
+async function restoreIntoPostgres(dmpcPath, log, { pgRestoreBin, settings }) {
   const { targetDb, stagingDb, targetUrl, stagingUrl, adminUrl } = buildPgUrls();
+
+  const restoreOpts = {
+    bin: pgRestoreBin,
+    jobs: Number(settings.restore_jobs) || 2,
+    timeoutMs: (Number(settings.restore_timeout_minutes) || 90) * 60_000,
+  };
 
   // ── Inventário do dump (rápido) → UI consegue calcular % por fase ─────────
   let totals;
   try {
-    totals = parseTocCounts(dmpcPath);
+    totals = parseTocCounts(dmpcPath, pgRestoreBin);
     console.log(`[SiengeBackup] TOC totals:`, totals);
   } catch (err) {
     console.warn(`[SiengeBackup] parseTocCounts falhou: ${err.message}`);
@@ -682,33 +744,63 @@ async function restoreIntoPostgres(dmpcPath, log) {
     import_started_at: new Date(),
   });
 
-  // ── 1. Prepara staging ────────────────────────────────────────────────────
-  await setStage(log, 'preparing_staging');
-  console.log(`[SiengeBackup] preparing staging "${stagingDb}" (drop+create)...`);
-  await dropDatabaseIfExists(stagingDb);
-  await createDatabase(stagingDb);
+  // Sobras de swaps que morreram no meio. Só é seguro fazer isto com a trava
+  // na mão — por isso mora aqui e não num cron solto.
+  await dropLeftoverOldDatabases(targetDb).catch(e => {
+    console.warn(`[SiengeBackup] limpeza de sobras falhou (segue): ${e.message}`);
+  });
 
+  // ── 1..3. Prepara staging, restaura e valida ──────────────────────────────
+  // O ciclo inteiro é retentável: se o pg_restore cai por queda de conexão, o
+  // staging fica pela metade e a única saída é recriá-lo — mas o .dmpc já está
+  // em disco, então não repetimos o download de 1,5 GB.
+  const maxAttempts = 1 + (Number(settings.restore_retry_attempts) || 0);
   let restoreResult;
-  try {
-    // ── 2. Restaura no staging ──────────────────────────────────────────────
-    await setStage(log, 'restoring');
-    restoreResult = await runPgRestore(dmpcPath, log, totals, stagingUrl);
+  let lastErr;
 
-    // ── 3. Valida o staging ─────────────────────────────────────────────────
-    await setStage(log, 'validating');
-    const validation = await validateStaging(stagingUrl, totals);
-    console.log(`[SiengeBackup] validation:`, validation);
-    if (!validation.ok) {
-      throw new Error(`Validação do staging falhou: ${validation.errors.join('; ')}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let stagingCreated = false;
+    try {
+      await setStage(log, 'preparing_staging');
+      console.log(`[SiengeBackup] preparing staging "${stagingDb}" (drop+create), tentativa ${attempt}/${maxAttempts}...`);
+      await dropDatabaseIfExists(stagingDb);
+      await createDatabase(stagingDb);
+      stagingCreated = true;
+
+      await setStage(log, 'restoring');
+      restoreResult = await runPgRestore(dmpcPath, log, totals, stagingUrl, restoreOpts);
+
+      await setStage(log, 'validating');
+      const validation = await validateStaging(stagingUrl, totals);
+      console.log(`[SiengeBackup] validation:`, validation);
+      if (!validation.ok) {
+        const err = new Error(`Validação do staging falhou: ${validation.errors.join('; ')}`);
+        // Restore incompleto costuma vir de queda no meio: refazer resolve.
+        err.retryable = true;
+        throw err;
+      }
+
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      // Falha até a validação = staging descartado, produção intocada. Só
+      // dropamos o que ESTA rodada criou.
+      if (stagingCreated) {
+        console.warn(`[SiengeBackup] descartando staging "${stagingDb}" devido a falha: ${err.message}`);
+        await dropDatabaseIfExists(stagingDb).catch(e => {
+          console.warn(`[SiengeBackup] cleanup do staging falhou: ${e.message}`);
+        });
+      }
+
+      const canRetry = err.retryable === true && attempt < maxAttempts;
+      if (!canRetry) break;
+      console.warn(`[SiengeBackup] restore falhou (${err.message}). Refazendo do arquivo local em 60s...`);
+      await sleep(60_000);
     }
-  } catch (err) {
-    // Qualquer falha até aqui = staging descartado, produção intocada
-    console.warn(`[SiengeBackup] descartando staging "${stagingDb}" devido a falha: ${err.message}`);
-    await dropDatabaseIfExists(stagingDb).catch(e => {
-      console.warn(`[SiengeBackup] cleanup do staging falhou: ${e.message}`);
-    });
-    throw err;
   }
+
+  if (lastErr) throw lastErr;
 
   // ── 3.5 Snapshot das views custom do sienge_readonly (ANTES do swap) ────
   // Lê do banco vivo (intocado) e espelha no database `postgres`, que sobrevive
@@ -759,19 +851,43 @@ async function restoreIntoPostgres(dmpcPath, log) {
     console.warn(`[SiengeBackup] applyPerfIndexes falhou (banco já promovido, ignorando): ${e.message}`);
   }
 
+  // ── 8. Data do dado que acabou de entrar. É o que as telas consultam pra
+  //       não mostrar número velho como se fosse de agora. ──────────────────
+  clearFreshnessCache();
+  let mirrorLastChange = null;
+  try {
+    // A sonda devolve a hora de parede que o Sienge gravou (coluna sem fuso);
+    // a coluna daqui é timestamptz, então convertemos de Brasília.
+    const wall = await probeMirrorLastChange();
+    mirrorLastChange = brasiliaWallClockToInstant(wall);
+    console.log(`[SiengeBackup] espelho agora vai até: ${wall}`);
+  } catch (e) {
+    console.warn(`[SiengeBackup] sonda de frescor falhou (banco já promovido): ${e.message}`);
+  }
+
   const finishedAt = new Date();
   await log.update({
     import_status: 'success',
     import_finished_at: finishedAt,
     import_duration_ms: finishedAt - new Date(log.import_started_at),
+    mirror_last_change: mirrorLastChange,
   });
   return restoreResult;
 }
 
 // ─── Pipeline principal ───────────────────────────────────────────────────────
 
-export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
+/**
+ * Uma rodada completa, já com a trava na mão.
+ *
+ * Nunca chame direto: use runDailyBackup(), que é quem garante a exclusão
+ * mútua. Duas rodadas simultâneas destroem uma à outra (o staging é um recurso
+ * global) — foi exatamente o que derrubou 39% das cargas até aqui.
+ */
+async function runDailyBackupLocked({ triggeredBy, attempt, pgRestoreBin }) {
   await mkdir(TMP_DIR, { recursive: true });
+
+  const settings = await getSettings();
 
   const startedAt = new Date();
   const yyyymmdd  = startedAt.toISOString().slice(0, 10);
@@ -783,12 +899,30 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
     status: 'running',
     stage: 'starting',
     triggered_by: triggeredBy,
+    attempt,
+    instance_id: instanceId(),
+    heartbeat_at: startedAt,
     stage_timings: {
       starting: { started_at: startedAt.toISOString(), finished_at: startedAt.toISOString() },
     },
   });
 
+  // Batida periódica: a tela e o vigia usam isso pra saber que a rodada está
+  // viva. Sem ela, um container morto no meio deixa um log `running` eterno.
+  const heartbeat = setInterval(() => {
+    log.update({ heartbeat_at: new Date() }).catch(() => {});
+  }, HEARTBEAT_MS);
+  heartbeat.unref?.();
+
   try {
+    // 0. Preflight — o binário já foi provado antes da trava; aqui confirmamos
+    //    que o Postgres alvo responde, ANTES de dropar e recriar o staging.
+    //    Falhar aqui não deixa nada pela metade.
+    await setStage(log, 'preflight');
+    await withAdminClient(c => c.query('SELECT 1'));
+    await log.update({ pg_restore_bin: pgRestoreBin });
+    console.log(`[SiengeBackup] preflight ok — ${pgRestoreBin}`);
+
     // 1. MD5 esperado
     await setStage(log, 'fetching_md5');
     const expectedMd5 = await fetchExpectedMd5();
@@ -818,7 +952,7 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
       await log.update({ import_status: 'skipped' });
     } else {
       try {
-        await restoreIntoPostgres(localDmpc, log);
+        await restoreIntoPostgres(localDmpc, log, { pgRestoreBin, settings });
       } catch (restoreErr) {
         const finishedAt = new Date();
         await log.update({
@@ -854,8 +988,81 @@ export async function runDailyBackup({ triggeredBy = 'cron' } = {}) {
     });
     await unlink(localGz).catch(() => {});
     await unlink(localDmpc).catch(() => {});
+    err.logId = log.id;
     throw err;
+  } finally {
+    clearInterval(heartbeat);
   }
+}
+
+/**
+ * Pipeline diário, com exclusão mútua.
+ *
+ * Se outra instância já está com a trava, esta rodada NÃO executa — registra
+ * `skipped/lock_busy` com o instance_id e sai. Antes disso ela entrava mesmo
+ * assim e dropava o database de staging da outra, que é a origem dos três modos
+ * de falha do histórico.
+ *
+ * Devolve `{ ok: false, skipped: true }` quando foi barrada.
+ */
+export async function runDailyBackup({ triggeredBy = 'cron', attempt = 1 } = {}) {
+  // Preflight do binário ANTES da trava, de propósito.
+  //
+  // A instância que não tem pg_restore não pode nem ocupar a fila: se ela
+  // pegasse a trava, a instância boa seria dispensada e o dia ficaria sem
+  // carga até a retentativa. Falhando aqui, ela sai de cena em um segundo e a
+  // instância boa roda no horário.
+  //
+  // É registrado como `skipped` (não `failed`): não é a carga que falhou, é
+  // esta máquina que não podia fazê-la. Quem cobra o resultado é o vigia de
+  // frescor, que olha a idade do espelho.
+  let pgRestoreBin;
+  try {
+    pgRestoreBin = probePgRestore().bin;
+  } catch (err) {
+    const now = new Date();
+    console.error(`⛔ [SiengeBackup] esta instância (${instanceId()}) não pode restaurar: ${err.message}`);
+    await db.SiengeBackupLog.create({
+      started_at: now,
+      finished_at: now,
+      duration_ms: 0,
+      status: 'skipped',
+      stage: 'preflight',
+      triggered_by: triggeredBy,
+      attempt,
+      instance_id: instanceId(),
+      error_message: String(err.message).slice(0, 4000),
+      stage_timings: { preflight: { started_at: now.toISOString(), finished_at: now.toISOString() } },
+    }).catch(e => console.warn('[SiengeBackup] não consegui registrar o preflight:', e.message));
+    return { ok: false, skipped: true, reason: 'preflight' };
+  }
+
+  const { locked, result } = await withBackupLock(
+    () => runDailyBackupLocked({ triggeredBy, attempt, pgRestoreBin }),
+    {
+      onBusy: async () => {
+        const now = new Date();
+        console.warn(`⏭️  [SiengeBackup] outra rodada já está em andamento — esta instância (${instanceId()}) não vai executar.`);
+        await db.SiengeBackupLog.create({
+          started_at: now,
+          finished_at: now,
+          duration_ms: 0,
+          status: 'skipped',
+          stage: 'lock_busy',
+          triggered_by: triggeredBy,
+          attempt,
+          instance_id: instanceId(),
+          error_message: 'Outra rodada da carga já estava em andamento; esta foi dispensada pela trava.',
+          stage_timings: {
+            lock_busy: { started_at: now.toISOString(), finished_at: now.toISOString() },
+          },
+        }).catch(e => console.warn('[SiengeBackup] não consegui registrar o skip:', e.message));
+      },
+    }
+  );
+
+  if (!locked) return { ok: false, skipped: true, reason: 'lock_busy' };
+  return result;
 }
 
 export default { runDailyBackup };

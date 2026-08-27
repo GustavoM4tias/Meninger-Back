@@ -726,11 +726,13 @@ export async function checkBillsDepartmentLive(bills, { concurrency = 4 } = {}) 
  * é de agora.
  */
 export async function getDataFreshness() {
-    const { rows } = await siengeQuery(`
-        SELECT to_char(MAX(GREATEST(dtcadastro, COALESCE(dtalteracao, dtcadastro))), 'YYYY-MM-DD"T"HH24:MI:SS') AS last_change
-        FROM ecpgtitulo
-    `);
-    return { lastChange: rows?.[0]?.last_change || null };
+    // A sonda mora em services/sienge/siengeMirrorFreshness.js desde o conserto
+    // da carga diária: é a mesma pergunta que todas as telas do espelho fazem, e
+    // ter duas implementações significaria duas respostas. O formato de retorno
+    // continua `{ lastChange }` — a aba de Auditoria do Stand lê exatamente isso.
+    const { getMirrorFreshness } = await import('../sienge/siengeMirrorFreshness.js');
+    const f = await getMirrorFreshness();
+    return { lastChange: f.lastChange, stale: f.stale, ageHours: f.ageHours };
 }
 
 // ── Classificação ────────────────────────────────────────────────────────────

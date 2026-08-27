@@ -99,6 +99,7 @@ import marketingSyncScheduler     from './scheduler/marketingSyncScheduler.js';
 import { ensureFinanceOverridesSchema } from './lib/ensureFinanceOverridesSchema.js';
 import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
+import { ensureSiengeBackupSettingsSchema } from './lib/ensureSiengeBackupSettingsSchema.js';
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
 import { ensureEmeReportsSchema } from './lib/ensureEmeReportsSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
@@ -517,6 +518,7 @@ async function syncModelsAndPatches(fingerprint) {
   const patches = [
     ['FinanceOverrides', ensureFinanceOverridesSchema],
     ['SiengeBackupLog', ensureSiengeBackupLogSchema],
+    ['SiengeBackupSettings', ensureSiengeBackupSettingsSchema],
     ['Boleto', ensureBoletoSchema],
     ['Userede', ensureUseredeSchema],
     ['ReservaCancel', ensureReservaCancelSchema],
@@ -651,7 +653,12 @@ async function startBackgroundServices() {
   // Registro unificado de empresas/empreendimentos: sync diário de madrugada
   // (sempre ligado — dispensa o sync manual; ORG_REGISTRY_CRON_EXPRESSION p/ ajustar).
   orgRegistryScheduler.start();
-  if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') siengeBackupScheduler.start();
+  // Carga diária do espelho do Sienge + vigia de frescor. O `start` é async
+  // porque lê o horário de sienge_backup_settings (a tela manda no cron).
+  if (process.env.ENABLE_SIENGE_BACKUP_SCHEDULE === 'true') {
+    siengeBackupScheduler.start()
+      .catch(err => console.warn('⚠️  SiengeBackupScheduler não subiu:', err.message));
+  }
 
   // Índices de performance no backup do Sienge (Custos/Títulos ao vivo). O restore
   // diário já os reaplica; este ensure cobre deploy feito DEPOIS do restore do dia.

@@ -37,6 +37,24 @@ export default (sequelize, DataTypes) => {
     // { done, total, started_at, finished_at, current } — a UI desenha 5
     // barras (data, index, constraint, fk, trigger) com ETA por fase.
     phase_progress:        { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
+
+    // Nº da tentativa do dia (1 = a primeira rodada; 2+ = retentativa).
+    attempt:               { type: DataTypes.INTEGER, allowNull: true },
+
+    // Quem rodou: réplica/serviço do Railway + pid. Existe porque a carga já
+    // foi disputada por duas instâncias e não havia como saber quais eram.
+    instance_id:           { type: DataTypes.STRING(120), allowNull: true },
+
+    // Caminho do binário efetivamente usado — o `spawn pg_restore ENOENT` era
+    // o modo de falha mais comum e não registrava o que tinha sido tentado.
+    pg_restore_bin:        { type: DataTypes.TEXT, allowNull: true },
+
+    // Batida a cada 60s enquanto a rodada vive: distingue rodada em andamento
+    // de log zumbi (container morto no meio), que antes só o cancelar resolvia.
+    heartbeat_at:          { type: DataTypes.DATE, allowNull: true },
+
+    // Data do dado mais recente do espelho logo depois do swap.
+    mirror_last_change:    { type: DataTypes.DATE, allowNull: true },
   }, {
     tableName: 'sienge_backup_logs',
     underscored: true,

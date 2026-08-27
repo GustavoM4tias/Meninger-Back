@@ -1,9 +1,26 @@
 # Configuração do Nixpacks pro deploy no Railway.
-# Inclui o binário pg_restore (do pacote postgresql) usado pelo
-# SiengeBackupService pra restaurar o dump diário do Sienge no Postgres.
+#
+# O SiengeBackupService precisa do pg_restore pra restaurar o dump diário do
+# Sienge. Ele vem por DUAS vias independentes de propósito: o modo de falha mais
+# comum da carga era `spawn pg_restore ENOENT`, que só acontece quando o binário
+# não está onde o processo procura.
+#
+#   1. nixPkgs postgresql_17 — coloca o pg_restore no PATH do runtime.
+#   2. fase `pgtools` abaixo — baixa o cliente portátil pra Meninger-Back/bin/,
+#      que o services/sienge/pgRestoreBin.js acha por caminho absoluto, sem
+#      depender de PATH nenhum. `bin/` é gitignored, por isso o download.
 #
 # nodejs_22 = última LTS estável disponível no nixpkgs no commit padrão do nixpacks.
 # nodejs_24 só está em nixpkgs muito recente — pode não estar no commit que o nixpacks resolve.
 
 [phases.setup]
-nixPkgs = ["nodejs_22", "postgresql_17"]
+# gnutar: o setup-pg-tools extrai o tarball com `tar -xf`.
+nixPkgs = ["nodejs_22", "postgresql_17", "gnutar"]
+
+# Fase própria em vez de sobrescrever `install`: mexer nos cmds daquela fase
+# trocaria o `npm ci` que o nixpacks monta sozinho.
+[phases.pgtools]
+dependsOn = ["install"]
+# `|| true`: sem o cliente portátil o deploy ainda serve — o pg_restore do
+# nixPkgs cobre. O que não pode é o deploy inteiro cair por causa do download.
+cmds = ["node scripts/setup-pg-tools.js || true"]
