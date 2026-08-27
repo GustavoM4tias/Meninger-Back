@@ -49,6 +49,13 @@ const fmtETA = (ms) => {
 function buildSnapshot(core, repasseMirror = null) {
     const sit = core?.situacao || {};
     return {
+        // A ETAPA da reserva, direto do CV. Sem ela o snapshot não enxergava
+        // mudança de etapa: `status_reserva` prioriza o espelho da tabela local
+        // `repasses`, então enquanto o repasse não fosse ressincronizado a
+        // reserva ficava congelada na etapa antiga (57 reservas apareciam em
+        // "Ato Pago"/"Ato Emitido" na base local depois de terem voltado para
+        // Envio Sienge no CV, e o sweep as dava como "inalteradas").
+        idsituacao_reserva: sit?.idsituacao ?? null,
         status_reserva: repasseMirror?.status_reserva ?? core?.status_reserva ?? sit?.nome ?? sit?.situacao ?? null,
         status_repasse: repasseMirror?.status_repasse ?? core?.status_repasse ?? null,
         idsituacao_repasse: repasseMirror?.idsituacao_repasse ?? core?.idsituacao_repasse ?? null,
@@ -62,6 +69,7 @@ function buildSnapshot(core, repasseMirror = null) {
 function snapshotsEqual(a, b) {
     if (!a || !b) return false;
     return (
+        String(a.idsituacao_reserva ?? '') === String(b.idsituacao_reserva ?? '') &&
         (a.status_reserva ?? null) === (b.status_reserva ?? null) &&
         (a.status_repasse ?? null) === (b.status_repasse ?? null) &&
         String(a.idsituacao_repasse ?? '') === String(b.idsituacao_repasse ?? '') &&
@@ -248,6 +256,18 @@ export default class ReservaFullSweepService {
         const deadRows = await CvReservaIdDead.findAll({ attributes: ['idreserva'], raw: true });
         const deadSet = new Set(deadRows.map(r => r.idreserva));
 
+        // Reserva que EXISTE aqui não pode estar no cemitério: um 404
+        // transitório do CV a condenava para sempre, porque o sweep pula os
+        // mortos antes de perguntar qualquer coisa. Resultado medido em
+        // 27/08/2026: 400 das 777 entradas eram reservas vivas, e a base local
+        // ficava congelada nelas. Se o CV devolver 404 de novo, ela volta.
+        const mortosVivos = [...deadSet].filter(id => existingSnap.has(id));
+        if (mortosVivos.length) {
+            await CvReservaIdDead.destroy({ where: { idreserva: mortosVivos } }).catch(() => {});
+            for (const id of mortosVivos) deadSet.delete(id);
+            console.log(`🩺 [Sweep] ${mortosVivos.length} ids saíram do cemitério (existem em reservas).`);
+        }
+
         // Monta lista final de IDs
         const idsToScan = [];
         if (explicitIds) {
@@ -283,6 +303,7 @@ export default class ReservaFullSweepService {
         let created   = 0;
         let updated   = 0;
         let unchanged = 0;
+        let ressuscitados = 0;
         let notFound  = 0;
         let failed    = 0;
         let lastLog   = Date.now();
@@ -313,6 +334,16 @@ export default class ReservaFullSweepService {
 
             try {
                 const core = await fetchReservaCore(idreserva);
+                // Respondeu: se estava no cemitério, sai de lá. Sem isto um 404
+                // transitório condenava o id para sempre - com `skipDead` (o
+                // padrão) ele nunca mais era relido. Medido em 27/08/2026: das
+                // 777 entradas do cemitério, 400 eram reservas VIVAS, e é por
+                // isso que a base local ficava para trás do CV.
+                if (core && deadSet.has(idreserva)) {
+                    await CvReservaIdDead.destroy({ where: { idreserva } }).catch(() => {});
+                    deadSet.delete(idreserva);
+                    ressuscitados++;
+                }
                 if (!core) {
                     // Resposta 200 mas vazia → trata como 404 leve
                     await CvReservaIdDead.upsert({
@@ -430,6 +461,7 @@ export default class ReservaFullSweepService {
             created,
             updated,
             unchanged,
+            resurrected: ressuscitados,
             not_found: notFound,
             failed,
             failure_by_status: failureBreakdown,
@@ -447,6 +479,7 @@ export default class ReservaFullSweepService {
         console.log(`   criados (NOVOS): ${created}   ← reservas que não tínhamos`);
         console.log(`   atualizados    : ${updated}   ← snapshot mudou (histórico preservado)`);
         console.log(`   mantidos       : ${unchanged} ← inalterados`);
+        console.log(`   ressuscitados  : ${ressuscitados} ← estavam no cemitério e responderam`);
         console.log(`   404 (mortos)   : ${notFound}  ← gravados em cv_reserva_id_dead`);
         console.log(`   falhas         : ${failed}`);
         if (failed > 0) {
