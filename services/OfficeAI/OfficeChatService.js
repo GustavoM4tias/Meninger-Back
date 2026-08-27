@@ -39,6 +39,7 @@ import './AssistantTools.js';
 import { escolherTools, tosRecentes } from './ToolPreselect.js';
 import { getToolsFor, toGeminiDeclarations, findTool, userHasPermissions } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
+import { repararLinks } from './linkGuard.js';
 import { buildScreenContextBlock } from './screenContext.js';
 
 // Registry: nome → { declaration, executor }
@@ -805,6 +806,12 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   //    enforcement de alçada aqui também (fonte da verdade = user_permissions,
   //    nunca o Gemini: tool alucinada na declaração é negada na execução).
   const runToolCall = async (name, args, toolStart) => {
+    // A Eme REDIGITA as URLs que a pessoa colou, e já perdeu um caractere no
+    // meio de um UUID (ver linkGuard.js). O conserto entra aqui, antes do
+    // roteamento: vale para o registry e para o caminho legado de uma vez, e o
+    // audit grava o argumento que de fato rodou, não o torto.
+    args = repararLinks(args, userMessage, { toolName: name });
+
     if (findTool(name)) {
       return runSecureTool({
         user: fullUser,
