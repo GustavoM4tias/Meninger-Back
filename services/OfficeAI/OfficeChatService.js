@@ -2305,6 +2305,15 @@ function summarizeForGemini(result) {
       regulamento: c.regulamento ? String(c.regulamento).slice(0, 300) : undefined,
     }));
     summary.message = result.message;
+  } else if (type === 'person_cards') {
+    // A lista de e-mails do query_people é o que vira CONVITE: o corte padrão do
+    // compactForModel (20 itens) e o de string (300 chars) reintroduziriam
+    // exatamente o convite incompleto que esse campo veio consertar - foi assim
+    // que "convide todos os gestores comerciais" saiu com 6 de 11 em 28/08.
+    summary.total = total ?? result.cards?.length ?? 0;
+    if (Array.isArray(result.emails)) summary.emails = result.emails.slice(0, 100);
+    if (result.pessoas) summary.pessoas = String(result.pessoas).slice(0, 4000);
+    summary.message = result.message;
   } else {
     // detail, condition_sheet, condition_compare e outros — compacta TUDO em
     // vez de descartar arrays (o descarte deixava o modelo sem os dados que o

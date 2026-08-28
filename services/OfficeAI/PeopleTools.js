@@ -21,6 +21,17 @@ const MAX_CARDS = 8;
 
 const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 
+// ── "Gestor" é CARGO, não aresta do organograma ──────────────────────────────
+//
+// `apenas: 'gestores'` filtrava por `team.length > 0` (tem subordinado cadastrado).
+// Medido em 28/08/2026: "convide todos os gestores comerciais" convidou 6 e deixou
+// 4 de fora - Alexsandra, Eliane, Sergio e Willian têm cargo "Gestor Comercial" e
+// ZERO subordinados no organograma, então sumiam do filtro. Quem pede "os gestores"
+// quer quem TEM O CARGO; a aresta do organograma é outra pergunta ("quem é o gestor
+// DELE"), e essa continua respondida pela ordenação, que põe quem lidera na frente.
+const CARGO_LIDERANCA = /(gestor|gerente|diretor|coordenador|supervisor|superintendente|head|l[ií]der)/i;
+const ehLideranca = (u) => (u.team?.length > 0) || CARGO_LIDERANCA.test(String(u.position || ''));
+
 async function loadDirectory() {
     const [users, positions, departments] = await Promise.all([
         db.User.findAll({
@@ -91,7 +102,7 @@ registerTool({
             departamento: { type: 'string', description: 'Filtra por departamento (ex: Marketing, Comercial, Financeiro).' },
             cargo: { type: 'string', description: 'Filtra por cargo (ex: Gerente, Analista).' },
             cidade: { type: 'string', description: 'Filtra por cidade.' },
-            apenas: { type: 'string', enum: ['gestores', 'admins', 'todos'], description: '"gestores" = só quem lidera pessoas; "admins" = só administradores do sistema. Padrão: todos.' },
+            apenas: { type: 'string', enum: ['gestores', 'admins', 'todos'], description: '"gestores" = quem tem cargo de liderança (gestor, gerente, coordenador, diretor, supervisor) OU lidera alguém no organograma - é o filtro certo para "todos os gestores do Comercial"; "admins" = só administradores do sistema. Padrão: todos.' },
         },
     },
     requiredPermissions: ['/settings/organograma'],
@@ -118,7 +129,7 @@ registerTool({
         if (cargo) rows = rows.filter(u => norm(u.position).includes(cargo));
         if (cidade) rows = rows.filter(u => norm(u.city).includes(cidade));
         if (apenas === 'admins') rows = rows.filter(u => u.role === 'admin');
-        if (apenas === 'gestores') rows = rows.filter(u => u.team.length > 0);
+        if (apenas === 'gestores') rows = rows.filter(ehLideranca);
 
         // Gestores primeiro (mais provável de ser a resposta de "quem é o gestor de X")
         rows = [...rows].sort((a, b) => (b.team.length - a.team.length) || a.username.localeCompare(b.username));
@@ -138,12 +149,21 @@ registerTool({
 
         const total = rows.length;
         const shown = rows.slice(0, MAX_CARDS);
+        // A lista detalhada é cortada em MAX_CARDS e era a ÚNICA fonte de e-mail do
+        // modelo: com 11 pessoas no filtro, "convide todos" virava convite para 8 -
+        // sem ninguém perceber, porque o corte não aparecia em lugar nenhum. Os
+        // e-mails saem inteiros aqui, e o corte da lista detalhada é anunciado.
+        const emails = rows.map(u => u.email).filter(Boolean).slice(0, 100);
+        const aviso = total > shown.length
+            ? ` ATENÇÃO: só ${shown.length} de ${total} estão detalhadas em "pessoas". Para convite, e-mail ou qualquer lista do GRUPO INTEIRO, use TODOS os ${emails.length} endereços do campo "emails" - nunca só os detalhados.`
+            : '';
 
         const out = {
             total,
+            emails,
             pessoas: formatPersonList(shown),
             message: total
-                ? `${total} pessoa(s) no filtro (${shown.length} detalhada(s) no campo "pessoas"; cards com modal de detalhe JÁ estão na UI). Responda CURTO e direto ao que foi perguntado (quem é, contato, gestor...) usando SOMENTE estes dados — nunca invente nome/cargo/contato. "ADMIN do sistema" = administrador do Office; "Gestor direto" = superior imediato; "Lidera N pessoa(s)" = é gestor. O organograma completo fica em /settings/organograma.`
+                ? `${total} pessoa(s) no filtro (${shown.length} detalhada(s) no campo "pessoas"; cards com modal de detalhe JÁ estão na UI).${aviso} Responda CURTO e direto ao que foi perguntado (quem é, contato, gestor...) usando SOMENTE estes dados — nunca invente nome/cargo/contato. "ADMIN do sistema" = administrador do Office; "Gestor direto" = superior imediato; "Lidera N pessoa(s)" = tem equipe no organograma - quem tem CARGO de gestor sem equipe também é gestor, não exclua da lista. O organograma completo fica em /settings/organograma.`
                 : 'Nenhuma pessoa encontrada nesse filtro. Diga isso com clareza — não invente. Sugira conferir o organograma em /settings/organograma ou ajustar o nome/departamento.',
         };
         if (shown.length) {
