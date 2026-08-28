@@ -24,9 +24,48 @@ import outlookService from '../microsoft/MicrosoftOutlookService.js';
 
 const TZ = 'America/Sao_Paulo';
 
-/** "AAAA-MM-DDTHH:mm:ss" no fuso de Brasília - o formato que o Graph espera. */
-function paraIsoLocal(d) {
-    return d.toLocaleString('sv-SE', { timeZone: TZ }).replace(' ', 'T');
+/**
+ * RELÓGIO DE PAREDE de Brasília: um Date cujos campos LOCAIS são a hora de SP.
+ *
+ * Ainda não é um instante - é a hora de Brasília vestida de data local do
+ * servidor. Serve para conta de calendário ("põe 15h", "o dia de hoje") sem
+ * depender do fuso da máquina. Mesmo desenho de `AssistantTools.relogioDe`.
+ */
+function relogioDe(instante = new Date()) {
+    return new Date(instante.toLocaleString('en-US', { timeZone: TZ }));
+}
+
+/**
+ * Relógio de parede → "AAAA-MM-DDTHH:mm:ss", o formato que o Graph espera.
+ *
+ * Lê os campos como estão, SEM reconverter fuso - e é aí que estava o erro.
+ * Antes havia um `toLocaleString({ timeZone: TZ })` aqui, que num servidor em
+ * UTC (o Railway) descontava três horas de uma data que JÁ era de Brasília:
+ * "marca uma reunião agora", às 9h36, virava 06:36 no cartão. Duas conversões
+ * para a mesma mentira. Em máquina de desenvolvimento (fuso de SP) as duas
+ * davam no mesmo, e por isso o erro só aparecia em produção.
+ */
+function paraIsoLocal(relogio) {
+    const p = n => String(n).padStart(2, '0');
+    return `${relogio.getFullYear()}-${p(relogio.getMonth() + 1)}-${p(relogio.getDate())}`
+         + `T${p(relogio.getHours())}:${p(relogio.getMinutes())}:${p(relogio.getSeconds())}`;
+}
+
+/**
+ * Relógio de parede → o instante de verdade, para quem precisa mandar ISO em UTC.
+ *
+ * Duas passadas porque o deslocamento é o do instante FINAL, não o do palpite:
+ * na virada de um horário de verão a primeira conta usaria o offset do dia
+ * errado. Onde o fuso não muda, a segunda passada só confirma a primeira.
+ */
+function paraInstante(relogio) {
+    if (!relogio || Number.isNaN(relogio.getTime())) return null;
+    let d = relogio;
+    for (let i = 0; i < 2; i++) {
+        const desloc = d.getTime() - relogioDe(d).getTime();
+        d = new Date(relogio.getTime() + desloc);
+    }
+    return d;
 }
 
 /**
@@ -43,7 +82,7 @@ function momentoDe(texto) {
     const t = String(texto || '').trim().toLowerCase();
     if (!t) return null;
 
-    const agora = new Date(new Date().toLocaleString('en-US', { timeZone: TZ }));
+    const agora = relogioDe();
 
     if (/^(agora|já|ja|neste momento|agora mesmo)$/.test(t)) return agora;
 
@@ -79,9 +118,7 @@ const semConta = {
 
 /** Converte "hoje", "amanhã", "esta semana" em um intervalo ISO em UTC. */
 function periodo(quando = 'hoje') {
-    const agora = new Date();
-    const local = new Date(agora.toLocaleString('en-US', { timeZone: TZ }));
-    const inicio = new Date(local);
+    const inicio = relogioDe();
     inicio.setHours(0, 0, 0, 0);
     const fim = new Date(inicio);
 
@@ -92,7 +129,10 @@ function periodo(quando = 'hoje') {
     else if (q.includes('ontem')) { inicio.setDate(inicio.getDate() - 1); fim.setDate(fim.getDate()); }
     else { fim.setDate(fim.getDate() + 1); }
 
-    return { inicio: inicio.toISOString(), fim: fim.toISOString(), rotulo: q };
+    // `paraInstante` porque o relógio de parede virava ISO como se já fosse UTC:
+    // num servidor em UTC o "hoje" da agenda começava às 21h de ontem e perdia
+    // tudo o que estivesse depois das 21h de hoje.
+    return { inicio: paraInstante(inicio).toISOString(), fim: paraInstante(fim).toISOString(), rotulo: q };
 }
 
 function hora(iso) {
@@ -198,8 +238,9 @@ registerTool({
         + 'RESOLVA em vez de perguntar: se ele disse "agora", passe `quando: "agora"`; se disse a duração, '
         + 'passe `duracao_min`; se citou uma pessoa pelo nome, ache o e-mail com query_people e use. '
         + 'Só pergunte o que ele REALMENTE não disse e você não tem como descobrir. '
-        + 'A confirmação já é feita pela própria tool: sem `confirmado: true` ela devolve a prévia e não '
-        + 'agenda nada - então monte a prévia de primeira, não pergunte antes de montá-la. '
+        + 'A confirmação já é feita pela própria tool, e SÓ quando há convidados: aí, sem `confirmado: true`, '
+        + 'ela devolve a prévia e não agenda nada - então monte a prévia de primeira, não pergunte antes de '
+        + 'montá-la. Reunião sem convidado é agendada na hora, sem perguntar. '
         + 'A reunião é criada no calendário DELE, com ele como organizador.',
     parameters: {
         type: 'object',
@@ -282,9 +323,15 @@ registerTool({
             } };
         }
 
-        // Agendar dispara convite para outras pessoas: sem confirmação explícita,
-        // devolve a prévia e não cria nada.
-        if (args?.confirmado !== true) {
+        // ── Confirmação é por causa do CONVITE, não da reunião ───────────────
+        //
+        // O convite sai no nome da pessoa e cai na caixa dos outros: isso se
+        // confirma. Sem convidado nenhum, a reunião é uma linha na agenda dela,
+        // que se desmarca num clique - e aí perguntar é o "OK caro": ela pediu
+        // "marca uma reunião agora", recebeu uma pergunta de volta e o pedido
+        // não foi feito. Quem não tem consequência para escrever precisa de
+        // desfazer, não de confirmação: o cartão sai com "Desmarcar".
+        if (convidados.length && args?.confirmado !== true) {
             return {
                 result: {
                     // Prévia também é cartão: ler "de 2026-08-26T15:00:00 a
@@ -351,6 +398,9 @@ registerTool({
                     { label: 'Ver na agenda', icon: 'fas fa-calendar-days', link: '/microsoft/teams?tab=agenda' },
                     { label: 'Meu dia', icon: 'fas fa-compass', link: '/assistente' },
                 ],
+                // O desfazer de quem não foi perguntado: reunião sem convidado
+                // é agendada direto, então o caminho de volta fica à vista.
+                sugestoes: convidados.length ? [] : ['Desmarcar essa reunião'],
                 message: 'O cartão da reunião JÁ está na tela, com o botão de entrar. Confirme em uma frase e NÃO escreva a URL no texto.',
                 resumo: `Reunião "${evento.subject}" agendada para ${dia(evento.start)} às ${hora(evento.start)}`
                       + (convidados.length ? `, convite enviado para ${convidados.length} pessoa(s).` : '.'),
@@ -1183,13 +1233,15 @@ registerTool({
         }
 
         // O dia: o pedido diz, ou é hoje.
-        const hoje = new Date(new Date().toLocaleString('en-US', { timeZone: TZ }));
+        const hoje = relogioDe();
         const dia0 = /^\d{4}-\d{2}-\d{2}$/.test(args?.dia || '')
             ? args.dia
             : `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`;
 
-        const inicioDia = new Date(`${dia0}T00:00:00`);
-        const fimDia = new Date(`${dia0}T23:59:59`);
+        // ISO sem fuso é lido no relógio do SERVIDOR: em UTC, "00:00" do dia é
+        // 21h da véspera de Brasília. A janela precisa do instante certo.
+        const inicioDia = paraInstante(new Date(`${dia0}T00:00:00`));
+        const fimDia = paraInstante(new Date(`${dia0}T23:59:59`));
         const { items } = await teamsService.getCalendarView(u, inicioDia.toISOString(), fimDia.toISOString());
 
         const doDia = items.filter(e => !e.isCancelled && !e.isAllDay && String(e.start || '').startsWith(dia0));
