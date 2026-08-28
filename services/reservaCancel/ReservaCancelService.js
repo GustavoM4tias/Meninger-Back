@@ -37,12 +37,16 @@
 // cancelamento em massa retém TODOS os casos da rajada como 'held', sem tocar
 // em Sienge nem em CV. Regulado em settings (burst_*) — ver avaliarRajada().
 //
-// Workflow CV (definido pelo negócio em 2026-07-23):
+// Workflow CV (revisto em 2026-08-28):
 //   sucesso        → reserva PERMANECE/volta para "Cancelada" (settings.situacao_cancelada_id, ID 4)
-//   blocked/error  → reserva é movida para "Pendência" (settings.situacao_pendencia_id, ID 30);
-//                    ao regularizar, mover Pendência → Cancelada re-dispara o webhook e o
-//                    fluxo roda de novo. Assim "Cancelada" só contém o que foi de fato
-//                    cancelado dos dois lados.
+//   blocked/error  → a reserva NÃO muda de etapa. O desfecho vai na primeira linha da
+//                    mensagem postada na reserva (STATUS_CANCELAMENTO) e o acompanhamento
+//                    é pela tela do Office, que é onde se reprocessa.
+//
+// Por que a etapa saiu: o CV não libera a transição Cancelada → Pendência para o usuário
+// do token de integração (400 "bloqueada no workflow"). Foram 214 casos entre 23/07 e
+// 28/08 com `situacao_aplicada_id` nulo em 214 - a etapa nunca foi aplicada uma vez
+// sequer, e a mensagem sempre foi o único sinal que chegou ao gestor.
 
 import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
@@ -190,9 +194,9 @@ async function buscarClientesPorDocumento(doc) {
 }
 
 /**
- * Altera a situação da reserva no CV (workflow). Usada pra mover a reserva
- * pra "Pendência" quando algo barra o cancelamento, e pra devolver/manter em
- * "Cancelada" quando o fluxo conclui com sucesso.
+ * Altera a situação da reserva no CV (workflow). Hoje só serve pra devolver/manter
+ * a reserva em "Cancelada" quando o fluxo conclui com sucesso - o desvio pra
+ * "Pendência" saiu em 2026-08-28, ver o cabeçalho do arquivo.
  */
 async function alterarSituacaoCv(idreserva, idsituacao, comentario) {
     const tag = `[RESERVA-CANCEL][CV-SITUACAO][reserva ${idreserva}]`;
@@ -507,6 +511,25 @@ async function conferirEmpreendimento(contrato, unidade) {
 
 // ── Mensagens CV ──────────────────────────────────────────────────────────────
 
+// ── O status do cancelamento vive na MENSAGEM, não na etapa do CV ────────────
+//
+// A etapa "Pendência" nunca funcionou: o workflow do CV não libera
+// Cancelada -> Pendência para o usuário do token de integração, e a API responde
+// 400 "bloqueada no workflow". Medido em 28/08/2026: 214 casos desde 23/07,
+// `situacao_aplicada_id` nulo em 214 - nem uma vez. A etapa foi removida do CV e
+// o acompanhamento passou a ser o Office.
+//
+// Quem informa em que pé está o cancelamento é a PRIMEIRA LINHA da mensagem
+// postada na reserva, mesmo recurso que o Ato usa (lib/atoStatus.js). Vai no topo
+// porque na timeline o operador lê a primeira linha sem abrir a mensagem, e SEM
+// EMOJI porque `sanitizeCvMessage` remove todo code point fora do BMP - comeria
+// justamente a linha que mais importa.
+const STATUS_CANCELAMENTO = {
+    CONCLUIDO: 'STATUS DO CANCELAMENTO: CONCLUÍDO',
+    PENDENTE:  'STATUS DO CANCELAMENTO: PENDENTE - AÇÃO NECESSÁRIA',
+    ERRO:      'STATUS DO CANCELAMENTO: ERRO - REPROCESSAR',
+};
+
 function linhasBase(history) {
     return [
         `Reserva ${history.idreserva} - ${history.titular_nome || 'titular não identificado'}`,
@@ -517,6 +540,8 @@ function linhasBase(history) {
 
 function mensagemSucessoComDelete(history, contrato, checks) {
     return [
+        STATUS_CANCELAMENTO.CONCLUIDO,
+        '',
         '✅ Automação de cancelamento CV × Sienge concluída.',
         '',
         ...linhasBase(history),
@@ -535,6 +560,8 @@ function mensagemSucessoComDelete(history, contrato, checks) {
 
 function mensagemSucessoSemContrato(history, checks) {
     return [
+        STATUS_CANCELAMENTO.CONCLUIDO,
+        '',
         '✅ Automação de cancelamento CV × Sienge concluída.',
         '',
         ...linhasBase(history),
@@ -552,6 +579,8 @@ function mensagemSucessoSemContrato(history, checks) {
 
 function mensagemBloqueio(history, motivo) {
     return [
+        STATUS_CANCELAMENTO.PENDENTE,
+        '',
         '⚠️ Automação de cancelamento CV × Sienge NÃO executou o cancelamento desta reserva.',
         '',
         ...linhasBase(history),
@@ -560,22 +589,24 @@ function mensagemBloqueio(history, motivo) {
         '',
         'Nenhum dado foi alterado no Sienge.',
         'Para efetuar este cancelamento de maneira correta, envie um e-mail ao administrativo interno solicitando a regularização do contrato no Sienge.',
-        'A reserva foi movida para a etapa PENDÊNCIA no CV e só deve retornar para Cancelada após a regularização.',
+        'A reserva CONTINUA em Cancelada no CV: enquanto esta pendência não for resolvida, o cancelamento está pela metade.',
         '',
-        `Acompanhamento: ${OFFICE_TELA} (caso #${history.id}).`,
+        `Acompanhamento e reprocesso: ${OFFICE_TELA} (caso #${history.id}).`,
     ].join('\n');
 }
 
 function mensagemErro(history, motivo) {
     return [
+        STATUS_CANCELAMENTO.ERRO,
+        '',
         '❌ Automação de cancelamento CV × Sienge encontrou um erro nesta reserva.',
         '',
         ...linhasBase(history),
         '',
         `Erro: ${motivo}`,
         '',
-        'A reserva foi movida para a etapa PENDÊNCIA no CV até a regularização.',
-        `Reprocesse pela tela ${OFFICE_TELA} (caso #${history.id}) ou retorne a reserva para Cancelada para tentar novamente.`,
+        'A reserva CONTINUA em Cancelada no CV e o cancelamento NÃO foi concluído.',
+        `Reprocesse pela tela ${OFFICE_TELA} (caso #${history.id}).`,
     ].join('\n');
 }
 
@@ -740,7 +771,8 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
     };
 
     // Preenchido após a reserva ser carregada e confirmada como cancelada -
-    // habilita os finalizadores a mexer no workflow do CV (Pendência/Cancelada).
+    // habilita os finalizadores a mexer no workflow do CV (Cancelada) e a postar
+    // mensagem na reserva.
     let reservaCtx = null; // { situacaoId }
 
     /**
@@ -767,29 +799,28 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         return false;
     };
 
-    // Bloqueio por REGRA: nada foi alterado no Sienge; mensagem orienta e-mail
-    // ao administrativo interno e a reserva vai pra etapa Pendência no CV.
+    // Bloqueio por REGRA: nada foi alterado no Sienge. A reserva fica onde está e
+    // a pendência é anunciada na primeira linha da mensagem, com orientação de
+    // e-mail ao administrativo interno.
     const finishBlocked = async (motivo) => {
         console.warn(`${tag} BLOQUEADO: ${motivo}`);
         await ev('blocked', motivo, 'warning');
         const msg = await sendCvMessage(idreserva, mensagemBloqueio(history, motivo));
-        if (msg.ok) await ev('cv_message_sent', 'Mensagem de pendência registrada na reserva CV.');
+        if (msg.ok) await ev('cv_message_sent', 'Pendência registrada na mensagem da reserva CV (1ª linha: STATUS DO CANCELAMENTO).');
         else warnings.push({ etapa: 'cv_mensagem', erro: msg.error });
-        if (reservaCtx) await aplicarSituacaoCv(settings.situacao_pendencia_id, 'Pendência');
         return finish('blocked', motivo, { cv_mensagem_enviada: !!msg.ok });
     };
 
-    // Erro TÉCNICO: reserva também vai pra Pendência (se já sabemos que está
-    // cancelada), com mensagem própria orientando o reprocesso.
+    // Erro TÉCNICO: mensagem própria na reserva (se já sabemos que ela está
+    // cancelada), orientando o reprocesso pela tela.
     const finishError = async (motivo, extra = {}) => {
         console.error(`${tag} ERRO: ${motivo}`);
         let msgOk = false;
         if (reservaCtx) {
             const msg = await sendCvMessage(idreserva, mensagemErro(history, motivo));
             msgOk = !!msg.ok;
-            if (msg.ok) await ev('cv_message_sent', 'Mensagem de erro registrada na reserva CV.');
+            if (msg.ok) await ev('cv_message_sent', 'Erro registrado na mensagem da reserva CV (1ª linha: STATUS DO CANCELAMENTO).');
             else warnings.push({ etapa: 'cv_mensagem', erro: msg.error });
-            await aplicarSituacaoCv(settings.situacao_pendencia_id, 'Pendência');
         }
         return finish('error', motivo, { cv_mensagem_enviada: msgOk, ...extra });
     };
@@ -1106,7 +1137,7 @@ async function runProcess({ idreserva, manual, triggeredBy, webhookPayload, tag 
         const detail = describeApiError(err);
         console.error(`${tag} ✗ Erro: ${detail}`);
         await ev('error', detail, 'error');
-        // finishError também move a reserva pra Pendência (se a reserva já foi
+        // finishError também registra a mensagem de erro na reserva (se ela já foi
         // confirmada como cancelada nesta execução).
         return finishError(detail).catch(() => history);
     }
