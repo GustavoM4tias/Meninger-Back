@@ -21,10 +21,14 @@ const canView = [authenticate, requireInternal, requireCapability(ROUTE, 'view')
 const canManage = [authenticate, requireInternal, requireCapability(ROUTE, 'manage')];
 const canConfigure = [authenticate, requireInternal, requireCapability(ROUTE, 'configure')];
 
-// Fotos do stand: só imagem, até 8 MB, direto para o bucket (sem disco local).
+// Fotos do stand: só imagem, direto para o bucket (sem disco local). A tela
+// reduz e comprime antes de enviar, então o normal é chegar aqui com algumas
+// centenas de KB; o teto folgado existe para o arquivo que o navegador não
+// conseguiu tratar chegar e receber uma recusa explicada, em vez de ser cortado
+// pelo multer com um erro seco.
 const imageUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 8 * 1024 * 1024 },
+    limits: { fileSize: 12 * 1024 * 1024, files: 2 },
     fileFilter: (_req, file, cb) => {
         if (!/^image\/(jpeg|png|webp|gif|heic|heif)$/i.test(file.mimetype || '')) {
             return cb(new Error('Envie uma imagem (JPG, PNG, WEBP ou HEIC).'));
@@ -75,7 +79,11 @@ router.put('/:id(\\d+)/items', ...canManage, ctrl.updateStandItems);
 
 // Fotos
 router.get('/:id(\\d+)/images', ...canView, ctrl.listImages);
-router.post('/:id(\\d+)/images', ...canManage, imageUpload.single('file'), ctrl.addImage);
+router.post('/:id(\\d+)/images', ...canManage,
+    imageUpload.fields([{ name: 'file', maxCount: 1 }, { name: 'thumb', maxCount: 1 }]),
+    ctrl.addImage);
+// Reordenar = definir a capa: a primeira foto e a que aparece no cartao.
+router.patch('/:id(\\d+)/images/order', ...canManage, ctrl.reorderImages);
 router.patch('/:id(\\d+)/images/:imageId(\\d+)', ...canManage, ctrl.updateImage);
 router.delete('/:id(\\d+)/images/:imageId(\\d+)', ...canManage, ctrl.deleteImage);
 

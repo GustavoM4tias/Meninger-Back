@@ -406,6 +406,7 @@ export async function getStandDetail({ id, user }) {
             sporadic_value: spend.summary.totals.esporadica,
             unclassified_value: spend.summary.totals.sem_classificacao,
             images: images.map(plain),
+            images_max: MAX_IMAGES,
         },
         expenses: spend.items,
         summary: spend.summary,
@@ -672,6 +673,13 @@ export async function undefineStand({ id, userId, user }) {
 
 const IMAGE_BUCKET = process.env.SUPABASE_BUCKET || 'Office Bucket';
 const MAX_IMAGES = Number(process.env.SALES_STAND_MAX_IMAGES || 24);
+// O bucket do Office recusa objeto acima de 2 MB (medido em 27/08/2026:
+// file_size_limit = 2097152). A tela manda a foto já tratada e bem abaixo
+// disso; este teto existe para o erro ser explicado aqui, em vez de voltar do
+// Supabase como "The object exceeded the maximum allowed size".
+const MAX_IMAGE_BYTES = Number(process.env.SALES_STAND_MAX_IMAGE_BYTES || 2 * 1024 * 1024);
+
+const mb = (n) => `${(Number(n || 0) / (1024 * 1024)).toFixed(1)} MB`;
 
 export async function listStandImages({ id, user }) {
     const row = await loadStandForUser(id, user);
@@ -679,33 +687,69 @@ export async function listStandImages({ id, user }) {
         where: { stand_id: row.id },
         order: [['sort_order', 'ASC'], ['id', 'ASC']],
     });
-    return { items: rows.map(plain) };
+    return { items: rows.map(plain), max: MAX_IMAGES };
 }
 
-export async function addStandImage({ id, file, caption, userId, user }) {
+async function subirObjeto(buffer, path, contentType) {
+    const { error } = await supabase.storage
+        .from(IMAGE_BUCKET)
+        .upload(path, buffer, { contentType: contentType || 'image/jpeg', upsert: false });
+    if (error) throw httpError(`Falha ao subir a foto: ${error.message}`, 502);
+    const { data } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(path);
+    return data?.publicUrl || null;
+}
+
+/**
+ * Guarda a foto do stand. A tela manda a imagem já redimensionada e comprimida,
+ * mais uma miniatura; se a miniatura não vier (navegador que não decodificou o
+ * arquivo), a foto tratada serve de miniatura e a grade fica mais pesada.
+ */
+export async function addStandImage({ id, file, thumb, caption, width, height, userId, user }) {
     const row = await loadStandForUser(id, user);
     if (!file?.buffer?.length) throw httpError('Nenhuma imagem recebida.', 400);
+    if (file.buffer.length > MAX_IMAGE_BYTES) {
+        throw httpError(
+            `A foto tem ${mb(file.buffer.length)} e o limite do armazenamento é ${mb(MAX_IMAGE_BYTES)}. `
+            + 'Tente de novo por um navegador atualizado (a tela reduz a foto antes de enviar) ou envie uma imagem menor.',
+            413, 'IMAGE_TOO_LARGE',
+        );
+    }
 
     const total = await db.SalesStandImage.count({ where: { stand_id: row.id } });
     if (total >= MAX_IMAGES) {
         throw httpError(`Este stand já tem ${MAX_IMAGES} fotos. Apague alguma antes de subir outra.`, 409);
     }
 
-    const ext = (file.originalname?.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
-    const path = `office/stand-vendas/${row.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const { error } = await supabase.storage
-        .from(IMAGE_BUCKET)
-        .upload(path, file.buffer, { contentType: file.mimetype || 'image/jpeg', upsert: false });
-    if (error) throw httpError(`Falha ao subir a foto: ${error.message}`, 502);
+    const ext = (file.mimetype || '').includes('webp') ? 'webp' : 'jpg';
+    const base = `office/stand-vendas/${row.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const path = `${base}.${ext}`;
+    const url = await subirObjeto(file.buffer, path, file.mimetype);
 
-    const { data } = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(path);
+    let thumbPath = null;
+    let thumbUrl = null;
+    if (thumb?.buffer?.length && thumb.buffer.length <= MAX_IMAGE_BYTES) {
+        thumbPath = `${base}-thumb.${ext}`;
+        try {
+            thumbUrl = await subirObjeto(thumb.buffer, thumbPath, thumb.mimetype);
+        } catch (e) {
+            // Miniatura é conforto, não requisito: se ela falhar, a foto entra
+            // do mesmo jeito e a grade usa a imagem cheia.
+            console.warn('[salesStand.addStandImage] miniatura falhou:', e?.message || e);
+            thumbPath = null;
+        }
+    }
+
     const image = await db.SalesStandImage.create({
         stand_id: row.id,
-        url: data?.publicUrl || null,
+        url,
         path,
+        thumb_url: thumbUrl,
+        thumb_path: thumbPath,
         caption: (caption || '').trim().slice(0, 200) || null,
         content_type: file.mimetype || null,
         size_bytes: file.size || file.buffer.length,
+        width: Number(width) || null,
+        height: Number(height) || null,
         sort_order: total,
         uploaded_by: userId || null,
     });
@@ -722,19 +766,47 @@ export async function updateStandImage({ id, imageId, payload = {}, user }) {
     return plain(image);
 }
 
+/**
+ * Reordena as fotos de uma vez. A primeira é a CAPA do stand (é ela que
+ * aparece no cartão da listagem), então "definir como capa" é só mandar aquela
+ * foto para o começo.
+ */
+export async function reorderStandImages({ id, ids, user }) {
+    const row = await loadStandForUser(id, user);
+    const ordem = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter(Boolean))];
+    if (!ordem.length) throw httpError('Informe a nova ordem das fotos.', 400);
+
+    const fotos = await db.SalesStandImage.findAll({ where: { stand_id: row.id } });
+    const porId = new Map(fotos.map((f) => [f.id, f]));
+    let pos = 0;
+    for (const imageId of ordem) {
+        const foto = porId.get(imageId);
+        if (!foto) continue;
+        foto.sort_order = pos++;
+        await foto.save();
+        porId.delete(imageId);
+    }
+    // Foto que não veio na lista vai para o fim, preservando a ordem relativa.
+    for (const foto of [...porId.values()].sort((a, b) => a.sort_order - b.sort_order)) {
+        foto.sort_order = pos++;
+        await foto.save();
+    }
+    return listStandImages({ id, user });
+}
+
 export async function deleteStandImage({ id, imageId, user }) {
     const row = await loadStandForUser(id, user);
     const image = await db.SalesStandImage.findOne({ where: { id: Number(imageId), stand_id: row.id } });
     if (!image) throw httpError('Foto não encontrada.', 404);
-    if (image.path) {
-        const { error } = await supabase.storage.from(IMAGE_BUCKET).remove([image.path]);
+    const objetos = [image.path, image.thumb_path].filter(Boolean);
+    if (objetos.length) {
+        const { error } = await supabase.storage.from(IMAGE_BUCKET).remove(objetos);
         // Objeto órfão no bucket não pode travar a tela; o registro sai de qualquer jeito.
         if (error) console.warn('[salesStand.deleteStandImage] bucket:', error.message);
     }
     await image.destroy();
     return { ok: true };
 }
-
 
 // ── Seed dos 4 modelos padrão (Standard/Medium/Plus/Premium) ─────────────────
 // Faixas propositalmente ambíguas (de/até; máx 0 = aberta "X+").
@@ -893,6 +965,7 @@ export default {
     listStandImages,
     addStandImage,
     updateStandImage,
+    reorderStandImages,
     deleteStandImage,
     clearSpendCache,
     seedSalesStandModels,

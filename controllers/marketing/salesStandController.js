@@ -168,11 +168,26 @@ export default {
         catch (err) { fail(res, err); }
     },
 
+    // A tela manda a foto já tratada em `file` e a miniatura em `thumb`.
     async addImage(req, res) {
         try {
             res.status(201).json(await svc.addStandImage({
-                id: req.params.id, file: req.file, caption: req.body?.caption,
-                userId: req.user.id, user: req.user,
+                id: req.params.id,
+                file: req.files?.file?.[0],
+                thumb: req.files?.thumb?.[0],
+                caption: req.body?.caption,
+                width: req.body?.width,
+                height: req.body?.height,
+                userId: req.user.id,
+                user: req.user,
+            }));
+        } catch (err) { fail(res, err); }
+    },
+
+    async reorderImages(req, res) {
+        try {
+            res.json(await svc.reorderStandImages({
+                id: req.params.id, ids: req.body?.ids, user: req.user,
             }));
         } catch (err) { fail(res, err); }
     },
