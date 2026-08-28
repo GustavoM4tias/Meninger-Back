@@ -120,8 +120,8 @@ registerTool({
         type: 'object',
         properties: {
             busca: { type: 'string', description: 'Nome, parte do nome ou e-mail da pessoa procurada. Use SEMPRE que o usuário citar alguém pelo nome.' },
-            departamento: { type: 'string', description: 'Filtra por departamento (ex: Marketing, Comercial, Financeiro).' },
-            cargo: { type: 'string', description: 'Filtra por cargo (ex: Gerente, Analista).' },
+            departamento: { type: 'string', description: 'Filtra pelo DEPARTAMENTO (ex: Marketing, Comercial, Financeiro). Use quando o pedido for sobre a ÁREA: "o time do Comercial", "os gestores DO Comercial" (aí some `apenas: "gestores"`).' },
+            cargo: { type: 'string', description: 'Filtra pelo CARGO da pessoa (ex: "Gestor Comercial", "Analista de Marketing"). Use quando o pedido NOMEIA o cargo - "os gestores comerciais", "os analistas de marketing". Pode mandar no plural, como o usuário falou: a tool casa "gestores comerciais" com "Gestor Comercial". Recorte diferente do departamento: por cargo vêm só os que têm aquele cargo, sem gerente/coordenador/diretor da área.' },
             cidade: { type: 'string', description: 'Filtra por cidade.' },
             apenas: { type: 'string', enum: ['gestores', 'admins', 'todos'], description: '"gestores" = quem tem cargo de liderança (gestor, gerente, coordenador, diretor, supervisor) OU lidera alguém no organograma - é o filtro certo para "todos os gestores do Comercial"; "admins" = só administradores do sistema. Padrão: todos.' },
         },
