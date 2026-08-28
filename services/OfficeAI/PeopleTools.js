@@ -32,6 +32,27 @@ const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toL
 const CARGO_LIDERANCA = /(gestor|gerente|diretor|coordenador|supervisor|superintendente|head|l[ií]der)/i;
 const ehLideranca = (u) => (u.team?.length > 0) || CARGO_LIDERANCA.test(String(u.position || ''));
 
+// ── Plural do pedido x singular do cadastro ──────────────────────────────────
+//
+// O usuário fala "gestores comerciais" e o modelo repassa exatamente assim; no
+// cadastro o cargo é "Gestor Comercial". Um `includes()` cru não casa NADA - e o
+// filtro que não casa nada devolve a lista inteira ou vazia, os dois errados.
+// Casamos token a token, cada um reduzido ao singular.
+const singular = (w) => w
+    .replace(/ais$/, 'al')
+    .replace(/eis$/, 'el')
+    .replace(/ois$/, 'ol')
+    .replace(/oes$/, 'ao')
+    .replace(/es$/, '')
+    .replace(/s$/, '');
+
+/** Todos os termos do filtro precisam aparecer em algum dos campos. */
+function casaTermos(filtro, ...campos) {
+    const alvo = campos.map(norm).filter(Boolean).join(' | ');
+    const tokens = norm(filtro).split(/\s+/).filter(Boolean).map(singular);
+    return tokens.length > 0 && tokens.every(t => alvo.includes(t));
+}
+
 async function loadDirectory() {
     const [users, positions, departments] = await Promise.all([
         db.User.findAll({
@@ -125,8 +146,8 @@ registerTool({
         const apenas = ['gestores', 'admins', 'todos'].includes(args?.apenas) ? args.apenas : 'todos';
 
         if (busca) rows = rows.filter(u => norm(u.username).includes(busca) || norm(u.email).includes(busca));
-        if (dep) rows = rows.filter(u => norm(u.department).includes(dep) || norm(u.position).includes(dep));
-        if (cargo) rows = rows.filter(u => norm(u.position).includes(cargo));
+        if (dep) rows = rows.filter(u => casaTermos(dep, u.department, u.position));
+        if (cargo) rows = rows.filter(u => casaTermos(cargo, u.position));
         if (cidade) rows = rows.filter(u => norm(u.city).includes(cidade));
         if (apenas === 'admins') rows = rows.filter(u => u.role === 'admin');
         if (apenas === 'gestores') rows = rows.filter(ehLideranca);
