@@ -569,7 +569,12 @@ async function getLastBridgeContext(sessionId) {
       // Genérico: qualquer action com itens nomeáveis (linhas/cards) serve de
       // ponte — o mesmo problema de "continuação plural" existe em todas as tools.
       const hasItems = extractItemLabels(a).length > 0;
-      if (hasIds || hasFilters || hasConditionsCtx || hasItems) { action = a; break; }
+      // Reunião recém-agendada/editada: o id do evento é a ponte para o pedido
+      // seguinte ("convide os gestores comerciais para ELA"). Sem isto o modelo
+      // perguntava de volta qual era a reunião que ele mesmo tinha acabado de
+      // criar - o histórico guarda só texto, e o cartão levava o id embora.
+      const hasMeeting = ctx.source === 'meeting' && ctx.evento_id;
+      if (hasIds || hasFilters || hasConditionsCtx || hasItems || hasMeeting) { action = a; break; }
     } catch { /* skip */ }
   }
   if (!action || !action.context) return '';
@@ -606,6 +611,11 @@ async function getLastBridgeContext(sessionId) {
     bits.push(`empreendimentos_anteriores=[${c.empreendimentos.slice(0, 30).join(' | ')}]`);
   }
   if (c.ficha_id)               bits.push(`ficha_id=${c.ficha_id}`);
+  if (c.evento_id) {
+    bits.push(`reuniao_id=${c.evento_id}`);
+    if (c.assunto) bits.push(`reuniao_assunto=${c.assunto}`);
+    if (c.inicio)  bits.push(`reuniao_inicio=${c.inicio}`);
+  }
   if (c.foco)                   bits.push(`foco=${c.foco}`);
   // Itens nomeáveis da última consulta (qualquer tool): referência exata para
   // continuações plurais — "detalhe de cada um", "a ficha dos 3", "e o segundo?".

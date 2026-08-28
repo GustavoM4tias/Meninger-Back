@@ -394,6 +394,21 @@ registerTool({
                 inicio: evento.start,
                 fim: evento.end,
                 linkEntrada: evento.joinUrl,
+                // ── A reunião recém-criada precisa sobreviver ao turno ───────
+                //
+                // Medido: agendei "Elaboração Eventos Setembro" e no turno
+                // seguinte o pedido "convide os gestores comerciais para ela"
+                // virou uma pergunta de volta ("qual reunião?"), porque o
+                // histórico do chat guarda só TEXTO - o `id` do evento morria
+                // com o cartão. `context` é o que o bridge do OfficeChatService
+                // lê para o próximo turno: com ele, "ela" resolve sozinho.
+                context: {
+                    source: 'meeting',
+                    evento_id: evento.id,
+                    assunto: evento.subject,
+                    inicio: evento.start,
+                    fim: evento.end,
+                },
                 atalhos: [
                     { label: 'Ver na agenda', icon: 'fas fa-calendar-days', link: '/microsoft/teams?tab=agenda' },
                     { label: 'Meu dia', icon: 'fas fa-compass', link: '/assistente' },
@@ -928,6 +943,15 @@ registerTool({
         return { result: {
             alterado: true,
             reuniao: resumoDoEvento(atualizado),
+            // Mesma ponte do schedule_meeting: quem acabou de editar costuma
+            // pedir mais uma coisa na MESMA reunião ("agora tira a Ana").
+            context: {
+                source: 'meeting',
+                evento_id: atualizado.id,
+                assunto: atualizado.subject,
+                inicio: atualizado.start,
+                fim: atualizado.end,
+            },
             resumo: `"${atualizado.subject}" atualizada para ${dia(atualizado.start)} às ${hora(atualizado.start)}. Os participantes foram avisados.`,
         } };
     },

@@ -66,7 +66,13 @@ const PISTAS = [
     { quando: /lead|m[ií]dia|campanha|meta|marketing|an[úu]ncio/i, tools: /(lead|marketing|campaign|meta)/i },
     { quando: /boleto|t[íi]tulo|custo|pagamento|financeiro|inadimpl|receber/i,
       tools: /(boleto|custo|payment|financ|title|titulo)/i },
-    { quando: /pessoa|usu[áa]rio|colaborador|equipe|organograma|cargo/i, tools: /(people|user|pessoa)/i },
+    // "gestores comerciais" nao tinha pista nenhuma: a palavra que sobrava era
+    // "comerciais", que pontua alto na descricao das tools de FICHA comercial -
+    // e foi exatamente a tela que a Eme abriu quando pediram para convidar os
+    // gestores para uma reuniao. Cargo generico agora puxa gente, nao ficha.
+    { quando: /pessoa|usu[áa]rio|colaborador|equipe|organograma|cargo|gestor|gerente|diretor|coordenador|supervisor/i, tools: /(people|user|pessoa)/i },
+    // Convidar e sempre duas coisas: QUEM (people) e PARA ONDE (meeting).
+    { quando: /convid|convoc/i, tools: /(meeting|agenda|people|pessoa)/i },
     { quando: /imobili[áa]ria|corretor|correspondente/i, tools: /(realestate|imobili|corretor)/i },
     { quando: /processo|procedimento|pop|como fa[çz]|academy|treinamento|trilha/i, tools: /^academy/ },
     { quando: /alerta|aviso autom|monitor/i, tools: /alert/ },
