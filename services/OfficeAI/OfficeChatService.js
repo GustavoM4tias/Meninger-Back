@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { assembleSystemPrompt } from './promptAssembler.js';
-import { MAX_PROMPT_ENTERPRISES, PLURAL_COMPONENT_RULES } from './systemPrompt.js';
+import { MAX_PROMPT_ENTERPRISES, PLURAL_COMPONENT_RULES, SCOPE_RULES } from './systemPrompt.js';
 import { getActiveBrain } from './ConfigService.js';
 import { buildAcademyTutorPrompt } from './academyTutorPrompt.js';
 import { TOOL_DECLARATIONS as MARKETING_DECLARATIONS, executeTool as marketingExecuteTool } from './MarketingTools.js';
@@ -741,6 +741,8 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     // Regras de pluralidade/componentes/formatação — SEMPRE anexadas (fora do
     // Cérebro, como o bloco de voz), para valerem também com brain publicado.
     systemPrompt += PLURAL_COMPONENT_RULES;
+    // Escopo de trabalho: curto para o avulso, sem virar tutor nem persona.
+    systemPrompt += SCOPE_RULES;
 
     // Eme do Office é o assistente ÚNICO — também responde sobre PROCESSOS do
     // Academy. Anexa as tools do registry elegíveis p/ OFFICE (academy_*),
