@@ -24,8 +24,10 @@
 //      forcar_distribuicao_lead, o protocolo do CV registrou "Lead não
 //      encontrou uma fila compatível e foi represado" — a distribuição rodou e
 //      não teve para quem dar (o lead tem 8 interesses em 4 cidades, nenhuma
-//      regra de fila casa). Informar `idfila` pula as regras e é o único jeito
-//      de garantir atendimento. As filas saem de listFilas().
+//      regra de fila casa). E `idfila` sozinho também não basta: medido em
+//      28/08/2026 no lead 10685, em edição de lead existente o CV registra a
+//      fila mas só roda o motor com forcar_distribuicao_lead junto. É o par
+//      idfila + forçar que garante atendimento. As filas saem de listFilas().
 //   3. Não desfaz. Situação e dono novos não voltam por API — o estado anterior
 //      fica em `antes`, na resposta e no evento, para refazer à mão no painel.
 //
@@ -193,7 +195,11 @@ export async function returnLeadToQueue({
         // verificacao de regras (doc do campo) e e a unica forma de garantir
         // que alguem receba.
         ...(idfila ? { idfila_distribuicao_leads: Number(idfila) } : {}),
-        ...(forcarDistribuicao ? { forcar_distribuicao_lead: true } : {}),
+        // Fila explicita SEM o forcar nao entrega: medido em 28/08/2026 no lead
+        // 10685 — em edicao de lead existente o CV registra a fila mas nao roda
+        // a distribuicao sozinho, e o lead ficou sem dono ate o envio manual
+        // pelo painel. Com idfila, o forcar vai junto sempre.
+        ...((forcarDistribuicao || idfila) ? { forcar_distribuicao_lead: true } : {}),
         ...(conversao ? { conversao } : {}),
         ...(midia ? { midia } : {}),
         ...(origem ? { origem } : {}),
@@ -208,7 +214,7 @@ export async function returnLeadToQueue({
         interesse_ja_existia: jaTemInteresse,
         interesses_que_permanecem: antes.interesses,
         fila: idfila
-            ? `fila ${idfila} (explícita, pula as regras do CV)`
+            ? `fila ${idfila} (explícita + distribuição forçada, pula as regras do CV)`
             : 'escolhida pelo CV pelas regras dele — pode não achar nenhuma e represar o lead',
     };
 

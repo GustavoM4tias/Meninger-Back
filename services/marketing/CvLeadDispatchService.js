@@ -227,6 +227,12 @@ async function applySecondInterestReturn(lead, payload, mirror, situacao) {
     payload.remover_corretor = true;
     payload.lead_utilizar_fila = true;
     payload.idfila_distribuicao_leads = fila.idfila;
+    // Em EDIÇÃO de lead existente o CV registra a fila mas não roda a
+    // distribuição sozinho: medido em 28/08/2026 no lead 10685, que ficou sem
+    // dono até o envio manual pelo painel. O forcar é o gatilho do motor (no
+    // lead 12361 ele rodou a distribuição mesmo sem achar fila); com o idfila
+    // explícito junto, a entrega sai no mesmo POST.
+    payload.forcar_distribuicao_lead = true;
 
     console.log(`[marketing-capture] lead ${lead.id}: segundo interesse (${alvo}) em etapa "${situacao.nome}" — devolvendo para ${fila.nome}.`);
     return {
