@@ -1041,6 +1041,38 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         if (formaPagamento === 'cartao') {
             const { default: UseredeLink } = await import('../userede/UseredeLinkService.js');
 
+            // Gate de pausa do cartao: o toggle "Automacao" da tela do Userede
+            // vale AQUI (os schedulers dele so cuidam de sessao e conciliacao).
+            // Fica DEPOIS do gate de re-trigger de proposito: se a condicao
+            // mudou, o link antigo ja foi excluido la atras - melhor nada
+            // pagavel do que um link com valor errado no ar.
+            const useredeSettings = await db.UseredeSettings.findByPk(1);
+            if (!useredeSettings?.active) {
+                console.log(`[BOLETO] Emissao por cartao PAUSADA nas configuracoes. Reserva ${idreserva} nao emitida.`);
+                await history.update({
+                    status: 'error',
+                    error_message: 'Emissao de link de cartao pausada nas configuracoes do Userede. Reative a automacao e reprocesse este acionamento.',
+                    titular_nome: titular?.nome,
+                    empreendimento: unidade?.empreendimento,
+                    idpessoa_cv: titular?.idpessoa_cv,
+                    valor: valorEmitir,
+                    valor_original: valorOriginal,
+                    comissao_percentual_aplicada: comissaoPercentualAplicada,
+                    vencimento: vencimentoStr,
+                });
+                const msgPausa = [
+                    'X Link de pagamento no cartao NAO foi gerado: a emissao por cartao esta pausada no Office.',
+                    '',
+                    `Condicao: ${qtdParcelas}x - ${formatCurrency(valorEmitir)}`,
+                    `Vencimento: ${formatDate(vencimentoStr)}`,
+                    '',
+                    'Quando a emissao for reativada, reprocesse o acionamento na tela do Ato ou salve a reserva novamente no CV.',
+                ].join('\n');
+                const msgPausaOk = pushWarn(await sendCvMessage(idreserva, msgPausa, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
+                await history.update({ cv_mensagem_enviada: msgPausaOk });
+                return;
+            }
+
             // O registro do boleto vira 'skipped': nao e falha, e a outra forma.
             await history.update({
                 status: 'skipped',
