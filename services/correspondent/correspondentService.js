@@ -422,21 +422,41 @@ export async function sincronizarEspelho() {
     return usuarios.length;
 }
 
+// Nome de sistema para a empresa que existe no CV e ainda não tem nome em
+// lugar nenhum. Sai sozinho na primeira rodada em que o CV der o nome dela.
+const ROTULO_PROVISORIO = /^Empresa #[0-9]+$/;
+export const rotuloProvisorio = (id) => `Empresa #${id}`;
+
 /**
  * Materializa as empresas no cadastro do Office.
  *
  * Antes o nome era resolvido só na hora de montar a tela; agora o sync grava,
  * então a listagem passa a ser por NOME de verdade (dado do Office) e não por
  * um rótulo calculado. Empresas assim nascem com status `imported`: o nome
- * veio do pré-cadastro, não de um cadastro conferido, e a tela deixa isso
- * visível para quem quiser confirmar região/cidade/endereço.
+ * veio do CV, não de um cadastro conferido, e a tela deixa isso visível para
+ * quem quiser confirmar região/cidade/endereço.
+ *
+ * CCA NOVO (corrigido em 2026-08-28): antes a empresa só era criada se já
+ * existisse nome vindo do CV. Quem acabou de ser cadastrado no CV não tem
+ * pré-cadastro nem reserva ainda - era exatamente o correspondente novo que
+ * ficava invisível na tela, junto com a equipe dele (a empresa 39 passou 2 dias
+ * assim). Agora empresa com gente no espelho entra sempre; sem nome conhecido
+ * ela nasce com o rótulo provisório, que o próprio sync troca pelo nome de
+ * verdade assim que o primeiro pré-cadastro ou reserva chegar.
  */
 export async function importarEmpresasDoCv(usuarios = null) {
     const lista = usuarios || await listarUsuariosCv();
-    const nomes = await mapaNomesDoPrecadastro();
+    const nomes = await mapaNomesDoCv();
 
-    const ids = [...new Set(lista.map((u) => Number(u.idempresa)).filter(Boolean))];
-    if (!ids.length) return { criadas: 0, atualizadas: 0 };
+    // União das duas leituras possíveis: quem tem gente no espelho e quem
+    // aparece nomeado em pré-cadastro/reserva. Uma empresa pode existir só de
+    // um lado - CCA recém-criado ainda não tem movimento, e CCA antigo pode ter
+    // perdido a equipe e continuar recebendo pré-cadastro.
+    const ids = [...new Set([
+        ...lista.map((u) => Number(u.idempresa)),
+        ...nomes.keys(),
+    ].filter(Boolean))];
+    if (!ids.length) return { criadas: 0, atualizadas: 0, removidas: 0 };
 
     const existentes = await CorrespondentCompany.findAll({ where: { cv_idempresa: ids } });
     const porId = new Map(existentes.map((e) => [Number(e.cv_idempresa), e]));
@@ -449,13 +469,10 @@ export async function importarEmpresasDoCv(usuarios = null) {
         const atual = porId.get(id);
 
         if (!atual) {
-            // Sem nome no pré-cadastro a empresa não entra: seria uma linha
-            // "Empresa #N" sem nenhuma informação útil, só poluindo a lista.
             // Empresa cadastrada por gente no Office nunca cai aqui.
-            if (!nomeCv) continue;
             await CorrespondentCompany.create({
                 cv_idempresa: id,
-                nome: nomeCv,
+                nome: nomeCv || rotuloProvisorio(id),
                 status: 'imported',
             });
             criadas++;
@@ -470,11 +487,17 @@ export async function importarEmpresasDoCv(usuarios = null) {
         }
     }
 
-    // Limpa resquício de importação antiga: empresa `imported` que ficou só
-    // com o rótulo "Empresa #N" não tem nome no pré-cadastro e não deve
-    // aparecer. Registro confirmado por gente (linked/external) é preservado.
+    // Limpa resquício de importação antiga: empresa `imported` com rótulo
+    // provisório que NÃO existe mais no CV (sem gente no espelho e sem nome em
+    // lugar nenhum) é lixo de importação e sai. A que ainda existe fica - é o
+    // CCA novo esperando o nome aparecer. Registro confirmado por gente
+    // (linked/external) é sempre preservado.
     const removidas = await CorrespondentCompany.destroy({
-        where: { status: 'imported', nome: { [Op.regexp]: '^Empresa #[0-9]+$' } },
+        where: {
+            status: 'imported',
+            nome: { [Op.regexp]: '^Empresa #[0-9]+$' },
+            cv_idempresa: { [Op.notIn]: ids },
+        },
     });
 
     if (criadas || atualizadas || removidas) {
@@ -483,37 +506,61 @@ export async function importarEmpresasDoCv(usuarios = null) {
     return { criadas, atualizadas, removidas };
 }
 
-const ENTIDADES = { '&amp;': '&', '&quot;': '"', '&#39;': "'", '&lt;': '<', '&gt;': '>', '&nbsp;': ' ' };
-const decodifica = (s) => String(s || '').replace(/&(amp|quot|#39|lt|gt|nbsp);/g, (m) => ENTIDADES[m] || m).trim();
+const ENTIDADES = { '&amp;': '&', '&quot;': '"', '&lt;': '<', '&gt;': '>', '&nbsp;': ' ' };
+/**
+ * O CV escapa o nome da empresa em HTML, e não só na forma nomeada: a empresa
+ * 39 chegou como "HIMARY &#38; MARTINI LTDA" (2026-08-28), com o & em código
+ * numérico, que o mapa de nomes não cobria - o nome ia para a tela com o código
+ * cru no meio. Por isso a forma numérica é resolvida por cálculo, não por lista.
+ */
+const decodifica = (s) => String(s || '')
+    .replace(/&(amp|quot|lt|gt|nbsp);/g, (m) => ENTIDADES[m] || m)
+    .replace(/&#(\d{1,6});/g, (m, n) => {
+        const cod = Number(n);
+        return cod > 0 && cod <= 0x10ffff ? String.fromCodePoint(cod) : m;
+    })
+    .trim();
 
 /**
- * Nome das empresas correspondentes a partir dos pré-cadastros.
+ * Nome das empresas correspondentes deduzido do que o CV já mandou.
  *
- * O GET de empresas do CV está quebrado, mas cada pré-cadastro carrega
- * `empresa_correspondente: { idempresa, nome }`. Isso resolve o nome de
- * praticamente todas as empresas sem ninguém digitar nada. Quando o CV tem
- * grafias diferentes para o mesmo id, vence a mais frequente.
+ * O GET de empresas do CV está quebrado, mas tanto o pré-cadastro quanto a
+ * reserva carregam `empresa_correspondente: { idempresa, nome }`. Isso resolve
+ * o nome de praticamente todas as empresas sem ninguém digitar nada. Quando o
+ * CV tem grafias diferentes para o mesmo id, vence a mais frequente.
+ *
+ * A reserva entrou como segunda fonte em 2026-08-28: empresa que só aparece em
+ * reserva antiga (sem pré-cadastro no espelho) ficava sem nome e, por isso,
+ * fora da tela inteira.
  */
-export async function mapaNomesDoPrecadastro() {
+export async function mapaNomesDoCv() {
     try {
         const [linhas] = await db.sequelize.query(`
-            SELECT idempresa, nome FROM (
+            WITH fontes AS (
                 SELECT (raw->'empresa_correspondente'->>'idempresa')::int AS idempresa,
-                       raw->'empresa_correspondente'->>'nome'            AS nome,
-                       ROW_NUMBER() OVER (
-                         PARTITION BY (raw->'empresa_correspondente'->>'idempresa')::int
-                         ORDER BY COUNT(*) DESC
-                       ) AS rn
-                FROM cv_precadastros
-                WHERE raw->'empresa_correspondente'->>'idempresa' IS NOT NULL
-                  AND COALESCE(raw->'empresa_correspondente'->>'nome', '') <> ''
-                GROUP BY 1, 2
+                       raw->'empresa_correspondente'->>'nome'            AS nome
+                  FROM cv_precadastros
+                 WHERE raw->'empresa_correspondente'->>'idempresa' ~ '^[0-9]+$'
+                   AND COALESCE(raw->'empresa_correspondente'->>'nome', '') <> ''
+                UNION ALL
+                SELECT (empresa_correspondente->>'idempresa')::int,
+                       empresa_correspondente->>'nome'
+                  FROM reservas
+                 WHERE jsonb_typeof(empresa_correspondente) = 'object'
+                   AND empresa_correspondente->>'idempresa' ~ '^[0-9]+$'
+                   AND COALESCE(empresa_correspondente->>'nome', '') <> ''
+            )
+            SELECT idempresa, nome FROM (
+                SELECT idempresa, nome,
+                       ROW_NUMBER() OVER (PARTITION BY idempresa ORDER BY COUNT(*) DESC) AS rn
+                  FROM fontes
+                 GROUP BY 1, 2
             ) t WHERE rn = 1
         `);
         return new Map(linhas.map((l) => [Number(l.idempresa), decodifica(l.nome)]));
     } catch (err) {
         // Origem secundária: se falhar, a tela só perde o nome bonito.
-        console.warn('[Correspondentes] não foi possível resolver nomes pelo pré-cadastro:', err.message);
+        console.warn('[Correspondentes] não foi possível resolver nomes pelo CV:', err.message);
         return new Map();
     }
 }
@@ -589,7 +636,7 @@ export async function montarPanorama(user = null) {
     const [empresas, usuarios, nomesCv, atuacao] = await Promise.all([
         CorrespondentCompany.findAll({ order: [['nome', 'ASC']] }),
         CvCorrespondent.findAll({ order: [['nome', 'ASC']] }),
-        mapaNomesDoPrecadastro(),
+        mapaNomesDoCv(),
         cidadesDeAtuacao(),
     ]);
 
@@ -614,8 +661,14 @@ export async function montarPanorama(user = null) {
         return [...conjunto];
     };
     const noEscopo = (cidades) => {
-        if (scopeCities === null) return true;
-        if (!scopeCities.length || !cidades.length) return false;
+        if (scopeCities === null) return true;      // admin
+        if (!scopeCities.length) return false;      // sem grant, sem dado
+        // Empresa sem NENHUMA praça conhecida: não há o que recortar. É o CCA
+        // recém-cadastrado, que ainda não apareceu em reserva nem pré-cadastro
+        // - fechar aqui deixava o correspondente novo invisível para todo mundo
+        // menos admin, justamente para a equipe que precisa completar o
+        // cadastro dele. Some da lista sozinha no dia em que ganhar praça.
+        if (!cidades.length) return true;
         return cidades.some((c) => scopeCities.some((sc) => cityMatches(c, sc)));
     };
 
@@ -647,13 +700,12 @@ export async function montarPanorama(user = null) {
         // para provar o escopo dela - antes era escondida de todo não-admin.
         const cidades = cidadesDe(null, idempresa);
         if (!noEscopo(cidades)) continue;
-        // Empresa que existe no CV mas não tem NADA no sistema - nem nome vindo
-        // de pré-cadastro, nem uma praça onde tenha atuado - não é relevante
-        // para a operação e fica de fora. Não é perda silenciosa: no minuto em
-        // que ela aparecer numa reserva ou num pré-cadastro, passa a ter nome
-        // ou cidade e entra sozinha, sem ninguém cadastrar nada.
+        // Empresa com gente no CV entra mesmo sem nome e sem praça: é o CCA
+        // recém-cadastrado. Esconder isso era o que fazia o correspondente novo
+        // sumir da tela por dias, até o primeiro pré-cadastro chegar. Ela vem
+        // com o rótulo provisório e a marca de cadastro incompleto - o sync
+        // troca pelo nome de verdade sozinho.
         const nomeCv = nomesCv.get(Number(idempresa));
-        if (!nomeCv && !cidades.length) continue;
         linhas.push(montaLinha(null, idempresa, lista, 'cv', nomeCv, cidades));
         usuariosVisiveis += lista.length;
     }
@@ -671,14 +723,20 @@ export async function montarPanorama(user = null) {
 }
 
 function montaLinha(empresa, cvIdempresa, usuarios, origem, nomeCv = null, cidades = []) {
+    // Nome local > nome inferido do CV > rótulo provisório
+    const nome = empresa?.nome || nomeCv || (cvIdempresa ? rotuloProvisorio(cvIdempresa) : 'Sem empresa');
+    // Empresa que existe no CV e ainda não tem nome em lugar nenhum: é o CCA
+    // novo. A tela precisa saber a diferença entre "nome deduzido" e "nome
+    // desconhecido" - a cobrança para quem opera não é a mesma.
+    const semNome = ROTULO_PROVISORIO.test(nome);
     return {
         id: empresa?.id ?? null,
         cv_idempresa: cvIdempresa ? Number(cvIdempresa) : null,
-        // Nome local > nome inferido do pré-cadastro > "Empresa #N"
-        nome: empresa?.nome || nomeCv || (cvIdempresa ? `Empresa #${cvIdempresa}` : 'Sem empresa'),
+        nome,
+        sem_nome: semNome,
         // Sinaliza para a tela que o nome veio de fonte secundária, não de um
         // cadastro conferido - por isso a empresa ainda oferece "Completar cadastro".
-        nome_inferido: origem === 'importada' || (!empresa?.nome && !!nomeCv),
+        nome_inferido: !semNome && (origem === 'importada' || (!empresa?.nome && !!nomeCv)),
         regiao: empresa?.regiao ?? null,
         estado: empresa?.estado ?? null,
         cidade: empresa?.cidade || cidades[0] || null,

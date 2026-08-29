@@ -189,6 +189,11 @@ export async function updateCompany(req, res) {
             email: b.email ?? empresa.email,
             dias_agendamento: b.dias_agendamento ?? empresa.dias_agendamento,
             observacao: b.observacao ?? empresa.observacao,
+            // Empresa que veio do sync (`imported`) tem nome DEDUZIDO, e o sync
+            // se dá o direito de corrigir esse nome sozinho. Depois que gente
+            // preencheu o cadastro, ele não pode mais mexer - senão a próxima
+            // rodada desfaz o que a pessoa acabou de digitar.
+            status: empresa.status === 'imported' ? 'external' : empresa.status,
         });
         return res.json({ ok: true, empresa });
     } catch (err) {
