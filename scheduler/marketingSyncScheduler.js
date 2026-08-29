@@ -230,16 +230,31 @@ async function alertMissingBindings() {
     const userIds = await MarketingConfigService.getAlertRecipients();
     if (!userIds.length) return;
 
-    const topList = signal.top.map(t => `• ${t.name} (${t.held} lead${t.held === 1 ? '' : 's'})`).join('\n');
+    // Duas situações no mesmo aviso: leads JÁ represados (urgente) e campanha
+    // de lead ativa sem vínculo (cobrar antes do primeiro lead — foi a falta
+    // desse aviso que deixou leads de Avaré irem pra Ibitinga em ago/2026).
+    const parts = [];
+    if (signal.leads_at_risk > 0) {
+        const topList = signal.top.map(t => `• ${t.name} (${t.held} lead${t.held === 1 ? '' : 's'})`).join('\n');
+        parts.push(`Leads represados que não chegam ao CV por falta de vínculo:\n${topList}`);
+    }
+    if (signal.active_unbound_count > 0) {
+        const topList = signal.active_unbound_top.map(n => `• ${n}`).join('\n');
+        parts.push(`Campanha(s) de lead ATIVA(s) sem vínculo — vincule antes que os leads cheguem:\n${topList}`);
+    }
+    const title = signal.leads_at_risk > 0
+        ? `${signal.unbound_count} campanha(s) sem vínculo represando ${signal.leads_at_risk} lead(s)`
+        : `${signal.active_unbound_count} campanha(s) de lead ativa(s) sem vínculo com o CV`;
+
     await NotificationService.notify({
         type: NotificationType.LEAD_BINDING_MISSING,
         recipients: { users: userIds },
-        title: `${signal.unbound_count} campanha(s) sem vínculo represando ${signal.leads_at_risk} lead(s)`,
-        body: `Há leads captados que não chegam ao CV porque a campanha não tem vínculo configurado.\n\n${topList}\n\nVincule em Marketing › Vínculos CV.`,
-        link: '/marketing/vinculos',
+        title,
+        body: `${parts.join('\n\n')}\n\nVincule na Central Meta › Vínculos CV.`,
+        link: '/meta?tab=vinculos',
         importance: 8,
     });
-    console.warn(`🔔 [marketing-full-sync] alerta de vínculo enviado: ${signal.unbound_count} campanha(s), ${signal.leads_at_risk} lead(s) represado(s).`);
+    console.warn(`🔔 [marketing-full-sync] alerta de vínculo enviado: ${signal.unbound_count} represando, ${signal.active_unbound_count} ativa(s) sem vínculo.`);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

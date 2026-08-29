@@ -31,17 +31,21 @@ function isBound(entity) {
 }
 
 /**
- * O fallback do formulário cobre campanha sem vínculo? Depende do escopo
- * configurado (meta_form_fallback_scope) — a MESMA regra do resolveLeadBinding,
- * senão a central diria "recuperável" pra lead que o disparo não resolve.
+ * Escopo do fallback do formulário (meta_form_fallback_scope) — a MESMA regra
+ * do resolveLeadBinding, senão a central diria "recuperável" pra lead que o
+ * disparo não resolve. Exposto no overview pra tela adaptar os textos.
  */
-async function formFallbackCoversCampaigns() {
+async function getFallbackScope() {
     try {
         const cfg = await MarketingConfigService.getConfig();
-        return (cfg?.meta_form_fallback_scope || 'no_campaign') === 'always';
+        return cfg?.meta_form_fallback_scope === 'always' ? 'always' : 'no_campaign';
     } catch {
-        return false;   // mesmo fail-safe do resolveLeadBinding
+        return 'no_campaign';   // mesmo fail-safe do resolveLeadBinding
     }
+}
+
+async function formFallbackCoversCampaigns() {
+    return (await getFallbackScope()) === 'always';
 }
 
 /**
@@ -313,12 +317,13 @@ async function fallbackDeliveries({ days = 30 } = {}) {
  * cutoff (default do cutover) pra ignorar leads de teste antigos.
  */
 export async function getOverview({ since = null, until = null, cutoff = DEFAULT_CUTOFF } = {}) {
-    const [funnel, held, activeUnbound, backlog, fallbackInUse] = await Promise.all([
+    const [funnel, held, activeUnbound, backlog, fallbackInUse, fallbackScope] = await Promise.all([
         deliveryFunnel({ since, until }),
         heldByCampaign({ cutoff }),
         activeUnboundCampaigns(),
         previewBacklogSince({ cutoff }).catch(() => null),
         fallbackDeliveries().catch(() => []),
+        getFallbackScope(),
     ]);
 
     // Represados recuperáveis = o que o disparo resolveria HOJE (vínculo da
@@ -336,6 +341,7 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
         held,
         active_unbound_campaigns: activeUnbound,
         fallback_in_use: fallbackInUse,   // campanhas sem vínculo entregando pelo form (30d)
+        form_fallback_scope: fallbackScope,
         backlog,                          // { routed_pending, historical_total, ... }
         summary: {
             fallback_campaigns: fallbackInUse.length,
@@ -350,19 +356,28 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
 }
 
 /**
- * Sinal para o alerta automático: existe vazamento que justifica notificar?
- * (campanhas sem vínculo acumulando leads represados). Usado pelo scheduler.
+ * Sinal para o alerta automático. Duas situações justificam notificar:
+ *   1. campanhas sem vínculo ACUMULANDO leads represados (o vazamento em curso);
+ *   2. campanha de lead ATIVA sem vínculo, mesmo antes do primeiro lead —
+ *      cobrar ANTES é o que evita o represamento (e, no escopo 'always', o
+ *      lead sair calado com o destino do formulário; incidente ago/2026).
+ * Usado pelo scheduler (throttle ~20h lá).
  */
 export async function getAlertSignal({ cutoff = DEFAULT_CUTOFF } = {}) {
-    const held = await heldByCampaign({ cutoff });
+    const [held, activeUnbound] = await Promise.all([
+        heldByCampaign({ cutoff }),
+        activeUnboundCampaigns().catch(() => []),
+    ]);
     const unbound = held.campaigns.filter(c => c.blocked_count > 0);
     const leadsAtRisk = unbound.reduce((s, c) => s + c.blocked_count, 0)
         + held.forms.filter(f => !f.is_bound).reduce((s, f) => s + f.held_count, 0);
     return {
-        should_alert: unbound.length > 0 && leadsAtRisk > 0,
+        should_alert: (unbound.length > 0 && leadsAtRisk > 0) || activeUnbound.length > 0,
         unbound_count: unbound.length,
         leads_at_risk: leadsAtRisk,
         top: unbound.slice(0, 5).map(c => ({ name: c.name || c.campaign_id, held: c.blocked_count })),
+        active_unbound_count: activeUnbound.length,
+        active_unbound_top: activeUnbound.slice(0, 5).map(c => c.name || c.campaign_id),
     };
 }
 
