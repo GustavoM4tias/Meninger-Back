@@ -21,6 +21,10 @@ export const KNOWN_BLOCK_TYPES = new Set([
   'comparison', 'chart-bar', 'chart-line', 'chart-donut', 'chart-funnel', 'gauge',
   'ranking', 'map', 'table', 'timeline', 'highlight-list', 'insight-box', 'image',
   'divider', 'note', 'footer', 'custom-html',
+  // Simulador de proposta de venda: bloco de conta, alimentado por
+  // services/comercial/simuladorPvService.js. As props carregam a tabela
+  // inteira porque o link publico e congelado - ver SimulatorPvBlock.vue.
+  'simulator-pv',
 ]);
 
 // Sanitização defensiva do custom-html no servidor (o front re-sanitiza com
