@@ -63,7 +63,14 @@ export const REGRAS_PADRAO = {
     // de um produto assim reprovaria a própria tabela autorizada.
     primeiroAnoMin: null,
     segundoAnoMin: null,
-    ateChavesMin: 0.90,
+    // Piso de "entrou até as chaves" DESLIGADO: virou regra, não percentual.
+    //
+    // 90% era herança da planilha e quase não mordia - com a comissão fora, o
+    // teto é 96%, então ele permitia deixar uns 6% da venda para depois da
+    // entrega. E a regra é outra: NADA pode sobrar para depois, a não ser o que
+    // a própria tabela já deixa (ver aposChavesMesesTolerancia abaixo). Como o
+    // teto passou a ser a tabela, um número fixo aqui só atrapalharia.
+    ateChavesMin: null,
     // O 30 do 30/70: tudo que o cliente paga com recurso próprio, fora o
     // financiamento da entrega.
     //
