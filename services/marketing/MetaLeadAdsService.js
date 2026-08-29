@@ -301,7 +301,23 @@ export async function resolveLeadBinding({ campaignId = null, adId = null, formI
     }
 
     // 2) Fallback: mapping do form (legado)
-    if (!binding.midia_slug && formId) {
+    //
+    // Escopo configurável (Central Meta › Configurações). O form é um asset da
+    // PÁGINA e atende campanhas de produtos diferentes — cobrir campanha sem
+    // vínculo com o binding do form já mandou lead de Avaré pra Ibitinga
+    // (incidente ago/2026). Em 'no_campaign' (default), lead COM campanha
+    // identificada e sem vínculo represa (held) até alguém vincular a campanha;
+    // o form só decide quando o lead não tem campanha nenhuma.
+    let formFallbackAllowed = true;
+    if (!binding.midia_slug && formId && resolvedCampaignId) {
+        try {
+            const cfg = await MarketingConfigService.getConfig();
+            formFallbackAllowed = (cfg?.meta_form_fallback_scope || 'no_campaign') === 'always';
+        } catch {
+            formFallbackAllowed = false;   // na dúvida, held é melhor que destino errado
+        }
+    }
+    if (!binding.midia_slug && formId && formFallbackAllowed) {
         try {
             const mapping = await MetaLeadFormService.findById(String(formId));
             if (mapping?.mapping_active && mapping.midia_slug) {

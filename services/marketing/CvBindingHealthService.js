@@ -19,6 +19,7 @@
 import { Op, fn, col, literal } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { previewBacklogSince, DEFAULT_CUTOFF } from './CvBacklogDispatchService.js';
+import MarketingConfigService from './MarketingConfigService.js';
 
 const { InboundLead, MetaCampaign, MetaLeadForm } = db;
 
@@ -27,6 +28,20 @@ const META_CHANNEL = 'meta_lead_ads';
 /** Uma entidade (campanha/form) tem vínculo se mapping ativo E mídia definida. */
 function isBound(entity) {
     return !!(entity && entity.mapping_active && entity.midia_slug);
+}
+
+/**
+ * O fallback do formulário cobre campanha sem vínculo? Depende do escopo
+ * configurado (meta_form_fallback_scope) — a MESMA regra do resolveLeadBinding,
+ * senão a central diria "recuperável" pra lead que o disparo não resolve.
+ */
+async function formFallbackCoversCampaigns() {
+    try {
+        const cfg = await MarketingConfigService.getConfig();
+        return (cfg?.meta_form_fallback_scope || 'no_campaign') === 'always';
+    } catch {
+        return false;   // mesmo fail-safe do resolveLeadBinding
+    }
 }
 
 /**
@@ -145,14 +160,19 @@ async function heldByCampaign({ cutoff }) {
         for (const f of rows) formsById.set(String(f.id), f.get({ plain: true }));
     }
 
+    const fallbackCovers = await formFallbackCoversCampaigns();
+
     const campaigns = campIds.map(cid => {
         const agg = byCampaign.get(cid);
         const camp = campsById.get(cid) || null;
         const bound = isBound(camp);
-        // Recuperável hoje = campanha vinculada (tudo) OU form do lead vinculado.
+        // Recuperável hoje = campanha vinculada (tudo) OU form do lead vinculado —
+        // este último só quando o escopo permite o form cobrir campanha.
         const resolvable = bound
             ? agg.count
-            : [...agg.byForm.entries()].reduce((sum, [fid, n]) => sum + (isBound(formsById.get(fid)) ? n : 0), 0);
+            : (fallbackCovers
+                ? [...agg.byForm.entries()].reduce((sum, [fid, n]) => sum + (isBound(formsById.get(fid)) ? n : 0), 0)
+                : 0);
         return {
             campaign_id: cid,
             name: camp?.name || null,
@@ -232,15 +252,73 @@ async function activeUnboundCampaigns() {
 }
 
 /**
+ * Campanhas SEM vínculo próprio cujos leads saíram (ou estão saindo) pelo
+ * vínculo do FORMULÁRIO. Não é held — o lead FOI entregue — e por isso era
+ * invisível na central: tudo verde enquanto o destino podia estar errado
+ * (form de um produto cobrindo campanha de outro; incidente ago/2026,
+ * Esmeralda×Três Marias). Mostra o destino que o form aplicou para o admin
+ * bater com o produto real da campanha.
+ */
+async function fallbackDeliveries({ days = 30 } = {}) {
+    const [rows] = await db.sequelize.query(`
+        SELECT mc.id                     AS campaign_id,
+               mc.name                   AS name,
+               mc.account_name           AS account_name,
+               mc.effective_status       AS effective_status,
+               mlf.id                    AS form_id,
+               mlf.name                  AS form_name,
+               mlf.midia_slug            AS form_midia,
+               mlf.bound_empreendimentos AS form_emps,
+               COUNT(il.id)::int         AS lead_count,
+               MAX(il.created_at)        AS last_at
+          FROM inbound_leads il
+          JOIN meta_campaigns mc   ON mc.id = il.meta_campaign_id
+          JOIN meta_lead_forms mlf ON mlf.id = il.meta_form_id
+         WHERE il.channel = :channel
+           AND il.status IN ('delivered', 'routed', 'dispatching')
+           AND il.created_at >= now() - (:days * interval '1 day')
+           AND (mc.midia_slug IS NULL OR mc.mapping_active = false)
+           AND mlf.midia_slug IS NOT NULL AND mlf.mapping_active = true
+         GROUP BY mc.id, mc.name, mc.account_name, mc.effective_status,
+                  mlf.id, mlf.name, mlf.midia_slug, mlf.bound_empreendimentos
+         ORDER BY MAX(il.created_at) DESC`,
+        { replacements: { channel: META_CHANNEL, days } });
+
+    // Enxerta o NOME do empreendimento — "[39]" não conta a história; "TRES
+    // MARIAS - IBITINGA" numa campanha da conta Esmeralda conta.
+    const ids = new Set();
+    for (const r of rows) {
+        const emps = Array.isArray(r.form_emps) ? r.form_emps : [];
+        for (const id of emps) ids.add(Number(id));
+    }
+    const namesById = new Map();
+    if (ids.size && db.CvEnterprise) {
+        const ents = await db.CvEnterprise.findAll({
+            where: { idempreendimento: { [Op.in]: [...ids] } },
+            attributes: ['idempreendimento', 'nome'],
+            raw: true,
+        });
+        for (const e of ents) namesById.set(Number(e.idempreendimento), e.nome);
+    }
+    return rows.map(r => ({
+        ...r,
+        campaign_id: String(r.campaign_id),
+        form_emp_names: (Array.isArray(r.form_emps) ? r.form_emps : [])
+            .map(id => namesById.get(Number(id)) || `#${id}`),
+    }));
+}
+
+/**
  * Overview completo da central. Período recorta o funil; o backlog/held usa o
  * cutoff (default do cutover) pra ignorar leads de teste antigos.
  */
 export async function getOverview({ since = null, until = null, cutoff = DEFAULT_CUTOFF } = {}) {
-    const [funnel, held, activeUnbound, backlog] = await Promise.all([
+    const [funnel, held, activeUnbound, backlog, fallbackInUse] = await Promise.all([
         deliveryFunnel({ since, until }),
         heldByCampaign({ cutoff }),
         activeUnboundCampaigns(),
         previewBacklogSince({ cutoff }).catch(() => null),
+        fallbackDeliveries().catch(() => []),
     ]);
 
     // Represados recuperáveis = o que o disparo resolveria HOJE (vínculo da
@@ -257,8 +335,10 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
         funnel,
         held,
         active_unbound_campaigns: activeUnbound,
+        fallback_in_use: fallbackInUse,   // campanhas sem vínculo entregando pelo form (30d)
         backlog,                          // { routed_pending, historical_total, ... }
         summary: {
+            fallback_campaigns: fallbackInUse.length,
             leads_at_risk: leadsAtRisk,               // held por falta de vínculo
             leads_recoverable: leadsRecoverable,      // held mas já vinculável
             unbound_campaigns_with_leads: held.campaigns.filter(c => c.blocked_count > 0).length,

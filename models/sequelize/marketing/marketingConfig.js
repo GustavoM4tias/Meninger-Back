@@ -32,6 +32,16 @@ export default (sequelize, DataTypes) => {
     // empreendimento. Só age fora das etapas de qualificação.
     lead_return_auto: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
 
+    // ── Roteamento / vínculo ─────────────────────────────────────────────────
+    // Escopo do fallback de vínculo pelo FORMULÁRIO (resolveLeadBinding):
+    //   'no_campaign' (default) = o form só decide quando o lead NÃO tem campanha
+    //                             identificada; campanha conhecida sem vínculo
+    //                             represa (held) até alguém vincular.
+    //   'always'                = comportamento antigo: o form cobre campanha sem
+    //                             vínculo. Risco: form de um produto atendendo
+    //                             campanha de outro manda o lead pro lugar errado.
+    meta_form_fallback_scope: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'no_campaign' },
+
     // ── Meta Lead Ads ────────────────────────────────────────────────────────
     meta_app_id:             { type: DataTypes.STRING(100) },
     meta_app_secret_enc:     { type: DataTypes.TEXT },

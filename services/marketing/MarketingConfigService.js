@@ -63,9 +63,26 @@ async function ensureReguaColumn() {
     }
 }
 
+// Escopo do fallback de vínculo pelo formulário (2026-08-28). Nasceu do
+// incidente Esmeralda×Três Marias: campanha nova sem vínculo caiu no form
+// vinculado a outro empreendimento e os leads de Avaré foram pra Ibitinga.
+let _fallbackScopeColumnEnsured = false;
+async function ensureFallbackScopeColumn() {
+    if (_fallbackScopeColumnEnsured) return;
+    try {
+        await db.sequelize.query(
+            `ALTER TABLE marketing_configs
+             ADD COLUMN IF NOT EXISTS meta_form_fallback_scope VARCHAR(20) NOT NULL DEFAULT 'no_campaign'`);
+        _fallbackScopeColumnEnsured = true;
+    } catch (err) {
+        console.warn('[marketing-config] ensure meta_form_fallback_scope falhou:', err.message);
+    }
+}
+
 async function loadRow() {
     await ensureAlertRecipientsColumn();
     await ensureReguaColumn();
+    await ensureFallbackScopeColumn();
     let row = await db.MarketingConfig.findByPk(SINGLETON_ID);
     if (!row) row = await db.MarketingConfig.create({ id: SINGLETON_ID });
     return row;
@@ -82,6 +99,7 @@ function rowToConfig(row, { withSecrets = false } = {}) {
         lead_return_ordem_blindada: row.lead_return_ordem_blindada,
         lead_return_auto: row.lead_return_auto,
         alert_recipient_user_ids: row.alert_recipient_user_ids || null,
+        meta_form_fallback_scope: row.meta_form_fallback_scope || 'no_campaign',
         meta_app_id: row.meta_app_id,
         meta_graph_api_version: row.meta_graph_api_version,
         meta_last_health_at: row.meta_last_health_at,
@@ -114,6 +132,7 @@ function envFallback({ withSecrets }) {
         lead_return_ordem_blindada: Number(process.env.CV_LEAD_ORDEM_BLINDADA) || 4,
         lead_return_auto: process.env.MARKETING_LEAD_RETURN_AUTO !== 'false',
         alert_recipient_user_ids: null,
+        meta_form_fallback_scope: process.env.META_FORM_FALLBACK_SCOPE === 'always' ? 'always' : 'no_campaign',
         meta_app_id: process.env.META_APP_ID || '785502081163165',
         meta_graph_api_version: process.env.META_GRAPH_API_VERSION || 'v21.0',
         has_meta_app_secret:     !!process.env.META_APP_SECRET,
@@ -205,6 +224,13 @@ async function updateConfig(patch = {}) {
     ];
     for (const k of direct) {
         if (patch[k] !== undefined && patch[k] !== null) row[k] = patch[k];
+    }
+
+    // Escopo do fallback do formulário: só aceita os dois valores conhecidos.
+    if (patch.meta_form_fallback_scope !== undefined) {
+        if (['no_campaign', 'always'].includes(patch.meta_form_fallback_scope)) {
+            row.meta_form_fallback_scope = patch.meta_form_fallback_scope;
+        }
     }
 
     // Destinatários dos alertas: array de IDs de usuário. Aceita [] (= volta
