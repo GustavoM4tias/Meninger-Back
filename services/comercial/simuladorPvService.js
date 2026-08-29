@@ -40,20 +40,45 @@ const { Op } = db.Sequelize || {};
 // Cortes da planilha PV PADRÃO. Fração do total nominal da proposta.
 export const REGRAS_PADRAO = {
     vplAnual: 0.06,          // 6% a.a. -> a taxa mensal sai daí, como na planilha
+
+    // A COMISSÃO SAI DO ATO, e é isso que dá sentido ao corte de 1%.
+    //
+    // O ato da tabela é 5% do valor da venda e a comissão da imobiliária é 4%:
+    // do ato, entra 1% na companhia. Os cortes são medidos nesse LÍQUIDO - no
+    // bruto, o ato apareceria como 5% e passaria com folga um valor que está
+    // exatamente no limite. `mesDaComissao` é 0 porque ela sai junto com o ato.
+    comissaoPct: 0.04,
+    mesDaComissao: 0,
+
+    // Ato: medido no LÍQUIDO. 5% de ato menos 4% de comissão = 1% que entra.
     atoMin: 0.01,
+    // Daqui para baixo é o que o CLIENTE PAGA (bruto), que é como o desenho do
+    // produto é falado.
     entrada6mMin: 0.06,
-    primeiroAnoMin: 0.25,
-    segundoAnoMin: 0.50,
+    // 1º e 2º ano DESLIGADOS em Sinop (null = corte não avaliado, some da tela).
+    //
+    // Os 25% e 50% vieram da aba URBAN, de Marília, onde o cliente paga quase
+    // tudo antes da chave. Sinop é 30/70: 30% de recurso próprio até a entrega
+    // e 70% de financiamento quando recebe o apartamento. Cobrar 25% no 1º ano
+    // de um produto assim reprovaria a própria tabela autorizada.
+    primeiroAnoMin: null,
+    segundoAnoMin: null,
     ateChavesMin: 0.90,
     // "Até chaves, SEM a parcela das chaves": o que o cliente paga de recurso
     // próprio durante a obra. Na aba SINOP da planilha a meta é 30% (H48) -
     // ali a parcela da entrega é o repasse do banco, e cobrar 90% antes dela
     // seria pedir o financiamento adiantado.
     ateChavesSemChavesMin: 0.30,
-    comissaoPct: 0.05,
     // A planilha marca "ERRADO PASSOU DAS CHAVES" quando sobra parcela de obra
-    // depois da entrega. Aqui vira regra explícita.
+    // depois da entrega. Aqui vira regra explícita - com folga.
+    //
+    // A folga existe porque a própria REV08 tem 24 mensais a partir do mês 1 e
+    // a chave no mês 23: a última cai um mês depois, R$ 3.100 numa venda de
+    // R$ 568 mil. Reprovar por isso seria transformar arredondamento de
+    // cronograma em impedimento; ignorar deixaria passar meia dúzia de parcelas
+    // empurradas para depois da entrega. 1% da venda é a linha entre as duas.
     semParcelaAposChaves: true,
+    aposChavesTolerancia: 0.01,
 };
 
 /** "02/09/2026" ou "2026-09-02" -> "2026-09-02" (só a data, sem fuso). */
