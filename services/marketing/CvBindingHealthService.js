@@ -288,22 +288,7 @@ async function fallbackDeliveries({ days = 30 } = {}) {
          ORDER BY MAX(il.created_at) DESC`,
         { replacements: { channel: META_CHANNEL, days } });
 
-    // Enxerta o NOME do empreendimento — "[39]" não conta a história; "TRES
-    // MARIAS - IBITINGA" numa campanha da conta Esmeralda conta.
-    const ids = new Set();
-    for (const r of rows) {
-        const emps = Array.isArray(r.form_emps) ? r.form_emps : [];
-        for (const id of emps) ids.add(Number(id));
-    }
-    const namesById = new Map();
-    if (ids.size && db.CvEnterprise) {
-        const ents = await db.CvEnterprise.findAll({
-            where: { idempreendimento: { [Op.in]: [...ids] } },
-            attributes: ['idempreendimento', 'nome'],
-            raw: true,
-        });
-        for (const e of ents) namesById.set(Number(e.idempreendimento), e.nome);
-    }
+    const namesById = await empNamesById(rows.flatMap(r => Array.isArray(r.form_emps) ? r.form_emps : []));
     return rows.map(r => ({
         ...r,
         campaign_id: String(r.campaign_id),
@@ -313,17 +298,95 @@ async function fallbackDeliveries({ days = 30 } = {}) {
 }
 
 /**
+ * Nome dos empreendimentos por id — "[39]" não conta a história; "TRES MARIAS
+ * - IBITINGA" numa campanha da conta Esmeralda conta.
+ */
+async function empNamesById(ids) {
+    const namesById = new Map();
+    const unique = [...new Set((ids || []).map(Number).filter(Number.isInteger))];
+    if (unique.length && db.CvEnterprise) {
+        const ents = await db.CvEnterprise.findAll({
+            where: { idempreendimento: { [Op.in]: unique } },
+            attributes: ['idempreendimento', 'nome'],
+            raw: true,
+        });
+        for (const e of ents) namesById.set(Number(e.idempreendimento), e.nome);
+    }
+    return namesById;
+}
+
+/**
+ * Leads ENTREGUES cujo destino gravado difere do vínculo ATUAL da campanha
+ * (ou do form, para lead sem campanha). É o rastro de um vínculo corrigido
+ * depois do estrago: o lead já está no CV com o interesse antigo. A tela
+ * oferece o reenvio (redispatchDeliveredWithBinding) para aplicar o destino
+ * certo — nasceu do incidente Esmeralda×Três Marias (ago/2026).
+ */
+async function mismatchedDeliveries({ days = 90 } = {}) {
+    const repl = { channel: META_CHANNEL, days };
+    const [byCampaign] = await db.sequelize.query(`
+        SELECT mc.id                     AS campaign_id,
+               mc.name                   AS name,
+               mc.account_name           AS account_name,
+               mc.bound_empreendimentos  AS target_emps,
+               COUNT(il.id)::int         AS lead_count,
+               MAX(il.created_at)        AS last_at
+          FROM inbound_leads il
+          JOIN meta_campaigns mc ON mc.id = il.meta_campaign_id
+         WHERE il.channel = :channel
+           AND il.status = 'delivered'
+           AND il.created_at >= now() - (:days * interval '1 day')
+           AND mc.midia_slug IS NOT NULL AND mc.mapping_active = true
+           AND mc.bound_empreendimentos IS NOT NULL
+           AND COALESCE(il.bound_empreendimentos::text, 'null')
+               IS DISTINCT FROM mc.bound_empreendimentos::text
+         GROUP BY mc.id, mc.name, mc.account_name, mc.bound_empreendimentos
+         ORDER BY MAX(il.created_at) DESC`, { replacements: repl });
+
+    const [byForm] = await db.sequelize.query(`
+        SELECT mlf.id                    AS form_id,
+               mlf.name                  AS name,
+               mlf.bound_empreendimentos AS target_emps,
+               COUNT(il.id)::int         AS lead_count,
+               MAX(il.created_at)        AS last_at
+          FROM inbound_leads il
+          JOIN meta_lead_forms mlf ON mlf.id = il.meta_form_id
+         WHERE il.channel = :channel
+           AND il.status = 'delivered'
+           AND il.meta_campaign_id IS NULL
+           AND il.created_at >= now() - (:days * interval '1 day')
+           AND mlf.midia_slug IS NOT NULL AND mlf.mapping_active = true
+           AND mlf.bound_empreendimentos IS NOT NULL
+           AND COALESCE(il.bound_empreendimentos::text, 'null')
+               IS DISTINCT FROM mlf.bound_empreendimentos::text
+         GROUP BY mlf.id, mlf.name, mlf.bound_empreendimentos
+         ORDER BY MAX(il.created_at) DESC`, { replacements: repl });
+
+    const rows = [
+        ...byCampaign.map(r => ({ ...r, kind: 'campaign', campaign_id: String(r.campaign_id) })),
+        ...byForm.map(r => ({ ...r, kind: 'form', form_id: String(r.form_id) })),
+    ];
+    const namesById = await empNamesById(rows.flatMap(r => Array.isArray(r.target_emps) ? r.target_emps : []));
+    return rows.map(r => ({
+        ...r,
+        target_emp_names: (Array.isArray(r.target_emps) ? r.target_emps : [])
+            .map(id => namesById.get(Number(id)) || `#${id}`),
+    }));
+}
+
+/**
  * Overview completo da central. Período recorta o funil; o backlog/held usa o
  * cutoff (default do cutover) pra ignorar leads de teste antigos.
  */
 export async function getOverview({ since = null, until = null, cutoff = DEFAULT_CUTOFF } = {}) {
-    const [funnel, held, activeUnbound, backlog, fallbackInUse, fallbackScope] = await Promise.all([
+    const [funnel, held, activeUnbound, backlog, fallbackInUse, fallbackScope, mismatched] = await Promise.all([
         deliveryFunnel({ since, until }),
         heldByCampaign({ cutoff }),
         activeUnboundCampaigns(),
         previewBacklogSince({ cutoff }).catch(() => null),
         fallbackDeliveries().catch(() => []),
         getFallbackScope(),
+        mismatchedDeliveries().catch(() => []),
     ]);
 
     // Represados recuperáveis = o que o disparo resolveria HOJE (vínculo da
@@ -342,9 +405,11 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
         active_unbound_campaigns: activeUnbound,
         fallback_in_use: fallbackInUse,   // campanhas sem vínculo entregando pelo form (30d)
         form_fallback_scope: fallbackScope,
+        mismatched_delivered: mismatched, // entregues com destino ≠ vínculo atual (90d)
         backlog,                          // { routed_pending, historical_total, ... }
         summary: {
             fallback_campaigns: fallbackInUse.length,
+            mismatched_delivered_leads: mismatched.reduce((s, r) => s + (r.lead_count || 0), 0),
             leads_at_risk: leadsAtRisk,               // held por falta de vínculo
             leads_recoverable: leadsRecoverable,      // held mas já vinculável
             unbound_campaigns_with_leads: held.campaigns.filter(c => c.blocked_count > 0).length,

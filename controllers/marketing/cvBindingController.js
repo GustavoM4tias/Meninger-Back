@@ -63,4 +63,30 @@ export async function dispatchRecoverable(req, res) {
     }
 }
 
-export default { overview, dispatchRecoverable };
+/**
+ * POST /marketing/cv-binding/redispatch-delivered
+ * Reenvia ao CV leads JÁ ENTREGUES cujo destino difere do vínculo atual
+ * (correção pós-vínculo). Recorte por campanha/form é OBRIGATÓRIO.
+ * Body: { preview?, limit?, concurrency?, campaign_id?/campaign_ids?, form_id?/form_ids? }
+ */
+export async function redispatchDelivered(req, res) {
+    try {
+        const preview = req.body?.preview === true;
+        const limit = Math.min(Math.max(Number(req.body?.limit) || 500, 1), 1000);
+        const concurrency = Math.min(Math.max(Number(req.body?.concurrency) || 5, 1), 10);
+        const campaignIds = idList(req.body?.campaign_id, req.body?.campaign_ids);
+        const formIds = idList(req.body?.form_id, req.body?.form_ids);
+        const result = await CvBacklogDispatchService.redispatchDeliveredWithBinding({
+            preview, limit, concurrency,
+            ...(campaignIds.length ? { campaignIds } : {}),
+            ...(formIds.length ? { formIds } : {}),
+        });
+        if (result?.blocked) return res.status(409).json({ ok: false, error: result.reason, ...result });
+        return res.json({ ok: true, ...result });
+    } catch (err) {
+        console.error(`❌ [cv-binding] redispatchDelivered: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
+export default { overview, dispatchRecoverable, redispatchDelivered };

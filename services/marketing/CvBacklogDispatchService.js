@@ -329,4 +329,95 @@ export async function dispatchRecoverableHeld({ cutoff = DEFAULT_CUTOFF, preview
     return summary;
 }
 
-export default { DEFAULT_CUTOFF, previewBacklogSince, dispatchBacklogSince, dispatchRecoverableHeld };
+/**
+ * Reenvia ao CV leads JÁ ENTREGUES cujo destino gravado difere do vínculo
+ * ATUAL — a correção de quando alguém percebe que vinculou errado (ou
+ * vinculou depois): ajusta o vínculo na campanha e reenvia os leads dela.
+ * Upsert no CV (permitir_alteracao): adiciona o interesse certo e o retorno
+ * automático re-enfileira; o interesse ANTIGO permanece no CV (a API não
+ * remove interesse — só o painel Gestor).
+ *
+ * SEMPRE recortado por campanha/form: reenviar "todos os delivered" não é um
+ * caso real e multiplicaria conversões no CV à toa. Lead cujo destino já bate
+ * com o vínculo atual é pulado (unchanged) — reenviar não corrigiria nada.
+ */
+export async function redispatchDeliveredWithBinding({ preview = false, limit = 500, concurrency = 5, campaignIds = null, formIds = null } = {}) {
+    const camps = (Array.isArray(campaignIds) ? campaignIds : []).map(String).filter(Boolean);
+    const forms = (Array.isArray(formIds) ? formIds : []).map(String).filter(Boolean);
+    const shadow = await isShadowMode();
+
+    const summary = {
+        scope: { campaign_ids: camps, form_ids: forms },
+        shadow_mode: shadow,
+        scanned: 0,
+        mismatched: 0,         // destino diverge do vínculo atual → reenviado
+        unchanged: 0,          // destino já é o atual → nada a corrigir
+        no_binding: 0,         // vínculo atual não resolve (campanha sem vínculo)
+        dispatched: 0,
+        delivered: 0,
+        failed: 0,
+        reached_limit: false,
+        errors: [],
+        preview,
+    };
+
+    if (!camps.length && !forms.length) {
+        return { ...summary, blocked: true, reason: 'Informe a campanha ou o formulário — o reenvio de entregues é sempre recortado.' };
+    }
+    if (!preview && shadow) {
+        return { ...summary, blocked: true, reason: 'Modo sombra (dry-run) ainda está ligado. Desligue em Configurações antes de reenviar.' };
+    }
+
+    const or = [];
+    if (camps.length) or.push({ meta_campaign_id: { [Op.in]: camps } });
+    if (forms.length) or.push({ meta_campaign_id: null, meta_form_id: { [Op.in]: forms } });
+
+    const leads = await InboundLead.findAll({
+        where: { channel: 'meta_lead_ads', status: 'delivered', [Op.or]: or },
+        order: [['created_at', 'ASC']],
+        limit,
+    });
+    summary.scanned = leads.length;
+    summary.reached_limit = leads.length >= limit;
+
+    async function processOne(lead) {
+        const before = JSON.stringify(lead.bound_empreendimentos ?? null);
+        let resolved = false;
+        try {
+            resolved = await applyBindingToHistorical(lead);   // vínculo com o estado ATUAL
+        } catch (e) {
+            summary.errors.push({ lead_id: lead.id, error: e.message });
+            return;
+        }
+        if (!resolved) { summary.no_binding += 1; return; }
+        const after = JSON.stringify(lead.bound_empreendimentos ?? null);
+        if (after === before) { summary.unchanged += 1; return; }
+        summary.mismatched += 1;
+        if (preview) return;
+
+        try {
+            lead.status = 'routed';
+            await lead.save();
+            await recordLeadEvent({
+                leadId: lead.id, type: 'manual_redispatch', actor: 'fix-binding',
+                statusFrom: 'delivered', statusTo: 'routed',
+                message: 'Correção de destino: o vínculo atual difere do aplicado na entrega; lead reenviado ao CV.',
+                detail: { de: JSON.parse(before), para: lead.bound_empreendimentos, midia: lead.midia_slug },
+            });
+        } catch (e) {
+            summary.errors.push({ lead_id: lead.id, error: e.message });
+            return;
+        }
+        await runDispatch(lead, summary);
+    }
+
+    let next = 0;
+    const poolSize = Math.max(1, Math.min(concurrency, leads.length || 1));
+    await Promise.all(Array.from({ length: poolSize }, async () => {
+        while (next < leads.length) await processOne(leads[next++]);
+    }));
+
+    return summary;
+}
+
+export default { DEFAULT_CUTOFF, previewBacklogSince, dispatchBacklogSince, dispatchRecoverableHeld, redispatchDeliveredWithBinding };

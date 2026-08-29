@@ -57,6 +57,7 @@ import {
 import {
     overview as cvBindingOverview,
     dispatchRecoverable as cvBindingDispatchRecoverable,
+    redispatchDelivered as cvBindingRedispatchDelivered,
 } from '../controllers/marketing/cvBindingController.js';
 import {
     inspect as inspectLeadReturn,
@@ -130,6 +131,7 @@ router.post('/lead-return/:idlead/execute', executeLeadReturn);
 // Central de Vínculos CV (saúde da entrega + campanhas sem vínculo)
 router.get('/cv-binding/overview', cvBindingOverview);
 router.post('/cv-binding/dispatch-recoverable', cvBindingDispatchRecoverable);
+router.post('/cv-binding/redispatch-delivered', cvBindingRedispatchDelivered);
 
 // Campanhas Meta (cache local + insights de gasto/leads/CAC)
 // Relatório de desempenho por período (série diária local)
