@@ -33,6 +33,11 @@ export default (sequelize, DataTypes) => {
 
     presente_no_cv: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     synced_at:      { type: DataTypes.DATE },
+
+    // Posição do rodízio do OFFICE nesta fila. Existe porque o CV não distribui
+    // lead devolvido por API (medido 28/08/2026, leads 35091/34987): quando a
+    // fila do CV não entrega, o Office associa o próximo corretor daqui.
+    rodizio_pos: { type: DataTypes.INTEGER },
   }, {
     tableName: 'cv_lead_queues',
     underscored: true,

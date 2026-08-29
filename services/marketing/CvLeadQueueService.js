@@ -107,6 +107,38 @@ export async function resolveFila(idempreendimento) {
     return { idfila: fila.idfila, nome: fila.nome, origem: binding.origem, motivo: binding.motivo };
 }
 
+/**
+ * O próximo corretor do rodízio de uma fila — e avança a posição.
+ *
+ * Existe porque o CV NÃO distribui lead devolvido por API (medido 28/08/2026,
+ * leads 35091/34987: fila explícita + lead_utilizar_fila + forcar_distribuicao
+ * movem o lead para "Aguardando Atendimento Corretor" e ninguém é associado).
+ * O que a API aplica de verdade é a associação direta idcorretor/idimobiliaria
+ * no POST de lead — então o rodízio quem faz é o Office, sobre a lista de
+ * membros que a própria API da fila devolve.
+ *
+ * @returns {Promise<{idcorretor:number, idimobiliaria:?number, nome:?string, imobiliaria:?string}|null>}
+ */
+export async function proximoDoRodizio(idfila) {
+    const fila = await CvLeadQueue.findByPk(Number(idfila));
+    if (!fila) return null;
+
+    const membros = (Array.isArray(fila.corretores) ? fila.corretores : [])
+        .filter(m => Number.isInteger(Number(m?.idcorretor)));
+    if (!membros.length) return null;
+
+    const pos = ((fila.rodizio_pos ?? -1) + 1) % membros.length;
+    await fila.update({ rodizio_pos: pos });
+
+    const m = membros[pos];
+    return {
+        idcorretor: Number(m.idcorretor),
+        idimobiliaria: m.idimobiliaria != null ? Number(m.idimobiliaria) : null,
+        nome: m.nome_corretor || null,
+        imobiliaria: m.nome_imobiliaria || null,
+    };
+}
+
 /** Filas + a quem cada uma atende. É o que a tela desenha. */
 export async function listWithBindings() {
     const [filas, bindings, empreendimentos] = await Promise.all([
@@ -187,4 +219,4 @@ export async function setBinding({ idempreendimento, idfila, userId = null }) {
     return { idempreendimento: id, idfila: fila.idfila, nome: fila.nome };
 }
 
-export default { syncQueues, refresh, resolveFila, listWithBindings, setBinding, ORIGEM };
+export default { syncQueues, refresh, resolveFila, proximoDoRodizio, listWithBindings, setBinding, ORIGEM };

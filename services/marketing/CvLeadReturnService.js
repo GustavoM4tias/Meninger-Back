@@ -19,15 +19,16 @@
 //   1. Não TROCA o interesse, adiciona. `idempreendimento` é aditivo (doc 2.3)
 //      e a rota alterar_empreendimento devolve 400 quando já está associado.
 //      O interesse antigo continua no lead; remover, só pelo painel Gestor.
-//   2. Sem `idfila` NÃO adianta contar com o CV para achar a fila. Medido em
-//      26/08/2026 no lead 12361: com lead_utilizar_fila e depois com
-//      forcar_distribuicao_lead, o protocolo do CV registrou "Lead não
-//      encontrou uma fila compatível e foi represado" — a distribuição rodou e
-//      não teve para quem dar (o lead tem 8 interesses em 4 cidades, nenhuma
-//      regra de fila casa). E `idfila` sozinho também não basta: medido em
-//      28/08/2026 no lead 10685, em edição de lead existente o CV registra a
-//      fila mas só roda o motor com forcar_distribuicao_lead junto. É o par
-//      idfila + forçar que garante atendimento. As filas saem de listFilas().
+//   2. O CV NÃO distribui lead devolvido por API — em nenhuma combinação de
+//      campos (três medições): sem idfila o motor roda e represa por falta de
+//      fila compatível (26/08, lead 12361); com idfila sem forçar a fila é
+//      registrada e o motor não roda (28/08, lead 10685); com idfila +
+//      lead_utilizar_fila + forcar_distribuicao_lead juntos o lead vai para
+//      "Aguardando Atendimento Corretor" e NINGUÉM é associado (28/08, leads
+//      35091/34987). O único write que o CV aplica de verdade é a associação
+//      direta idcorretor/idimobiliaria (associarCorretorDireto) — por isso o
+//      rodízio é do Office (CvLeadQueueService.proximoDoRodizio), usado como
+//      fallback quando a releitura mostra o lead sem dono.
 //   3. Não desfaz. Situação e dono novos não voltam por API — o estado anterior
 //      fica em `antes`, na resposta e no evento, para refazer à mão no painel.
 //
@@ -40,6 +41,7 @@ import db from '../../models/sequelize/index.js';
 import { recordLeadEvent } from './leadEventLog.js';
 import MarketingConfigService from './MarketingConfigService.js';
 import { classifySituacao, situacaoInicio, FAIXA } from './cvLeadWorkflow.js';
+import { proximoDoRodizio } from './CvLeadQueueService.js';
 
 const { InboundLead, Lead } = db;
 
@@ -195,10 +197,10 @@ export async function returnLeadToQueue({
         // verificacao de regras (doc do campo) e e a unica forma de garantir
         // que alguem receba.
         ...(idfila ? { idfila_distribuicao_leads: Number(idfila) } : {}),
-        // Fila explicita SEM o forcar nao entrega: medido em 28/08/2026 no lead
-        // 10685 — em edicao de lead existente o CV registra a fila mas nao roda
-        // a distribuicao sozinho, e o lead ficou sem dono ate o envio manual
-        // pelo painel. Com idfila, o forcar vai junto sempre.
+        // Nem com o forcar o CV associa alguem (medido 28/08/2026, leads
+        // 35091/34987): o lead vai para "Aguardando Atendimento Corretor" e
+        // fica sem dono. Os campos continuam indo porque registram a fila no
+        // painel do CV; quem garante o dono e o fallback de rodizio abaixo.
         ...((forcarDistribuicao || idfila) ? { forcar_distribuicao_lead: true } : {}),
         ...(conversao ? { conversao } : {}),
         ...(midia ? { midia } : {}),
@@ -214,7 +216,7 @@ export async function returnLeadToQueue({
         interesse_ja_existia: jaTemInteresse,
         interesses_que_permanecem: antes.interesses,
         fila: idfila
-            ? `fila ${idfila} (explícita + distribuição forçada, pula as regras do CV)`
+            ? `fila ${idfila} (explícita; se o CV não associar ninguém, o rodízio do Office associa o próximo corretor)`
             : 'escolhida pelo CV pelas regras dele — pode não achar nenhuma e represar o lead',
     };
 
@@ -295,10 +297,78 @@ export async function returnLeadToQueue({
     // esperando a fila girar — que é um desfecho legítimo, mas não o mesmo.
     depois.distribuido = !!(depois.lido_ao_vivo && (depois.idcorretor || depois.idimobiliaria));
 
+    // O CV não distribui por API (ver cabeçalho): com fila explícita e lead
+    // ainda sem dono, o rodízio do Office assume e associa o próximo corretor.
+    if (!depois.distribuido && idfila) {
+        const rodizio = await distribuirPeloOffice({
+            idlead, idfila,
+            email: lead.email, telefone: lead.telefone,
+        });
+        if (rodizio) {
+            depois.corretor = rodizio.corretor;
+            depois.imobiliaria = rodizio.imobiliaria;
+            depois.distribuido = true;
+            depois.modo = 'rodizio_office';
+        }
+    }
+
     console.log(`[lead-return] lead ${idlead} devolvido — situação ${depois.idsituacao}, dono ${depois.corretor || depois.imobiliaria || 'ainda na fila'}.`);
     await registrarEvento({ idlead, actor, ok: true, antes, plano, payload, resposta: body, depois });
 
     return { ok: true, faixa: situacao.faixa, antes, plano, payload, depois, resposta: body };
+}
+
+/**
+ * Associa um corretor diretamente ao lead — o ÚNICO write de lead que o CV
+ * aplica de verdade (medido 28/08/2026 nos leads 34987/35091: POST com
+ * idcorretor/idimobiliaria associou, confirmado por releitura ao vivo).
+ * Confere relendo ao vivo, porque a resposta do POST ecoa o dono anterior.
+ *
+ * @returns {Promise<{ok:boolean, corretor:?string, imobiliaria:?string, mensagem:?string}>}
+ */
+export async function associarCorretorDireto({ idlead, email = null, telefone = null, idcorretor, idimobiliaria = null }) {
+    const payload = {
+        permitir_alteracao: true,
+        idlead: Number(idlead),
+        ...(email ? { email } : {}),
+        ...(telefone ? { telefone: String(telefone).replace(/\D/g, '') } : {}),
+        idcorretor: Number(idcorretor),
+        ...(idimobiliaria != null ? { idimobiliaria: Number(idimobiliaria) } : {}),
+    };
+    const endpoint = await getCvLeadsEndpoint();
+    let body;
+    try {
+        const res = await apiCv.post(endpoint, payload);
+        body = res?.data || {};
+    } catch (err) {
+        return { ok: false, corretor: null, imobiliaria: null, mensagem: `CV respondeu HTTP ${err?.response?.status || '-'}.` };
+    }
+    if (body.sucesso !== true) {
+        return { ok: false, corretor: null, imobiliaria: null, mensagem: body.mensagem || 'CV recusou sem mensagem.' };
+    }
+    const vivo = await readLiveLead(idlead);
+    const corretor = vivo?.corretor?.nome || null;
+    const imobiliaria = vivo?.imobiliaria?.nome || null;
+    return { ok: !!(corretor || imobiliaria), corretor, imobiliaria, mensagem: null };
+}
+
+/**
+ * Fallback de distribuição: o CV não associou ninguém, então o Office pega o
+ * próximo corretor do rodízio da fila e associa direto. Devolve null quando a
+ * fila não tem membro com id (aí o represamento fica de pé e vira alerta).
+ *
+ * @returns {Promise<{corretor:?string, imobiliaria:?string, alvo:object}|null>}
+ */
+export async function distribuirPeloOffice({ idlead, idfila, email = null, telefone = null }) {
+    const alvo = await proximoDoRodizio(idfila);
+    if (!alvo) return null;
+    const r = await associarCorretorDireto({
+        idlead, email, telefone,
+        idcorretor: alvo.idcorretor,
+        idimobiliaria: alvo.idimobiliaria,
+    });
+    if (!r.ok) return null;
+    return { corretor: r.corretor, imobiliaria: r.imobiliaria, alvo };
 }
 
 /**
@@ -402,4 +472,4 @@ export function desfechoDaResposta(cvResponse) {
     return msg ? 'outro' : null;
 }
 
-export default { returnLeadToQueue, inspectLead, readLiveLead, listFilas, desfechoDaResposta };
+export default { returnLeadToQueue, inspectLead, readLiveLead, listFilas, desfechoDaResposta, associarCorretorDireto, distribuirPeloOffice };

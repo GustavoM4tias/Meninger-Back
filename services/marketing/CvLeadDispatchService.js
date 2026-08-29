@@ -26,7 +26,7 @@ import { recordLeadEvent } from './leadEventLog.js';
 import MarketingConfigService from './MarketingConfigService.js';
 import { classifySituacao, situacaoInicio, FAIXA } from './cvLeadWorkflow.js';
 import { resolveFila } from './CvLeadQueueService.js';
-import { readLiveLead } from './CvLeadReturnService.js';
+import { readLiveLead, distribuirPeloOffice } from './CvLeadReturnService.js';
 
 const { InboundLead } = db;
 
@@ -227,11 +227,12 @@ async function applySecondInterestReturn(lead, payload, mirror, situacao) {
     payload.remover_corretor = true;
     payload.lead_utilizar_fila = true;
     payload.idfila_distribuicao_leads = fila.idfila;
-    // Em EDIÇÃO de lead existente o CV registra a fila mas não roda a
-    // distribuição sozinho: medido em 28/08/2026 no lead 10685, que ficou sem
-    // dono até o envio manual pelo painel. O forcar é o gatilho do motor (no
-    // lead 12361 ele rodou a distribuição mesmo sem achar fila); com o idfila
-    // explícito junto, a entrega sai no mesmo POST.
+    // NENHUMA combinação destes campos faz o CV associar corretor (medido em
+    // 28/08/2026, leads 35091/34987: mesmo com o forcar o lead vai para
+    // "Aguardando Atendimento Corretor" e fica sem dono). Eles continuam indo
+    // porque registram a fila no painel do CV; quem garante o dono é o
+    // conferirDistribuicao, que aciona o rodízio do Office quando a releitura
+    // mostra o lead solto.
     payload.forcar_distribuicao_lead = true;
 
     console.log(`[marketing-capture] lead ${lead.id}: segundo interesse (${alvo}) em etapa "${situacao.nome}" — devolvendo para ${fila.nome}.`);
@@ -428,23 +429,43 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
 
 // A API não conta se a fila está ativa nem quem está nela por grupo, então não
 // dá para prever se a entrega vai ser distribuída. Depois de um retorno a gente
-// confere lendo o lead ao vivo: fila que não entregou deixa o lead sem dono, e
-// isso tem que virar aviso, não silêncio.
+// confere lendo o lead ao vivo — e, como o CV NÃO distribui lead devolvido por
+// API em nenhuma combinação de campos (medido 28/08/2026, leads 35091/34987:
+// ele move para "Aguardando Atendimento Corretor" e ninguém é associado), lead
+// sem dono aqui não é espera, é defeito: o rodízio do Office assume e associa o
+// próximo corretor da fila. Só vira alerta se nem isso funcionar.
 async function conferirDistribuicao(lead, retorno, actor) {
     try {
         const vivo = await readLiveLead(lead.cv_idlead);
-        const corretor = vivo?.corretor?.nome || null;
-        const imobiliaria = vivo?.imobiliaria?.nome || null;
-        const distribuido = !!(corretor || imobiliaria);
+        let corretor = vivo?.corretor?.nome || null;
+        let imobiliaria = vivo?.imobiliaria?.nome || null;
+        let modo = 'fila_cv';
 
+        if (!corretor && !imobiliaria) {
+            const rodizio = await distribuirPeloOffice({
+                idlead: lead.cv_idlead,
+                idfila: retorno.fila.id,
+                email: lead.email,
+                telefone: lead.telefone,
+            });
+            if (rodizio) {
+                corretor = rodizio.corretor;
+                imobiliaria = rodizio.imobiliaria;
+                modo = 'rodizio_office';
+            }
+        }
+
+        const distribuido = !!(corretor || imobiliaria);
         await recordLeadEvent({
             leadId: lead.id,
             type: distribuido ? 'retorno_distribuido' : 'retorno_represado',
             actor,
             message: distribuido
-                ? `Devolvido para ${retorno.fila.nome} e atribuído a ${corretor || imobiliaria}.`
+                ? (modo === 'rodizio_office'
+                    ? `Devolvido para ${retorno.fila.nome}; o CV não distribuiu e o rodízio do Office associou ${corretor || imobiliaria}.`
+                    : `Devolvido para ${retorno.fila.nome} e atribuído a ${corretor || imobiliaria}.`)
                 : `Devolvido para ${retorno.fila.nome}, mas o CV não atribuiu ninguém — lead sem dono.`,
-            detail: { fila: retorno.fila, corretor, imobiliaria, situacao: vivo?.situacao || null },
+            detail: { fila: retorno.fila, corretor, imobiliaria, modo, situacao: vivo?.situacao || null },
         });
 
         if (!distribuido) {
