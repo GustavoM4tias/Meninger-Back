@@ -64,21 +64,21 @@ export const REGRAS_PADRAO = {
     primeiroAnoMin: null,
     segundoAnoMin: null,
     ateChavesMin: 0.90,
-    // "Até chaves, SEM a parcela das chaves": o que o cliente paga de recurso
-    // próprio durante a obra. Na aba SINOP da planilha a meta é 30% (H48) -
-    // ali a parcela da entrega é o repasse do banco, e cobrar 90% antes dela
-    // seria pedir o financiamento adiantado.
-    ateChavesSemChavesMin: 0.30,
-    // A planilha marca "ERRADO PASSOU DAS CHAVES" quando sobra parcela de obra
-    // depois da entrega. Aqui vira regra explícita - com folga.
+    // O 30 do 30/70: tudo que o cliente paga com recurso próprio, fora o
+    // financiamento da entrega.
     //
-    // A folga existe porque a própria REV08 tem 24 mensais a partir do mês 1 e
-    // a chave no mês 23: a última cai um mês depois, R$ 3.100 numa venda de
-    // R$ 568 mil. Reprovar por isso seria transformar arredondamento de
-    // cronograma em impedimento; ignorar deixaria passar meia dúzia de parcelas
-    // empurradas para depois da entrega. 1% da venda é a linha entre as duas.
+    // É a NATUREZA do dinheiro, não a data. Parcela de recurso próprio que cai
+    // depois da chave continua compondo os 30% - o que o calendário controla é
+    // a regra de atraso, logo abaixo.
+    recursoProprioMin: 0.30,
+    // A planilha marca "ERRADO PASSOU DAS CHAVES" quando sobra parcela depois
+    // da entrega. Aqui a folga é de DATA, em meses.
+    //
+    // Um mês é o padrão da casa: a REV08 tem 24 mensais a partir do mês 1 com a
+    // chave no mês 23, então a última cai um mês depois e isso é normal. Dois ou
+    // mais é proposta empurrando parcela para depois da chave, e bloqueia.
     semParcelaAposChaves: true,
-    aposChavesTolerancia: 0.01,
+    aposChavesMesesTolerancia: 1,
 };
 
 /** "02/09/2026" ou "2026-09-02" -> "2026-09-02" (só a data, sem fuso). */
@@ -120,7 +120,11 @@ function papelDe(nome) {
     const n = String(nome || '').toUpperCase();
     if (/^ATO|SINAL/.test(n)) return 'ato';
     if (/CHAVE/.test(n)) return 'chaves';
-    if (/FINANCIAMENTO|FGTS|SUBS[ÍI]DIO|RECURSO/.test(n)) return 'financiamento';
+    // "RECURSO PRÓPRIO" é o oposto de financiamento e aparece assim em várias
+    // tabelas do CV (Drumond, Moacir Marangoni). Cair no regex de baixo faria
+    // ele sair da conta dos 30%, que é exatamente o que ele compõe.
+    if (/RECURSOs+PR[ÓO]PRIO/.test(n)) return 'obra';
+    if (/FINANCIAMENTO|FGTS|SUBS[ÍI]DIO/.test(n)) return 'financiamento';
     if (/ENTRADA/.test(n)) return 'entrada';
     return 'obra';
 }
