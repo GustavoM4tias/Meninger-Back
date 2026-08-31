@@ -58,11 +58,18 @@ export async function consultar(req, res) {
             opened_at: signer.opened_at ?? new Date().toISOString(),
         });
 
+        // Os textos da tela vêm do registro (raw.rotulo) para o documento poder
+        // se apresentar pelo que ele é — um aditivo de cláusula 13 ou não.
+        const rotulo = linha.raw?.rotulo ?? {};
         return res.json({
             assinante: signer.nome,
             unidade: linha.unidade,
             empreendimento: linha.empreendimento,
-            documento: 'Aditivo contratual - cláusula 13 (prazo de entrega)',
+            titulo: rotulo.titulo || 'Aditivo do seu contrato',
+            documento: rotulo.documento || 'Aditivo contratual - cláusula 13 (prazo de entrega)',
+            observacao: rotulo.observacao
+                || 'A assinatura é feita no DocuSign. Nada muda no seu contrato além da redação da cláusula 13, '
+                 + 'que passa a trazer a data-limite de entrega já prevista.',
             assinado: signer.status === 'completed',
             cancelado: ['voided', 'declined'].includes(linha.status),
             bloqueado: (signer.cpf_fails ?? 0) >= MAX_TENTATIVAS,
