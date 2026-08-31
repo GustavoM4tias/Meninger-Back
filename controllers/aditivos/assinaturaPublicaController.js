@@ -77,7 +77,7 @@ export async function consultar(req, res) {
             // "Retificação" e o verbo do proprio documento ("retificar e
             // ratificar") e assusta menos que "aditivo" na abertura da tela.
             titulo: rotulo.titulo || 'Retificação de Contrato',
-            documento: rotulo.documento || 'Cláusula 13 - prazo de entrega',
+            documento: rotulo.documento || 'Cláusula 13',
             observacao: rotulo.observacao
                 || 'Assinatura eletrônica pelo DocuSign. Nada muda no seu contrato além da redação da cláusula 13, '
                  + 'que passa a trazer a data-limite de entrega já prevista no contrato firmado.',
