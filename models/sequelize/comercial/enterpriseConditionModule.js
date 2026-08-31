@@ -48,6 +48,9 @@ export default (sequelize, DataTypes) => {
         manager_name:      { type: DataTypes.STRING(200), allowNull: true },
         manager_email:     { type: DataTypes.STRING(200), allowNull: true },
         manager_phone:     { type: DataTypes.STRING(50),  allowNull: true },
+        // Administrativo responsável: sempre usuário do Office (precisa de acesso
+        // ao empreendimento), por isso não tem modo manual como o gestor.
+        adm_user_id:       { type: DataTypes.INTEGER,     allowNull: true },
         delivery_deadline_months: { type: DataTypes.INTEGER },
         delivery_deadline_note: { type: DataTypes.TEXT },
         commission_pct: { type: DataTypes.DECIMAL(6, 4) },

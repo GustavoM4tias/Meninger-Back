@@ -132,6 +132,7 @@ const MODULE_FIELD_LABELS = {
     has_digital_cert: 'Certificação', digital_cert_provider: 'Plataforma cert.', digital_cert_has_cost: 'Cert. tem custo',
     digital_cert_cost: 'Cert. valor', digital_cert_paid_by: 'Cert. pagador',
     manager_user_id: 'Gestor', manager_name: 'Gestor (nome)', manager_email: 'Gestor (e-mail)', manager_phone: 'Gestor (tel.)',
+    adm_user_id: 'Administrativo',
     contract_registration_by: 'Registro por', enterprise_files_url: 'Arquivos', notes: 'Observações',
     price_table_ids: 'Tabelas CV', manual_price_tables: 'Tabelas manuais', price_premise_note: 'Premissa de preço',
 };
@@ -1188,6 +1189,7 @@ export const copyModuleFromSource = async (req, res) => {
         // ── Operacional: gestor, registro, CCA, certificação digital (+custo), arquivos, notes
         const OPERATIONAL_FIELDS = [
             'manager_user_id', 'manager_mode', 'manager_name', 'manager_email', 'manager_phone',
+            'adm_user_id',
             'contract_registration_by', 'contract_registered_by_user_id',
             'outros_contact_name', 'outros_contact_email', 'outros_contact_phone',
             'cca_company_name', 'cca_cost', 'cca_charges_company',

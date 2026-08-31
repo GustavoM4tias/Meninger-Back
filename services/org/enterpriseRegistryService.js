@@ -129,18 +129,75 @@ async function upsertEnterprise(cand, { soft = false } = {}) {
   });
 }
 
+// ── Sync das EMPRESAS (Sienge) ───────────────────────────────────────────────
+//
+// `/v1/cost-centers` NÃO traz o nome da empresa, só o `idCompany`. Por isso as
+// empresas nasciam todas como "Empresa <id>" (121 de 121 assim em 2026-08-30) e
+// o agrupamento por empresa da tela de Alçadas ficava ilegível: o admin escolhia
+// entre "Empresa 104" e "Empresa 108" sem saber qual era qual. `/v1/companies`
+// tem nome e CNPJ.
+export async function syncCompaniesFromSienge({ limit = 200 } = {}) {
+  let offset = 0;
+  let total = null;
+  let vistas = 0;
+  let nomeados = 0;
+
+  do {
+    const { data } = await apiSienge.get('/v1/companies', { params: { offset, limit } });
+    const results = Array.isArray(data?.results) ? data.results : [];
+    if (total == null) total = Number(data?.resultSetMetadata?.count) || results.length;
+    if (!results.length) break;
+
+    for (const it of results) {
+      const id = toInt(it.id);
+      const name = cleanStr(it.name) || cleanStr(it.tradeName);
+      if (!id || !name) continue;
+      vistas++;
+
+      const existente = await db.OrgCompany.findByPk(id);
+      // Nome de verdade sempre ganha do provisório "Empresa <id>".
+      if (!existente || existente.name !== name) nomeados++;
+      await db.OrgCompany.upsert({
+        id, name, cnpj: cleanStr(it.cnpj, 20), last_seen_at: new Date(),
+      });
+    }
+    offset += limit;
+  } while (offset < (total ?? 0));
+
+  return { source: 'companies', total, vistas, nomeados };
+}
+
 // ── Sync CV (CRM) ────────────────────────────────────────────────────────────
 export async function syncFromCv() {
   const resp = await apiCv.get('/v1/cadastros/empreendimentos');
   const list = Array.isArray(resp.data) ? resp.data : [];
 
+  // `idempreendimento_int` deveria ser o CENTRO DE CUSTO do Sienge, mas parte do
+  // cadastro traz a EMPRESA (ver corrigirVinculoEmpresaDoCv). Distingue pelo que
+  // o Sienge JÁ PROVOU existir: o id que veio DENTRO do payload da API.
+  // Ler a coluna `erp_cost_center_id` aqui não serviria — é justamente ela que
+  // pode estar sobrescrita com o número da empresa, e o teste se autoconfirmaria.
+  const ccReais = new Set((await sequelize.query(
+    `SELECT DISTINCT NULLIF(erp_payload->>'id', '')::int AS id FROM enterprises
+      WHERE erp_payload IS NOT NULL`, Q
+  )).map(r => Number(r.id)).filter(n => Number.isFinite(n) && n > 0));
+  const empresas = new Set((await sequelize.query(`SELECT id FROM companies`, Q)).map(r => Number(r.id)));
+
   let created = 0;
+  let comoEmpresa = 0;
   for (const it of list) {
     const cvId = toInt(it.idempreendimento);
     if (!cvId) continue;
+
+    const numeroInt = toInt(it.idempreendimento_int);
+    const ehEmpresa = numeroInt != null && !ccReais.has(numeroInt) && empresas.has(numeroInt);
+    if (ehEmpresa) comoEmpresa++;
+
     const r = await upsertEnterprise({
       cv_id: cvId,
-      erp_cost_center_id: toInt(it.idempreendimento_int),
+      erp_cost_center_id: ehEmpresa ? null : numeroInt,
+      // undefined preserva a empresa já gravada; só define quando é o caso.
+      company_id: ehEmpresa ? numeroInt : undefined,
       name: cleanStr(it.nome),
       city: cleanStr(it.cidade, 120),
       uf: cleanStr(it.estado, 2),
@@ -148,7 +205,7 @@ export async function syncFromCv() {
     });
     if (r.created) created++;
   }
-  return { source: 'cv', seen: list.length, created };
+  return { source: 'cv', seen: list.length, created, comoEmpresa };
 }
 
 // ── Sync Sienge (ERP) ────────────────────────────────────────────────────────
@@ -161,6 +218,10 @@ export async function syncFromSienge({ limit = 200, maxCount } = {}) {
   let created = 0;
   let skipped = 0;
   const companiesSeen = new Map();
+  // TODOS os centros de custo devolvidos pela API, inclusive os que não viram
+  // empreendimento (sem "CIDADE/UF - " no nome). É a lista autoritativa usada
+  // depois para desmascarar vínculo falso — ver corrigirVinculoEmpresaDoCv().
+  const ccIdsDoSienge = new Set();
 
   do {
     pages += 1;
@@ -176,12 +237,14 @@ export async function syncFromSienge({ limit = 200, maxCount } = {}) {
       const erpId = toInt(it.id);
       const name = cleanStr(String(it.name || '').replace(/\s+/g, ' '));
       const { city, uf } = parseCityFromCostCenterName(name || '');
+      const companyId = toInt(it.idCompany);
+      if (erpId) ccIdsDoSienge.add(erpId);
+
       // Sem cidade no padrão "CIDADE/UF - ..." = CC administrativo/genérico,
       // não é empreendimento → ignora (mesma regra do sync antigo).
       if (!erpId || !city) { skipped++; continue; }
       matched++;
 
-      const companyId = toInt(it.idCompany);
       if (companyId && !companiesSeen.has(companyId)) {
         companiesSeen.set(companyId, cleanStr(it.companyName) || `Empresa ${companyId}`);
       }
@@ -217,7 +280,93 @@ export async function syncFromSienge({ limit = 200, maxCount } = {}) {
     if (!exists) await db.OrgCompany.create({ id, name: cleanStr(c.name) || `Empresa ${id}`, last_seen_at: c.seen });
   }
 
-  return { source: 'sienge', pages, totalReported: total, seen, matched, created, skipped, companies: companiesSeen.size };
+  // Listagem completa? Só então dá para afirmar que um id NÃO é centro de custo.
+  const listagemCompleta = !maxCount && total != null && ccIdsDoSienge.size >= total;
+  const corrigidos = listagemCompleta ? await corrigirVinculoEmpresaDoCv(ccIdsDoSienge) : 0;
+
+  return {
+    source: 'sienge', pages, totalReported: total, seen, matched, created, skipped,
+    companies: companiesSeen.size, vinculosCorrigidos: corrigidos, listagemCompleta,
+  };
+}
+
+/**
+ * O campo `idempreendimento_int` do CV deveria trazer o CENTRO DE CUSTO do
+ * Sienge, mas em parte do cadastro veio a EMPRESA (medido em 2026-08-30: 10 de
+ * 31 empreendimentos). Como o sync gravava esse número direto em
+ * `erp_cost_center_id`, o empreendimento ficava "pareado" com um centro de custo
+ * inexistente — e o centro de custo VERDADEIRO virava uma segunda linha. É a
+ * origem do mesmo empreendimento aparecendo duas vezes na tela de Alçadas.
+ *
+ * A lista de centros de custo vinda da API manda. Dois desfechos:
+ *
+ *   1. O `erp_payload` da linha guarda o centro de custo real (o Sienge já
+ *      passou por ela antes de o número ser sobrescrito): restaura o vínculo e,
+ *      se o centro real tiver virado outra linha, FUNDE as duas. Os grants da
+ *      linha absorvida migram — ninguém perde acesso.
+ *   2. Não há centro de custo conhecido: o número vira `company_id` e o vínculo
+ *      falso é apagado. O empreendimento passa a aparecer UMA vez, dentro da
+ *      empresa dele, marcado como "só CV" até alguém parear de verdade.
+ *
+ * Idempotente: na segunda rodada não há o que corrigir.
+ */
+async function corrigirVinculoEmpresaDoCv(ccIdsDoSienge) {
+  const suspeitos = await sequelize.query(
+    `SELECT e.id, e.name, e.erp_cost_center_id,
+            NULLIF(e.erp_payload->>'id', '')::int AS cc_do_payload
+       FROM enterprises e
+       JOIN companies c ON c.id = e.erp_cost_center_id
+      WHERE e.erp_cost_center_id IS NOT NULL AND e.cv_id IS NOT NULL`, Q
+  );
+
+  let corrigidos = 0;
+  for (const linha of suspeitos) {
+    const numero = Number(linha.erp_cost_center_id);
+    // É centro de custo de verdade? Então o vínculo está certo, não toca.
+    if (ccIdsDoSienge.has(numero)) continue;
+
+    const ccReal = Number(linha.cc_do_payload) || null;
+    const temCcReal = ccReal != null && ccIdsDoSienge.has(ccReal);
+
+    await sequelize.transaction(async (t) => {
+      if (!temCcReal) {
+        await sequelize.query(
+          `UPDATE enterprises
+              SET company_id = COALESCE(company_id, :numero),
+                  erp_cost_center_id = NULL,
+                  pair_status = 'cv_only',
+                  updated_at = NOW()
+            WHERE id = :id`,
+          { replacements: { numero, id: linha.id }, transaction: t }
+        );
+        console.warn(`[orgRegistry] "${linha.name}": idempreendimento_int=${numero} é EMPRESA no Sienge, não centro de custo. `
+          + 'Vínculo falso desfeito e empresa aplicada. Preencha o centro de custo no cadastro do CV para parear.');
+        return;
+      }
+
+      // O centro de custo real pode ter virado uma segunda linha do mesmo
+      // empreendimento — funde antes de reassumir o número (a coluna é única).
+      const outraLinha = await db.OrgEnterprise.findOne({
+        where: { erp_cost_center_id: ccReal }, transaction: t,
+      });
+      if (outraLinha && Number(outraLinha.id) !== Number(linha.id)) {
+        await mergeEnterpriseRows(linha.id, outraLinha.id, t);
+      }
+      await sequelize.query(
+        `UPDATE enterprises
+            SET erp_cost_center_id = :ccReal,
+                company_id = COALESCE(company_id, :numero),
+                pair_status = 'paired',
+                updated_at = NOW()
+          WHERE id = :id`,
+        { replacements: { ccReal, numero, id: linha.id }, transaction: t }
+      );
+      console.warn(`[orgRegistry] "${linha.name}": centro de custo restaurado para ${ccReal} `
+        + `(estava com ${numero}, que é a EMPRESA)${outraLinha && Number(outraLinha.id) !== Number(linha.id) ? ' e a linha duplicada foi fundida' : ''}.`);
+    });
+    corrigidos++;
+  }
+  return corrigidos;
 }
 
 // ── Catálogo de cidades (user_cities) alimentado pelo registro ───────────────
@@ -251,11 +400,21 @@ export async function syncUserCitiesFromRegistry() {
 
 /** Sync completo (usado pelo scheduler diário e pelo botão Consolidar). */
 export async function syncAll({ log = console.log } = {}) {
-  const erp = await syncFromSienge();
+  // Ordem: EMPRESAS → CV → Sienge.
+  // As empresas vêm primeiro porque o passo do CV precisa delas para saber se o
+  // `idempreendimento_int` é empresa ou centro de custo (e por causa da FK).
+  // O CV vem antes do Sienge para que as linhas do CV já existam quando o passo
+  // do Sienge desfaz vínculo falso — assim empreendimento novo fica certo na
+  // MESMA rodada. A ordem não muda nome/cidade: o passo do Sienge é `soft` e só
+  // preenche lacunas.
+  const companies = await syncCompaniesFromSienge();
   const cv = await syncFromCv();
+  const erp = await syncFromSienge();
   const cities = await syncUserCitiesFromRegistry();
-  log(`[orgRegistry] sync diário: Sienge ${erp.matched} CC(s) (${erp.companies} empresa(s)), CV ${cv.seen} empreendimento(s), ${cities.created} cidade(s) nova(s) no catálogo.`);
-  return { erp, cv, cities };
+  log(`[orgRegistry] sync diário: ${companies.vistas} empresa(s) (${companies.nomeados} com nome atualizado), `
+    + `Sienge ${erp.matched} CC(s), CV ${cv.seen} empreendimento(s), ${cities.created} cidade(s) nova(s) no catálogo, `
+    + `${erp.vinculosCorrigidos || 0} vínculo(s) empresa×centro de custo corrigido(s).`);
+  return { companies, erp, cv, cities };
 }
 
 // ── Semente legada (enterprise_cities) — roda só enquanto a tabela existir ───
@@ -393,4 +552,7 @@ export async function listRegistry({
   return { items: rows, total: count };
 }
 
-export default { syncFromCv, syncFromSienge, syncAll, consolidateRegistry, pairEnterprises, listRegistry };
+export default {
+  syncFromCv, syncFromSienge, syncCompaniesFromSienge, syncAll,
+  consolidateRegistry, pairEnterprises, listRegistry,
+};

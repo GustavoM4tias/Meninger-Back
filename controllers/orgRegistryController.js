@@ -60,7 +60,13 @@ export const syncErp = async (req, res) => {
 export const consolidate = async (_req, res) => {
   try {
     const r = await syncAll();
-    return res.json({ ok: true, enterprises: (r.cv?.seen || 0), companies: (r.erp?.companies || 0), detail: r });
+    return res.json({
+      ok: true,
+      enterprises: (r.cv?.seen || 0),
+      companies: (r.companies?.vistas || 0),
+      vinculosCorrigidos: (r.erp?.vinculosCorrigidos || 0),
+      detail: r,
+    });
   } catch (e) {
     console.error('[orgRegistry] consolidate:', e);
     return res.status(500).json({ error: e.message });
