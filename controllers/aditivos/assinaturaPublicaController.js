@@ -69,7 +69,7 @@ export async function consultar(req, res) {
             documento: rotulo.documento || 'Aditivo contratual - cláusula 13 (prazo de entrega)',
             observacao: rotulo.observacao
                 || 'A assinatura é feita no DocuSign. Nada muda no seu contrato além da redação da cláusula 13, '
-                 + 'que passa a trazer a data-limite de entrega já prevista.',
+                 + 'que passa a trazer a data-limite de entrega já prevista no contrato firmado.',
             assinado: signer.status === 'completed',
             cancelado: ['voided', 'declined'].includes(linha.status),
             bloqueado: (signer.cpf_fails ?? 0) >= MAX_TENTATIVAS,
