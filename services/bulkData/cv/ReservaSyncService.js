@@ -21,6 +21,7 @@
 import { Op } from 'sequelize';
 import db from '../../../models/sequelize/index.js';
 import apiCv from '../../../lib/apiCv.js';
+import { parseCvDate, formatCvDate } from '../../../lib/cvDate.js';
 
 const { Reserva, Repasse } = db;
 
@@ -39,15 +40,23 @@ const JITTER_MS           = parseInt(process.env.CVCRM_JITTER_MS || '250', 10);
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 const toDate = (s) => (s ? new Date(String(s).replace(' ', 'T')) : null);
 
+// O snapshot precisa ter EXATAMENTE o mesmo formato do que o
+// ReservaFullSweepService grava. Os dois escrevem no mesmo array `status` e
+// cada um compara o topo deixado pelo outro: qualquer campo que só um dos dois
+// emita vira "mudou" para sempre. Foi o que aconteceu com `idsituacao_reserva`,
+// que só o sweep tinha - o gap horário dava 100% de falso positivo justamente
+// nas reservas não-terminais (Envio Sienge, Em Assinatura), as que importam.
 function buildSnapshot(entry, repasseMirror = null) {
     const sit = entry?.situacao || {};
     return {
+        idsituacao_reserva: sit?.idsituacao ?? null,
         status_reserva: repasseMirror?.status_reserva ?? entry?.status_reserva ?? sit?.nome ?? sit?.situacao ?? null,
         status_repasse: repasseMirror?.status_repasse ?? entry?.status_repasse ?? null,
         idsituacao_repasse: repasseMirror?.idsituacao_repasse ?? entry?.idsituacao_repasse ?? null,
-        data_status_repasse: repasseMirror?.data_status_repasse
-            ? new Date(repasseMirror.data_status_repasse).toISOString().slice(0, 19).replace('T', ' ')
-            : (entry?.data_status_repasse ?? null),
+        // Forma canônica (hora de parede do CV), venha do espelho de repasse ou
+        // do texto cru da listagem. Ver lib/cvDate.js: era aqui que nascia a
+        // alternância de 3 em 3 horas.
+        data_status_repasse: formatCvDate(repasseMirror?.data_status_repasse ?? entry?.data_status_repasse),
         captured_at: new Date().toISOString(),
     };
 }
@@ -55,6 +64,7 @@ function buildSnapshot(entry, repasseMirror = null) {
 function snapshotsEqual(a, b) {
     if (!a || !b) return false;
     return (
+        String(a.idsituacao_reserva ?? '') === String(b.idsituacao_reserva ?? '') &&
         (a.status_reserva ?? null) === (b.status_reserva ?? null) &&
         (a.status_repasse ?? null) === (b.status_repasse ?? null) &&
         String(a.idsituacao_repasse ?? '') === String(b.idsituacao_repasse ?? '') &&
@@ -184,7 +194,12 @@ function mapReservaToCols(idreserva, core, docs, erp, campanhas, mensagens, snap
         status_reserva: snap.status_reserva ?? null,
         status_repasse: snap.status_repasse ?? null,
         idsituacao_repasse: snap.idsituacao_repasse ?? null,
-        data_status_repasse: snap.data_status_repasse ? toDate(snap.data_status_repasse) : null,
+        // parseCvDate e não toDate: o snapshot é hora de parede de Brasília, e
+        // o toDate genérico deixaria o instante gravado depender do fuso do
+        // processo (a origem do ping-pong). As demais datas seguem no toDate de
+        // sempre - trocá-las desloca data_venda/data_contrato em 3h e mexeria
+        // no corte mensal do Faturamento, o que pede auditoria própria.
+        data_status_repasse: parseCvDate(snap.data_status_repasse),
         documento: titular?.documento ?? null,
         empreendimento: unidade?.empreendimento ?? null,
         etapa: unidade?.etapa ?? null,

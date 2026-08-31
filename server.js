@@ -11,6 +11,7 @@ import authRoutes from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
 import favoriteRoutes from './routes/favoriteRoutes.js';
 import cvRoutes from './routes/cvRoutes.js';
+import cvIntegrationRoutes from './routes/cvIntegrationRoutes.js';
 import siengeRoutes from './routes/siengeRoutes.js';
 import validatorAI from './validatorAI/index.js';
 import contractAutomationRoutes from './routes/contractAutomationRoutes.js';
@@ -108,6 +109,7 @@ import { ensureWhatsappMessagesSchema } from './lib/ensureWhatsappMessagesSchema
 import { ensureUserPhoneBackfill } from './lib/ensureUserPhoneBackfill.js';
 import { ensurePlatformUpdatesSchema } from './lib/ensurePlatformUpdatesSchema.js';
 import { ensureCvPanelSchema } from './lib/ensureCvPanelSchema.js';
+import { ensureCvWebhookSchema } from './lib/ensureCvWebhookSchema.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
@@ -253,6 +255,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/favorite', favoriteRoutes);
 app.use('/api/cv', cvRoutes);
+// CV CRM > Integracoes: administracao dos webhooks (admin-only, ver o arquivo).
+app.use('/api/cv-integracoes', cvIntegrationRoutes);
 app.use('/api/sienge', siengeRoutes); // Sienge api, db and cron
 app.use('/api/microsoft', microsoftAuthRoutes);// Microsoft for archives
 app.use('/api/assistente', assistantRoutes); // Assistente pessoal: meu dia, tarefas, rotinas
@@ -544,6 +548,8 @@ async function syncModelsAndPatches(fingerprint) {
     ['PlatformUpdates', ensurePlatformUpdatesSchema],
     ['EmeAtendeSeed', ensureEmeAtendeSeed],
     ['CvPanel', ensureCvPanelSchema],
+    // Depois de CvPanel: acrescenta a coluna de retencao no mesmo singleton.
+    ['CvWebhook', ensureCvWebhookSchema],
     ['AlertShares', ensureAlertSharesSchema],
     ['DeptSpending', ensureDeptSpendingSchema],
     ['DepartmentVisibility', ensureDepartmentVisibilitySchema],
@@ -651,8 +657,21 @@ async function startBackgroundServices() {
   // cv_sync_jobs, editável em CV CRM > Configurações. No primeiro boot cada job
   // é semeado com o que as variáveis de ambiente diziam, então nada muda de
   // comportamento na virada. Ver services/cv/cvCronManager.js.
-  cvCronManager.aplicar({ bootstrap: true })
-    .catch(e => console.error('[CV crons] falha ao aplicar a configuração:', e?.message));
+  //
+  // O gate acima vale para ESTES crons também. Sem ele, `aplicar()` lia
+  // cv_sync_jobs - que é a tabela de PRODUÇÃO, com os onze jobs ligados - e
+  // agendava tudo a partir de qualquer `npm run dev`. Duas instâncias
+  // escrevendo o mesmo dado, uma em UTC e outra em America/Sao_Paulo, era a
+  // origem da alternância de 3 em 3 horas em `data_status_repasse` (medida em
+  // 27/08/2026: 1.289 reservas fora de sincronia com o próprio repasse). Para
+  // rodar os crons de CV localmente, ligue ENABLE_CV_CRONS=true no .env - e
+  // saiba que você está escrevendo na base compartilhada.
+  if (schedulerOn('ENABLE_CV_CRONS')) {
+    cvCronManager.aplicar({ bootstrap: true })
+      .catch(e => console.error('[CV crons] falha ao aplicar a configuração:', e?.message));
+  } else {
+    console.log('⏸️  Crons do CV não agendados (fora de produção). ENABLE_CV_CRONS=true para ligar.');
+  }
 
   if (process.env.ENABLE_LAND_CONTRACT_SCHEDULE === 'true') landScheduler.start();
   // Registro unificado de empresas/empreendimentos: sync diário de madrugada

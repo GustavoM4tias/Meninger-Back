@@ -22,6 +22,7 @@
 import { Op } from 'sequelize';
 import db from '../../../models/sequelize/index.js';
 import apiCv from '../../../lib/apiCv.js';
+import { parseCvDate, formatCvDate } from '../../../lib/cvDate.js';
 
 const { Reserva, Repasse, CvReservaIdDead } = db;
 
@@ -59,9 +60,9 @@ function buildSnapshot(core, repasseMirror = null) {
         status_reserva: repasseMirror?.status_reserva ?? core?.status_reserva ?? sit?.nome ?? sit?.situacao ?? null,
         status_repasse: repasseMirror?.status_repasse ?? core?.status_repasse ?? null,
         idsituacao_repasse: repasseMirror?.idsituacao_repasse ?? core?.idsituacao_repasse ?? null,
-        data_status_repasse: repasseMirror?.data_status_repasse
-            ? new Date(repasseMirror.data_status_repasse).toISOString().slice(0, 19).replace('T', ' ')
-            : (core?.data_status_repasse ?? null),
+        // Forma canônica (hora de parede do CV) - a mesma do
+        // ReservaSyncService. Ver lib/cvDate.js.
+        data_status_repasse: formatCvDate(repasseMirror?.data_status_repasse ?? core?.data_status_repasse),
         captured_at: new Date().toISOString(),
     };
 }
@@ -168,7 +169,8 @@ function mapReservaToCols(idreserva, core, docs, erp, campanhas, mensagens, snap
         status_reserva: snap.status_reserva ?? null,
         status_repasse: snap.status_repasse ?? null,
         idsituacao_repasse: snap.idsituacao_repasse ?? null,
-        data_status_repasse: snap.data_status_repasse ? toDate(snap.data_status_repasse) : null,
+        // Ver ReservaSyncService: so este campo troca de toDate para parseCvDate.
+        data_status_repasse: parseCvDate(snap.data_status_repasse),
         documento: titular?.documento ?? null,
         empreendimento: unidade?.empreendimento ?? null,
         etapa: unidade?.etapa ?? null,

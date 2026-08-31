@@ -29,6 +29,7 @@ import PriceTableSyncService from '../services/bulkData/cv/PriceTableSyncService
 import RealtorSyncService from '../services/bulkData/cv/RealtorSyncService.js';
 import CorrespondentSyncService from '../services/bulkData/cv/CorrespondentSyncService.js';
 import { RELATORIO_SCREENS } from '../lib/relatorioScreens.js';
+import { receberWebhook } from '../controllers/cv/webhookController.js';
 
 const router = express.Router();
 const cvLeads = new bulkDataController();
@@ -199,5 +200,21 @@ router.post('/correspondents/sync', authenticate, requireAdmin, async (req, res)
         return res.status(500).json({ ok: false, error: e?.message || String(e) });
     }
 });
+
+// ── Webhook do CV (entrada em tempo real) ────────────────────────────────────
+// Rota PÚBLICA: o CV chama sem credencial do Office, e o segredo é o token na
+// URL (comparado em tempo constante no controller). Entrada correspondente na
+// allowlist de security/integrityCheck.js, como manda o CLAUDE.md.
+//
+// A funcionalidade vem na URL porque é assim que o CV modela: lá se cadastra
+// um webhook por funcionalidade e gatilho. Os dois gatilhos de uma mesma
+// funcionalidade (alteração de situação e entrada em situação) apontam para
+// esta mesma URL de propósito - o processamento é idêntico, e assim não é
+// preciso descobrir se o gatilho de alteração também dispara na criação.
+router.post('/webhook/:funcionalidade/:token', receberWebhook);
+
+// A administração deste webhook (ligar, token, histórico) mora junto do resto
+// do painel do CV, em routes/realEstateRoutes.js - é lá que a tela CV CRM já
+// busca credencial e crons, sob a capacidade `configure` de /crm/imobiliarias.
 
 export default router;

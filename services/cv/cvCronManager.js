@@ -25,6 +25,7 @@ import cron from 'node-cron';
 import db from '../../models/sequelize/index.js';
 import { ensureCvPanelSchema } from '../../lib/ensureCvPanelSchema.js';
 import { markRunning, markFinished } from '../bulkData/cv/syncState.js';
+import { registrar as registrarEvento, podar as podarHistorico } from './cvIntegrationLog.js';
 
 import leadCvScheduler from '../../scheduler/leadCvScheduler.js';
 import leadCancelReasonScheduler from '../../scheduler/leadCancelReasonScheduler.js';
@@ -283,24 +284,42 @@ async function executar(key, origem) {
     try {
         const extra = await def.modulo.run();
         const duracao_ms = Date.now() - t0;
-        await markFinished(stateKey(key), {
-            status: extra?.parcial ? 'parcial' : 'ok',
-            message: extra?.parcial ? extra.falhas.join(' | ') : null,
-            stats: { duracao_ms, origem },
+        const status = extra?.parcial ? 'parcial' : 'ok';
+        const message = extra?.parcial ? extra.falhas.join(' | ') : null;
+        await markFinished(stateKey(key), { status, message, stats: { duracao_ms, origem } });
+        // `cv_sync_state` guarda só a ÚLTIMA execução; o histórico guarda todas.
+        // É a comparação entre as duas origens (cron x webhook) que vai dizer
+        // se o CV entrega os eventos de forma confiável o bastante para o cron
+        // virar apenas validador.
+        await registrarEvento({
+            origem: origem === 'tela' ? 'manual' : 'cron',
+            funcionalidade: key,
+            status,
+            mensagem: message,
+            duracao_ms,
+            stats: { origem },
         });
-        console.log(`[CV crons] "${key}" ${extra?.parcial ? 'parcial' : 'ok'} em ${duracao_ms}ms (${origem})`);
+        console.log(`[CV crons] "${key}" ${status} em ${duracao_ms}ms (${origem})`);
         return { ok: true, duracao_ms, parcial: !!extra?.parcial };
     } catch (err) {
         const duracao_ms = Date.now() - t0;
-        await markFinished(stateKey(key), {
-            status: 'error',
-            message: String(err?.message || err).slice(0, 1000),
-            stats: { duracao_ms, origem },
+        const message = String(err?.message || err).slice(0, 1000);
+        await markFinished(stateKey(key), { status: 'error', message, stats: { duracao_ms, origem } });
+        await registrarEvento({
+            origem: origem === 'tela' ? 'manual' : 'cron',
+            funcionalidade: key,
+            status: 'erro',
+            mensagem: message,
+            duracao_ms,
+            stats: { origem },
         });
         console.error(`[CV crons] "${key}" FALHOU em ${duracao_ms}ms (${origem}):`, err?.message);
         return { ok: false, erro: err?.message };
     } finally {
         emExecucao.delete(key);
+        // A poda anda de carona no cron de propósito: é trabalho de manutenção
+        // que não pode entrar no caminho do webhook, que precisa ser curto.
+        podarHistorico().catch(() => {});
     }
 }
 

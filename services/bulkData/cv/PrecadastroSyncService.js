@@ -178,6 +178,66 @@ export default class PrecadastroSyncService {
     async loadAll()   { console.log('🚀 [Precadastros] Carga inicial');   return this._run({ forceRefresh: true });  }
     async loadDelta() { console.log('🚀 [Precadastros] Delta');           return this._run({ forceRefresh: false }); }
 
+    /**
+     * Sincroniza UM pré-cadastro pelo id. É o caminho do webhook.
+     *
+     * Reaproveita `mapRawToCols`, `buildSnapshot` e o mesmo hash do cron de
+     * propósito: dois caminhos que gravam a mesma tabela com regras próprias
+     * acabam divergindo, e a divergência aparece como registro que "muda
+     * sozinho" toda vez que a outra origem passa - foi exatamente o que
+     * aconteceu entre o delta e o sweep de reservas.
+     *
+     * `/v1/comercial/precadastro/<id>` responde com o mesmo envelope da
+     * listagem (total/limite/pagina/precadastros), só que com um registro.
+     */
+    async upsertOne(idprecadastro) {
+        const id = Number(idprecadastro);
+        if (!Number.isFinite(id)) throw new Error('idprecadastro inválido.');
+
+        const { data } = await httpGet(`/v1/comercial/precadastro/${id}`);
+        const lista = Array.isArray(data?.precadastros)
+            ? data.precadastros
+            : Object.values(data?.precadastros || {});
+        const raw = lista.find(p => Number(p?.idprecadastro) === id) || lista[0];
+        if (!raw) return { total: 0, created: 0, updated: 0, unchanged: 0, nao_encontrado: true };
+
+        const novoHash = sha(raw);
+        const prev = await CvPrecadastro.findByPk(id, {
+            attributes: ['idprecadastro', 'content_hash', 'status_historico'],
+            raw: true,
+        });
+        const mapped = mapRawToCols(raw);
+        const agora = new Date();
+
+        if (!prev) {
+            await CvPrecadastro.create({
+                ...mapped,
+                status_historico: [buildSnapshot(raw)],
+                content_hash: novoHash,
+                first_seen_at: agora,
+                last_seen_at: agora,
+            });
+            return { total: 1, created: 1, updated: 0, unchanged: 0 };
+        }
+
+        if (prev.content_hash === novoHash) {
+            await CvPrecadastro.update({ last_seen_at: agora }, { where: { idprecadastro: id } });
+            return { total: 1, created: 0, updated: 0, unchanged: 1 };
+        }
+
+        const snap = buildSnapshot(raw);
+        const anterior = prev.status_historico?.[0] || null;
+        const historico = snapshotsEqual(anterior, snap)
+            ? (prev.status_historico || [])
+            : [snap, ...(prev.status_historico || [])];
+
+        await CvPrecadastro.update(
+            { ...mapped, status_historico: historico, content_hash: novoHash, last_seen_at: agora },
+            { where: { idprecadastro: id } },
+        );
+        return { total: 1, created: 0, updated: 1, unchanged: 0 };
+    }
+
     async _run({ forceRefresh }) {
         const t0 = Date.now();
         let total = 0, created = 0, updated = 0, unchanged = 0, failed = 0;

@@ -293,6 +293,8 @@ import CvImobiliariaDefine from './cv/imobiliaria.js';
 import CvImobiliariaEmpreendimentoDefine from './cv/imobiliariaEnterprise.js';
 import CvPanelSettingsDefine from './cv/panelSettings.js';
 import CvSyncJobDefine from './cv/syncJob.js';
+import CvIntegrationEventDefine from './cv/integrationEvent.js';
+import CvWebhookEndpointDefine from './cv/webhookEndpoint.js';
 
 // Correspondentes (CV): cadastro local de empresas + log de cadastros
 import CorrespondentCompanyDefine from './correspondent/company.js';
@@ -612,6 +614,8 @@ db.CvImobiliaria = CvImobiliariaDefine(sequelize, DataTypes);
 db.CvImobiliariaEmpreendimento = CvImobiliariaEmpreendimentoDefine(sequelize, DataTypes);
 db.CvPanelSettings = CvPanelSettingsDefine(sequelize, DataTypes);
 db.CvSyncJob = CvSyncJobDefine(sequelize, DataTypes);
+db.CvIntegrationEvent = CvIntegrationEventDefine(sequelize, DataTypes);
+db.CvWebhookEndpoint = CvWebhookEndpointDefine(sequelize, DataTypes);
 
 // Correspondentes (CV CRM)
 db.CorrespondentCompany = CorrespondentCompanyDefine(sequelize, DataTypes);

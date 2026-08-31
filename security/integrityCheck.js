@@ -62,6 +62,10 @@ const PUBLIC_PREFIXES = [
     '/api/meta-app-oauth',       // callback OAuth Meta (state assinado no controller)
     '/api/ai/validator',         // job server-to-server (protegido por token interno — security/internalJobToken)
     '/api/cv/banners',           // banners exibidos na TELA DE LOGIN (pré-autenticação; sem dado de negócio)
+    '/api/cv/webhook',           // webhook de dados do CV (reservas/repasses). Token por
+                                 // funcionalidade em cv_webhook_endpoints, conferido em
+                                 // tempo constante; o corpo é tratado como campainha —
+                                 // só o id é lido e o dado vem de nova busca no CV.
 ];
 
 // Rotas autenticadas que NÃO carregam alçada de tela por decisão de desenho.

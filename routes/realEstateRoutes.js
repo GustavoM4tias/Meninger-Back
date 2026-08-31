@@ -31,6 +31,7 @@ import {
     testCvApi,
 } from '../controllers/realEstateController.js';
 
+
 const TELA = '/crm/imobiliarias';
 const podeVer = requireCapability(TELA, 'view');
 const podeCadastrar = requireCapability(TELA, 'register');
@@ -65,5 +66,9 @@ router.post('/cv-panel/test-api', podeConfigurar, testCvApi);
 router.get('/cv-jobs', podeConfigurar, getCvJobs);
 router.put('/cv-jobs/:key', podeConfigurar, updateCvJob);
 router.post('/cv-jobs/:key/run', podeConfigurar, runCvJob);
+
+// A integração com o CV (webhooks, endpoints e histórico) tem tela própria:
+// CV CRM > Integrações, em routes/cvIntegrationRoutes.js. É admin-only por
+// código, porque quem mexe lá enxerga os tokens dos endpoints públicos.
 
 export default router;

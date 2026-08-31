@@ -1,6 +1,7 @@
 // src/services/bulkData/cv/RepasseSyncService.js
 import db from '../../../models/sequelize/index.js';
 import apiCv from '../../../lib/apiCv.js';
+import { parseCvDate, formatCvDate } from '../../../lib/cvDate.js';
 const { Repasse } = db;
 
 const LIMIT = 5000; // máximo da API
@@ -14,7 +15,10 @@ function buildCurrentSnapshot(raw) {
         status_reserva: raw.status_reserva ?? null,
         status_repasse: raw.status_repasse ?? null,
         idsituacao_repasse: raw.idsituacao_repasse ?? null,
-        data_status_repasse: raw.data_status_repasse ?? null, // manter string da API no histórico
+        // Forma canônica (hora de parede do CV). A string da API já vem assim,
+        // mas passar pelo formatCvDate garante o mesmo texto que a reserva
+        // grava a partir deste espelho. Ver lib/cvDate.js.
+        data_status_repasse: formatCvDate(raw.data_status_repasse),
         captured_at: new Date().toISOString()
     };
 }
@@ -50,7 +54,13 @@ function mapRawToCols(raw) {
         status_reserva: raw.status_reserva ?? null,
         status_repasse: raw.status_repasse ?? null,
         idsituacao_repasse: raw.idsituacao_repasse ?? null,
-        data_status_repasse: toDate(raw.data_status_repasse),
+        // parseCvDate e não toDate: este é o campo que a reserva lê deste
+        // espelho para montar o snapshot. Com o toDate genérico, o instante
+        // gravado dependia do fuso do processo (UTC no Railway, Brasília numa
+        // máquina local), e as duas escritas alternavam de 3 em 3 horas. As
+        // outras datas seguem no toDate - trocá-las mexeria em data_assinatura
+        // e no corte mensal do Faturamento, o que pede auditoria própria.
+        data_status_repasse: parseCvDate(raw.data_status_repasse),
 
         data_contrato_liberado: toDate(raw.data_contrato_liberado),
         sla_prazo_repasse: raw.sla_prazo_repasse ?? null,
@@ -127,6 +137,65 @@ export default class RepasseSyncService {
         const stats = await this.upsertBatch(all);
         console.log(`🎉 [Repasses] Delta concluído: total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged}`);
         return stats;
+    }
+
+    /**
+     * Sincroniza pelo id que veio no webhook, sem saber de antemão SE aquele id
+     * é um idrepasse ou um idreserva.
+     *
+     * O problema: o CV não documenta qual id manda no aviso de repasse, e o
+     * endpoint só filtra por `?ID=<idrepasse>` - `?idreserva=` é ignorado em
+     * silêncio (medido em 28/08/2026: `?idreserva=7076` devolveu o repasse
+     * ID=1). Chutar erraria calado, que é o pior desfecho possível.
+     *
+     * A saída é conferir em vez de supor: busca por `?ID=` e só aceita se o
+     * repasse devolvido tiver de fato aquele ID. Se não bater, o id era de
+     * reserva - e aí os repasses daquela reserva saem do espelho local, que
+     * já guarda a ligação idreserva -> idrepasse, e cada um é buscado pelo
+     * seu próprio ID.
+     *
+     * Assim funciona nos dois formatos, e o retorno diz qual deles era - o que
+     * transforma o histórico numa medição do comportamento real do CV.
+     */
+    async syncPorIdDoWebhook(id) {
+        const alvo = Number(id);
+        if (!Number.isFinite(alvo)) throw new Error('id inválido.');
+
+        const buscarPorId = async (idrepasse) => {
+            const { data } = await apiCv.get(`/v1/financeiro/repasses?ID=${idrepasse}&limit=1`);
+            const lista = data?.repasses ?? [];
+            // A conferência que impede o chute: sem ela, um filtro ignorado
+            // devolveria o primeiro repasse da base e nós gravaríamos o
+            // registro errado achando que deu certo.
+            return lista.find(r => Number(r?.ID) === Number(idrepasse)) || null;
+        };
+
+        const comoRepasse = await buscarPorId(alvo);
+        if (comoRepasse) {
+            const r = await this.upsertOne(comoRepasse);
+            return { total: 1, [r]: 1, interpretado_como: 'idrepasse' };
+        }
+
+        const doEspelho = await Repasse.findAll({
+            attributes: ['idrepasse'],
+            where: { idreserva: alvo },
+            raw: true,
+        });
+        if (!doEspelho.length) {
+            return { total: 0, nao_encontrado: true, interpretado_como: 'desconhecido' };
+        }
+
+        let created = 0, updated = 0, unchanged = 0, failed = 0;
+        for (const { idrepasse } of doEspelho) {
+            const raw = await buscarPorId(idrepasse);
+            if (!raw) { failed++; continue; }
+            const r = await this.upsertOne(raw);
+            if (r === 'created') created++; else if (r === 'updated') updated++; else unchanged++;
+        }
+        return {
+            total: doEspelho.length, created, updated, unchanged, failed,
+            interpretado_como: 'idreserva',
+        };
     }
 
     async upsertBatch(arr) {
