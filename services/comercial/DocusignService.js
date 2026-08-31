@@ -312,12 +312,21 @@ function escapeHtml(str) {
     }[c]));
 }
 
-// Cria e ENVIA o envelope. signers: [{name, email, order}]. Retorna { envelopeId }.
-export async function createEnvelope({ html, subject, signers, placement = 'final', requireInitials = false }) {
+// Cria e ENVIA o envelope. signers: [{name, email, order, clientUserId?}].
+// Retorna { envelopeId }.
+//
+// `documents` é opcional: quando informado ([{ base64, name, extension }]), o
+// envelope leva esses arquivos (PDF/DOCX) em vez do HTML, e a página de
+// assinaturas NÃO é anexada — o documento já traz as âncoras /sigN/ e /dtN/.
+// Sem `documents` o comportamento é exatamente o das Fichas Comerciais.
+//
+// `clientUserId` num assinante o torna "captive": o DocuSign não envia e-mail
+// para ele e o link de assinatura passa a ser gerado por createRecipientView().
+export async function createEnvelope({ html, subject, signers, placement = 'final', requireInitials = false, documents = null }) {
     if (!signers?.length) throw new Error('Configure ao menos 1 assinante nas configurações das fichas.');
 
     let documentHtml = html;
-    if (placement === 'final') {
+    if (!documents?.length && placement === 'final') {
         const page = buildSignaturePage(signers, requireInitials, subject);
         documentHtml = html.includes('</body>')
             ? html.replace('</body>', `${page}</body>`)
@@ -331,6 +340,8 @@ export async function createEnvelope({ html, subject, signers, placement = 'fina
             recipientId: String(i + 1),
             routingOrder: String(sg.order ?? i + 1),
         };
+        // Captive: sem e-mail do DocuSign, assinatura por link gerado pelo Office.
+        if (sg.clientUserId) base.clientUserId = String(sg.clientUserId);
         if (placement === 'final') {
             base.tabs = {
                 signHereTabs: [{
@@ -366,12 +377,19 @@ export async function createEnvelope({ html, subject, signers, placement = 'fina
     const { data } = await client.post('/envelopes', {
         emailSubject: subject?.substring(0, 100) || 'Ficha Comercial para assinatura',
         emailBlurb: `Você foi definido como assinante do documento "${subject || 'Ficha Comercial'}" da Menin Engenharia. Abra pelo botão abaixo e assine no campo com o seu nome, na Página de Assinaturas ao final do documento.`.substring(0, 500),
-        documents: [{
-            documentBase64: Buffer.from(documentHtml, 'utf8').toString('base64'),
-            name: `${subject || 'Ficha Comercial'}.html`,
-            fileExtension: 'html',
-            documentId: '1',
-        }],
+        documents: documents?.length
+            ? documents.map((d, i) => ({
+                documentBase64: d.base64,
+                name: d.name,
+                fileExtension: d.extension || 'pdf',
+                documentId: String(i + 1),
+            }))
+            : [{
+                documentBase64: Buffer.from(documentHtml, 'utf8').toString('base64'),
+                name: `${subject || 'Ficha Comercial'}.html`,
+                fileExtension: 'html',
+                documentId: '1',
+            }],
         recipients: { signers: recipients },
         status: 'sent',
     });
@@ -492,9 +510,24 @@ export async function uploadSignedPdf(buffer, conditionId, envelopeId) {
     return { path: filePath, url: urlData?.publicUrl ?? null };
 }
 
+// Link de assinatura de um destinatário CAPTIVE (clientUserId).
+// A URL devolvida vive poucos minutos e é de uso único — gere uma nova a cada
+// clique do assinante, nunca guarde essa URL.
+export async function createRecipientView({ envelopeId, clientUserId, name, email, returnUrl }) {
+    const client = await api();
+    const { data } = await client.post(`/envelopes/${envelopeId}/views/recipient`, {
+        authenticationMethod: 'none',
+        clientUserId: String(clientUserId),
+        userName: name,
+        email,
+        returnUrl,
+    });
+    return data.url;
+}
+
 export default {
     isConfigured, consentUrl, testConnection,
     getAuthorizeUrl, connectWithCode, disconnect,
     createEnvelope, getEnvelopeStatus, downloadCombinedPdf, voidEnvelope, uploadSignedPdf, resendEnvelope,
-    voidActiveForCondition,
+    voidActiveForCondition, createRecipientView,
 };

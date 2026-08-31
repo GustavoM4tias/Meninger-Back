@@ -38,6 +38,7 @@ import cobrancaAtoRoutes from './routes/cobrancaAtoRoutes.js';
 import reservaCancelRoutes from './routes/reservaCancelRoutes.js';
 import aboutRoutes from './routes/aboutRoutes.js';
 import shortLinkRoutes from './routes/shortLinkRoutes.js';
+import aditivoAssinaturaRoutes from './routes/aditivoAssinaturaRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
 import officeBrainRoutes from './routes/officeBrainRoutes.js';
@@ -281,6 +282,10 @@ app.use('/api/about', aboutRoutes); // Sobre o Office: números ao vivo (admin)
 // Encurtador de URL público — rota fora de /api por elegância.
 // Cliente que recebeu link curto via WhatsApp acessa `${host}/s/{slug}` e cai aqui.
 app.use('/s', shortLinkRoutes);
+
+// API pública da assinatura de aditivo — a tela é a LP; aqui só o token, a
+// conferência de CPF e a URL do DocuSign, que é gerada a cada clique.
+app.use('/api/aditivos', aditivoAssinaturaRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
 app.use('/api/office-brain', officeBrainRoutes);

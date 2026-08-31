@@ -172,6 +172,9 @@ import ReservaCancelEventDefine from './reservaCancel/reservaCancelEvent.js';
 // Encurtador de URL genérico
 import ShortLinkDefine from './shortLink.js';
 
+// Assinatura de aditivos contratuais (DocuSign embedded)
+import AditivoSignatureDefine from './aditivoSignature.js';
+
 // OfficeAI Chat
 import ChatSessionDefine from './chatSession.js';
 import ChatMessageDefine from './chatMessage.js';
@@ -473,6 +476,9 @@ db.ReservaCancelEvent    = ReservaCancelEventDefine(sequelize, DataTypes);
 
 // Encurtador de URL
 db.ShortLink           = ShortLinkDefine(sequelize, DataTypes);
+
+// Assinatura de aditivos contratuais
+db.AditivoSignature    = AditivoSignatureDefine(sequelize, DataTypes);
 
 // OfficeAI Chat
 db.ChatSession  = ChatSessionDefine(sequelize, DataTypes);
