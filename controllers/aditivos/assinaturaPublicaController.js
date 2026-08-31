@@ -61,8 +61,15 @@ export async function consultar(req, res) {
         // Os textos da tela vêm do registro (raw.rotulo) para o documento poder
         // se apresentar pelo que ele é — um aditivo de cláusula 13 ou não.
         const rotulo = linha.raw?.rotulo ?? {};
+        // Um link atende o documento inteiro: devolve todos os assinantes e o
+        // que falta, para o casal usar o mesmo endereço.
+        const assinantes = (linha.signers ?? []).map((s) => ({
+            nome: s.nome,
+            assinado: s.status === 'completed',
+        }));
         return res.json({
             assinante: signer.nome,
+            assinantes,
             unidade: linha.unidade,
             empreendimento: linha.empreendimento,
             titulo: rotulo.titulo || 'Aditivo do seu contrato',
@@ -70,7 +77,7 @@ export async function consultar(req, res) {
             observacao: rotulo.observacao
                 || 'A assinatura é feita no DocuSign. Nada muda no seu contrato além da redação da cláusula 13, '
                  + 'que passa a trazer a data-limite de entrega já prevista no contrato firmado.',
-            assinado: signer.status === 'completed',
+            assinado: assinantes.length > 0 && assinantes.every((a) => a.assinado),
             cancelado: ['voided', 'declined'].includes(linha.status),
             bloqueado: (signer.cpf_fails ?? 0) >= MAX_TENTATIVAS,
         });
@@ -96,24 +103,35 @@ export async function abrir(req, res) {
             return res.status(429).json({ error: 'Muitas tentativas com CPF incorreto. Fale com o seu corretor para liberar o acesso.' });
         }
 
-        if (soDigitos(req.body?.cpf) !== soDigitos(signer.cpf)) {
+        // O token diz QUAL DOCUMENTO; o CPF diz QUEM ESTÁ ASSINANDO. Assim um
+        // link só atende o casal: cada um digita o próprio CPF e cai na sua
+        // sessão do DocuSign, sem precisar de um link por pessoa.
+        const cpfInformado = soDigitos(req.body?.cpf);
+        const alvo = (linha.signers ?? []).findIndex((s) => soDigitos(s.cpf) === cpfInformado);
+        if (alvo < 0) {
             const atualizado = await gravarSigner(linha, idx, { cpf_fails: tentativas + 1 });
             const restam = MAX_TENTATIVAS - (atualizado.cpf_fails ?? 0);
             return res.status(401).json({
-                error: 'CPF não confere com o cadastro deste documento.',
+                error: 'CPF não confere com nenhum assinante deste documento.',
                 tentativas_restantes: restam,
             });
         }
 
+        const quem = linha.signers[alvo];
+        if (quem.status === 'completed') {
+            return res.status(409).json({ error: `${quem.nome} já assinou este documento.` });
+        }
+
         const url = await Docusign.createRecipientView({
             envelopeId: linha.envelope_id,
-            clientUserId: signer.client_user_id,
-            name: signer.nome,
-            email: signer.email,
+            clientUserId: quem.client_user_id,
+            name: quem.nome,
+            email: quem.email,
             returnUrl: `${linkPublico(req.params.token)}/pronto`,
         });
 
-        await gravarSigner(linha, idx, { cpf_fails: 0, last_view_at: new Date().toISOString() });
+        await gravarSigner(linha, idx, { cpf_fails: 0 });
+        await gravarSigner(linha, alvo, { last_view_at: new Date().toISOString() });
         return res.json({ url });
     } catch (e) {
         console.error('[aditivo/assinatura] abrir:', e);
