@@ -72,10 +72,12 @@ export async function consultar(req, res) {
             assinantes,
             unidade: linha.unidade,
             empreendimento: linha.empreendimento,
+            // Texto curto e sem repetir "aditivo": o cliente abre isso sem
+            // aviso prévio, e palavra jurídica repetida assusta.
             titulo: rotulo.titulo || 'Aditivo do seu contrato',
-            documento: rotulo.documento || 'Aditivo contratual - cláusula 13 (prazo de entrega)',
+            documento: rotulo.documento || 'Cláusula 13 - prazo de entrega',
             observacao: rotulo.observacao
-                || 'A assinatura é feita no DocuSign. Nada muda no seu contrato além da redação da cláusula 13, '
+                || 'Assinatura eletrônica pelo DocuSign. Nada muda no seu contrato além da redação da cláusula 13, '
                  + 'que passa a trazer a data-limite de entrega já prevista no contrato firmado.',
             assinado: assinantes.length > 0 && assinantes.every((a) => a.assinado),
             cancelado: ['voided', 'declined'].includes(linha.status),
