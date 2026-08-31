@@ -46,7 +46,7 @@ const cvPrecadastros = new PrecadastrosSyncController();
 const sincronizarTabelas = requireCapability('/crm/buildings', 'sync');
 
 const WORKFLOW_SCREENS = ['/crm/workflow/groups', ...RELATORIO_SCREENS, '/validator'];
-const ENTERPRISE_SCREENS = ['/crm/buildings', '/comercial/conditions', '/comercial/projections', ...RELATORIO_SCREENS, '/comercial/reservas-report', '/comercial/precadastros', '/marketing/plano-eventos'];
+const ENTERPRISE_SCREENS = ['/crm/buildings', '/comercial/conditions', '/comercial/projections', ...RELATORIO_SCREENS, '/marketing/plano-eventos'];
 
 router.get('/repasses', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasses);
 router.get('/repasse-workflow', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchRepasseWorkflow);
@@ -86,12 +86,12 @@ router.post('/empreendimentos/sync/delta', authenticate, requireAdmin, cvEnterpr
 // NOVO: Pré-cadastros (backup completo: listar + documentos + mensagens)
 router.post('/precadastros/sync/full', authenticate, requireAdmin, cvPrecadastros.fullSync.bind(cvPrecadastros));
 router.post('/precadastros/sync/delta', authenticate, requireAdmin, cvPrecadastros.deltaSync.bind(cvPrecadastros));
-router.get('/precadastros', authenticate, requireRoutePermission(['/comercial/precadastros']), listPrecadastros);
-router.get('/precadastros/:id', authenticate, requireRoutePermission(['/comercial/precadastros']), getPrecadastro);
+router.get('/precadastros', authenticate, requireRoutePermission(['/comercial/relatorios/precadastros']), listPrecadastros);
+router.get('/precadastros/:id', authenticate, requireRoutePermission(['/comercial/relatorios/precadastros']), getPrecadastro);
 
 // Reservas — relatório (lê do banco, não confundir com `GET /reservas` que é read-through na API CV)
-router.get('/reservas/report', authenticate, requireRoutePermission(['/comercial/reservas-report']), listReservasReport);
-router.get('/reservas/report/:id', authenticate, requireRoutePermission(['/comercial/reservas-report']), getReservaReport);
+router.get('/reservas/report', authenticate, requireRoutePermission(['/comercial/relatorios/reservas']), listReservasReport);
+router.get('/reservas/report/:id', authenticate, requireRoutePermission(['/comercial/relatorios/reservas']), getReservaReport);
 
 router.get('/empreendimentos', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingsFromDb);
 router.get('/empreendimento/:id', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingByIdFromDb);

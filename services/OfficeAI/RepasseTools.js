@@ -33,7 +33,7 @@ import {
 } from './ComercialTools.js';
 
 const LIST_HARD_CAP = 2000;
-const SCREEN = '/comercial/reservas-report';
+const SCREEN = '/comercial/relatorios/reservas';
 
 // Campo de data do filtro. `status` é o padrão porque é o que anda a cada
 // movimentação do repasse — é a data que faz sentido numa linha do tempo.

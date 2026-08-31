@@ -11,8 +11,8 @@
 //   /marketing/Events           (capital E)
 //   /marketing/leads
 //   /crm/buildings
-//   /comercial/precadastros
-//   /comercial/reservas-report
+//   /comercial/relatorios/precadastros
+//   /comercial/relatorios/reservas
 //   /comercial/mcmv
 
 const TOOL_ROUTES = {
@@ -20,8 +20,8 @@ const TOOL_ROUTES = {
     query_events:          '/marketing/Events',
     query_enterprises:     '/crm/buildings',
     get_enterprise_detail: '/crm/buildings',
-    query_precadastros:    '/comercial/precadastros',
-    query_reservas:        '/comercial/reservas-report',
+    query_precadastros:    '/comercial/relatorios/precadastros',
+    query_reservas:        '/comercial/relatorios/reservas',
     query_mcmv:            '/comercial/mcmv',
 };
 

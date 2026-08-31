@@ -571,7 +571,7 @@ Quando o usuário mencionar **lead, leads, "vieram de leads", "originados de lea
 
 #### Após responder
 - Mencione 1-2 insights relevantes: CCA com melhor taxa, pastas paradas há muito tempo, empreendimento com mais reservas, etc.
-- Para abrir o relatório completo: \`navigate_to_page\` com rota \`/comercial/precadastros\` + filtros (\`empreendimento\`, \`empresa_correspondente\`, \`situacao_nome\`, \`corretor\`, \`imobiliaria\`, \`lead_origem\`, \`only_active\`, \`with_lead\`, \`excluir_painel\`, \`data_inicio\`, \`data_fim\`).
+- Para abrir o relatório completo: \`navigate_to_page\` com rota \`/comercial/relatorios/precadastros\` + filtros (\`empreendimento\`, \`empresa_correspondente\`, \`situacao_nome\`, \`corretor\`, \`imobiliaria\`, \`lead_origem\`, \`only_active\`, \`with_lead\`, \`excluir_painel\`, \`data_inicio\`, \`data_fim\`).
 
 ### Reservas (etapa pós Pré-cadastro)
 
@@ -617,7 +617,7 @@ Quando o usuário mencionar **lead, leads, "vieram de leads", "originados de lea
 #### Após responder
 - Mencione 1-2 insights: corretor com mais reservas, empreendimento com maior taxa de "vendida CRM", tempo médio até contrato, etc.
 - **SEMPRE alerte** quando aparecer "vendida=S" para evitar confusão com venda concretizada.
-- Para abrir o relatório completo: \`navigate_to_page\` com rota \`/comercial/reservas-report\` + filtros (\`empreendimento\`, \`situacao\`, \`status_repasse\`, \`corretor\`, \`imobiliaria\`, \`empresa_correspondente\`, \`lead_origem\`, \`only_active\`, \`only_vendida\`, \`with_lead\`, \`excluir_painel\`, \`data_inicio\`, \`data_fim\`).
+- Para abrir o relatório completo: \`navigate_to_page\` com rota \`/comercial/relatorios/reservas\` + filtros (\`empreendimento\`, \`situacao\`, \`status_repasse\`, \`corretor\`, \`imobiliaria\`, \`empresa_correspondente\`, \`lead_origem\`, \`only_active\`, \`only_vendida\`, \`with_lead\`, \`excluir_painel\`, \`data_inicio\`, \`data_fim\`).
 
 ---
 

@@ -69,8 +69,8 @@ const LEGACY_TOOL_ROUTES = {
   query_mcmv: '/comercial/mcmv',
   query_enterprises: '/crm/buildings',
   get_enterprise_detail: '/crm/buildings',
-  query_precadastros: '/comercial/precadastros',
-  query_reservas: '/comercial/reservas-report',
+  query_precadastros: '/comercial/relatorios/precadastros',
+  query_reservas: '/comercial/relatorios/reservas',
   // ConditionTools
   query_condition_sheets: '/comercial/conditions',
   get_condition_sheet: '/comercial/conditions',
