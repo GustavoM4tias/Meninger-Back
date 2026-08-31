@@ -74,12 +74,10 @@ export async function consultar(req, res) {
             empreendimento: linha.empreendimento,
             // Texto curto e sem repetir "aditivo": o cliente abre isso sem
             // aviso prévio, e palavra jurídica repetida assusta.
-            // "Aditivo" sai do titulo e fica na linha de baixo: o cliente le
-            // primeiro o que o documento faz. Mas a palavra continua na tela,
-            // porque o proprio documento no DocuSign se chama assim - esconder
-            // o termo criaria um susto maior na hora de abrir.
-            titulo: rotulo.titulo || 'Atualização do seu contrato',
-            documento: rotulo.documento || 'Aditivo à cláusula 13 - prazo de entrega',
+            // "Retificação" e o verbo do proprio documento ("retificar e
+            // ratificar") e assusta menos que "aditivo" na abertura da tela.
+            titulo: rotulo.titulo || 'Retificação de Contrato',
+            documento: rotulo.documento || 'Cláusula 13 - prazo de entrega',
             observacao: rotulo.observacao
                 || 'Assinatura eletrônica pelo DocuSign. Nada muda no seu contrato além da redação da cláusula 13, '
                  + 'que passa a trazer a data-limite de entrega já prevista no contrato firmado.',
