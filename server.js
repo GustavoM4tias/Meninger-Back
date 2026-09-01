@@ -102,6 +102,7 @@ import { ensureFinanceOverridesSchema } from './lib/ensureFinanceOverridesSchema
 import { ensureMarketingCaptureSchema } from './lib/ensureMarketingCaptureSchema.js';
 import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.js';
 import { ensureSiengeBackupSettingsSchema } from './lib/ensureSiengeBackupSettingsSchema.js';
+import { ensureSiengeConnectionSchema } from './lib/ensureSiengeConnectionSchema.js';
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
 import { ensureEmeReportsSchema } from './lib/ensureEmeReportsSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
@@ -528,6 +529,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['FinanceOverrides', ensureFinanceOverridesSchema],
     ['SiengeBackupLog', ensureSiengeBackupLogSchema],
     ['SiengeBackupSettings', ensureSiengeBackupSettingsSchema],
+    ['SiengeConnection', ensureSiengeConnectionSchema],
     ['Boleto', ensureBoletoSchema],
     ['Userede', ensureUseredeSchema],
     ['ReservaCancel', ensureReservaCancelSchema],

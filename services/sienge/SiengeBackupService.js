@@ -30,23 +30,18 @@ import db from '../../models/sequelize/index.js';
 import { snapshotCustomViews, applyCustomViews } from './siengeCustomViews.js';
 import { probePgRestore } from './pgRestoreBin.js';
 import { getSettings } from './siengeBackupSettings.js';
+import { getConnection, backupAuthHeader, buildPgUrls } from './siengeConnection.js';
 import { clearFreshnessCache, probeMirrorLastChange, brasiliaWallClockToInstant } from './siengeMirrorFreshness.js';
 import { withBackupLock, instanceId } from '../../lib/siengeBackupLock.js';
 
-// ── Sienge API ────────────────────────────────────────────────────────────────
-const SIENGE_USER     = process.env.SIENGE_BACKUP_USER;
-const SIENGE_PASSWORD = process.env.SIENGE_BACKUP_PASSWORD;
-const SIENGE_URL      = process.env.SIENGE_BACKUP_URL;
-const SIENGE_MD5_URL  = process.env.SIENGE_BACKUP_MD5_URL;
-
-// ── PostgreSQL alvo do restore (Railway) ──────────────────────────────────────
-const SIENGE_PG_URL          = process.env.SIENGE_PG_URL;
-const SIENGE_PG_DATABASE     = process.env.SIENGE_PG_DATABASE || 'sie214801';
-const SIENGE_PG_STAGING_DB   = process.env.SIENGE_PG_STAGING_DATABASE || `${SIENGE_PG_DATABASE}_staging`;
-const AUTO_RESTORE_ENABLED   = process.env.ENABLE_SIENGE_AUTO_RESTORE !== 'false';
-
-// Paralelismo e timeout do pg_restore vivem em sienge_backup_settings; as env
-// vars continuam existindo só como piso (ver siengeBackupSettings.js).
+// ── Onde o Sienge mora ────────────────────────────────────────────────────────
+// Endereços, usuários e senhas do arquivo de backup e do Postgres do espelho
+// vivem em sienge_connection_settings e são editáveis na aba Configuração da
+// tela Sienge; as env vars ficaram só como piso.
+// Ver services/sienge/siengeConnection.js.
+//
+// Paralelismo e timeout do pg_restore vivem em sienge_backup_settings; mesma
+// história (ver siengeBackupSettings.js).
 
 const TMP_DIR = path.join(tmpdir(), 'sienge-backup');
 
@@ -65,45 +60,6 @@ const GRANTS_SQL_PATH = path.join(__dirname, '..', '..', 'scripts', 'sienge-gran
 const PERF_INDEXES_SQL_PATH = path.join(__dirname, '..', '..', 'scripts', 'sienge-perf-indexes.sql');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function siengeAuthHeader() {
-  return 'Basic ' + Buffer.from(`${SIENGE_USER}:${SIENGE_PASSWORD}`).toString('base64');
-}
-
-/**
- * Constrói as URLs de conexão a partir de SIENGE_PG_URL:
- *   - adminUrl   : aponta pro database "postgres" (CREATE/DROP/RENAME DATABASE)
- *   - targetUrl  : aponta pro database alvo final (queries, validações)
- *   - stagingUrl : aponta pro database de staging onde o restore acontece
- *
- * SIENGE_PG_URL pode vir com ou sem database no path. Se sem, usa
- * SIENGE_PG_DATABASE como default.
- */
-function buildPgUrls() {
-  if (!SIENGE_PG_URL) throw new Error('SIENGE_PG_URL não configurada');
-
-  const u = new URL(SIENGE_PG_URL);
-  const hasPath = u.pathname && u.pathname !== '/' && u.pathname !== '';
-  const targetDb = hasPath ? u.pathname.replace(/^\//, '') : SIENGE_PG_DATABASE;
-  const stagingDb = SIENGE_PG_STAGING_DB;
-
-  const admin = new URL(SIENGE_PG_URL);
-  admin.pathname = '/postgres';
-
-  const target = new URL(SIENGE_PG_URL);
-  target.pathname = '/' + targetDb;
-
-  const staging = new URL(SIENGE_PG_URL);
-  staging.pathname = '/' + stagingDb;
-
-  return {
-    adminUrl:   admin.toString(),
-    targetUrl:  target.toString(),
-    stagingUrl: staging.toString(),
-    targetDb,
-    stagingDb,
-  };
-}
 
 // Valida o nome do database antes de injetar em SQL (RENAME / DROP / CREATE
 // não aceitam parâmetros bindados, então temos que validar e interpolar).
@@ -152,7 +108,9 @@ async function closeCurrentStage(log) {
 // ─── Fase 1: download do Sienge + MD5 ─────────────────────────────────────────
 
 async function fetchExpectedMd5() {
-  const res = await fetch(SIENGE_MD5_URL, { headers: { Authorization: siengeAuthHeader() } });
+  const { backup_md5_url } = await getConnection();
+  if (!backup_md5_url) throw new Error('URL do md5 do backup não configurada (aba Configuração da tela Sienge).');
+  const res = await fetch(backup_md5_url, { headers: { Authorization: await backupAuthHeader() } });
   if (!res.ok) throw new Error(`MD5 endpoint retornou ${res.status} ${res.statusText}`);
   const text = (await res.text()).trim();
   return text.split(/\s+/)[0].toLowerCase();
@@ -173,9 +131,11 @@ function isTransientNetworkError(err) {
 }
 
 async function downloadAndHashOnce(localPath, log) {
-  const res = await fetch(SIENGE_URL, {
+  const { backup_url } = await getConnection();
+  if (!backup_url) throw new Error('URL do arquivo de backup não configurada (aba Configuração da tela Sienge).');
+  const res = await fetch(backup_url, {
     headers: {
-      Authorization: siengeAuthHeader(),
+      Authorization: await backupAuthHeader(),
       'Accept-Encoding': 'identity', // não pede gzip de novo (já vem .gz por content)
       'Connection': 'keep-alive',
     },
@@ -220,7 +180,7 @@ async function downloadAndHashOnce(localPath, log) {
 }
 
 async function downloadAndHash(localPath, log) {
-  const maxAttempts = Number(process.env.SIENGE_DOWNLOAD_MAX_ATTEMPTS || 3);
+  const { download_max_attempts: maxAttempts } = await getConnection();
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (log) await log.update({ download_attempts: attempt }).catch(() => {});
@@ -275,7 +235,7 @@ const PG_CLIENT_OPTS = (connectionString) => ({
 // ── Helpers de gerenciamento de database (blue-green) ────────────────────────
 
 async function withAdminClient(fn) {
-  const { adminUrl } = buildPgUrls();
+  const { adminUrl } = await buildPgUrls();
   const client = new pg.Client(PG_CLIENT_OPTS(adminUrl));
   await client.connect();
   try {
@@ -508,7 +468,7 @@ export async function applyPerfIndexes(targetUrl) {
 
 /** Ensure de boot: aplica os índices no banco de produção atual (fire-and-forget). */
 export async function ensurePerfIndexes() {
-  const { targetUrl } = buildPgUrls();
+  const { targetUrl } = await buildPgUrls();
   return applyPerfIndexes(targetUrl);
 }
 
@@ -719,7 +679,7 @@ function runPgRestore(dmpcPath, log, totals, targetUrl, { bin, jobs, timeoutMs }
  * <1s (rename é só metadado no catálogo do Postgres).
  */
 async function restoreIntoPostgres(dmpcPath, log, { pgRestoreBin, settings }) {
-  const { targetDb, stagingDb, targetUrl, stagingUrl, adminUrl } = buildPgUrls();
+  const { targetDb, stagingDb, targetUrl, stagingUrl, adminUrl } = await buildPgUrls();
 
   const restoreOpts = {
     bin: pgRestoreBin,
@@ -948,7 +908,7 @@ async function runDailyBackupLocked({ triggeredBy, attempt, pgRestoreBin }) {
     await unlink(localGz).catch(() => {});
 
     // 4. Restore no Postgres
-    if (!AUTO_RESTORE_ENABLED) {
+    if (!(await getConnection()).auto_restore_enabled) {
       await log.update({ import_status: 'skipped' });
     } else {
       try {

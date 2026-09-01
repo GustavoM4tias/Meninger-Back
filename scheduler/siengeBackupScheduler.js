@@ -4,8 +4,9 @@
 //   - carga:  baixa, valida MD5, restaura e promove o espelho (padrão 5h, Brasília)
 //   - vigia:  de 30 em 30 min confere a IDADE DO ESPELHO e dispara se envelheceu
 //
-// O horário e o resto da regra vêm de `sienge_backup_settings` (tela
-// /settings/backup-sienge); as env vars ficaram só como piso.
+// O horário e o resto da regra vêm de `sienge_backup_settings`, e o FUSO em que
+// esses horários são lidos vem de `sienge_connection_settings` — as duas abas de
+// configuração da tela /settings/sienge. As env vars ficaram só como piso.
 //
 // Quem executa é o siengeBackupRunner, que cuida da retentativa e do aviso. E
 // quem garante que só uma instância roda de cada vez é a trava em
@@ -15,8 +16,7 @@
 import cron from 'node-cron';
 import { runWithRetries, watchdogTick } from '../services/sienge/siengeBackupRunner.js';
 import { getSettings } from '../services/sienge/siengeBackupSettings.js';
-
-const TZ = process.env.SIENGE_BACKUP_TZ || 'America/Sao_Paulo';
+import { getConnection } from '../services/sienge/siengeConnection.js';
 
 class SiengeBackupScheduler {
   constructor() {
@@ -26,6 +26,11 @@ class SiengeBackupScheduler {
 
   async start() {
     this.stop();
+
+    let TZ = process.env.SIENGE_BACKUP_TZ || 'America/Sao_Paulo';
+    try {
+      TZ = (await getConnection()).timezone || TZ;
+    } catch { /* piso do env */ }
 
     let settings;
     try {

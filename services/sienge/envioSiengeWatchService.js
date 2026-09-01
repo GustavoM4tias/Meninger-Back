@@ -140,6 +140,7 @@ export async function runWatch(opts = {}) {
                 ? `${novos.length} venda(s) travadas para o ERP (${comAtoPago.length} com ato pago)`
                 : `${novos.length} venda(s) travadas para o ERP`,
             body: corpo,
+            link: '/settings/sienge?tab=envio',
             data: { total: pendentes.length, novos: novos.length, comAtoPago: comAtoPago.length, reservas: novos.map(p => p.idreserva) },
             importance: comAtoPago.length ? 8 : 6,
         }).catch(err => console.warn('[ENVIO_SIENGE_WATCH] notify falhou:', err?.message));

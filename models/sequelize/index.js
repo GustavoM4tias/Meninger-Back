@@ -75,6 +75,7 @@ import PaymentLaunchDefine from './sienge/paymentLaunch.js';
 import LaunchTypeConfigDefine from './sienge/launchTypeConfig.js';
 import SiengeBackupLogDefine from './sienge/backupLog.js';
 import SiengeBackupSettingsDefine from './sienge/backupSettings.js';
+import SiengeConnectionSettingsDefine from './sienge/connectionSettings.js';
 
 import AcademyArticleDefine from './academy/article.js';
 import AcademyTopicDefine from './academy/topic.js';
@@ -386,6 +387,7 @@ db.PaymentLaunch = PaymentLaunchDefine(sequelize, DataTypes);
 db.LaunchTypeConfig = LaunchTypeConfigDefine(sequelize, DataTypes);
 db.SiengeBackupLog = SiengeBackupLogDefine(sequelize, DataTypes);
 db.SiengeBackupSettings = SiengeBackupSettingsDefine(sequelize, DataTypes);
+db.SiengeConnectionSettings = SiengeConnectionSettingsDefine(sequelize, DataTypes);
 
 db.AcademyArticle = AcademyArticleDefine(sequelize, DataTypes);
 db.AcademyTopic = AcademyTopicDefine(sequelize, DataTypes);

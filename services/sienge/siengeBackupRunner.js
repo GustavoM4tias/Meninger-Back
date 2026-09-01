@@ -77,7 +77,7 @@ async function resolveRecipients(settings) {
  * Manda o aviso no máximo uma vez por motivo por dia. `key` carrega o dia, então
  * o mesmo problema volta a avisar amanhã se continuar.
  */
-async function sendAlert({ key, title, body, link = '/settings/backup-sienge', opensAlert = true }) {
+async function sendAlert({ key, title, body, link = '/settings/sienge?tab=backup', opensAlert = true }) {
   const row = await getSettingsRow();
   if (row.last_alert_key === key) return { sent: false, reason: 'já avisado' };
 
@@ -119,13 +119,13 @@ async function clearAlertIfOpen(freshness) {
       recipients: { users },
       title: 'Carga do espelho do Sienge voltou ao normal',
       body: `O espelho foi restaurado e está com dado de ${formatMirrorDate(freshness?.lastChange)}.`,
-      link: '/settings/backup-sienge',
+      link: '/settings/sienge?tab=backup',
       importance: 4,
       data: { recovered: true },
       emailData: {
         title: 'Carga do espelho do Sienge voltou ao normal',
         body: `O espelho foi restaurado e está com dado de ${formatMirrorDate(freshness?.lastChange)}.`,
-        link: '/settings/backup-sienge',
+        link: '/settings/sienge?tab=backup',
       },
     }).catch(err => console.warn('[SiengeBackupRunner] notify de recuperação falhou:', err?.message));
   }

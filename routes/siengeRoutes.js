@@ -37,6 +37,11 @@ import {
     runWatchdog,
 } from '../controllers/sienge/backupController.js';
 import {
+    getSiengeConnection,
+    putSiengeConnection,
+    testSiengeConnection,
+} from '../controllers/sienge/connectionController.js';
+import {
     getFilters as inadimplenciaFilters,
     getDashboard as inadimplenciaDashboard,
     getDetail as inadimplenciaDetail,
@@ -137,8 +142,15 @@ router.get('/launch-types', authenticate, listLaunchTypes);
 router.post('/launch-types', authenticate, configurarPaymentFlow, createLaunchType);
 router.patch('/launch-types/:id', authenticate, configurarPaymentFlow, updateLaunchType);
 
+// ── Conexão com o Sienge (aba Configuração da tela /settings/sienge) ─────────
+// Endereços e credenciais das três portas do Sienge. Admin-only: quem edita
+// isto muda de onde TODO o sistema lê o Sienge. Senha nunca sai no GET.
+router.get('/connection', authenticate, requireAdmin, getSiengeConnection);
+router.put('/connection', authenticate, requireAdmin, putSiengeConnection);
+router.post('/connection/test', authenticate, requireAdmin, testSiengeConnection);
+
 // ── Backup do banco Sienge (cron + log + pg_restore no Postgres Railway) ──────
-// Tela /settings/backup-sienge é admin-only; as rotas acompanham.
+// Tela /settings/sienge é admin-only; as rotas acompanham.
 router.get('/backups', authenticate, requireAdmin, listBackups);
 // Data do espelho: de propósito SEM requireAdmin. Toda tela que lê o backup
 // precisa poder dizer de quando é o número que está mostrando; é leitura de um
