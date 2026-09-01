@@ -386,6 +386,17 @@ class MicrosoftTranscriptService {
             } catch (err) {
                 const status = err?.response?.status;
                 if (status === 403) {
+                    // Desde 31/07/2026 a Microsoft impõe um interruptor de TENANT
+                    // (padrão desligado) para transcrição via Graph. Não é falta
+                    // de permissão do app nem "sem transcrição": é bloqueio geral,
+                    // e fingir lista vazia escondia isso de todo mundo.
+                    const code = err?.response?.data?.error?.innerError?.code
+                              || err?.response?.data?.error?.code;
+                    if (code === 'GraphAccessToTranscriptsDisabled') {
+                        const e = new Error('O acesso a transcrições pela API está desligado no tenant. Ligar em Teams admin center > Meetings > Meeting settings > Transcript API access (Microsoft Graph access).');
+                        e.tenantTranscriptsDisabled = true;
+                        throw e;
+                    }
                     console.warn('[Transcript] listTranscripts: sem permissão (403). Verifique OnlineMeetingTranscript.Read.All no Azure.');
                     return [];
                 }
@@ -550,9 +561,17 @@ class MicrosoftTranscriptService {
         if (!meetingId) return { estado: 'sem-reuniao' };
 
         // 2) As transcrições.
-        const transcricoes = organizerId
-            ? await this.listTranscriptsApp(organizerId, meetingId)
-            : await this.listTranscripts(user, meetingId);
+        let transcricoes;
+        try {
+            transcricoes = organizerId
+                ? await this.listTranscriptsApp(organizerId, meetingId)
+                : await this.listTranscripts(user, meetingId);
+        } catch (err) {
+            // Interruptor do tenant desligado: insistir não muda nada, e o vigia
+            // não deve tratar como "ainda processando".
+            if (err.tenantTranscriptsDisabled) return { estado: 'sem-acesso-tenant' };
+            throw err;
+        }
         if (!transcricoes.length) return { estado: 'sem-transcricao' };
 
         // Só as transcrições DESTA ocorrência: em série recorrente, a lista traz

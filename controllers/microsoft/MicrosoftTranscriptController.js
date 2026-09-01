@@ -150,10 +150,24 @@ class MicrosoftTranscriptController {
                 });
             }
 
-            const todas = viaApp
-                ? await transcriptService.listTranscriptsApp(
-                    await transcriptService.resolveOrganizerId(req.query.organizerEmail), meetingId)
-                : await transcriptService.listTranscripts(req.user, meetingId);
+            let todas;
+            try {
+                todas = viaApp
+                    ? await transcriptService.listTranscriptsApp(
+                        await transcriptService.resolveOrganizerId(req.query.organizerEmail), meetingId)
+                    : await transcriptService.listTranscripts(req.user, meetingId);
+            } catch (e) {
+                if (e.tenantTranscriptsDisabled) {
+                    return res.json({
+                        available: false,
+                        meetingId,
+                        transcripts: [],
+                        reason: 'tenant_disabled',
+                        hint: 'A Microsoft bloqueou o acesso a transcrições pela API neste tenant (controle novo, desligado por padrão desde 31/07/2026). As transcrições existem no Teams, mas a API não pode entregá-las. O administrador precisa ligar: Teams admin center > Meetings > Meeting settings > Transcript API access > Microsoft Graph access.',
+                    });
+                }
+                throw e;
+            }
 
             // Série recorrente acumula as transcrições de TODAS as ocorrências
             // no mesmo onlineMeeting: recorta pela data da reunião pedida, senão
