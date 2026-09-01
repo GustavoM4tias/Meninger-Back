@@ -324,12 +324,14 @@ auditarUrlsDeEnv([
   'FRONTEND_URL',
   'MICROSOFT_REDIRECT_URI',
   'CV_API_BASE_URL',
-  'SIENGE_API_BASE_URL',
+  // As URLs do Sienge (API REST, arquivo de backup e Postgres do espelho)
+  // saíram desta lista em 2026-09-01: elas moram em sienge_connection_settings
+  // e são editadas na aba Configuração da tela /settings/sienge, onde o próprio
+  // updateConnection valida o formato antes de gravar. Mantê-las aqui faria a
+  // ausência delas no ambiente virar um erro vermelho em todo deploy - que é
+  // exatamente o estado desejado depois que a tela assume a conexão.
   'VALIDATOR_API_BASE_URL',
   'SUPABASE_URL',
-  'SIENGE_BACKUP_URL',
-  'SIENGE_BACKUP_MD5_URL',
-  'SIENGE_PG_URL',
   'PUBLIC_API_URL',
   'PUBLIC_BACKEND_URL',
 ]);

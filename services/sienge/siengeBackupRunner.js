@@ -21,14 +21,25 @@ import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 import { runDailyBackup } from './SiengeBackupService.js';
 import { getSettings, getSettingsRow } from './siengeBackupSettings.js';
+import { getConnection } from './siengeConnection.js';
 import { getMirrorFreshness, isRunInProgress, brasiliaWallClockToInstant } from './siengeMirrorFreshness.js';
 
-const TZ = process.env.SIENGE_BACKUP_TZ || 'America/Sao_Paulo';
-
-// ─── Relógio de Brasília ──────────────────────────────────────────────────────
+// ─── Relógio local ────────────────────────────────────────────────────────────
 // O Railway roda em UTC. Sem isto, "para de tentar às 20h" viraria 17h local.
+//
+// O fuso vem de sienge_connection_settings (aba Configuração da tela Sienge) e a
+// env var é só o piso. As funções abaixo são SÍNCRONAS e chamadas em vários
+// pontos de uma rodada, então o valor é resolvido uma vez, na entrada de cada
+// rodada (`refreshTimezone`), e guardado aqui.
+let TZ = process.env.SIENGE_BACKUP_TZ || 'America/Sao_Paulo';
 
-function brasiliaParts(date = new Date()) {
+async function refreshTimezone() {
+  try {
+    TZ = (await getConnection()).timezone || TZ;
+  } catch { /* mantém o piso do env */ }
+}
+
+function localParts(date = new Date()) {
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: TZ,
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -41,11 +52,29 @@ function brasiliaParts(date = new Date()) {
   };
 }
 
-/** Instante em que o dia corrente começou, em Brasília, como Date absoluto. */
-function startOfBrasiliaDay(date = new Date()) {
-  const { dayKey } = brasiliaParts(date);
-  // Brasília é UTC-3 o ano todo desde 2019 (sem horário de verão).
-  return new Date(`${dayKey}T00:00:00-03:00`);
+/**
+ * Deslocamento do fuso configurado naquele instante, no formato "-03:00".
+ *
+ * Era fixo em -03:00, o que estava certo enquanto o fuso era Brasília e só
+ * Brasília (UTC-3 o ano todo desde 2019). Com o fuso vindo da tela, um valor
+ * fixo daria o dia errado em qualquer outro fuso - e em silêncio, que é pior.
+ */
+function offsetDoFuso(date) {
+  const nome = new Intl.DateTimeFormat('en-US', { timeZone: TZ, timeZoneName: 'longOffset' })
+    .formatToParts(date).find(x => x.type === 'timeZoneName')?.value || '';
+  const m = /GMT([+-]\d{2}:\d{2})/.exec(nome);
+  if (m) return m[1];
+  // Deslocamento zero vem como "GMT" pelado, sem número: UTC, Europe/London no
+  // inverno, Africa/Accra. Sem este caso o fuso zero cairia no piso lá embaixo
+  // e o dia começaria três horas cedo.
+  if (/^GMT$|^UTC$/.test(nome.trim())) return '+00:00';
+  return '-03:00';
+}
+
+/** Instante em que o dia corrente começou, no fuso configurado. */
+function startOfLocalDay(date = new Date()) {
+  const { dayKey } = localParts(date);
+  return new Date(`${dayKey}T00:00:00${offsetDoFuso(date)}`);
 }
 
 /**
@@ -161,6 +190,7 @@ function backoffMinutes(settings, attempt) {
  * como tentativa — quem está com a trava é que vai concluir ou falhar.
  */
 export async function runWithRetries({ triggeredBy = 'cron', attempt = 1 } = {}) {
+  await refreshTimezone();
   cancelPendingRetry();
 
   const settings = await getSettings();
@@ -185,12 +215,12 @@ export async function runWithRetries({ triggeredBy = 'cron', attempt = 1 } = {})
 }
 
 async function scheduleRetryOrGiveUp({ settings, attempt, triggeredBy, err }) {
-  const { hour, dayKey } = brasiliaParts();
+  const { hour, dayKey } = localParts();
   const maxAttempts = Number(settings.retry_max_attempts) || 5;
   const untilHour   = Number(settings.retry_until_hour);
 
   const waitMin = backoffMinutes(settings, attempt);
-  const nextHour = brasiliaParts(new Date(Date.now() + waitMin * 60_000)).hour;
+  const nextHour = localParts(new Date(Date.now() + waitMin * 60_000)).hour;
 
   const esgotou   = attempt >= maxAttempts;
   const foraDaJanela = hour >= untilHour || nextHour >= untilHour;
@@ -235,6 +265,7 @@ async function scheduleRetryOrGiveUp({ settings, attempt, triggeredBy, err }) {
  * mente é a data do dado.
  */
 export async function watchdogTick() {
+  await refreshTimezone();
   const settings = await getSettings();
   if (!settings.watchdog_enabled) return { skipped: 'desligado' };
 
@@ -263,14 +294,14 @@ export async function watchdogTick() {
     console.warn(`[SiengeBackupRunner] log ${inProgress.zombieLogId} fechado como falho (sem batida).`);
   }
 
-  const { hour, dayKey } = brasiliaParts();
+  const { hour, dayKey } = localParts();
   const maxAttempts = Number(settings.retry_max_attempts) || 5;
   const untilHour   = Number(settings.retry_until_hour);
 
   // Quantas rodadas de verdade já houve hoje (skip da trava não conta).
   const runsToday = await db.SiengeBackupLog.count({
     where: {
-      started_at: { [Op.gte]: startOfBrasiliaDay() },
+      started_at: { [Op.gte]: startOfLocalDay() },
       status: { [Op.ne]: 'skipped' },
     },
   });
