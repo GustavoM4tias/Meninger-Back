@@ -37,11 +37,16 @@ const HORAS_JANELA_PADRAO = 48;
 const MIN_MINUTOS = 5;
 
 // Backoff por reunião: sem isso, uma reunião sem transcrição seria consultada a
-// cada 10 minutos por dois dias, para nada. Chave: joinUrl base.
+// cada 10 minutos por dois dias, para nada. Chave: joinUrl base + dia da
+// ocorrência - série recorrente repete o joinUrl toda semana, e com a chave só
+// pelo link as falhas de ontem esgotavam as tentativas da reunião de hoje.
 const tentativas = new Map();   // chave → { n, ultima }
 const MAX_TENTATIVAS = 12;
 
-function chaveDe(joinUrl) { return String(joinUrl || '').split('?')[0]; }
+function chaveDe(joinUrl, start) {
+    return String(joinUrl || '').split('?')[0]
+         + '|' + String(start || '').slice(0, 10);
+}
 
 function podeTentar(chave) {
     const t = tentativas.get(chave);
@@ -62,15 +67,31 @@ function limparAntigas() {
     for (const [k, t] of tentativas.entries()) if (t.ultima < corte) tentativas.delete(k);
 }
 
-/** Já existe ata desta reunião no banco? (de qualquer pessoa) */
-async function jaTemAta(joinUrl) {
-    const base = chaveDe(joinUrl);
+/** Já existe ata DESTA OCORRÊNCIA no banco? (de qualquer pessoa)
+ *  O recorte por data é o que faz série recorrente funcionar: o joinUrl é o
+ *  mesmo toda semana, e sem ele a ata da primeira ocorrência fazia o vigia
+ *  pular todas as seguintes para sempre. */
+async function jaTemAta(joinUrl, start) {
+    const base = String(joinUrl || '').split('?')[0];
     if (!base) return null;
+
+    const where = {
+        join_url: { [db.Sequelize.Op.like]: `${base}%` },
+        report_json: { [db.Sequelize.Op.ne]: null },
+    };
+
+    const inicio = start ? new Date(start).getTime() : NaN;
+    if (Number.isFinite(inicio)) {
+        where.meeting_date = {
+            [db.Sequelize.Op.between]: [
+                new Date(inicio - 12 * 60 * 60_000),
+                new Date(inicio + 12 * 60 * 60_000),
+            ],
+        };
+    }
+
     return db.MeetingTranscript.findOne({
-        where: {
-            join_url: { [db.Sequelize.Op.like]: `${base}%` },
-            report_json: { [db.Sequelize.Op.ne]: null },
-        },
+        where,
         order: [['report_generated_at', 'ASC']],
     });
 }
@@ -146,11 +167,11 @@ async function rodar() {
                 if (fim < agora - horas * 60 * 60_000) continue;
                 if (minutos && minutos < MIN_MINUTOS) continue;
 
-                const chave = chaveDe(r.joinUrl);
+                const chave = chaveDe(r.joinUrl, r.start);
 
                 // Outra pessoa já gerou: espelha para esta e segue - sem Graph,
                 // sem IA. É o caso mais comum numa reunião de time.
-                const existente = await jaTemAta(r.joinUrl);
+                const existente = await jaTemAta(r.joinUrl, r.start);
                 if (existente) {
                     const novos = await transcriptService.espelharParaParticipantes(existente);
                     if (novos.length) { await avisar(novos, existente); avisos += novos.length; }

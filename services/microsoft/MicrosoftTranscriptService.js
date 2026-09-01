@@ -70,6 +70,36 @@ export function cuesToText(cues) {
     return cues.map(c => `[${c.startStr}] ${c.speaker}: ${c.text}`).join('\n');
 }
 
+// ── Janela da OCORRÊNCIA ──────────────────────────────────────────────────────
+//
+// Reunião RECORRENTE compartilha o MESMO onlineMeeting (e o mesmo joinUrl) em
+// todas as ocorrências, e as transcrições de todas elas se acumulam na mesma
+// lista do Graph. Sem este filtro, "a transcrição da reunião" era sempre a mais
+// recente da SÉRIE: a ata da semana passada colava na reunião de hoje e a de
+// hoje ficava como "sem transcrição".
+//
+// A transcrição nasce DURANTE a reunião, então o createdAt dela cai entre o
+// início e o fim da ocorrência. As margens absorvem a diferença de fuso (o
+// calendário devolve hora de parede de São Paulo, o Graph devolve UTC) e
+// reunião que estourou o horário.
+
+const OCORRENCIA_ANTES_MS  = 6 * 60 * 60_000;
+const OCORRENCIA_DEPOIS_MS = 12 * 60 * 60_000;
+
+/** Transcrições cujo createdAt cai na janela desta ocorrência. Sem data de
+ *  início, devolve a lista inteira (comportamento antigo, reunião avulsa). */
+export function filtrarPorOcorrencia(transcricoes, start, end) {
+    const inicio = start ? new Date(start).getTime() : NaN;
+    if (!Number.isFinite(inicio)) return transcricoes;
+    const fim = end ? new Date(end).getTime() : inicio;
+    const de  = inicio - OCORRENCIA_ANTES_MS;
+    const ate = (Number.isFinite(fim) ? fim : inicio) + OCORRENCIA_DEPOIS_MS;
+    return transcricoes.filter(t => {
+        const c = new Date(t.createdAt || 0).getTime();
+        return c >= de && c <= ate;
+    });
+}
+
 // ── Graph API helpers ─────────────────────────────────────────────────────────
 
 /** GET autenticado com token fresco — necessário para URLs absolutas do Graph */
@@ -525,8 +555,14 @@ class MicrosoftTranscriptService {
             : await this.listTranscripts(user, meetingId);
         if (!transcricoes.length) return { estado: 'sem-transcricao' };
 
+        // Só as transcrições DESTA ocorrência: em série recorrente, a lista traz
+        // as das semanas anteriores também, e a mais recente da série não é
+        // necessariamente a da reunião pedida.
+        const daOcorrencia = filtrarPorOcorrencia(transcricoes, reuniao.start, reuniao.end);
+        if (!daOcorrencia.length) return { estado: 'sem-transcricao' };
+
         // A mais recente é a que interessa: reunião que parou e voltou gera mais de uma.
-        const alvo = transcricoes.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
+        const alvo = daOcorrencia.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
 
         const [record] = await db.MeetingTranscript.findOrCreate({
             where: { user_id: user.id, transcript_id: alvo.id },
@@ -696,16 +732,32 @@ class MicrosoftTranscriptService {
      * É o caminho de quem só PARTICIPOU: o Graph não devolve a reunião para ela,
      * mas o organizador já baixou a transcrição aqui dentro. O link é comparado
      * sem a query string, que muda de convite para convite.
+     *
+     * `start` recorta pela ocorrência: série recorrente tem o mesmo joinUrl em
+     * todas as semanas, e sem o recorte a ata da semana passada era devolvida
+     * como se fosse a da reunião pedida.
      */
-    async findSharedByJoinUrl(joinUrl, user) {
+    async findSharedByJoinUrl(joinUrl, user, start = null) {
         const base = String(joinUrl || '').split('?')[0];
         if (!base) return [];
 
+        const where = {
+            join_url: { [db.Sequelize.Op.like]: `${base}%` },
+            parsed_transcript: { [db.Sequelize.Op.ne]: null },
+        };
+
+        const inicio = start ? new Date(start).getTime() : NaN;
+        if (Number.isFinite(inicio)) {
+            where.meeting_date = {
+                [db.Sequelize.Op.between]: [
+                    new Date(inicio - 12 * 60 * 60_000),
+                    new Date(inicio + 12 * 60 * 60_000),
+                ],
+            };
+        }
+
         const linhas = await db.MeetingTranscript.findAll({
-            where: {
-                join_url: { [db.Sequelize.Op.like]: `${base}%` },
-                parsed_transcript: { [db.Sequelize.Op.ne]: null },
-            },
+            where,
             include: [{ model: db.User, as: 'user', attributes: ['id', 'username'] }],
             order: [['created_at', 'ASC']],
         });

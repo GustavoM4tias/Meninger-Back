@@ -1,5 +1,5 @@
 // controllers/microsoft/MicrosoftTranscriptController.js
-import transcriptService, { cuesToText } from '../../services/microsoft/MicrosoftTranscriptService.js';
+import transcriptService, { cuesToText, filtrarPorOcorrencia } from '../../services/microsoft/MicrosoftTranscriptService.js';
 import settingsService from '../../services/microsoft/MicrosoftSettingsService.js';
 import { MeetingSummaryService } from '../../validatorAI/src/services/MeetingSummaryService.js';
 import { sendEmail } from '../../email/email.service.js';
@@ -82,7 +82,7 @@ class MicrosoftTranscriptController {
     async checkTranscripts(req, res) {
         if (!guard(req, res)) return;
         try {
-            const { joinUrl } = req.query;
+            const { joinUrl, start, end } = req.query;
             if (!joinUrl) return res.status(400).json({ error: 'joinUrl obrigatório' });
 
             // 1) Caminho de sempre: a conta da própria pessoa (organizador).
@@ -108,7 +108,7 @@ class MicrosoftTranscriptController {
             //    permissão nova nenhuma: a transcrição é a mesma para todos que
             //    estiveram na sala, e o direito de ver vem de ter participado.
             if (!meetingId) {
-                const compartilhadas = await transcriptService.findSharedByJoinUrl(joinUrl, req.user);
+                const compartilhadas = await transcriptService.findSharedByJoinUrl(joinUrl, req.user, start || null);
                 if (compartilhadas.length) {
                     const meus = await db.MeetingTranscript.findAll({
                         where: {
@@ -150,18 +150,25 @@ class MicrosoftTranscriptController {
                 });
             }
 
-            const transcripts = viaApp
+            const todas = viaApp
                 ? await transcriptService.listTranscriptsApp(
                     await transcriptService.resolveOrganizerId(req.query.organizerEmail), meetingId)
                 : await transcriptService.listTranscripts(req.user, meetingId);
+
+            // Série recorrente acumula as transcrições de TODAS as ocorrências
+            // no mesmo onlineMeeting: recorta pela data da reunião pedida, senão
+            // a ata da semana passada aparece como se fosse a de hoje.
+            const transcripts = filtrarPorOcorrencia(todas, start, end);
 
             if (!transcripts.length) {
                 return res.json({
                     available: false,
                     meetingId,
                     transcripts: [],
-                    reason: 'no_transcripts',
-                    hint: 'Reunião encontrada, mas sem transcrições. A transcrição precisa ter sido iniciada durante a reunião no Teams.',
+                    reason: todas.length ? 'occurrence_no_transcript' : 'no_transcripts',
+                    hint: todas.length
+                        ? 'Esta reunião é recorrente e há transcrição de outras datas da série, mas a desta ocorrência ainda não apareceu. Se ela acabou de terminar, o Teams pode estar processando (com gravação demora mais) - tente de novo em alguns minutos. Se a transcrição não foi ligada nesta data, não haverá o que buscar.'
+                        : 'Reunião encontrada, mas sem transcrições. A transcrição precisa ter sido iniciada durante a reunião no Teams.',
                 });
             }
 
