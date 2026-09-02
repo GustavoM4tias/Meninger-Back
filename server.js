@@ -40,6 +40,7 @@ import reservaCancelRoutes from './routes/reservaCancelRoutes.js';
 import aboutRoutes from './routes/aboutRoutes.js';
 import shortLinkRoutes from './routes/shortLinkRoutes.js';
 import aditivoAssinaturaRoutes from './routes/aditivoAssinaturaRoutes.js';
+import aditivoPainelRoutes from './routes/aditivoPainelRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
 import officeBrainRoutes from './routes/officeBrainRoutes.js';
@@ -290,6 +291,9 @@ app.use('/s', shortLinkRoutes);
 
 // API pública da assinatura de aditivo — a tela é a LP; aqui só o token, a
 // conferência de CPF e a URL do DocuSign, que é gerada a cada clique.
+// Acompanhamento interno (autenticado) antes da rota pública: prefixo mais
+// específico primeiro, para /painel não cair no router do cliente.
+app.use('/api/aditivos/painel', aditivoPainelRoutes);
 app.use('/api/aditivos', aditivoAssinaturaRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
