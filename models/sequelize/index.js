@@ -259,6 +259,13 @@ import BolaoMatchDefine       from './bolao/bolaoMatch.js';
 import BolaoParticipantDefine from './bolao/bolaoParticipant.js';
 import BolaoPredictionDefine  from './bolao/bolaoPrediction.js';
 
+// Frota (veículo corporativo)
+import VehicleDefine            from './fleet/vehicle.js';
+import VehicleReservationDefine from './fleet/vehicleReservation.js';
+import VehicleBlockDefine       from './fleet/vehicleBlock.js';
+import VehicleLogDefine         from './fleet/vehicleLog.js';
+import FleetSettingsDefine      from './fleet/fleetSettings.js';
+
 // Mural de Avisos / Comunicados
 import ComunicadoDefine           from './comunicados/comunicado.js';
 import ComunicadoAssignmentDefine from './comunicados/comunicadoAssignment.js';
@@ -579,6 +586,13 @@ db.Bolao            = BolaoDefine(sequelize, DataTypes);
 db.BolaoMatch       = BolaoMatchDefine(sequelize, DataTypes);
 db.BolaoParticipant = BolaoParticipantDefine(sequelize, DataTypes);
 db.BolaoPrediction  = BolaoPredictionDefine(sequelize, DataTypes);
+
+// Frota (veículo corporativo)
+db.Vehicle            = VehicleDefine(sequelize, DataTypes);
+db.VehicleReservation = VehicleReservationDefine(sequelize, DataTypes);
+db.VehicleBlock       = VehicleBlockDefine(sequelize, DataTypes);
+db.VehicleLog         = VehicleLogDefine(sequelize, DataTypes);
+db.FleetSettings      = FleetSettingsDefine(sequelize, DataTypes);
 
 // Mural de Avisos / Comunicados
 db.Comunicado           = ComunicadoDefine(sequelize, DataTypes);

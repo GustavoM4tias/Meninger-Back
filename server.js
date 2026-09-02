@@ -75,6 +75,7 @@ import bolaoRoutes from './routes/bolaoRoutes.js';
 import bolaoPublicRoutes from './routes/bolaoPublicRoutes.js';
 import comunicadoRoutes from './routes/comunicadoRoutes.js';
 import checklistRoutes from './routes/checklistRoutes.js';
+import fleetRoutes from './routes/fleetRoutes.js';
 import organogramRoutes from './routes/organogramRoutes.js';
 
 import { seedInitialTypes } from './controllers/sienge/launchTypeController.js';
@@ -131,6 +132,7 @@ import { ensureEmeAtendeOpenerTemplates } from './lib/ensureEmeAtendeOpenerTempl
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
 import { ensureChecklistSchema } from './lib/ensureChecklistSchema.js';
+import { ensureFleetSchema } from './lib/ensureFleetSchema.js';
 import { ensureOrganogramSchema } from './lib/ensureOrganogramSchema.js';
 import { ensureFaturamentoRulesSchema } from './lib/ensureFaturamentoRulesSchema.js';
 import { ensureProjectionLinkSchema } from './lib/ensureProjectionLinkSchema.js';
@@ -152,6 +154,7 @@ import { registerApp as registerIntegrityApp, runIntegrityCheck } from './securi
 import { schemaDriftCheck } from './lib/schemaDriftCheck.js';
 import { shouldRunSchemaSync, recordSchemaSync } from './lib/schemaSyncGate.js';
 import eventReminderScheduler from './scheduler/eventReminderScheduler.js';
+import fleetScheduler from './scheduler/fleetScheduler.js';
 import microsoftMeetingReminderScheduler from './scheduler/microsoftMeetingReminderScheduler.js';
 import microsoftTranscriptWatcherScheduler from './scheduler/microsoftTranscriptWatcherScheduler.js';
 import outlookAiScheduler from './scheduler/outlookAiScheduler.js';
@@ -314,6 +317,7 @@ app.use('/api/sales-closings', salesClosingRoutes);
 app.use('/api/bolao', bolaoRoutes);
 app.use('/api/comunicados', comunicadoRoutes);
 app.use('/api/checklists', checklistRoutes);
+app.use('/api/fleet', fleetRoutes);
 app.use('/api/organogram', organogramRoutes);
 app.use('/api/docusign-oauth', docusignOauthRoutes); // callback público do login DocuSign (state assinado)
 
@@ -570,6 +574,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['SalesStandSettings', seedSalesStandSettings],
     ['SalesStandExpenseCategories', seedSalesStandExpenseCategories],
     ['Checklist', ensureChecklistSchema],
+    ['Frota', ensureFleetSchema],
     ['LegacyDrops', ensureLegacyDrops],
     ['AccessModel', ensureAccessModelSchema],
     // E-mails minúsculos + aviso de cadastros duplicados (pessoa em dobro no organograma)
@@ -720,6 +725,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_UREDE_KEEPALIVE')) useredeKeepAliveScheduler.start(); // 20min: mantém viva a sessão do portal Userede (evita relogin, que é onde mora o reCAPTCHA)
   if (schedulerOn('ENABLE_UREDE_CONCILIACAO')) useredeConciliacaoScheduler.start(); // 08:10: concilia os links de cartão (pago/expirado/negado/estornado)
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService
+  if (schedulerOn('ENABLE_FLEET')) fleetScheduler.start(); // 15min: expira reserva não retirada, cobra devolução atrasada, lembra a retirada
   if (schedulerOn('ENABLE_MEETING_REMINDER')) microsoftMeetingReminderScheduler.start();
   if (schedulerOn('ENABLE_TRANSCRIPT_WATCHER')) microsoftTranscriptWatcherScheduler.start(); // 10min: procura a transcrição da reunião que acabou, gera a ata e avisa quem participou
   // Mantem a sessao Microsoft viva para ninguem precisar relogar. Ligado por

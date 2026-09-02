@@ -120,6 +120,13 @@ export const NotificationType = {
 
     // Administração — cadastro de usuários (primeiro acesso)
     USER_SIGNUP_PENDING:    'user.signup.pending',
+
+    // Frota — veículo corporativo
+    FLEET_RESERVATION_CREATED:   'frota.reserva.criada',
+    FLEET_RESERVATION_CANCELLED: 'frota.reserva.cancelada',
+    FLEET_RESERVATION_EXPIRED:   'frota.reserva.expirada',
+    FLEET_PICKUP_REMINDER:       'frota.retirada.lembrete',
+    FLEET_RETURN_OVERDUE:        'frota.devolucao.atrasada',
 };
 
 export const NOTIFICATION_CATALOG = {
@@ -762,6 +769,55 @@ export const NOTIFICATION_CATALOG = {
         emailType: 'generic.notification',
         whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+
+    // ── Frota — veículo corporativo ────────────────────────────────────────────
+    [NotificationType.FLEET_RESERVATION_CREATED]: {
+        label: 'Reservaram o veículo em seu nome',
+        group: 'Frota',
+        description: 'Quando outra pessoa cadastra uma reserva do veículo colocando você como condutor.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.FLEET_RESERVATION_CANCELLED]: {
+        label: 'Sua reserva do veículo foi cancelada',
+        group: 'Frota',
+        description: 'Quando o gestor da frota cancela a sua reserva ou bloqueia o veículo para manutenção no período que você tinha reservado.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        // Perder o carro sem saber é o pior caso do módulo: some do sino E vai
+        // por e-mail, e a preferência não desliga.
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: false,
+    },
+    [NotificationType.FLEET_RESERVATION_EXPIRED]: {
+        label: 'Reserva do veículo expirada',
+        group: 'Frota',
+        description: 'Quando você reservou o veículo e a retirada não foi registrada dentro do prazo, e o período voltou a ficar livre para outras pessoas.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.FLEET_PICKUP_REMINDER]: {
+        label: 'Lembrete da retirada do veículo',
+        group: 'Frota',
+        description: 'Lembrete enviado antes do início da sua reserva do veículo.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.FLEET_RETURN_OVERDUE]: {
+        label: 'Devolução do veículo em atraso',
+        group: 'Frota',
+        description: 'Quando passa do horário previsto de devolução e a devolução ainda não foi registrada.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        defaults: { inapp: true, email: false, whatsapp: false },
         userOptional: true,
     },
 };

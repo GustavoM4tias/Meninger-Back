@@ -106,3 +106,52 @@ export function toPgVector(arr) {
     if (!Array.isArray(arr) || !arr.length) return null;
     return `[${arr.map(n => Number(n)).join(',')}]`;
 }
+
+/**
+ * JSON a partir de uma IMAGEM. Mesma rotação de chave e mesmo modelo barato do
+ * generateJson - só acrescenta a parte visual.
+ *
+ * Nasceu para ler o odômetro na foto do painel: digitar seis dígitos de pé, no
+ * estacionamento, é onde o erro entra (e um km errado contamina a
+ * quilometragem de todas as viagens seguintes). A leitura é SUGESTÃO: quem
+ * confirma é a pessoa, e a regra de consistência valida depois.
+ *
+ * @param {string} prompt
+ * @param {{ data: string, mimeType: string }} imagem  data = base64 puro (sem data:)
+ */
+export async function generateJsonFromImage(prompt, imagem, { maxOutputTokens = 512 } = {}) {
+    if (!hasGeminiKey()) return null;
+    if (!imagem?.data) return null;
+
+    const keys = getKeys();
+    for (let k = 0; k < keys.length; k++) {
+        try {
+            const model = getClient(k).getGenerativeModel({
+                model: getCheapModel(),
+                generationConfig: {
+                    responseMimeType: 'application/json',
+                    maxOutputTokens,
+                    temperature: 0,   // leitura de número não é tarefa criativa
+                    thinkingConfig: { thinkingBudget: 0 },
+                },
+            });
+            const res = await model.generateContent([
+                { inlineData: { data: imagem.data, mimeType: imagem.mimeType || 'image/jpeg' } },
+                { text: prompt },
+            ]);
+            const txt = res?.response?.text?.() || '';
+            if (!txt) return null;
+            try { return JSON.parse(txt); }
+            catch {
+                const m = txt.match(/\{[\s\S]*\}/);
+                return m ? JSON.parse(m[0]) : null;
+            }
+        } catch (err) {
+            const status = err?.status || err?.response?.status;
+            if (RETRYABLE.has(status) && k < keys.length - 1) continue;
+            console.warn('[geminiClient.generateJsonFromImage]', err?.message);
+            return null;
+        }
+    }
+    return null;
+}

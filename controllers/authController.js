@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import db from '../models/sequelize/index.js';
 import jwtConfig from '../config/jwtConfig.js';
 import responseHandler from '../utils/responseHandler.js';
+import { distanceEuclidean, averageEmbedding, filterOutliers, resolveTemplate } from '../lib/faceMatch.js';
 import { sendEmail } from '../email/email.service.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 import { issueRefreshToken, rotateRefreshToken, revokeRefreshToken } from '../services/auth/refreshTokenService.js';
@@ -344,54 +345,11 @@ export const resetPassword = async (req, res) => {
 };
 
 // ── Face recognition utils ────────────────────────────────────────────────────
-
-const distanceEuclidean = (a, b) => {
-  if (!a || !b || a.length !== b.length) return Number.POSITIVE_INFINITY;
-  let s = 0;
-  for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d * d; }
-  return Math.sqrt(s);
-};
-
-const averageEmbedding = (arr) => {
-  if (!arr?.length) return null;
-  const len = arr[0].length;
-  const out = new Array(len).fill(0);
-  for (const v of arr) for (let i = 0; i < len; i++) out[i] += v[i];
-  for (let i = 0; i < len; i++) out[i] /= arr.length;
-  return out;
-};
-
-/**
- * Remove outliers: descarta embeddings cuja distância à média ultrapassa
- * (média das distâncias + 1.5 × desvio padrão). Garante que ao menos 60%
- * dos frames originais são mantidos para evitar descartar demais.
- */
-const filterOutliers = (embeddings) => {
-  if (embeddings.length < 6) return embeddings;
-  const mean = averageEmbedding(embeddings);
-  const dists = embeddings.map(e => distanceEuclidean(e, mean));
-  const avg = dists.reduce((a, b) => a + b, 0) / dists.length;
-  const std = Math.sqrt(dists.reduce((a, d) => a + (d - avg) ** 2, 0) / dists.length);
-  const cutoff = avg + 1.5 * std;
-  const filtered = embeddings.filter((_, i) => dists[i] <= cutoff);
-  // Se sobrar menos de 60% dos originais, retorna sem filtrar (evita descarte excessivo)
-  return filtered.length >= Math.ceil(embeddings.length * 0.6) ? filtered : embeddings;
-};
-
-/**
- * Resolve o template armazenado num objeto padronizado { mean, embeddings }.
- * Suporta o formato legado (array puro = só a média).
- */
-const resolveTemplate = (raw) => {
-  if (!raw) return null;
-  let tpl = raw;
-  if (typeof tpl === 'string') {
-    try { tpl = JSON.parse(tpl); } catch { return null; }
-  }
-  if (Array.isArray(tpl)) return { mean: tpl, embeddings: [] };
-  if (tpl && Array.isArray(tpl.mean)) return tpl;
-  return null;
-};
+//
+// As funções (distância, média, outliers, template) moraram aqui até a retirada
+// do veículo precisar da MESMA conferência. Foram para lib/faceMatch.js para
+// não existirem duas cópias da regra de segurança se desencontrando com o
+// tempo. O comportamento do login é idêntico: mesmas funções, outro arquivo.
 
 // ─────────────────────────────────────────────────────────────────────────────
 
