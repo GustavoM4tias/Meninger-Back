@@ -3,6 +3,7 @@ import express from 'express';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import requireCapability from '../middlewares/requireCapability.js';
 import {
+    getMeta,
     listOverrides,
     upsertOverride,
     deleteOverride,
@@ -16,6 +17,7 @@ const router = express.Router();
 //   edit → admin: reposicionar pessoa grava override de layout
 const ORGANOGRAMA = '/settings/organograma';
 
+router.get('/meta', authMiddleware, requireCapability(ORGANOGRAMA, 'view'), getMeta);
 router.get('/overrides', authMiddleware, requireCapability(ORGANOGRAMA, 'view'), listOverrides);
 
 router.put('/overrides/:userId', authMiddleware, requireCapability(ORGANOGRAMA, 'edit'), upsertOverride);

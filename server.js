@@ -147,6 +147,7 @@ import { ensureAccessModelColumns } from './lib/ensureAccessModelColumns.js';
 import { ensureRoutePolicySchema } from './lib/ensureRoutePolicySchema.js';
 import { ensureEventPlanSchema } from './lib/ensureEventPlanSchema.js';
 import { ensureOrgDefaultsSchema } from './lib/ensureOrgDefaultsSchema.js';
+import { ensureOrgRetirement } from './lib/ensureOrgRetirement.js';
 import { ensureVapidKeys } from './lib/ensureVapidKeys.js';
 import { ensureUserEmailNormalization } from './lib/ensureUserEmailNormalization.js';
 import { ensureBrazilCitiesSeed } from './lib/ensureBrazilCitiesSeed.js';
@@ -582,6 +583,10 @@ async function syncModelsAndPatches(fingerprint) {
     // Catálogo de cidades (IBGE) ANTES do OrgDefaults: o backfill de
     // users.city_id casa por nome e precisa das cidades já no lugar.
     ['BrazilCities', ensureBrazilCitiesSeed],
+    // Faxina do quadro de departamentos (uma vez só, applyOnce): funde os
+    // duplicados e apaga os que a empresa não usa. ANTES do OrgDefaults para o
+    // seed já enxergar o quadro final e não recriar o que acabou de sair.
+    ['OrgRetirement', ensureOrgRetirement],
     ['OrgDefaults', ensureOrgDefaultsSchema],
     // Perfis padrão DEPOIS do OrgDefaults: o seed cria um perfil por
     // departamento e precisa dos departamentos padrão já no banco (antes,

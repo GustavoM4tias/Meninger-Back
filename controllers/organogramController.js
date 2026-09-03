@@ -8,6 +8,37 @@ import responseHandler from '../utils/responseHandler.js';
 
 const { OrganogramOverride } = db;
 
+// GET /api/organogram/meta
+//
+// Catálogo de departamentos e cargos para a tela do organograma (filtro por
+// departamento + descrição do cargo no card da pessoa). Existe porque
+// /api/admin/positions é requireAdmin: a tela do organograma é alçada, não é
+// admin-only, e antes dela o filtro e a descrição do cargo só apareciam para
+// admin — para o resto o fetch falhava calado.
+//
+// Só devolve o que a tela usa (id/nome/código) e nada de pessoa.
+export const getMeta = async (req, res) => {
+    try {
+        const [departments, positions] = await Promise.all([
+            db.Department.findAll({
+                where: { active: true },
+                attributes: ['id', 'name', 'code'],
+                order: [['name', 'ASC']],
+                raw: true,
+            }),
+            db.Position.findAll({
+                where: { active: true },
+                attributes: ['id', 'name', 'code', 'description', 'department_id'],
+                order: [['name', 'ASC']],
+                raw: true,
+            }),
+        ]);
+        return responseHandler.success(res, { departments, positions });
+    } catch (error) {
+        return responseHandler.error(res, error);
+    }
+};
+
 // GET /api/organogram/overrides
 export const listOverrides = async (req, res) => {
     try {
