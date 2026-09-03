@@ -40,6 +40,14 @@ const REPASSE_SQL = `COALESCE(r.status_repasse, rep.status_repasse)`;
 // Repasse mais recente da reserva. Alem da situacao, traz o `idrepasse`, que e
 // o que permite abrir a etapa do repasse no CV
 // (/gestor/financeiro/repasses/<id>/administrar).
+//
+// Depende do indice composto `repasses (idreserva, idrepasse DESC)` (ver
+// lib/ensureRepasseIndexes.js). So com o indice simples de idreserva o
+// planejador preferia andar a chave primaria de tras para frente filtrando
+// por idreserva e lia ~1.760 linhas por reserva - 3,2 milhoes de paginas num
+// periodo de oito meses, 1,7 s dos 2,8 s da consulta (medido em 02/09/2026).
+// Escrever como MAX(idrepasse) nao ajudou: virou a mesma varredura. Com o
+// composto, uma pagina por reserva.
 const REPASSE_JOIN = `
           LEFT JOIN LATERAL (
             SELECT rp.idrepasse, rp.status_repasse
@@ -217,6 +225,11 @@ export const listReservasReport = async (req, res) => {
             whereClauses.push(`(${scopeParts.join(' OR ')})`);
         }
 
+        // A listagem nao traz os blocos que so o detalhe usa (condicoes,
+        // contratos, unidade_json, ultima_mensagem): o modal busca a reserva
+        // inteira em GET /reservas/report/:id. Medido em 02/09/2026 sobre os
+        // 1.796 registros do ano: esses quatro blocos pesavam 2,7 MB dos 8,8 MB
+        // da resposta - peso morto no celular da diretoria.
         const sql = `
           SELECT
             r.idreserva,
@@ -228,10 +241,10 @@ export const listReservasReport = async (req, res) => {
             r.idproposta_cv, r.idproposta_int,
             r.vendida, r.observacoes,
             r.data_reserva, r.data_contrato, r.data_venda,
-            r.idtipovenda, r.tipovenda, r.idprecadastro, r.ultima_mensagem,
-            r.idtime, r.contratos, r.empresa_correspondente,
-            r.situacao, r.imobiliaria, r.unidade_json, r.titular, r.corretor,
-            r.condicoes, r.leads_associados,
+            r.idtipovenda, r.tipovenda, r.idprecadastro,
+            r.idtime, r.empresa_correspondente,
+            r.situacao, r.imobiliaria, r.titular, r.corretor,
+            r.leads_associados,
             r.first_seen_at, r.last_seen_at,
             -- métricas calculadas no SQL
             EXTRACT(EPOCH FROM (COALESCE(r.data_venda, r.data_contrato, NOW()) - r.data_reserva))/86400 AS dias_em_reserva,
@@ -259,8 +272,19 @@ export const listReservasReport = async (req, res) => {
           ORDER BY r.data_reserva DESC
         `;
 
+        // JIT desligado SO nesta consulta. O Postgres estima 100 leads por
+        // reserva no subselect de origens (jsonb_array_elements nao tem
+        // estatistica), o custo estimado passa do limiar do JIT e ele compila
+        // o plano antes de rodar: ~0,8 s de compilacao para 60 ms de execucao
+        // (medido em 02/09/2026, oito meses de reservas).
+        //
+        // O SET vai na MESMA string da consulta: os dois comandos rodam numa
+        // transacao implicita (uma ida ao banco) e o SET LOCAL morre com ela,
+        // sem vazar para a conexao do pool. Abrir transacao explicita custava
+        // tres idas a mais (BEGIN, SET, COMMIT) por relatorio.
         const t0 = Date.now();
-        const rows = await db.sequelize.query(sql, {
+        const rows = await db.sequelize.query(`SET LOCAL jit = off;
+${sql}`, {
             replacements,
             type: db.Sequelize.QueryTypes.SELECT,
         });
