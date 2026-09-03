@@ -7,6 +7,14 @@ import crypto from 'crypto';
 const { Lead } = db;
 const LIMIT = 1000;
 const ID_VENDA_REALIZADA = 6;  // ajuste conforme seu CRM
+// Situação "Descartado" no CV. Medido em 03/09/2026 pelo `/cvio/lead?idlead=`:
+// o CV devolve `situacao: { id: 3, nome: 'Descartado' }`.
+const ID_DESCARTADO = 3;
+
+// Lacunas de id: quantos ids abaixo do topo conhecido e quantos acima dele o
+// delta reconsulta um a um (ver `fillGaps`).
+const GAP_JANELA = parseInt(process.env.LEAD_CV_GAP_WINDOW || '2000', 10);
+const GAP_MARGEM = parseInt(process.env.LEAD_CV_GAP_TAIL || '20', 10);
 
 function hashObj(o) {
     return crypto.createHash('sha256').update(JSON.stringify(o)).digest('hex');
@@ -79,18 +87,65 @@ export default class CvLeadSyncService {
 
         await this.upsertBatch(merge);
 
-        // marca descartados
+        // Lead que sumiu da lista de ativos sem ter vendido foi descartado no
+        // CV. O id da situação vai JUNTO com o nome: antes só o nome mudava e
+        // 11.703 leads ficaram "Descartado" com o situacao_id da etapa anterior
+        // (Em Atendimento, 1ª Tentativa...) - medido em 03/09/2026, o CV
+        // confirmava id 3 em todos os conferidos.
         await Lead.update(
-            { situacao_nome: 'Descartado' },
+            { situacao_id: ID_DESCARTADO, situacao_nome: 'Descartado' },
             {
                 where: {
                     idlead: { [Op.notIn]: idsSync },
-                    situacao_id: { [Op.notIn]: [3, ID_VENDA_REALIZADA] }
+                    situacao_id: { [Op.notIn]: [ID_DESCARTADO, ID_VENDA_REALIZADA] }
                 }
             }
         );
- 
-        console.log(`🎉 Delta concluído: ${merge.length} leads processados`);
+
+        // Lead criado E descartado entre um delta e outro nunca aparece em
+        // "ativos" nem em "vendidos": sem isto ele nao entrava nunca (35607 e
+        // 35957 estavam assim em 03/09/2026). O webhook cobre o caminho normal;
+        // esta e a rede.
+        const lacunas = await this.fillGaps();
+
+        console.log(`🎉 Delta concluído: ${merge.length} leads processados | lacunas: ${JSON.stringify(lacunas)}`);
+    }
+
+    /**
+     * Ids de lead que faltam na sequência, consultados um a um no CV.
+     *
+     * Só a janela recente (GAP_JANELA abaixo do topo) e uma margem acima dele:
+     * os buracos antigos são leads apagados de verdade (60 de 60 sondados em
+     * 03/09/2026 deram "Lead não encontrado") e não valem a chamada. O CV
+     * responde 400 "Lead não encontrado" para id inexistente - isso é
+     * resposta, não falha, e o id segue como buraco até sair da janela.
+     */
+    async fillGaps({ janela = GAP_JANELA, margem = GAP_MARGEM } = {}) {
+        const buracos = await db.sequelize.query(`
+            WITH topo AS (SELECT COALESCE(MAX(idlead), 0) AS mx FROM leads)
+            SELECT g.id
+              FROM generate_series(GREATEST(1, (SELECT mx FROM topo) - :janela), (SELECT mx FROM topo) + :margem) AS g(id)
+              LEFT JOIN leads l ON l.idlead = g.id
+             WHERE l.idlead IS NULL
+             ORDER BY g.id DESC`, {
+            replacements: { janela, margem },
+            type: db.Sequelize.QueryTypes.SELECT,
+        });
+
+        const stats = { buracos: buracos.length, criados: 0, inexistentes: 0, falhas: 0 };
+        for (const { id } of buracos) {
+            try {
+                const r = await this.syncOne(Number(id));
+                if (r?.nao_encontrado) stats.inexistentes++;
+                else if (r?.created) stats.criados++;
+            } catch (e) {
+                const msg = e?.response?.data?.mensagem || '';
+                if (e?.response?.status === 400 && /n[aã]o encontrado/i.test(msg)) stats.inexistentes++;
+                else { stats.falhas++; console.warn(`[Leads][gap] id=${id} falhou: ${e?.response?.status || e.message}`); }
+            }
+        }
+        if (stats.buracos) console.log(`🧩 [Leads] lacunas: ${JSON.stringify(stats)}`);
+        return stats;
     }
 
     async upsertBatch(arr) {
