@@ -62,24 +62,46 @@ pré-cadastro, reserva, corretor, imobiliária, Sienge, CV CRM, Office, Caixa,
 MCMV, INCC, habite-se, RG (registro de incorporação), CEF, boleto, comissão,
 Ibitinga, Araçatuba, Birigui, Penápolis, Bady Bassitt.
 
+TEMAS - A ESPINHA DORSAL DA ATA:
+Reunião de gestão quase sempre percorre BLOCOS: um por empreendimento/praça,
+ou um por assunto. A ata é organizada por esses blocos, senão vira uma lista
+embaralhada onde ninguém acha nada.
+- Identifique de 2 a 10 temas e liste em "temas". Nome curto (2 a 4 palavras,
+  ex.: "Parque Alameda - Votuporanga"); resumo de 1 a 2 frases com o essencial;
+  "status" pelo que foi DITO: "ok" (encaminhado), "atencao" (exige
+  acompanhamento), "critico" (risco real declarado na conversa).
+- "progresso": quando o tema tem UM número central de avanço contra meta
+  (reservas 33 de 59, vendas 20 contra meta 15), preencha
+  { rotulo, atual, meta, unidade } com NÚMEROS PUROS. Sem esse número central,
+  progresso é null. Não invente meta.
+- TODO item de decisoes, acoes, questoes_abertas, kpis e pontos_atencao carrega
+  "tema" com EXATAMENTE um dos nomes de "temas" (ou null se for transversal).
+  É essa amarração que deixa a ata conectada.
+
 O QUE FAZER COM CADA CAMPO:
-- resumo: 2 a 4 parágrafos, para quem não estava lá. Comece pelo resultado da
-  reunião, não pela ordem cronológica.
-- pauta: os temas efetivamente discutidos, na ordem em que apareceram.
+- resumo: UM parágrafo de 4 a 6 frases, começando pelo resultado da reunião.
+  Não recontar tema por tema aqui - isso é papel de "temas" e "destaques".
+- destaques: 5 a 8 frases telegráficas, UMA linha cada, sempre com o número
+  quando houver ("Ibitinga precisa de 13 vendas e tem odor afastando cliente").
+  É o que um diretor lê no celular antes de abrir o resto.
 - decisoes: só o que foi fechado. Se a reunião não fechou nada, devolva [] - é
   informação legítima e comum.
 - questoes_abertas: o que ficou no ar. Pergunta sem resposta, ponto adiado,
   divergência não resolvida, proposta esperando alguém. Diga o que falta para
   fechar ("o_que_falta") e de quem se espera ("esperando", null se ninguém foi
   nomeado). ESTA SEÇÃO É TÃO IMPORTANTE QUANTO AS DECISÕES.
-- kpis: qualquer número, meta, prazo, percentual ou resultado citado.
+- kpis: qualquer número, meta, prazo, percentual ou resultado citado. "valor" é
+  o texto como foi dito; "valor_num"/"meta_num" são o número puro para gráfico
+  (33, 4.5) - null quando o valor não é um número simples (datas, faixas,
+  proporções tipo "2 a 3 em 10" ficam null).
 - acoes: o que alguém precisa fazer. Prioridade pelo que foi dito na reunião
   (urgência declarada), não pelo seu julgamento.
-- checklist: itens concretos a conferir ou entregar, derivados das ações.
 - proximos_passos: o combinado sobre a continuidade (próxima reunião, retomada,
   o que acontece antes).
 - participantes: só quem efetivamente aparece falando.
-- pontos_atencao: risco, problema, atraso ou conflito mencionado.
+- pontos_atencao: risco, problema, atraso ou conflito mencionado. NÃO repita o
+  que já está em questoes_abertas: pendência esperando alguém é questão aberta;
+  risco/contexto que ninguém precisa "responder" é ponto de atenção.
 - sentimento_geral: como a reunião correu, com base no tom das falas.
 - tags: 3 a 6 termos que ajudem a achar esta reunião depois.
 - duracao_real_min: calcule pelo último timestamp da transcrição.
@@ -91,12 +113,21 @@ Responda SOMENTE com JSON válido. Sem markdown, sem texto fora do JSON.
 
 ESTRUTURA OBRIGATÓRIA DO JSON:
 {
-  "resumo": "2 a 4 parágrafos, começando pelo resultado da reunião",
-  "pauta": ["Tema discutido 1", "Tema discutido 2"],
+  "resumo": "Um parágrafo, 4 a 6 frases, começando pelo resultado da reunião",
+  "destaques": ["Frase telegráfica com o fato e o número"],
+  "temas": [
+    {
+      "nome": "Nome curto do bloco",
+      "resumo": "1 a 2 frases com o essencial do bloco",
+      "status": "ok | atencao | critico",
+      "progresso": { "rotulo": "Reservas", "atual": 33, "meta": 59, "unidade": "unidades" }
+    }
+  ],
   "decisoes": [
     {
       "texto": "O que ficou decidido, na forma afirmativa",
       "quem": "Quem fechou a decisão (nome da transcrição)",
+      "tema": "Nome do tema (ou null)",
       "minuto": "00:12:33",
       "confianca": "alta | media | baixa"
     }
@@ -107,6 +138,7 @@ ESTRUTURA OBRIGATÓRIA DO JSON:
       "quem_levantou": "Nome (ou null)",
       "o_que_falta": "O que precisa acontecer para fechar",
       "esperando": "Nome de quem se espera (ou null)",
+      "tema": "Nome do tema (ou null)",
       "minuto": "00:20:10"
     }
   ],
@@ -114,9 +146,12 @@ ESTRUTURA OBRIGATÓRIA DO JSON:
     {
       "nome": "Nome do indicador",
       "valor": "Exatamente como foi dito",
+      "valor_num": 33,
       "referencia": "Meta ou comparativo citado (ou null)",
+      "meta_num": 59,
       "contexto": "O que esse número representa",
       "quem": "Quem citou (ou null)",
+      "tema": "Nome do tema (ou null)",
       "minuto": "00:08:02",
       "confianca": "alta | media | baixa"
     }
@@ -128,11 +163,9 @@ ESTRUTURA OBRIGATÓRIA DO JSON:
       "prazo": "Prazo como foi dito (ou null)",
       "prioridade": "alta | media | baixa",
       "quem": "Quem pediu ou assumiu",
+      "tema": "Nome do tema (ou null)",
       "minuto": "00:31:47"
     }
-  ],
-  "checklist": [
-    { "item": "Item a verificar ou entregar", "responsavel": "Nome (ou null)", "concluido": false }
   ],
   "proximos_passos": ["Próximo passo combinado"],
   "participantes": [
@@ -143,7 +176,7 @@ ESTRUTURA OBRIGATÓRIA DO JSON:
     }
   ],
   "pontos_atencao": [
-    { "ponto": "Risco, problema ou atraso mencionado", "quem": "Nome (ou null)", "minuto": "00:44:12" }
+    { "ponto": "Risco, problema ou atraso mencionado", "quem": "Nome (ou null)", "tema": "Nome do tema (ou null)", "minuto": "00:44:12" }
   ],
   "sentimento_geral": "positivo | neutro | negativo | misto",
   "tags": ["tag1", "tag2", "tag3"],
@@ -167,10 +200,14 @@ Consolide-os em UM ÚNICO relatório final coerente, sem repetições, seguindo 
 Metadados: Assunto="${meta.subject}", Data="${meta.date}", Duração="${meta.durationMin} min"
 Responda SOMENTE com JSON válido.
 
-ESTRUTURA: {"resumo","pauta","decisoes","questoes_abertas","kpis","acoes","checklist","proximos_passos","participantes","pontos_atencao","sentimento_geral","tags","duracao_real_min","confiabilidade"}
+ESTRUTURA: {"resumo","destaques","temas","decisoes","questoes_abertas","kpis","acoes","proximos_passos","participantes","pontos_atencao","sentimento_geral","tags","duracao_real_min","confiabilidade"}
 
 REGRAS DA CONSOLIDAÇÃO:
 - Preserve o "minuto" e o "quem" de cada item: são a âncora que permite conferir a ata na transcrição.
+- TEMAS: una os temas das partes pelo assunto (o mesmo empreendimento em duas
+  partes é UM tema, com um único nome), e reescreva o campo "tema" de cada item
+  para o nome unificado. Progresso: use o número mais RECENTE citado.
+- "destaques": 5 a 8 frases telegráficas para o conjunto, com número quando houver.
 - Item repetido entre partes vira UM, com o minuto da PRIMEIRA vez que apareceu.
 - Questão aberta numa parte e RESPONDIDA em outra deixa de ser questão aberta e vira decisão, com o minuto da resposta.
 - Não invente ligação entre partes. Se duas partes falam de coisas parecidas sem se referirem uma à outra, mantenha separado.
