@@ -27,7 +27,7 @@
 // novo, então o custo cai sozinho.
 
 import db from '../models/sequelize/index.js';
-import ReservaFullSweepService from '../services/bulkData/cv/ReservaFullSweepService.js';
+import ReservaFullSweepService, { SQL_AINDA_ENTERRADO } from '../services/bulkData/cv/ReservaFullSweepService.js';
 import { markRunning, markFinished } from '../services/bulkData/cv/syncState.js';
 
 const JOB = 'cv_reservas_gap';
@@ -44,7 +44,10 @@ const service = new ReservaFullSweepService();
 let rodando = false;
 
 /**
- * Ids ausentes na sequência, já sem os 404 conhecidos.
+ * Ids ausentes na sequência, sem os mortos definitivos (404). Os que deram 400
+ * voltam para a fila quando a espera vence - o CV responde 400 para id que
+ * ainda não nasceu, e um id enterrado de vez virava reserva perdida (ver
+ * "Cemitério" no ReservaFullSweepService).
  *
  * A fatia é tirada das DUAS PONTAS: metade dos mais recentes (que é o que
  * interessa para a projeção) e metade dos mais antigos. Isso evita o cenário em
@@ -64,7 +67,7 @@ export async function findMissingIds(limite = MAX_POR_RODADA) {
             LEFT JOIN reservas r           ON r.idreserva = f.id
             LEFT JOIN cv_reserva_id_dead d ON d.idreserva = f.id
             WHERE r.idreserva IS NULL
-              AND d.idreserva IS NULL
+              AND (d.idreserva IS NULL OR NOT ${SQL_AINDA_ENTERRADO})
         )
         SELECT id FROM (
             (SELECT id FROM buracos ORDER BY id DESC LIMIT :metade)

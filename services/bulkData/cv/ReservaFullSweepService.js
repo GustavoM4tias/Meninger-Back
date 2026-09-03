@@ -8,6 +8,8 @@
 //   - existing em DB → preserva histórico (status[]) e só atualiza se snapshot mudou
 //   - new (200) → cria com primeiro snapshot
 //   - 404 → grava em cv_reserva_id_dead (não é tentado mais nas próximas runs)
+//   - 400 → "não existe (ainda)": grava no cemitério, mas volta a ser consultado
+//           com espera crescente (ver "Cemitério" abaixo)
 //   - 5xx/429 → retry com backoff (igual ao service principal)
 //
 // PARALELISMO:
@@ -35,6 +37,41 @@ const MAX_RETRIES          = parseInt(process.env.CVCRM_MAX_RETRIES || '5', 10);
 const BASE_BACKOFF_MS      = parseInt(process.env.CVCRM_BASE_BACKOFF_MS || '500', 10);
 const MAX_BACKOFF_MS       = parseInt(process.env.CVCRM_MAX_BACKOFF_MS || '8000', 10);
 const JITTER_MS            = parseInt(process.env.CVCRM_JITTER_MS || '250', 10);
+
+// ===================== Cemitério: quem volta a ser consultado =====================
+// O CV NÃO devolve 404 para reserva inexistente: devolve 400 "Ocorreu um erro
+// inesperado", o mesmo corpo para id que nunca existiu e para id que AINDA não
+// existe (medido em 03/09/2026: 8500 e 9999999 dão 400; das 377 entradas do
+// cemitério, 377 eram 400 e nenhuma era 404). Enterrar o 400 para sempre
+// perdia toda reserva cujo id foi sondado antes de nascer e que a listagem
+// depois escondeu: as canceladas 7251 e 7272 do Residencial Ingá ficaram
+// quatro meses fora do Office por isso.
+//
+// Regra: 404 e 204 seguem definitivos. 400 é "não existe (ainda)" e volta a
+// ser consultado com espera crescente (15 min, 30, 60... até o teto de um
+// dia). Um id que nunca vira reserva custa uma chamada por dia; uma reserva
+// que nasceu depois da sondagem aparece em até um dia mesmo que a listagem a
+// esconda. A MESMA regra mora aqui em JS (o sweep decide quem pular) e em SQL
+// (o vigia de lacunas monta a fila), lado a lado para não divergirem.
+const RECHECK_BASE_MIN = 15;
+const RECHECK_CAP_MIN  = 24 * 60;
+
+export function minutosAteReconsultar(attempts) {
+    return Math.min(RECHECK_BASE_MIN * 2 ** (Math.max(1, attempts || 1) - 1), RECHECK_CAP_MIN);
+}
+
+/** true = ainda dentro da espera: pular nesta rodada. */
+export function aindaEnterrado(row, agora = Date.now()) {
+    if (Number(row?.last_status) !== 400) return true;
+    const ultimo = row.last_check_at ? new Date(row.last_check_at).getTime() : 0;
+    return agora < ultimo + minutosAteReconsultar(row.attempts) * 60_000;
+}
+
+/** O mesmo teste em SQL. Alias `d` = cv_reserva_id_dead. */
+export const SQL_AINDA_ENTERRADO = `(
+    d.last_status IS DISTINCT FROM 400
+    OR d.last_check_at > now() - (LEAST(${RECHECK_BASE_MIN} * power(2, GREATEST(COALESCE(d.attempts, 1), 1) - 1), ${RECHECK_CAP_MIN}) * interval '1 minute')
+)`;
 
 // ===================== Utils =====================
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
@@ -254,19 +291,27 @@ export default class ReservaFullSweepService {
         const repasseMap = new Map();
         for (const r of repasses) if (r.idreserva && !repasseMap.has(r.idreserva)) repasseMap.set(r.idreserva, r);
 
-        // IDs mortos (já 404 antes) — pula
-        const deadRows = await CvReservaIdDead.findAll({ attributes: ['idreserva'], raw: true });
-        const deadSet = new Set(deadRows.map(r => r.idreserva));
+        // Cemitério: 404/204 pulam sempre; 400 pula só enquanto a espera
+        // não venceu (ver `aindaEnterrado`). `deadMap` guarda a linha inteira
+        // para o 400 reincidente somar tentativa em vez de recomeçar do zero.
+        const deadRows = await CvReservaIdDead.findAll({
+            attributes: ['idreserva', 'last_status', 'attempts', 'first_seen_at', 'last_check_at'],
+            raw: true,
+        });
+        const deadMap = new Map(deadRows.map(r => [r.idreserva, r]));
+        const agora = Date.now();
+        const deadSet = new Set(deadRows.filter(r => aindaEnterrado(r, agora)).map(r => r.idreserva));
+        const reconsultar = deadRows.length - deadSet.size;
 
         // Reserva que EXISTE aqui não pode estar no cemitério: um 404
         // transitório do CV a condenava para sempre, porque o sweep pula os
         // mortos antes de perguntar qualquer coisa. Resultado medido em
         // 27/08/2026: 400 das 777 entradas eram reservas vivas, e a base local
         // ficava congelada nelas. Se o CV devolver 404 de novo, ela volta.
-        const mortosVivos = [...deadSet].filter(id => existingSnap.has(id));
+        const mortosVivos = [...deadMap.keys()].filter(id => existingSnap.has(id));
         if (mortosVivos.length) {
             await CvReservaIdDead.destroy({ where: { idreserva: mortosVivos } }).catch(() => {});
-            for (const id of mortosVivos) deadSet.delete(id);
+            for (const id of mortosVivos) { deadSet.delete(id); deadMap.delete(id); }
             console.log(`🩺 [Sweep] ${mortosVivos.length} ids saíram do cemitério (existem em reservas).`);
         }
 
@@ -296,6 +341,7 @@ export default class ReservaFullSweepService {
         console.log(`   max idreserva DB : ${maxLocal}`);
         console.log(`   já no DB         : ${existingSnap.size}`);
         console.log(`   já marcados 404  : ${deadSet.size} ${skipDead ? '(pulados)' : '(REVISITADOS)'}`);
+        console.log(`   400 a reconsultar: ${reconsultar} (espera vencida)`);
         console.log(`   total a varrer   : ${totalScan}`);
         console.log(`   concurrency      : ${SWEEP_MAX_CONCURRENT} | gap=${SWEEP_MIN_TIME_MS}ms`);
         console.log(`   ETA estimado     : ${fmtETA((totalScan / SWEEP_MAX_CONCURRENT) * SWEEP_MIN_TIME_MS + totalScan * 200)}\n`);
@@ -341,9 +387,10 @@ export default class ReservaFullSweepService {
                 // padrão) ele nunca mais era relido. Medido em 27/08/2026: das
                 // 777 entradas do cemitério, 400 eram reservas VIVAS, e é por
                 // isso que a base local ficava para trás do CV.
-                if (core && deadSet.has(idreserva)) {
+                if (core && deadMap.has(idreserva)) {
                     await CvReservaIdDead.destroy({ where: { idreserva } }).catch(() => {});
                     deadSet.delete(idreserva);
+                    deadMap.delete(idreserva);
                     ressuscitados++;
                 }
                 if (!core) {
@@ -402,23 +449,27 @@ export default class ReservaFullSweepService {
                 existingSnap.set(idreserva, snap);
             } catch (e) {
                 const status = e?.response?.status;
-                // 404 ou 400 → ID inexistente no CV.
-                // O CV usa 400 para reservas excluídas/expurgadas/IDs nunca alocados como registro real.
-                // Tratamos como "morto" e nunca mais tentamos.
+                // 404 → morto de vez. 400 → "não existe (ainda)": o CV responde
+                // 400 tanto para id nunca alocado quanto para id que ainda vai
+                // nascer, então ele entra no cemitério somando tentativa e volta
+                // a ser consultado quando a espera vencer (ver `aindaEnterrado`).
                 if (status === 404 || status === 400) {
                     const bodyMsg = e?.response?.data
                         ? (typeof e.response.data === 'string'
                             ? e.response.data.slice(0, 200)
                             : JSON.stringify(e.response.data).slice(0, 200))
                         : null;
-                    await CvReservaIdDead.upsert({
+                    const anterior = deadMap.get(idreserva);
+                    const linha = {
                         idreserva,
                         last_status: status,
-                        attempts: 1,
-                        first_seen_at: new Date(),
+                        attempts: status === 400 ? (Number(anterior?.attempts) || 0) + 1 : 1,
+                        first_seen_at: anterior?.first_seen_at || new Date(),
                         last_check_at: new Date(),
                         message: bodyMsg,
-                    });
+                    };
+                    await CvReservaIdDead.upsert(linha);
+                    deadMap.set(idreserva, linha);
                     notFound++;
                 } else {
                     failed++;
