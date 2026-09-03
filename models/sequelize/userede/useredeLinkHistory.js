@@ -30,7 +30,11 @@ export default (sequelize, DataTypes) => {
         },
         comissao_percentual_aplicada: {
             type: DataTypes.DECIMAL(6, 2), allowNull: true,
-            comment: 'Percentual da regra do empreendimento aplicado sobre o valor da série (null = sem regra). Mesma regra do boleto.',
+            comment: 'Percentual da regra do empreendimento aplicado sobre o valor da série (null = sem regra ou cálculo pela comissão do CV). Mesma regra do boleto.',
+        },
+        comissao_valor_deduzida: {
+            type: DataTypes.DECIMAL(15, 2), allowNull: true,
+            comment: 'Comissão fora do contrato deduzida do valor da série (valor_contrato - valor_liquido do CV). Mesma regra do boleto.',
         },
         // O portal oferece um TETO de parcelas; quem escolhe é o cliente. Por
         // isso duas colunas: o que ofertamos e o que ele de fato fez.

@@ -25,7 +25,12 @@ export default (sequelize, DataTypes) => {
         comissao_percentual_aplicada: {
             type: DataTypes.DECIMAL(6, 2),
             allowNull: true,
-            comment: 'Percentual aplicado pela regra de comissão (null = sem regra).',
+            comment: 'Percentual aplicado pela regra de comissão (null = sem regra ou cálculo pela comissão do CV).',
+        },
+        comissao_valor_deduzida: {
+            type: DataTypes.DECIMAL(15, 2),
+            allowNull: true,
+            comment: 'Comissão fora do contrato deduzida do valor da série (valor_contrato - valor_liquido do CV). null = nada deduzido por este caminho.',
         },
         vencimento: {
             type: DataTypes.DATEONLY,

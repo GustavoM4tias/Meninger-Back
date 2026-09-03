@@ -701,9 +701,9 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             return;
         }
 
-        // ── 2b. Carrega regra do empreendimento (% comissão + override de dias) ──
+        // ── 2b. Carrega regra do empreendimento (comissão + override de dias) ──
         // Regra é única (ou nenhuma) por empreendimento. Mesmo bloco usa pra:
-        //   - aplicar percentual_boleto sobre valor da série
+        //   - escolher como descontar a comissão embutida na série
         //   - pegar max_dias_vencimento (override do setting geral)
         const empreendimentoRule = unidade?.idempreendimento_cv
             ? await db.BoletoComissionRule.findOne({
@@ -714,26 +714,130 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             })
             : null;
 
+        // ── 2b-i. QUANTO DA SÉRIE É COMISSÃO ──────────────────────────────────
+        // A série de ato traz junto a comissão que o cliente paga direto à
+        // imobiliária. Cobrar a série cheia cobra a comissão de novo; cobrar um
+        // percentual fixo só acerta enquanto o ato for sempre a mesma fração do
+        // contrato. O CV já entrega a conta certa na própria reserva:
+        //
+        //   comissão fora do contrato = valor_contrato - valor_liquido
+        //   valor a cobrar            = série do ato - comissão
+        //
+        // Confere com a coluna "valor sem comissão fora do contrato" da tela de
+        // condições do CV, no centavo (reserva 8359, Verona REV08: 546.212,87 -
+        // 524.364,36 = 21.848,51; 27.310,66 - 21.848,51 = 5.462,15). Vale para
+        // ato negociado e para venda à vista, onde o percentual fixo errava
+        // centenas de milhares de reais.
+        //
+        // O CV dá a comissão da VENDA INTEIRA e não diz em qual série ela está.
+        // Onde ela não cai toda no ato (Ipês, Urban, Parque das Flores: o ato
+        // chega a ser menor que a comissão) esta conta não serve, e é por isso
+        // que o modo 'cv' se liga empreendimento a empreendimento em vez de
+        // valer para todos.
+        const valorContratoCv = parseFloat(condicoes?.valor_contrato);
+        const valorLiquidoCv = parseFloat(
+            condicoes?.valor_liquido_com_juros ?? condicoes?.valor_liquido_sem_juros
+        );
+        const comissaoCv = (Number.isFinite(valorContratoCv) && valorContratoCv > 0 && Number.isFinite(valorLiquidoCv))
+            ? Number((valorContratoCv - valorLiquidoCv).toFixed(2))
+            : null;
+
         const valorOriginal = parseFloat(serie.valor);
         let valorEmitir = valorOriginal;
         let comissaoPercentualAplicada = null;
-        let comissaoRuleId = null;
+        let comissaoValorDeduzida = null;
 
-        if (empreendimentoRule) {
-            const pct = parseFloat(empreendimentoRule.percentual_boleto);
-            if (Number.isFinite(pct) && pct >= 0 && pct < 100) {
-                valorEmitir = Number((valorOriginal * (pct / 100)).toFixed(2));
-                comissaoPercentualAplicada = pct;
-                comissaoRuleId = empreendimentoRule.id;
+        // Modo: a regra do empreendimento manda. Sem modo escolhido, um
+        // percentual gravado continua valendo - era assim que a regra
+        // funcionava antes deste campo existir, e trocar isso calado
+        // multiplicaria por 5 a cobrança do Verona. Sem percentual, vale o
+        // padrão geral da tela.
+        const pctRegra = empreendimentoRule ? parseFloat(empreendimentoRule.percentual_boleto) : NaN;
+        const pctUsavel = Number.isFinite(pctRegra) && pctRegra >= 0 && pctRegra < 100;
+        const modoComissao = empreendimentoRule?.modo
+            || (pctUsavel ? 'percentual' : (settings.comissao_modo || 'nenhum'));
+
+        const aplicarPercentual = () => {
+            valorEmitir = Number((valorOriginal * (pctRegra / 100)).toFixed(2));
+            comissaoPercentualAplicada = pctRegra;
+            console.log(
+                `[BOLETO] Percentual fixo aplicado (empreendimento ${unidade?.idempreendimento_cv}): `
+                + `${pctRegra}% de ${formatCurrency(valorOriginal)} = ${formatCurrency(valorEmitir)}`
+            );
+        };
+
+        if (modoComissao === 'percentual') {
+            if (pctUsavel) aplicarPercentual();
+        } else if (modoComissao === 'cv') {
+            if (comissaoCv != null && comissaoCv > 0) {
+                valorEmitir = Number((valorOriginal - comissaoCv).toFixed(2));
+                comissaoValorDeduzida = comissaoCv;
                 console.log(
-                    `[BOLETO] Regra de comissão aplicada (empreendimento ${unidade.idempreendimento_cv}): `
-                    + `${pct}% de ${formatCurrency(valorOriginal)} = ${formatCurrency(valorEmitir)}`
+                    `[BOLETO] Comissão do CV deduzida (empreendimento ${unidade?.idempreendimento_cv}): `
+                    + `${formatCurrency(valorOriginal)} - ${formatCurrency(comissaoCv)} = ${formatCurrency(valorEmitir)}`
                 );
+            } else if (comissaoCv == null && pctUsavel) {
+                // O CV não mandou os campos da comissão nesta reserva. Emitir a
+                // série cheia cobraria a comissão do cliente de novo, então cai
+                // no percentual da regra e deixa o aviso no histórico.
+                aplicarPercentual();
+                warnings.push({
+                    etapa: 'comissao',
+                    erro: `CV não informou valor_contrato/valor_liquido nesta reserva - usado o percentual fixo de ${pctRegra}% da regra do empreendimento.`,
+                });
             }
+            // comissaoCv === 0: empreendimento sem comissão fora do contrato,
+            // a série inteira é da incorporadora. Emite cheio.
         }
+
+        // Texto único da conta, reaproveitado nas mensagens do CV.
+        const detalheComissao = comissaoValorDeduzida != null
+            ? `${formatCurrency(valorOriginal)} do ato menos ${formatCurrency(comissaoValorDeduzida)} de comissão fora do contrato`
+            : (comissaoPercentualAplicada != null
+                ? `${comissaoPercentualAplicada}% de ${formatCurrency(valorOriginal)} - comissão embutida deduzida`
+                : null);
 
         // Substitui o valor da série pelo valor a emitir (mantém referência ao original).
         serie.valor = valorEmitir;
+
+        // ── 2b-ii. COMISSÃO MAIOR QUE O ATO ───────────────────────────────────
+        // Ato abaixo da comissão não deixa nada para a incorporadora cobrar: a
+        // conta dá zero ou negativo. Isso é condição fora do padrão, não erro de
+        // cálculo (visto em 3 reservas do Verona). Emitir qualquer valor aqui
+        // seria inventar número, então para e chama gente.
+        if (valorEmitir <= 0) {
+            const msg = [
+                'X Cobranca do ato nao emitida: nao sobra valor a cobrar.',
+                '',
+                `Serie do ato: ${formatCurrency(valorOriginal)}`,
+                `Comissao fora do contrato: ${formatCurrency(comissaoValorDeduzida ?? 0)}`,
+                `Sobra para a incorporadora: ${formatCurrency(valorEmitir)}`,
+                '',
+                'Confira a condicao de pagamento da reserva no CV. Nenhuma cobranca foi gerada.',
+            ].join('\n');
+            const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
+
+            console.warn(
+                `[BOLETO] Emissão barrada: reserva ${idreserva}, ato ${formatCurrency(valorOriginal)} `
+                + `menos comissão ${formatCurrency(comissaoValorDeduzida ?? 0)} = ${formatCurrency(valorEmitir)}`
+            );
+
+            await history.update({
+                status: 'error',
+                error_message: `Comissão fora do contrato (${formatCurrency(comissaoValorDeduzida ?? 0)}) consome todo o ato (${formatCurrency(valorOriginal)}) - nada a cobrar.`,
+                titular_nome: titular?.nome,
+                empreendimento: unidade?.empreendimento,
+                idpessoa_cv: titular?.idpessoa_cv,
+                valor: valorEmitir,
+                valor_original: valorOriginal,
+                comissao_percentual_aplicada: comissaoPercentualAplicada,
+                comissao_valor_deduzida: comissaoValorDeduzida,
+                vencimento: serie.vencimento,
+                cv_mensagem_enviada: msgOk,
+                warnings: warnings.length ? warnings : null,
+            });
+            return;
+        }
 
         // ── 2b-bis. TETO DE VALOR ─────────────────────────────────────────────
         // O valor vem cru de `serie.valor` (CV), sem validação de origem. Série
@@ -761,6 +865,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 valor: valorEmitir,
                 valor_original: valorOriginal,
                 comissao_percentual_aplicada: comissaoPercentualAplicada,
+                comissao_valor_deduzida: comissaoValorDeduzida,
                 vencimento: serie.vencimento,
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
@@ -917,6 +1022,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                     valor: valorEmitir,
                     valor_original: valorOriginal,
                     comissao_percentual_aplicada: comissaoPercentualAplicada,
+                    comissao_valor_deduzida: comissaoValorDeduzida,
                     vencimento: vencimentoStr,
                     cv_mensagem_enviada: msgIgnOk,
                     cv_situacao_alterada: false,   // NÃO mudou situação — deixa o lote tentar de novo
@@ -1004,6 +1110,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 valor: valorEmitir,
                 valor_original: valorOriginal,
                 comissao_percentual_aplicada: comissaoPercentualAplicada,
+                comissao_valor_deduzida: comissaoValorDeduzida,
                 vencimento,
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
@@ -1025,6 +1132,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 valor: valorEmitir,
                 valor_original: valorOriginal,
                 comissao_percentual_aplicada: comissaoPercentualAplicada,
+                comissao_valor_deduzida: comissaoValorDeduzida,
                 vencimento,
                 cv_mensagem_enviada: msgOk,
                 warnings: warnings.length ? warnings : null,
@@ -1058,6 +1166,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                     valor: valorEmitir,
                     valor_original: valorOriginal,
                     comissao_percentual_aplicada: comissaoPercentualAplicada,
+                    comissao_valor_deduzida: comissaoValorDeduzida,
                     vencimento: vencimentoStr,
                 });
                 const msgPausa = [
@@ -1083,6 +1192,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 valor: valorEmitir,
                 valor_original: valorOriginal,
                 comissao_percentual_aplicada: comissaoPercentualAplicada,
+                comissao_valor_deduzida: comissaoValorDeduzida,
                 vencimento: vencimentoStr,
             });
 
@@ -1097,6 +1207,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 valor: valorEmitir,
                 valorOriginal,
                 comissaoPercentual: comissaoPercentualAplicada,
+                comissaoValor: comissaoValorDeduzida,
                 parcelas: qtdParcelas,
                 validade: vencimentoStr,
                 substituiId: anterior?.forma === 'cartao' ? anterior.reg.id : null,
@@ -1109,9 +1220,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                     '',
                     `Forma: Cartao de credito (em ate ${qtdParcelas}x de ${formatCurrency(valorEmitir / qtdParcelas)})`,
                     `Valor: ${formatCurrency(valorEmitir)}`,
-                    comissaoPercentualAplicada
-                        ? `Percentual aplicado: ${comissaoPercentualAplicada}% de ${formatCurrency(valorOriginal)}`
-                        : null,
+                    detalheComissao ? `Valor da cobranca: ${detalheComissao}` : null,
                     `Valido ate: ${formatDate(vencimentoStr)}`,
                     `${registroCartao.link_url}`,
                     '',
@@ -1154,6 +1263,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             valor: valorEmitir,
             valor_original: valorOriginal,
             comissao_percentual_aplicada: comissaoPercentualAplicada,
+            comissao_valor_deduzida: comissaoValorDeduzida,
             vencimento,
         });
 
@@ -1344,8 +1454,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
 
 
         // ── 10. Envia mensagem de sucesso com resumo completo do boleto ────────
-        const linhaValor = comissaoPercentualAplicada != null
-            ? `💰 Valor: ${formatCurrency(valorEmitir)} (${comissaoPercentualAplicada}% de ${formatCurrency(valorOriginal)} — comissão embutida deduzida)`
+        const linhaValor = detalheComissao != null
+            ? `💰 Valor: ${formatCurrency(valorEmitir)} (${detalheComissao})`
             : `💰 Valor: ${formatCurrency(valorEmitir)}`;
 
         // Checklist de notificações com destinatário concreto pra gestor ver

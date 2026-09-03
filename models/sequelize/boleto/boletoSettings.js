@@ -120,6 +120,25 @@ export default (sequelize, DataTypes) => {
             comment: 'Valor máximo (R$) aceito para emissão. Série acima disto → erro "excede teto", sem registrar no banco. Vazio = sem teto.',
         },
 
+        // ── Comissão fora do contrato ─────────────────────────────────────────
+        // A série de ato pode trazer embutida a comissão que o cliente paga
+        // direto à imobiliária; só o que sobra é da incorporadora e vira
+        // cobrança. O CV informa quanto é essa comissão NA VENDA INTEIRA
+        // (valor_contrato menos valor_liquido), mas não diz em qual série ela
+        // está: no Verona ela cai toda no ato, no Ipês e no Urban ela está
+        // espalhada nas parcelas (medido em 03/09/2026 - lá o ato chega a ser
+        // menor que a comissão da venda). Por isso o padrão é 'nenhum', o
+        // comportamento de sempre, e deduzir a comissão do CV é opção que se
+        // liga empreendimento a empreendimento em boleto_comission_rules.modo,
+        // depois de conferir na tela de condições do CV que a coluna "sem
+        // comissão fora do contrato" só muda na linha do ato.
+        comissao_modo: {
+            type: DataTypes.STRING(20),
+            allowNull: false,
+            defaultValue: 'nenhum',
+            comment: "Modo padrão de cálculo do valor: 'nenhum' (emite o valor cheio da série) ou 'cv' (deduz a comissão fora do contrato informada pelo CV). Vale para empreendimento sem regra própria.",
+        },
+
         // ── Janela de funcionamento (horário de Brasília) ──────────────────────
         // Acionamentos recebidos fora da janela não são processados na hora: a
         // emissão fica agendada pra próxima abertura (ver lib/boletoJanela.js e

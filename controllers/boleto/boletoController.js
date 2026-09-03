@@ -95,9 +95,20 @@ export async function updateSettings(req, res) {
             'tolerancia_dias_uteis',
             'revalidacao_baixado_dias', 'cv_situacoes_reserva_morta',
             'max_dias_vencimento', 'valor_maximo',
+            'comissao_modo',
             'janela_ativa', 'janela_inicio_hora', 'janela_fim_hora',
             'active',
         ];
+
+        // Modo de cálculo: valor desconhecido faria toda emissão cair no ramo
+        // "nenhum" calado, cobrando a comissão junto do ato.
+        if (req.body.comissao_modo !== undefined) {
+            if (!MODOS_COMISSAO_GLOBAL.includes(req.body.comissao_modo)) {
+                return res.status(400).json({
+                    error: `comissao_modo deve ser um destes: ${MODOS_COMISSAO_GLOBAL.join(', ')}.`,
+                });
+            }
+        }
 
         // Janela de funcionamento: horas cheias, início antes do fim. Config
         // inválida faria a emissão ser adiada pra sempre — barra aqui.
@@ -1025,6 +1036,13 @@ export async function markHistoryCancelled(req, res) {
 
 // ── Comission Rules (admin) ───────────────────────────────────────────────────
 
+// 'cv' deduz a comissão fora do contrato que o CV informa na reserva;
+// 'percentual' multiplica a série pelo percentual fixo da regra. No global só
+// existe 'cv' ou 'nenhum' (valor cheio da série), porque percentual sem
+// empreendimento não tem número para aplicar.
+const MODOS_COMISSAO_GLOBAL = ['cv', 'nenhum'];
+const MODOS_COMISSAO_REGRA = ['cv', 'percentual'];
+
 export async function listComissionRules(req, res) {
     try {
         const rules = await db.BoletoComissionRule.findAll({
@@ -1055,9 +1073,16 @@ function parseComissionPayload(body) {
         }
         maxDias = Math.trunc(n);
     }
+    // modo vazio/null = herda o modo global das configurações.
+    let modo = body.modo === '' || body.modo == null ? null : String(body.modo);
+    if (modo !== null && !MODOS_COMISSAO_REGRA.includes(modo)) {
+        throw new Error(`modo deve ser um destes: ${MODOS_COMISSAO_REGRA.join(', ')} (ou vazio para herdar o padrão).`);
+    }
+
     return {
         idempreendimento_cv,
         empreendimento_nome: body.empreendimento_nome || null,
+        modo,
         percentual_boleto: percentual,
         max_dias_vencimento: maxDias,
         observacao: body.observacao || null,

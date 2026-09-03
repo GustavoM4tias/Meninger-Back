@@ -86,9 +86,9 @@ export async function emitir(dados) {
     const {
         idreserva, titular = {}, empreendimento, unidade,
         valor, parcelas, validade, enviarAoCliente = true,
-        // Vindos do fluxo comum do Ato: o valor JA passou pelo percentual do
-        // empreendimento, e guardamos o original para a tela mostrar os dois.
-        valorOriginal = null, comissaoPercentual = null,
+        // Vindos do fluxo comum do Ato: o valor JA passou pelo desconto da
+        // comissao embutida, e guardamos o original para a tela mostrar os dois.
+        valorOriginal = null, comissaoPercentual = null, comissaoValor = null,
         // Link anterior que este substitui (ja excluido no portal pelo gate de
         // re-trigger antes de chegar aqui).
         substituiId = null,
@@ -104,6 +104,7 @@ export async function emitir(dados) {
         valor,
         valor_original: valorOriginal ?? valor,
         comissao_percentual_aplicada: comissaoPercentual,
+        comissao_valor_deduzida: comissaoValor,
         parcelas_limite: parcelas,
         validade,
         substitui_id: substituiId,
