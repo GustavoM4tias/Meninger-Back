@@ -173,7 +173,15 @@ async function rodar() {
                 // sem IA. É o caso mais comum numa reunião de time.
                 const existente = await jaTemAta(r.joinUrl, r.start);
                 if (existente) {
-                    const novos = await transcriptService.espelharParaParticipantes(existente);
+                    // Convite sem lista de participantes (canal/lista de
+                    // distribuição) deixava a ata órfã: completa a lista com o
+                    // que o calendário DESTA pessoa sabe.
+                    if (!(existente.attendees_json || []).length && (r.attendees || []).length) {
+                        await existente.update({ attendees_json: r.attendees });
+                    }
+                    // A reunião estar no calendário de u já prova participação:
+                    // u ganha a cópia mesmo quando a lista do evento é vazia.
+                    const novos = await transcriptService.espelharParaParticipantes(existente, [u.id]);
                     if (novos.length) { await avisar(novos, existente); avisos += novos.length; }
                     continue;
                 }

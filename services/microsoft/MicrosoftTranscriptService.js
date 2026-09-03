@@ -632,21 +632,28 @@ class MicrosoftTranscriptService {
      * texto da transcrição. Ele é grande e a pessoa talvez nunca abra; se
      * abrir, o caminho compartilhado copia na hora.
      *
+     * `extraUserIds` cobre convite SEM lista de participantes (canal, lista de
+     * distribuição): quem tem a reunião no próprio calendário participou, mesmo
+     * que o evento não diga quem mais estava.
+     *
      * @returns {number[]} ids de quem passou a ter a ata agora
      */
-    async espelharParaParticipantes(record) {
+    async espelharParaParticipantes(record, extraUserIds = []) {
         const emails = [
             ...(record.attendees_json || []).map(a => a?.email),
             record.organizer_email,
         ].map(e => String(e || '').trim().toLowerCase()).filter(Boolean);
 
-        if (!emails.length) return [];
+        const criterios = [];
+        if (emails.length) criterios.push({ email: { [db.Sequelize.Op.in]: [...new Set(emails)] } });
+        if (extraUserIds.length) criterios.push({ id: { [db.Sequelize.Op.in]: extraUserIds } });
+        if (!criterios.length) return [];
 
         const pessoas = await db.User.findAll({
             where: {
                 status: true,
                 id: { [db.Sequelize.Op.ne]: record.user_id },
-                email: { [db.Sequelize.Op.in]: [...new Set(emails)] },
+                [db.Sequelize.Op.or]: criterios,
             },
             attributes: ['id', 'email'],
         });
