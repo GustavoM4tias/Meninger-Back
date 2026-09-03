@@ -21,10 +21,25 @@ import NotificationService from '../services/notification/NotificationService.js
 import { NotificationType } from '../services/notification/notificationTypes.js';
 import { generateSecurePassword } from './authController.js';
 import { findUserByEmailCI } from '../utils/userEmail.js';
+import { urlDeEnv, ehProducao } from '../utils/envUrl.js';
 
 const { User, Position, UserCity, Department, PermissionProfile, UserPermission } = db;
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+// ── Endereço do front ────────────────────────────────────────────────────────
+//
+// Lido a cada uso, e não no import: em 26/08/2026 a variável de produção estava
+// valendo literalmente `"https:` - truncada e com a aspa da colagem - e o `||`
+// de antes aceitava isso numa boa, porque valor quebrado não é valor vazio. O
+// callback da Microsoft mandava a pessoa para um endereço que não existe.
+//
+// urlDeEnv exige URL absoluta de verdade e cai no endereço do Office quando o
+// que veio do ambiente não presta.
+const FRONT_PROD = 'https://office.menin.com.br';
+const FRONT_DEV = 'http://localhost:5173';
+
+function frontendUrl() {
+    return urlDeEnv('FRONTEND_URL', ehProducao() ? FRONT_PROD : FRONT_DEV);
+}
 
 // Sino + e-mail para todos os admins com deep-link que abre o modal do usuário
 // direto no painel (bypassPrefs: aviso operacional crítico).
@@ -349,7 +364,7 @@ async function mergeAndActivateTwin(res, pending, twin) {
       name: twin.username,
       email: twin.email,
       password: provisionalPassword,
-      loginUrl: FRONTEND_URL,
+      loginUrl: frontendUrl(),
     });
   } catch (err) {
     emailSent = false;
@@ -427,7 +442,7 @@ export const activateUser = async (req, res) => {
         name: user.username,
         email: user.email,
         password: provisionalPassword,
-        loginUrl: FRONTEND_URL,
+        loginUrl: frontendUrl(),
       });
     } catch (err) {
       emailSent = false;
