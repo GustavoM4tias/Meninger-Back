@@ -470,6 +470,14 @@ async function syncModelsAndPatches(fingerprint) {
   await runPatch('AccessModelColumns', ensureAccessModelColumns);   // users.position_id/city_id/permission_profile_id + user_permissions.routes_* + positions.level
   await runPatch('RoutePolicy', ensureRoutePolicySchema);           // route_policies + permission_profiles.seed_code/routes_customized
   await runPatch('EventPlan', ensureEventPlanSchema);               // event_plan_settings.auto_submit_enabled
+  // Cobrança do Ato: as tabelas de boleto/Userede só ganham coluna por estes
+  // patches (o sync global roda com alter:false), e o webhook do CV bate nelas
+  // assim que o app sobe. Em 03/09/2026 a fase não chegou até a fila de baixo
+  // e o módulo ficou em 500 (webhooks perdidos) até o patch rodar à mão. Por
+  // isso os dois rodam aqui, antes de tudo; a repetição lá embaixo cobre banco
+  // novo, onde as tabelas só existem depois do sync.
+  await runPatch('Boleto', ensureBoletoSchema);
+  await runPatch('Userede', ensureUseredeSchema);
 
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
