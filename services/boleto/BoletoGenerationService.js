@@ -246,6 +246,15 @@ async function attachToCV(idreserva, buffer, settings) {
     }
 }
 
+// Primitivos reaproveitados pela emissao de PARCELAS (ParcelaEmissaoService):
+// o mesmo upload, o mesmo anexo, a mesma mensagem e o mesmo lock do ato. Exportar
+// nao muda nada aqui - so evita copiar codigo que ja provou funcionar.
+export const _primitivos = {
+    acquireEcoLockWithWait, formatCurrency, formatDate, getSettings,
+    sanitizeCvMessage, sendCvMessage, uploadToSupabase, attachToCV,
+    describeCvError, isCvResponseOk,
+};
+
 // ── Processamento principal ───────────────────────────────────────────────────
 
 /**
@@ -396,6 +405,8 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                     status: 'success',
                     payment_status: 'paid',
                     ignorado: false,
+                    // So o boleto do ATO: parcela mensal paga nao quita o ato.
+                    parcela_id: null,
                     id: { [Op.ne]: history.id },
                 },
                 order: [['id', 'DESC']],
@@ -898,6 +909,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                     status: 'success',
                     payment_status: 'pending',
                     ignorado: false,
+                    parcela_id: null, // boleto de parcela mensal nao e "o ato pendente"
                     id: { [Op.ne]: history.id }, // ignora o registro recém criado nesta rodada
                 },
                 order: [['created_at', 'DESC']],

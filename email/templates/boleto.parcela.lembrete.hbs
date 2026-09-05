@@ -1,0 +1,42 @@
+<p style="margin:0 0 8px 0; font-size:18px; color:#0f172a;">Olá, {{titularPrimeiroNome}} 👋</p>
+<p style="margin:0 0 24px 0; font-size:15px; color:#475569;">
+    Só um lembrete: a <strong style="color:#0f172a;">{{descricao}}</strong> da sua unidade no empreendimento
+    <strong style="color:#0f172a;">{{empreendimento}}</strong>{{#if unidade}} (unidade <strong style="color:#0f172a;">{{unidade}}</strong>){{/if}}
+    vence em <strong style="color:#0f172a;">{{vencimentoFormatado}}</strong>.
+</p>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; margin:0 0 24px 0; background:#f8fafc;">
+    <tr>
+        <td style="padding:20px 28px;">
+            <p style="margin:0 0 6px 0; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#64748b; font-weight:600;">Valor</p>
+            <p style="margin:0; font-size:28px; font-weight:700; color:#0f172a;">{{valorFormatado}}</p>
+            <p style="margin:8px 0 0 0; font-size:13px; color:#475569;">Nosso número <span style="font-family:'Courier New', monospace;">{{nossoNumero}}</span></p>
+        </td>
+    </tr>
+</table>
+
+{{#if boletoUrl}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 24px 0;">
+    <tr>
+        <td align="center">
+            <a href="{{boletoUrl}}" target="_blank"
+                style="display:inline-block; background:#0f172a; color:#ffffff; text-decoration:none;
+                       font-weight:600; font-size:15px; padding:14px 32px; border-radius:10px;">
+                📄 Abrir o boleto
+            </a>
+        </td>
+    </tr>
+</table>
+{{/if}}
+
+<p style="margin:0; font-size:13px; color:#64748b; line-height:1.6;">
+    Se você já efetuou o pagamento, desconsidere este e-mail. Precisa de segunda via ou tem alguma dúvida? Fale com o seu corretor.
+</p>
+
+<div class="divider"></div>
+
+<p style="margin:0; font-size:12px; color:#94a3b8; text-align:center; line-height:1.6;">
+    📬 Este é um e-mail automático <strong>somente para envio</strong> de comunicados.<br>
+    Por favor, <strong>não responda a esta mensagem</strong>.
+</p>

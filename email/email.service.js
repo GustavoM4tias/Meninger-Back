@@ -154,6 +154,25 @@ const META = {
         file: 'boleto.caixa.hbs',
         headerLight: true,    // cliente externo — usa header claro com logo preta
     },
+    // Parcelas mensais do ato: mesmo visual do boleto.caixa (cliente externo).
+    'boleto.parcela': {
+        subject: (d) => `${d.reemissao ? 'Boleto atualizado' : 'Boleto'} da ${d.descricao || 'parcela'} — ${d.empreendimento || 'Sua unidade'} (venc. ${d.vencimentoFormatado || ''})`,
+        preview: (d) => `Valor ${d.valorFormatado || ''} • Vencimento ${d.vencimentoFormatado || ''}`,
+        file: 'boleto.parcela.hbs',
+        headerLight: true,
+    },
+    'boleto.parcela.lembrete': {
+        subject: (d) => `Lembrete: ${d.descricao || 'parcela'} vence em ${d.vencimentoFormatado || ''} — ${d.empreendimento || 'Sua unidade'}`,
+        preview: (d) => `Valor ${d.valorFormatado || ''}`,
+        file: 'boleto.parcela.lembrete.hbs',
+        headerLight: true,
+    },
+    'boleto.parcela.atraso': {
+        subject: (d) => `${d.descricao || 'Parcela'} em aberto — ${d.empreendimento || 'Sua unidade'}`,
+        preview: (d) => `Vencida em ${d.vencimentoFormatado || ''} • ${d.valorFormatado || ''}`,
+        file: 'boleto.parcela.atraso.hbs',
+        headerLight: true,
+    },
 };
 
 function compileTemplateOnce(file) {

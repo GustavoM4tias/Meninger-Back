@@ -287,6 +287,14 @@ async function aplicarResultado(r, _opts = {}) {
     const history = await BoletoHistory.findByPk(r.historyId);
     if (!history) return;
 
+    // Boleto de PARCELA mensal: a parcela e quem muda de estado, e a mensagem
+    // na reserva fala em "parcela 3 de 60", nao em ato. Import dinamico para
+    // nao fechar ciclo (o service da parcela usa isSituacaoPaga daqui).
+    if (history.parcela_id) {
+        const { aplicarResultadoParcela } = await import('./ParcelaEmissaoService.js');
+        return aplicarResultadoParcela(r, history);
+    }
+
     // Sempre atualiza last_checked / last_situation
     const baseUpdate = {
         last_checked_at: new Date(),
@@ -489,6 +497,7 @@ export async function baixarBoletoPorCancelamento(idreserva, { motivo = 'cancela
             idreserva,
             status: 'success',
             payment_status: 'pending',
+            parcela_id: null, // o ato; boletos de parcela sao baixados pela rodada de parcelas
             ignorado: false,
             nosso_numero: { [Op.ne]: null },
         },

@@ -48,6 +48,12 @@ export default (sequelize, DataTypes) => {
             comment: 'Número do documento (seuNumero = idpessoa_cv)',
         },
 
+        // ── De que cobrança é este boleto ─────────────────────────────────────
+        // 'ato' (o de sempre) ou 'parcela' (mensal do plano, ver ato_parcelas).
+        // Quem lê o ato como "a cobrança da reserva" filtra parcela_id IS NULL.
+        tipo: { type: DataTypes.STRING(10), allowNull: false, defaultValue: 'ato' },
+        parcela_id: { type: DataTypes.INTEGER, allowNull: true, comment: 'ato_parcelas.id quando tipo = parcela.' },
+
         // ── Status do processamento ────────────────────────────────────────────
         // 'skipped' = reserva entrou na situação-gatilho mas não cabia boleto
         // (sem série de Ato). Não é falha técnica — fluxo deliberadamente pulado

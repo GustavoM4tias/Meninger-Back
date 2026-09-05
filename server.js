@@ -95,6 +95,7 @@ import envioSiengeWatchRoutes from './routes/envioSiengeWatchRoutes.js';
 import boletoCleanupScheduler from './scheduler/boletoCleanupScheduler.js';
 import boletoPaymentCheckScheduler from './scheduler/boletoPaymentCheckScheduler.js';
 import boletoWindowScheduler from './scheduler/boletoWindowScheduler.js';
+import atoParcelasScheduler from './scheduler/atoParcelasScheduler.js';
 import useredeKeepAliveScheduler from './scheduler/useredeKeepAliveScheduler.js';
 import useredeConciliacaoScheduler from './scheduler/useredeConciliacaoScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
@@ -735,6 +736,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase
   if (schedulerOn('ENABLE_BOLETO_PAYMENT_CHECK_IN_DEV')) boletoPaymentCheckScheduler.start(); // 8h: verifica pagamento/baixa (já self-skip em dev)
   if (schedulerOn('ENABLE_BOLETO_WINDOW')) boletoWindowScheduler.start(); // 1min: retoma emissões que chegaram fora da janela 06h-23h
+  if (schedulerOn('ENABLE_ATO_PARCELAS')) atoParcelasScheduler.start(); // diário (hora em boleto_settings): parcelas mensais do ato - adesão, encerramento, emissão, lembretes
   if (schedulerOn('ENABLE_UREDE_KEEPALIVE')) useredeKeepAliveScheduler.start(); // 20min: mantém viva a sessão do portal Userede (evita relogin, que é onde mora o reCAPTCHA)
   if (schedulerOn('ENABLE_UREDE_CONCILIACAO')) useredeConciliacaoScheduler.start(); // 08:10: concilia os links de cartão (pago/expirado/negado/estornado)
   if (schedulerOn('ENABLE_EVENT_REMINDER')) eventReminderScheduler.start(); // lembretes de evento (D-1) via NotificationService

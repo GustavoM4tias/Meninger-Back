@@ -163,6 +163,46 @@ export default (sequelize, DataTypes) => {
             comment: 'Hora cheia de fechamento da janela, no fuso de Brasília (1-24). Janela aberta em [início, fim).',
         },
 
+        // ── Parcelas mensais (plano por reserva) ─────────────────────────────
+        // Depois do ato pago, o Office cobra as mensais ate o Sienge faturar o
+        // contrato. Defaults em lib/atoParcelas.js (PARCELAS_DEFAULTS); a tela
+        // e a dona do valor. `parcelas_ativo` nasce DESLIGADO: o deploy so
+        // calcula e mostra os planos; nada e emitido ate ligar.
+        parcelas_ativo: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        parcelas_idseries: {
+            type: DataTypes.TEXT,
+            defaultValue: '[20,1,37]',
+            comment: 'IDs de serie do CV tratadas como mensais (JSON array).',
+            get() {
+                const raw = this.getDataValue('parcelas_idseries');
+                let parsed;
+                try { parsed = JSON.parse(raw ?? '[20,1,37]'); } catch { return [20, 1, 37]; }
+                if (!Array.isArray(parsed)) parsed = [parsed];
+                const flat = parsed.flat(Infinity).map(Number).filter(n => Number.isFinite(n) && n > 0);
+                return Array.from(new Set(flat));
+            },
+            set(val) {
+                const raw = Array.isArray(val) ? val : (val == null ? [] : [val]);
+                const flat = raw.flat(Infinity).map(Number).filter(n => Number.isFinite(n) && n > 0);
+                this.setDataValue('parcelas_idseries', JSON.stringify(Array.from(new Set(flat))));
+            },
+        },
+        parcelas_exigir_ato_pago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Plano so nasce com o ato pago (boleto ou cartao).' },
+        parcelas_antecedencia_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 10, comment: 'Boleto da parcela sai N dias corridos antes do vencimento.' },
+        parcelas_encerrar_quando_faturado: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Encerra o plano quando o contrato ganha titulo no Sienge (contracts.receivable_bill_id).' },
+        parcelas_vencidas_na_adesao: { type: DataTypes.STRING(10), allowNull: true, defaultValue: 'emitir', comment: "'emitir' (hoje + prazo, sem encargos) | 'ignorar' para parcelas ja vencidas quando o plano nasce." },
+        parcelas_prazo_vencida_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 5, comment: 'Dias corridos ate o novo vencimento de parcela ja vencida (adesao e reemissao).' },
+        parcelas_hora_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 9, comment: 'Hora cheia (Brasilia) da rodada diaria de parcelas.' },
+        parcelas_max_emissoes_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 40, comment: 'Teto de boletos emitidos por rodada (o resto sai no dia seguinte).' },
+        atraso_reemitir: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Parcela vencida e baixada e reemitida automaticamente.' },
+        atraso_max_reemissoes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 3, comment: 'Quantas vias novas por parcela antes de parar e chamar gente.' },
+        atraso_cobrar_encargos: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Reemissao por atraso leva multa + juros.' },
+        atraso_multa_pct: { type: DataTypes.DECIMAL(6, 2), allowNull: true, defaultValue: 2, comment: 'Multa (%) sobre o valor original, uma vez.' },
+        atraso_juros_mes_pct: { type: DataTypes.DECIMAL(6, 2), allowNull: true, defaultValue: 1, comment: 'Juros (% ao mes) pro rata dia sobre o valor original.' },
+        lembrete_dias_antes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 3, comment: 'Lembrete ao cliente N dias antes do vencimento (0 desliga).' },
+        aviso_atraso_dias_depois: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 1, comment: 'Aviso de vencido N dias depois do vencimento (0 desliga).' },
+        parcelas_ultima_rodada_em: { type: DataTypes.DATE, allowNull: true, comment: 'Quando a rodada diaria de parcelas rodou pela ultima vez (sobrevive a restart).' },
+
         // ── Controle ───────────────────────────────────────────────────────────
         active: {
             type: DataTypes.BOOLEAN,

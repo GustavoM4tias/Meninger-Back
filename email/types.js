@@ -11,6 +11,10 @@ export const EmailType = {
     AUTH_PASSWORD_RESET: 'auth.password.reset',
     MEETING_REPORT: 'meeting.report',
     BOLETO_CAIXA: 'boleto.caixa',
+    // Parcelas mensais do ato (services/boleto/ParcelaNotifyService.js)
+    BOLETO_PARCELA: 'boleto.parcela',
+    BOLETO_PARCELA_LEMBRETE: 'boleto.parcela.lembrete',
+    BOLETO_PARCELA_ATRASO: 'boleto.parcela.atraso',
 };
 
 // Contratos mínimos de dados por tipo (JSDoc p/ intellisense)

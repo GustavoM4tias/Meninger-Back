@@ -66,7 +66,11 @@ const SELECT_BOLETO = `
         h.ignorado, h.substitui_id, h.substituido_por_id,
         h.last_checked_at, h.paid_at, h.cancelled_at,
         h.created_at, h.updated_at
-      FROM boleto_history h`;
+      FROM boleto_history h
+     WHERE h.parcela_id IS NULL`;
+// ^ Boleto de PARCELA mensal fica fora do historico do ATO: entrando aqui ele
+//   seria eleito "a cobranca atual" da reserva e esconderia o ato. As parcelas
+//   tem a propria aba (services/boleto/AtoParcelaService.js).
 
 const SELECT_CARTAO = `
     SELECT

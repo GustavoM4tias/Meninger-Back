@@ -98,7 +98,54 @@ export async function updateSettings(req, res) {
             'comissao_modo',
             'janela_ativa', 'janela_inicio_hora', 'janela_fim_hora',
             'active',
+            // Parcelas mensais (lib/atoParcelas.js)
+            'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago',
+            'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado',
+            'parcelas_vencidas_na_adesao', 'parcelas_prazo_vencida_dias',
+            'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada',
+            'atraso_reemitir', 'atraso_max_reemissoes', 'atraso_cobrar_encargos',
+            'atraso_multa_pct', 'atraso_juros_mes_pct',
+            'lembrete_dias_antes', 'aviso_atraso_dias_depois',
         ];
+
+        // Parcelas: inteiros nao-negativos onde e contagem de dias, percentuais
+        // entre 0 e 100, hora cheia 0..23. Valor fora da faixa faria a rodada
+        // emitir cedo demais, cobrar encargo absurdo ou nunca rodar.
+        const intEntre = (k, min, max) => {
+            if (req.body[k] === undefined) return null;
+            const n = Number(req.body[k]);
+            if (!Number.isInteger(n) || n < min || n > max) return `${k} deve ser um inteiro entre ${min} e ${max}.`;
+            req.body[k] = n;
+            return null;
+        };
+        const pctEntre = (k) => {
+            if (req.body[k] === undefined) return null;
+            const n = Number(req.body[k]);
+            if (!Number.isFinite(n) || n < 0 || n > 100) return `${k} deve ser um percentual entre 0 e 100.`;
+            req.body[k] = n;
+            return null;
+        };
+        const erroParcelas = intEntre('parcelas_antecedencia_dias', 0, 60)
+            || intEntre('parcelas_prazo_vencida_dias', 1, 60)
+            || intEntre('parcelas_hora_rodada', 0, 23)
+            || intEntre('parcelas_max_emissoes_rodada', 1, 500)
+            || intEntre('atraso_max_reemissoes', 0, 12)
+            || intEntre('lembrete_dias_antes', 0, 30)
+            || intEntre('aviso_atraso_dias_depois', 0, 30)
+            || pctEntre('atraso_multa_pct')
+            || pctEntre('atraso_juros_mes_pct');
+        if (erroParcelas) return res.status(400).json({ error: erroParcelas });
+        if (req.body.parcelas_vencidas_na_adesao !== undefined
+            && !['emitir', 'ignorar'].includes(req.body.parcelas_vencidas_na_adesao)) {
+            return res.status(400).json({ error: "parcelas_vencidas_na_adesao deve ser 'emitir' ou 'ignorar'." });
+        }
+        if (req.body.parcelas_idseries !== undefined) {
+            const raw = req.body.parcelas_idseries;
+            const arr = Array.isArray(raw) ? raw : (typeof raw === 'string' ? raw.split(',') : [raw]);
+            req.body.parcelas_idseries = Array.from(new Set(
+                arr.flat(Infinity).map(v => Number(String(v).trim())).filter(n => Number.isFinite(n) && n > 0),
+            ));
+        }
 
         // Modo de cálculo: valor desconhecido faria toda emissão cair no ramo
         // "nenhum" calado, cobrando a comissão junto do ato.

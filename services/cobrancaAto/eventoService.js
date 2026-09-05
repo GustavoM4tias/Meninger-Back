@@ -100,6 +100,8 @@ export async function listarTentativas(idreserva) {
             status: b.status, payment_status: b.payment_status,
             arquivo_url: b.boleto_supabase_url,
             parcelas_limite: null, parcelas_escolhidas: null,
+            // 'ato' | 'parcela' - a linha do tempo da reserva mostra as duas.
+            tipo: b.tipo || 'ato', parcela_id: b.parcela_id || null,
             ignorado: b.ignorado, created_at: b.created_at,
         })),
         ...links.map(c => ({

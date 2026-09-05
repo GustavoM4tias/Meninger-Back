@@ -1,0 +1,35 @@
+<p style="margin:0 0 8px 0; font-size:18px; color:#0f172a;">Olá, {{titularPrimeiroNome}}.</p>
+<p style="margin:0 0 24px 0; font-size:15px; color:#475569;">
+    Não identificamos o pagamento da <strong style="color:#0f172a;">{{descricao}}</strong> da sua unidade no empreendimento
+    <strong style="color:#0f172a;">{{empreendimento}}</strong>{{#if unidade}} (unidade <strong style="color:#0f172a;">{{unidade}}</strong>){{/if}},
+    vencida em <strong style="color:#0f172a;">{{vencimentoFormatado}}</strong>.
+</p>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="border:1px solid #fde68a; border-radius:12px; overflow:hidden; margin:0 0 24px 0; background:#fffbeb;">
+    <tr>
+        <td style="padding:20px 28px;">
+            <p style="margin:0 0 6px 0; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#92400e; font-weight:600;">Valor em aberto</p>
+            <p style="margin:0; font-size:28px; font-weight:700; color:#0f172a;">{{valorFormatado}}</p>
+        </td>
+    </tr>
+</table>
+
+<p style="margin:0 0 16px 0; font-size:14px; color:#334155; line-height:1.6;">
+    {{#if reemitirAutomatico}}
+    O boleto vencido não pode mais ser pago. Vamos gerar um <strong>novo boleto atualizado</strong> (com os encargos previstos em contrato) e enviar por e-mail e WhatsApp.
+    {{else}}
+    O boleto vencido não pode mais ser pago. Fale com o seu corretor para regularizar a parcela.
+    {{/if}}
+</p>
+
+<p style="margin:0; font-size:13px; color:#64748b; line-height:1.6;">
+    Se o pagamento já foi feito, desconsidere este e-mail ou nos envie o comprovante pelo seu corretor. O processamento bancário pode levar até 2 dias úteis.
+</p>
+
+<div class="divider"></div>
+
+<p style="margin:0; font-size:12px; color:#94a3b8; text-align:center; line-height:1.6;">
+    📬 Este é um e-mail automático <strong>somente para envio</strong> de comunicados.<br>
+    Por favor, <strong>não responda a esta mensagem</strong>.
+</p>
