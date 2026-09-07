@@ -80,8 +80,8 @@ export function getAtrasoTemplateDefinition() {
             + 'A *{{2}}* da sua reserva no *{{3}}* venceu em *{{4}}* ({{5}}) e ainda não identificamos o pagamento. '
             + 'O boleto vencido não pode mais ser pago.\n\n'
             + '⚠️ Sem a confirmação do pagamento, a sua reserva pode ser cancelada.\n\n'
-            + 'Quer um novo boleto? Responda *SIM* (ou toque no botão abaixo) que geramos uma nova via com vencimento '
-            + 'no próximo dia útil e enviamos por aqui e por e-mail. Se preferir, procure o seu corretor.\n\n'
+            + 'Quer um novo boleto? Responda *SIM* (ou toque no botão abaixo) que geramos uma nova via e enviamos '
+            + 'por aqui e por e-mail. Se preferir, procure o seu corretor.\n\n'
             + 'Se já pagou, desconsidere esta mensagem.',
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', '20/10/2026', 'R$ 496,74'],
         footerText: null,

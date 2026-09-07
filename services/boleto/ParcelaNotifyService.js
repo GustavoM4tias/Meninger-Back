@@ -237,7 +237,7 @@ export async function sendAvisoAtraso({ titular, dados, historyId = null }) {
     const textoLivre = `Olá, ${primeiroNome(titular?.nome) || 'cliente'}. A ${dados.descricao}`
         + `${dados.empreendimento ? ` da sua reserva no ${dados.empreendimento}` : ''} venceu em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}) e ainda não identificamos o pagamento. O boleto vencido não pode mais ser pago.`
         + ' Sem a confirmação do pagamento, a sua reserva pode ser cancelada.'
-        + ' Quer um novo boleto? Responda SIM que geramos uma nova via com vencimento no próximo dia útil e enviamos por aqui e por e-mail. Se preferir, procure o seu corretor.'
+        + ' Quer um novo boleto? Responda SIM que geramos uma nova via e enviamos por aqui e por e-mail. Se preferir, procure o seu corretor.'
         + ' Se já pagou, desconsidere esta mensagem.';
     const [email, whatsapp] = await Promise.all([
         enviarEmail(EmailType.BOLETO_PARCELA_ATRASO, titular, emailData, null),
