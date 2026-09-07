@@ -493,13 +493,14 @@ const JANELA_RESPOSTA_DIAS = 15;
  * dias e a resposta e afirmativa, reemite a parcela (vencimento no proximo dia
  * util) e responde na janela de 24h. Devolve true quando tratou a mensagem.
  */
-export async function tratarRespostaCliente({ fromPhone, body }) {
+/** Parcelas deste numero que receberam aviso de vencida ha pouco e ainda esperam a resposta. Sem efeito colateral. */
+async function parcelasAguardandoResposta(fromPhone, body) {
     const fone = String(fromPhone || '').replace(/\D/g, '');
-    if (!fone || !RE_SIM.test(String(body || ''))) return false;
+    if (!fone || !RE_SIM.test(String(body || ''))) return [];
     const planos = await AtoPlano.findAll({ where: { titular_fone: fone, status: PLANO_STATUS.ATIVO }, attributes: ['id', 'idreserva'] });
-    if (!planos.length) return false;
+    if (!planos.length) return [];
     const desde = new Date(Date.now() - JANELA_RESPOSTA_DIAS * 86400000);
-    const vencidas = await AtoParcela.findAll({
+    return AtoParcela.findAll({
         where: {
             plano_id: { [Op.in]: planos.map(p => p.id) },
             status: { [Op.in]: [PARCELA_STATUS.VENCIDA, PARCELA_STATUS.EMITIDA] },
@@ -507,6 +508,21 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
         },
         order: [['vencimento', 'ASC']],
     });
+}
+
+/**
+ * Usado pelo roteador do webhook (EmeAtendeWebhookRouter) ANTES de decidir se a
+ * mensagem vai para a Eme Atende: resposta a aviso de parcela vencida e do
+ * Office, mesmo que o numero seja lead de teste da Eme ou usuario interno.
+ */
+export async function pareceRespostaDeParcela({ fromPhone, body }) {
+    try { return (await parcelasAguardandoResposta(fromPhone, body)).length > 0; }
+    catch { return false; }
+}
+
+export async function tratarRespostaCliente({ fromPhone, body }) {
+    const fone = String(fromPhone || '').replace(/\D/g, '');
+    const vencidas = await parcelasAguardandoResposta(fone, body);
     if (!vencidas.length) return false;
 
     const resultados = [];
@@ -563,4 +579,4 @@ export async function limparTeste(idreserva) {
     return { ok: true, baixas, parcelas: ids.length, boletos: boletos.length };
 }
 
-export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, tratarRespostaCliente, limparTeste };
+export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, tratarRespostaCliente, pareceRespostaDeParcela, limparTeste };

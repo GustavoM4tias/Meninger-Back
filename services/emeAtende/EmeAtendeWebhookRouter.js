@@ -108,6 +108,22 @@ async function route(payload) {
                 const eme = [];
                 for (const m of value.messages) {
                     const from = m?.from || value.contacts?.[0]?.wa_id || null;
+                    // 0º: resposta ao aviso de PARCELA VENCIDA do Ato ("SIM") é do
+                    // Office, mesmo que o número seja lead de teste da Eme ou usuário
+                    // interno. Em 07/09/2026 o SIM de um número em teste foi parar
+                    // no atendimento do Parque das Flores.
+                    const corpo = m?.text?.body || m?.button?.text || m?.interactive?.button_reply?.title || '';
+                    if (corpo) {
+                        try {
+                            const { pareceRespostaDeParcela } = await import('../boleto/ParcelaEmissaoService.js');
+                            if (await pareceRespostaDeParcela({ fromPhone: from, body: corpo })) {
+                                console.log(`[eme-atende/router] ${from} fica no Office — resposta a aviso de parcela`);
+                                off.push(m); continue;
+                            }
+                        } catch (err) {
+                            console.warn('[eme-atende/router] checagem de parcela falhou:', err?.message || err);
+                        }
+                    }
                     // 1º: se é resposta a algo NOSSO, o dono do original decide.
                     // Isso vem antes de tudo porque é o sinal mais forte que existe.
                     const dono = await donoDoContexto(m);
