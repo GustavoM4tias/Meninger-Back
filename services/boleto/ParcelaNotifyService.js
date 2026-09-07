@@ -181,7 +181,7 @@ export async function sendParcelaToTitular({ titular, dados, historyId = null, p
         `Olá, ${primeiroNome(titular?.nome) || 'cliente'}! Segue o boleto da ${dados.descricao} da sua reserva`
         + `${dados.empreendimento ? ` no ${dados.empreendimento}` : ''}${dados.unidade ? ` (${dados.unidade})` : ''}: `
         + `${formatCurrency(dados.valor)}, vencimento ${formatDateBr(dados.vencimento)}.`
-        + ' Pague até o vencimento para manter a sua reserva em dia. Se já pagou, desconsidere esta mensagem.';
+        + ' Pague até o vencimento para manter a sua reserva em dia. Em caso de atraso, procure o seu corretor com urgência: sem a confirmação do pagamento, a reserva pode ser cancelada. Se já pagou, desconsidere esta mensagem.';
 
     const [email, whatsapp] = await Promise.all([
         enviarEmail(EmailType.BOLETO_PARCELA, titular, emailData, attachments),

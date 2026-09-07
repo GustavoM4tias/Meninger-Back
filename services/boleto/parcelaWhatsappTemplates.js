@@ -24,6 +24,12 @@ export const TPL_PARCELA = 'boleto_parcela_v1';
 export const TPL_LEMBRETE = 'boleto_parcela_lembrete_v1';
 export const TPL_ATRASO = 'boleto_parcela_atraso_v1';
 
+// Mesmo aviso do ato (AVISO_PRAZO do link/boleto), dito para a parcela.
+export const AVISO_PARCELA =
+    '⚠️ Pague até o vencimento para manter a sua reserva em dia. '
+    + 'Em caso de atraso, procure o seu corretor com *urgência*: '
+    + 'sem a confirmação do pagamento, a reserva pode ser cancelada.';
+
 export function getParcelaTemplateDefinition() {
     return {
         name: TPL_PARCELA,
@@ -35,7 +41,8 @@ export function getParcelaTemplateDefinition() {
             + 'Segue o boleto da *{{2}}* da sua reserva no *{{3}}* ({{4}}). O PDF está em anexo.\n\n'
             + '💰 *Valor:* {{5}}\n'
             + '📅 *Vencimento:* {{6}}\n\n'
-            + '⚠️ Pague até o vencimento para manter a sua reserva em dia. Se já pagou, desconsidere esta mensagem.',
+            + AVISO_PARCELA,
+        // {{2}} tambem sai como "nova via da parcela 3 de 60" na reemissao.
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', 'QD 08 - LT 08', 'R$ 496,74', '20/10/2026'],
         footerText: RODAPE,
         buttons: [],
@@ -52,8 +59,7 @@ export function getLembreteTemplateDefinition() {
             'Olá, *{{1}}*! 👋\n\n'
             + 'Passando para lembrar: a *{{2}}* da sua reserva no *{{3}}* vence *{{4}}*, em {{5}}.\n\n'
             + '💰 *Valor:* {{6}}\n\n'
-            + 'O boleto foi enviado por aqui e por e-mail. Pague até o vencimento para manter a sua reserva em dia. '
-            + 'Se já pagou, desconsidere.',
+            + 'O boleto foi enviado por aqui e por e-mail. ' + AVISO_PARCELA + ' Se já pagou, desconsidere.',
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', 'em 3 dias', '20/10/2026', 'R$ 496,74'],
         footerText: RODAPE,
         buttons: [],

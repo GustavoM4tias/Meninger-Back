@@ -66,9 +66,11 @@ export async function emitirParcela(parcelaId, opts = {}) {
     if (!settings.eco_usuario || !settings.eco_senha) return { ok: false, skipped: true, erro: 'Credenciais do Ecobranca nao configuradas.' };
     if (!cfg.ativo && !opts.forcar) return { ok: false, skipped: true, erro: 'Cobranca de parcelas pausada (parcelas_ativo = false).' };
     if (plano.status !== PLANO_STATUS.ATIVO && !opts.forcar) return { ok: false, skipped: true, erro: `Plano ${plano.status}.` };
-    if (![PARCELA_STATUS.PREVISTA, PARCELA_STATUS.VENCIDA, PARCELA_STATUS.ERRO].includes(parcela.status)) {
-        return { ok: false, skipped: true, erro: `Parcela ${parcela.status} - nao cabe emissao.` };
-    }
+    // Emitida so entra pela tela (forcar): e o boleto vivo que passou do
+    // vencimento e a rodada das 08h ainda nao baixou - a emissao faz a baixa previa.
+    const cabe = [PARCELA_STATUS.PREVISTA, PARCELA_STATUS.VENCIDA, PARCELA_STATUS.ERRO].includes(parcela.status)
+        || (opts.forcar && parcela.status === PARCELA_STATUS.EMITIDA);
+    if (!cabe) return { ok: false, skipped: true, erro: `Parcela ${parcela.status} - nao cabe emissao.` };
     // Ja existe boleto vivo desta parcela? Reemitir por cima duplicaria a cobranca.
     const vivo = await BoletoHistory.findOne({
         where: { parcela_id: parcela.id, status: 'success', payment_status: 'pending', ignorado: false },
@@ -208,7 +210,9 @@ export async function emitirParcela(parcelaId, opts = {}) {
             titular,
             dados: {
                 empreendimento: unidade.empreendimento, unidade: unidade.unidade || unidade.bloco || '',
-                descricao: descricaoParcela(p), rotulo: rotuloParcela(p),
+                // Na segunda via o cliente le "nova via da parcela 3 de 60" no
+                // MESMO template - a variavel carrega a diferenca.
+                descricao: reemissao ? `nova via da ${descricaoParcela(p)}` : descricaoParcela(p), rotulo: rotuloParcela(p),
                 valor: cond.valor, valorOriginal: Number(parcela.valor), encargos: cond.encargos, reemissao,
                 vencimento: cond.vencimento, nossoNumero: eco.nossoNumero, seuNumero: eco.seuNumero, boletoUrl: supabaseUrl,
             },
