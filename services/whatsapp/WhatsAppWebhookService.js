@@ -158,32 +158,38 @@ async function handleIncomingMessage(m, fromPhone) {
     console.log(`[whatsapp/webhook] inbound full payload:`, JSON.stringify({
         id: m.id, type: m.type, button: m.button, text: m.text, interactive: m.interactive, context: m.context,
     }));
-    // O módulo de Aprovações consumia a resposta de botão aqui (casando pelo
-    // wamid do template) antes de repassar aos alertas. Removido em 2026-08-19
-    // junto do módulo — hoje toda resposta de botão vai direto para os alertas.
-    try {
-        await AlertReplyHandler.handleInbound({ fromPhone, body, contextId });
-    } catch (err) {
-        console.error('[whatsapp/webhook] AlertReplyHandler erro:', err?.message || err);
-    }
+    // PRIMEIRO, para qualquer número (inclusive usuário interno): cliente que
+    // recebeu o aviso de parcela vencida e tocou/escreveu "SIM" está pedindo a
+    // nova via. É a leitura mais específica que existe (número gravado no plano,
+    // aviso nos últimos dias, resposta afirmativa), então ganha dos alertas e da
+    // auto-resposta. Em 07/09/2026 o "SIM" de um usuário interno caiu nos
+    // alertas e devolveu o relatório de leads em vez do boleto.
+    // Fire-and-forget: a reemissão leva dezenas de segundos (Playwright) e o
+    // ACK para a Meta não pode esperar.
+    (async () => {
+        let tratadoPelasParcelas = false;
+        try {
+            const { tratarRespostaCliente } = await import('../boleto/ParcelaEmissaoService.js');
+            tratadoPelasParcelas = await tratarRespostaCliente({ fromPhone, body });
+        } catch (err) {
+            console.error('[whatsapp/webhook] resposta de parcela erro:', err?.message || err);
+        }
+        if (tratadoPelasParcelas) return;
 
-    // Auto-resposta pra remetentes externos (não-users) — fire-and-forget.
-    // Sem await pra não atrasar o ACK do webhook pra Meta.
-    //
-    // Antes dela: cliente que recebeu o aviso de parcela vencida e tocou/escreveu
-    // "SIM" está pedindo a nova via - o módulo de parcelas do Ato reemite e
-    // responde ele mesmo; aí a auto-resposta genérica não faz sentido.
-    if (!userId && fromPhone) {
-        (async () => {
-            try {
-                const { tratarRespostaCliente } = await import('../boleto/ParcelaEmissaoService.js');
-                if (await tratarRespostaCliente({ fromPhone, body })) return;
-            } catch (err) {
-                console.error('[whatsapp/webhook] resposta de parcela erro:', err?.message || err);
-            }
+        // O módulo de Aprovações consumia a resposta de botão aqui (casando pelo
+        // wamid do template) antes de repassar aos alertas. Removido em 2026-08-19
+        // junto do módulo — hoje toda resposta de botão vai direto para os alertas.
+        try {
+            await AlertReplyHandler.handleInbound({ fromPhone, body, contextId });
+        } catch (err) {
+            console.error('[whatsapp/webhook] AlertReplyHandler erro:', err?.message || err);
+        }
+
+        // Auto-resposta pra remetentes externos (não-users).
+        if (!userId && fromPhone) {
             await maybeReplyToExternal(fromPhone);
-        })().catch(err => console.error('[whatsapp/webhook] auto-reply erro:', err?.message || err));
-    }
+        }
+    })().catch(err => console.error('[whatsapp/webhook] inbound erro:', err?.message || err));
 }
 
 /**
