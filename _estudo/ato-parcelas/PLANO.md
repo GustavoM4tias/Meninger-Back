@@ -33,16 +33,17 @@ reservas** (278 delas venceram nos ultimos 30 dias). Nos proximos 30 dias vencem
    encerra (motivo `sienge_faturado`), parcelas previstas viram `transferida`, boleto
    vivo e baixado. Reserva cancelada = plano cancelado + boletos em aberto baixados.
 4. **Atraso**: boleto vencido e baixado pela rodada das 08h vira parcela `vencida`.
-   O cliente recebe o aviso perguntando se quer a nova via; ela sai quando ele
-   responde SIM no WhatsApp (`tratarRespostaCliente`) ou pelo botao Reemitir da
-   tela - sempre com o MESMO valor e vencimento no PROXIMO DIA UTIL, ate
+   O cliente recebe o aviso (a reserva pode ser cancelada; procure o corretor) e a
+   nova via sai pelo botao Reemitir da tela - sempre com o MESMO valor e
+   vencimento no PROXIMO DIA UTIL, ate
    `atraso_max_reemissoes` (3) vias. `atraso_reemitir=true` faz a rodada reemitir
    sozinha. Multa e juros ficaram FORA desta etapa; o calculo existe em
    lib/atoParcelas.js.
 5. **Mensagens ao cliente** (e-mail sempre; WhatsApp quando o template estiver
    aprovado, senao janela de 24h): boleto da parcela (10 dias antes), lembrete
-   "vence em X dias" (D-3) e aviso de vencida com a pergunta (D+1). Um de cada por
-   boleto.
+   "vence em X dias" (D-3) e aviso de vencida (D+1). Um de cada por boleto. Texto
+   fala em RESERVA (nao contrato), nunca pede resposta (ninguem atende) e, no
+   atraso, diz que a reserva pode ser cancelada.
 6. **Interruptor mestre** `parcelas_ativo` nasce DESLIGADO: o deploy so calcula e
    mostra; nada e emitido ate ligar na tela.
 

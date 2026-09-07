@@ -5,15 +5,17 @@
 //
 //   boleto_parcela_v1           boleto da parcela (sai 10 dias antes), PDF no header
 //   boleto_parcela_lembrete_v1  "sua parcela vence em X dias", so texto
-//   boleto_parcela_atraso_v1    "sua parcela venceu; quer a nova via? responda SIM"
+//   boleto_parcela_atraso_v1    "sua parcela venceu; a reserva pode ser cancelada"
 //
-// TEXTOS EM RASCUNHO (07/09/2026): aguardando o Gustavo aprovar antes de criar
-// na Meta. Ate aprovar, o envio cai na janela de servico de 24h (texto livre)
-// ou e pulado com erro legivel - o e-mail sai sempre. Aprovado e IMUTAVEL:
-// mudou a copy, sobe a versao (v2...).
+// Regras de texto (Gustavo, 07/09/2026): o cliente tem uma RESERVA, nao um
+// contrato - nunca falar em "contrato"; NUNCA pedir para responder a mensagem
+// (ninguem atende esse numero; o rodape diz isso); no atraso, dizer que sem o
+// pagamento a reserva pode ser cancelada e mandar procurar o corretor.
 //
-// A resposta "SIM" ao aviso de vencida e tratada por
-// ParcelaEmissaoService.tratarRespostaCliente (reemite para o proximo dia util).
+// TEXTOS EM RASCUNHO: aguardando aprovacao antes de criar na Meta. Ate aprovar,
+// o envio cai na janela de servico de 24h (texto livre) ou e pulado com erro
+// legivel - o e-mail sai sempre. Aprovado e IMUTAVEL: mudou a copy, sobe a
+// versao (v2...).
 import { RODAPE } from '../userede/useredeWhatsappTemplate.js';
 
 export const LANG = 'pt_BR';
@@ -30,10 +32,10 @@ export function getParcelaTemplateDefinition() {
         // Header DOCUMENT: o handle do PDF de exemplo e injetado no controller.
         body:
             'Olá, *{{1}}*! 👋\n\n'
-            + 'Segue o boleto da *{{2}}* da sua unidade no *{{3}}* ({{4}}). O PDF está em anexo.\n\n'
+            + 'Segue o boleto da *{{2}}* da sua reserva no *{{3}}* ({{4}}). O PDF está em anexo.\n\n'
             + '💰 *Valor:* {{5}}\n'
             + '📅 *Vencimento:* {{6}}\n\n'
-            + 'Pagando em dia você mantém o seu contrato regular. Se já pagou, desconsidere esta mensagem.',
+            + '⚠️ Pague até o vencimento para manter a sua reserva em dia. Se já pagou, desconsidere esta mensagem.',
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', 'QD 08 - LT 08', 'R$ 496,74', '20/10/2026'],
         footerText: RODAPE,
         buttons: [],
@@ -48,10 +50,10 @@ export function getLembreteTemplateDefinition() {
         // {{4}} = "em 3 dias" | "amanhã" | "hoje"
         body:
             'Olá, *{{1}}*! 👋\n\n'
-            + 'Passando para lembrar: a *{{2}}* da sua unidade no *{{3}}* vence *{{4}}*, em {{5}}.\n\n'
+            + 'Passando para lembrar: a *{{2}}* da sua reserva no *{{3}}* vence *{{4}}*, em {{5}}.\n\n'
             + '💰 *Valor:* {{6}}\n\n'
-            + 'O boleto já foi enviado por aqui e por e-mail. Precisa de uma segunda via? '
-            + 'É só responder esta mensagem. Se já pagou, desconsidere.',
+            + 'O boleto foi enviado por aqui e por e-mail. Pague até o vencimento para manter a sua reserva em dia. '
+            + 'Se já pagou, desconsidere.',
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', 'em 3 dias', '20/10/2026', 'R$ 496,74'],
         footerText: RODAPE,
         buttons: [],
@@ -65,11 +67,11 @@ export function getAtrasoTemplateDefinition() {
         language: LANG,
         body:
             'Olá, *{{1}}*.\n\n'
-            + 'A *{{2}}* da sua unidade no *{{3}}* venceu em *{{4}}* ({{5}}) e ainda não identificamos o pagamento. '
+            + 'A *{{2}}* da sua reserva no *{{3}}* venceu em *{{4}}* ({{5}}) e ainda não identificamos o pagamento. '
             + 'O boleto vencido não pode mais ser pago.\n\n'
-            + 'Quer receber um novo boleto? Responda *SIM* que geramos uma nova via com vencimento no próximo dia útil '
-            + 'e enviamos por aqui e por e-mail.\n\n'
-            + 'Se já pagou, desconsidere esta mensagem ou nos envie o comprovante.',
+            + '⚠️ Sem a confirmação do pagamento, a sua reserva pode ser cancelada. '
+            + 'Procure o seu corretor com *urgência* para receber um novo boleto, com vencimento no próximo dia útil.\n\n'
+            + 'Se já pagou, desconsidere esta mensagem.',
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', '20/10/2026', 'R$ 496,74'],
         footerText: RODAPE,
         buttons: [],

@@ -178,10 +178,10 @@ export async function sendParcelaToTitular({ titular, dados, historyId = null, p
         formatDateBr(dados.vencimento),
     ];
     const textoLivre =
-        `Olá, ${primeiroNome(titular?.nome) || 'cliente'}! Segue o boleto da ${dados.descricao}`
-        + `${dados.empreendimento ? ` de ${dados.empreendimento}` : ''}${dados.unidade ? ` (${dados.unidade})` : ''}: `
+        `Olá, ${primeiroNome(titular?.nome) || 'cliente'}! Segue o boleto da ${dados.descricao} da sua reserva`
+        + `${dados.empreendimento ? ` no ${dados.empreendimento}` : ''}${dados.unidade ? ` (${dados.unidade})` : ''}: `
         + `${formatCurrency(dados.valor)}, vencimento ${formatDateBr(dados.vencimento)}.`
-        + (dados.encargos ? ` Valor atualizado com multa e juros de ${dados.encargos.diasAtraso} dia(s) de atraso.` : '');
+        + ' Pague até o vencimento para manter a sua reserva em dia. Se já pagou, desconsidere esta mensagem.';
 
     const [email, whatsapp] = await Promise.all([
         enviarEmail(EmailType.BOLETO_PARCELA, titular, emailData, attachments),
@@ -213,8 +213,8 @@ export async function sendLembrete({ titular, dados, historyId = null }) {
     emailData.quando = quando;
     const variables = [primeiroNome(titular?.nome), dados.descricao, dados.empreendimento || '', quando, formatDateBr(dados.vencimento), formatCurrency(dados.valor)];
     const textoLivre = `Olá, ${primeiroNome(titular?.nome) || 'cliente'}! Passando para lembrar: a ${dados.descricao}`
-        + `${dados.empreendimento ? ` da sua unidade no ${dados.empreendimento}` : ''} vence ${quando}, em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}).`
-        + (shortUrl ? ` Boleto: ${shortUrl}` : '') + ' Precisa de segunda via? Responda esta mensagem. Se já pagou, desconsidere.';
+        + `${dados.empreendimento ? ` da sua reserva no ${dados.empreendimento}` : ''} vence ${quando}, em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}).`
+        + (shortUrl ? ` Boleto: ${shortUrl}` : '') + ' Pague até o vencimento para manter a sua reserva em dia. Se já pagou, desconsidere.';
     const [email, whatsapp] = await Promise.all([
         enviarEmail(EmailType.BOLETO_PARCELA_LEMBRETE, titular, emailData, null),
         enviarWhatsApp({ titular, templateName: TPL_LEMBRETE, variables, textoLivre, resumo: `Lembrete parcela ${dados.rotulo} venc. ${formatDateBr(dados.vencimento)}` }),
@@ -223,7 +223,7 @@ export async function sendLembrete({ titular, dados, historyId = null }) {
     return { email, whatsapp };
 }
 
-/** Aviso D+N: venceu e nao foi pago; perguntamos se quer a nova via (responde SIM). */
+/** Aviso D+N: venceu e nao foi pago; a reserva pode ser cancelada, procure o corretor. */
 export async function sendAvisoAtraso({ titular, dados, historyId = null }) {
     if (isLocalEnvironment()) {
         const reason = skipLocal();
@@ -235,9 +235,9 @@ export async function sendAvisoAtraso({ titular, dados, historyId = null }) {
     };
     const variables = [primeiroNome(titular?.nome), dados.descricao, dados.empreendimento || '', formatDateBr(dados.vencimento), formatCurrency(dados.valor)];
     const textoLivre = `Olá, ${primeiroNome(titular?.nome) || 'cliente'}. A ${dados.descricao}`
-        + `${dados.empreendimento ? ` da sua unidade no ${dados.empreendimento}` : ''} venceu em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}) e ainda não identificamos o pagamento. O boleto vencido não pode mais ser pago.`
-        + ' Quer receber um novo boleto? Responda SIM que geramos uma nova via com vencimento no próximo dia útil e enviamos por aqui e por e-mail.'
-        + ' Se já pagou, desconsidere esta mensagem ou nos envie o comprovante.';
+        + `${dados.empreendimento ? ` da sua reserva no ${dados.empreendimento}` : ''} venceu em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}) e ainda não identificamos o pagamento. O boleto vencido não pode mais ser pago.`
+        + ' Sem a confirmação do pagamento, a sua reserva pode ser cancelada. Procure o seu corretor com urgência para receber um novo boleto, com vencimento no próximo dia útil.'
+        + ' Se já pagou, desconsidere esta mensagem.';
     const [email, whatsapp] = await Promise.all([
         enviarEmail(EmailType.BOLETO_PARCELA_ATRASO, titular, emailData, null),
         enviarWhatsApp({ titular, templateName: TPL_ATRASO, variables, textoLivre, resumo: `Atraso parcela ${dados.rotulo} venc. ${formatDateBr(dados.vencimento)}` }),
