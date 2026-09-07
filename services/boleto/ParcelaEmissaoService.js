@@ -101,10 +101,8 @@ export async function emitirParcela(parcelaId, opts = {}) {
 
     const { titular, unidade } = reserva;
     const hoje = hojeYmd();
-    const cond = condicaoDeEmissao(parcela, {
-        hoje, prazoVencidaDias: cfg.prazoVencidaDias, cobrarEncargos: cfg.atrasoCobrarEncargos,
-        multaPct: cfg.atrasoMultaPct, jurosMesPct: cfg.atrasoJurosMesPct,
-    });
+    // Parcela ja vencida sai com o mesmo valor e vencimento no proximo dia util.
+    const cond = condicaoDeEmissao(parcela, { hoje, cobrarEncargos: cfg.atrasoCobrarEncargos });
     const reemissao = (Number(parcela.emissoes) || 0) > 0;
     const p = { numero: parcela.numero, total: parcela.total };
 
@@ -414,26 +412,32 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
     const hoje = hojeYmd();
     const stats = { lembretes: 0, avisos: 0, falhas: 0 };
     if (!cfg.ativo) return stats;
-    const emitidas = await AtoParcela.findAll({
-        where: { status: PARCELA_STATUS.EMITIDA, boleto_history_id: { [Op.ne]: null } },
+    // Emitida (boleto vivo) para o lembrete; emitida OU vencida (boleto ja
+    // baixado pela rodada das 08h) para o aviso de atraso - sem isso o aviso
+    // nunca sairia, porque a baixa acontece antes do D+1.
+    const parcelas = await AtoParcela.findAll({
+        where: { status: { [Op.in]: [PARCELA_STATUS.EMITIDA, PARCELA_STATUS.VENCIDA] }, boleto_history_id: { [Op.ne]: null } },
         include: [{ model: AtoPlano, as: 'plano', where: { status: PLANO_STATUS.ATIVO }, attributes: ['id', 'idreserva', 'empreendimento', 'unidade'] }],
     });
-    for (const parcela of emitidas) {
+    for (const parcela of parcelas) {
         try {
             const venc = String(parcela.vencimento_cobrado || parcela.vencimento).slice(0, 10);
             const faltam = diffDays(hoje, venc); // negativo = ja venceu
-            const querLembrete = cfg.lembreteDiasAntes > 0 && !parcela.lembrete_enviado_em && faltam >= 0 && faltam <= cfg.lembreteDiasAntes;
+            const querLembrete = parcela.status === PARCELA_STATUS.EMITIDA
+                && cfg.lembreteDiasAntes > 0 && !parcela.lembrete_enviado_em && faltam >= 0 && faltam <= cfg.lembreteDiasAntes;
             const querAviso = cfg.avisoAtrasoDiasDepois > 0 && !parcela.aviso_atraso_enviado_em && faltam < 0 && (-faltam) >= cfg.avisoAtrasoDiasDepois;
             if (!querLembrete && !querAviso) continue;
             const boleto = await BoletoHistory.findByPk(parcela.boleto_history_id);
-            if (!boleto || boleto.payment_status !== 'pending') continue;
+            if (!boleto) continue;
+            if (querLembrete && boleto.payment_status !== 'pending') continue;
+            if (querAviso && boleto.payment_status === 'paid') continue;
             const reserva = await carregarReservaCv(parcela.idreserva);
             const p = { numero: parcela.numero, total: parcela.total };
             const dados = {
                 empreendimento: parcela.plano.empreendimento || reserva.unidade?.empreendimento, unidade: parcela.plano.unidade || reserva.unidade?.unidade || '',
                 descricao: descricaoParcela(p), rotulo: rotuloParcela(p),
-                valor: Number(parcela.valor_cobrado || parcela.valor), vencimento: venc,
-                nossoNumero: boleto.nosso_numero, boletoUrl: boleto.boleto_supabase_url, reemitirAutomatico: cfg.atrasoReemitir,
+                valor: Number(parcela.valor_cobrado || parcela.valor), vencimento: venc, diasParaVencer: faltam,
+                nossoNumero: boleto.nosso_numero, boletoUrl: boleto.boleto_supabase_url,
             };
             if (querLembrete) {
                 const r = await sendLembrete({ titular: reserva.titular, dados, historyId: boleto.id });
@@ -443,7 +447,9 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
             } else if (querAviso) {
                 const r = await sendAvisoAtraso({ titular: reserva.titular, dados, historyId: boleto.id });
                 await parcela.update({ aviso_atraso_enviado_em: new Date() });
-                await EventLogger.log({ historyId: boleto.id, idreserva: parcela.idreserva, type: 'overdue_notice_sent', severity: 'warning', message: `Aviso de atraso enviado (e-mail ${r.email.ok ? 'OK' : 'nao'}, WhatsApp ${r.whatsapp.ok ? 'OK' : 'nao'}).`, data: r });
+                // Guarda o numero para reconhecer o "SIM" do cliente (tratarRespostaCliente).
+                if (r.whatsapp?.to) await AtoPlano.update({ titular_fone: String(r.whatsapp.to).replace(/\D/g, '') }, { where: { id: parcela.plano_id } });
+                await EventLogger.log({ historyId: boleto.id, idreserva: parcela.idreserva, type: 'overdue_notice_sent', severity: 'warning', message: `Aviso de parcela vencida enviado (e-mail ${r.email.ok ? 'OK' : 'nao'}, WhatsApp ${r.whatsapp.ok ? 'OK' : 'nao'}). Aguardando o cliente pedir a nova via.`, data: r });
                 stats.avisos++;
             }
         } catch (err) {
@@ -454,4 +460,59 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
     return stats;
 }
 
-export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes };
+// ── Resposta do cliente no WhatsApp ("SIM, quero a nova via") ────────────────
+
+const RE_SIM = /^\s*(sim|s|quero|pode|ok|manda|reemit|reemis|boleto|nova via|segunda via)/i;
+const JANELA_RESPOSTA_DIAS = 15;
+
+/**
+ * Chamado pelo webhook do WhatsApp para toda mensagem de remetente externo.
+ * Se o numero e de um titular que recebeu aviso de parcela vencida nos ultimos
+ * dias e a resposta e afirmativa, reemite a parcela (vencimento no proximo dia
+ * util) e responde na janela de 24h. Devolve true quando tratou a mensagem.
+ */
+export async function tratarRespostaCliente({ fromPhone, body }) {
+    const fone = String(fromPhone || '').replace(/\D/g, '');
+    if (!fone || !RE_SIM.test(String(body || ''))) return false;
+    const planos = await AtoPlano.findAll({ where: { titular_fone: fone, status: PLANO_STATUS.ATIVO }, attributes: ['id', 'idreserva'] });
+    if (!planos.length) return false;
+    const desde = new Date(Date.now() - JANELA_RESPOSTA_DIAS * 86400000);
+    const vencidas = await AtoParcela.findAll({
+        where: {
+            plano_id: { [Op.in]: planos.map(p => p.id) },
+            status: { [Op.in]: [PARCELA_STATUS.VENCIDA, PARCELA_STATUS.EMITIDA] },
+            aviso_atraso_enviado_em: { [Op.gte]: desde },
+        },
+        order: [['vencimento', 'ASC']],
+    });
+    if (!vencidas.length) return false;
+
+    const resultados = [];
+    for (const parcela of vencidas) {
+        const boleto = parcela.boleto_history_id ? await BoletoHistory.findByPk(parcela.boleto_history_id) : null;
+        if (boleto?.payment_status === 'paid') continue;
+        if (parcela.status === PARCELA_STATUS.EMITIDA && boleto?.payment_status === 'pending') {
+            // Boleto ainda vivo (a rodada das 08h nao baixou): a reemissao faz a baixa previa.
+        }
+        await EventLogger.log({ historyId: boleto?.id, idreserva: parcela.idreserva, type: 'client_requested_reissue', severity: 'info', message: `Cliente respondeu "${String(body).slice(0, 60)}" no WhatsApp - reemissao da ${descricaoParcela(parcela)} solicitada.`, data: { fromPhone: fone } });
+        const r = await emitirParcela(parcela.id, { forcar: true });
+        resultados.push({ parcela, r });
+    }
+    if (!resultados.length) return false;
+
+    const ok = resultados.filter(x => x.r.ok);
+    const texto = ok.length
+        ? `Perfeito! Geramos o novo boleto da ${ok.map(x => descricaoParcela(x.parcela)).join(' e da ')} com vencimento no próximo dia útil. Ele já foi enviado por aqui e por e-mail.`
+        : 'Recebemos o seu pedido, mas não conseguimos gerar o boleto agora. Nossa equipe vai verificar e te retornar.';
+    try {
+        const { default: WhatsAppService } = await import('../whatsapp/WhatsAppService.js');
+        const { id } = await WhatsAppService.sendText({ to: fone, body: texto });
+        await db.WhatsappMessage.create({ direction: 'out', user_id: null, to_phone: fone, type: 'text', body: texto, status: 'sent', meta_message_id: id, sent_at: new Date() });
+    } catch (err) {
+        console.warn(`[PARCELAS] resposta ao cliente ${fone} falhou: ${err.message}`);
+    }
+    console.log(`[PARCELAS] resposta do cliente ${fone}: ${ok.length}/${resultados.length} reemissao(oes) OK.`);
+    return true;
+}
+
+export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, tratarRespostaCliente };

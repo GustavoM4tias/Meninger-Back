@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     addMonthsClamp, addDays, diffDays, derivarParcelas, diffPlano, calcularEncargos,
-    decidirParcela, condicaoDeEmissao, motivoEncerramento, PARCELA_STATUS,
+    decidirParcela, condicaoDeEmissao, proximoDiaUtil, motivoEncerramento, PARCELA_STATUS,
 } from '../lib/atoParcelas.js';
 
 test('addMonthsClamp preserva o dia e presa ao fim do mes', () => {
@@ -111,34 +111,41 @@ test('decidirParcela: antecedencia, reemissao ate o teto, parar depois', () => {
     assert.equal(decidirParcela({ status: 'emitida', vencimento: '2026-09-06' }, cfg), 'aguardar');
 });
 
-test('condicaoDeEmissao: no prazo mantem; vencida sem boleto sai limpa; reemissao leva encargos', () => {
-    const cfg = { hoje: '2026-09-05', prazoVencidaDias: 5, cobrarEncargos: true, multaPct: 2, jurosMesPct: 1 };
+test('proximoDiaUtil: pula fim de semana e feriado', () => {
+    assert.equal(proximoDiaUtil('2026-09-04'), '2026-09-08'); // sexta -> pula sab/dom e 7 de setembro (segunda)
+    assert.equal(proximoDiaUtil('2026-09-08'), '2026-09-09');
+    assert.equal(proximoDiaUtil('2026-09-11'), '2026-09-14'); // sexta -> segunda
+    assert.equal(proximoDiaUtil('2026-12-24'), '2026-12-28'); // quinta -> pula Natal (sexta) e fim de semana
+});
+
+test('condicaoDeEmissao: no prazo mantem; vencida sai com o mesmo valor e vencimento no proximo dia util', () => {
+    const cfg = { hoje: '2026-09-04' };
     const futura = condicaoDeEmissao({ vencimento: '2026-09-20', valor: 496.74, emissoes: 0 }, cfg);
     assert.deepEqual([futura.vencimento, futura.valor, futura.encargos, futura.motivo], ['2026-09-20', 496.74, null, 'no_prazo']);
 
     const adesao = condicaoDeEmissao({ vencimento: '2026-08-06', valor: 1000, emissoes: 0 }, cfg);
-    assert.equal(adesao.vencimento, '2026-09-10');
+    assert.equal(adesao.vencimento, '2026-09-08');
     assert.equal(adesao.valor, 1000);
     assert.equal(adesao.motivo, 'adesao_vencida');
 
     const reem = condicaoDeEmissao({ vencimento: '2026-08-06', valor: 1000, emissoes: 1 }, cfg);
-    assert.equal(reem.vencimento, '2026-09-10');
-    assert.equal(reem.valor, 1030);
+    assert.equal(reem.vencimento, '2026-09-08');
+    assert.equal(reem.valor, 1000);           // sem encargos nesta etapa
+    assert.equal(reem.encargos, null);
     assert.equal(reem.motivo, 'reemissao_atraso');
 
-    const semEncargo = condicaoDeEmissao({ vencimento: '2026-08-06', valor: 1000, emissoes: 1 }, { ...cfg, cobrarEncargos: false });
-    assert.equal(semEncargo.valor, 1000);
+    // O calculo de encargos continua existindo, mas so entra se alguem pedir.
+    const comEncargo = condicaoDeEmissao({ vencimento: '2026-08-05', valor: 1000, emissoes: 1 }, { ...cfg, cobrarEncargos: true, multaPct: 2, jurosMesPct: 1 });
+    assert.equal(comEncargo.valor, 1030);
 });
 
-test('motivoEncerramento: Sienge so assume com titulo E venda faturada; cancelada ganha', () => {
+test('motivoEncerramento: Sienge assume so pela venda faturada; titulo nao conta; cancelada ganha', () => {
     const completo = { receivable_bill_id: 33058, financial_institution_date: '2026-09-01', situation: 'Emitido' };
     const soTitulo = { receivable_bill_id: 33058, financial_institution_date: null, situation: 'Emitido' };
     const soVenda = { receivable_bill_id: null, financial_institution_date: '2026-09-01', situation: 'Solicitado' };
     assert.equal(motivoEncerramento({ contrato: completo }), 'sienge_faturado');
     assert.equal(motivoEncerramento({ contrato: soTitulo }), null);           // caso real: 42 contratos em 07/09
-    assert.equal(motivoEncerramento({ contrato: soVenda }), null);
-    assert.equal(motivoEncerramento({ contrato: soTitulo, criterio: 'titulo' }), 'sienge_faturado');
-    assert.equal(motivoEncerramento({ contrato: soVenda, criterio: 'venda' }), 'sienge_faturado');
+    assert.equal(motivoEncerramento({ contrato: soVenda }), 'sienge_faturado');
     assert.equal(motivoEncerramento({ contrato: { receivable_bill_id: null, situation: 'Autorizado' } }), null);
     assert.equal(motivoEncerramento({ contrato: null }), null);
     assert.equal(motivoEncerramento({ contrato: { ...completo, situation: 'Cancelado' } }), null);

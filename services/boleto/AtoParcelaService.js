@@ -45,10 +45,9 @@ export function cfgParcelas(s) {
         antecedenciaDias: num(s?.parcelas_antecedencia_dias, D.antecedenciaDias),
         encerrarQuandoFaturado: s?.parcelas_encerrar_quando_faturado ?? D.encerrarQuandoFaturado,
         vencidasNaAdesao: s?.parcelas_vencidas_na_adesao || D.vencidasNaAdesao,
-        prazoVencidaDias: num(s?.parcelas_prazo_vencida_dias, D.prazoVencidaDias),
         horaRodada: num(s?.parcelas_hora_rodada, D.horaRodada),
         maxEmissoesRodada: num(s?.parcelas_max_emissoes_rodada, D.maxEmissoesRodada),
-        atrasoReemitir: s?.atraso_reemitir ?? D.atrasoReemitir,
+        atrasoReemitir: s?.atraso_reemitir ?? D.atrasoReemitir, // false = a pedido (cliente/tela)
         atrasoMaxReemissoes: num(s?.atraso_max_reemissoes, D.atrasoMaxReemissoes),
         // Multa e juros ficaram FORA desta etapa (decisao de 07/09/2026): a
         // reemissao por atraso sai com o valor original e vencimento novo. O
@@ -56,10 +55,6 @@ export function cfgParcelas(s) {
         atrasoCobrarEncargos: false,
         atrasoMultaPct: 0,
         atrasoJurosMesPct: 0,
-        // Quando o Sienge assume: titulo gerado E venda faturada (mesma regra do
-        // relatorio de Faturamento). Ver siengeAssumiu em lib/atoParcelas.js.
-        criterioSienge: ['titulo_e_venda', 'titulo', 'venda'].includes(s?.parcelas_criterio_sienge)
-            ? s.parcelas_criterio_sienge : D.criterioSienge,
         lembreteDiasAntes: num(s?.lembrete_dias_antes, D.lembreteDiasAntes),
         avisoAtrasoDiasDepois: num(s?.aviso_atraso_dias_depois, D.avisoAtrasoDiasDepois),
         situacoesMortas: Array.isArray(s?.cv_situacoes_reserva_morta) ? s.cv_situacoes_reserva_morta : [4],
@@ -213,7 +208,7 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
             status: PARCELA_STATUS.PREVISTA,
         })));
         // Ja nasceu faturado/cancelado? Encerra na hora, sem emitir nada.
-        const motivo = motivoEncerramento({ contrato, reservaCancelada: cancelada, encerrarQuandoFaturado: cfg.encerrarQuandoFaturado, criterio: cfg.criterioSienge });
+        const motivo = motivoEncerramento({ contrato, reservaCancelada: cancelada, encerrarQuandoFaturado: cfg.encerrarQuandoFaturado });
         if (motivo) await encerrarPlano(plano, motivo, { detalhe: 'detectado na criacao do plano' });
         console.log(`[PARCELAS] Plano criado para a reserva ${idreserva}: ${derivadas.length} parcela(s)${motivo ? ` - encerrado (${motivo})` : ''}.`);
         return { plano, criado: true, resumo: { parcelas: derivadas.length, encerrado: motivo || null } };
@@ -342,11 +337,10 @@ export async function verificarEncerramentos(cfg) {
                 contrato,
                 encerrarQuandoFaturado: cfg.encerrarQuandoFaturado,
                 situacaoMorta: situacaoMortaLocal(local, cfg.situacoesMortas),
-                criterio: cfg.criterioSienge,
             });
             if (!motivo) continue;
             const detalhe = motivo === 'sienge_faturado'
-                ? `contrato Sienge ${contrato.id}: titulo ${contrato.receivable_bill_id || '-'}, venda faturada em ${contrato.financial_institution_date || '-'}`
+                ? `contrato Sienge ${contrato.id} faturado como venda em ${contrato.financial_institution_date}`
                 : `reserva na situacao "${local?.situacao?.situacao || '?'}" no CV`;
             const { parcelasComBoletoVivo } = await encerrarPlano(plano, motivo, { detalhe });
             encerrados.push({ plano, motivo, detalhe, parcelasComBoletoVivo });

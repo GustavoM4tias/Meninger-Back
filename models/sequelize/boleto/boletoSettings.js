@@ -191,14 +191,13 @@ export default (sequelize, DataTypes) => {
         parcelas_antecedencia_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 10, comment: 'Boleto da parcela sai N dias corridos antes do vencimento.' },
         parcelas_encerrar_quando_faturado: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Encerra o plano quando o contrato ganha titulo no Sienge (contracts.receivable_bill_id).' },
         parcelas_vencidas_na_adesao: { type: DataTypes.STRING(10), allowNull: true, defaultValue: 'emitir', comment: "'emitir' (hoje + prazo, sem encargos) | 'ignorar' para parcelas ja vencidas quando o plano nasce." },
-        parcelas_prazo_vencida_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 5, comment: 'Dias corridos ate o novo vencimento de parcela ja vencida (adesao e reemissao).' },
+        // parcelas_prazo_vencida_dias existe no banco mas nao e lida: parcela
+        // vencida sai sempre com vencimento no PROXIMO DIA UTIL (07/09/2026).
         parcelas_hora_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 9, comment: 'Hora cheia (Brasilia) da rodada diaria de parcelas.' },
         parcelas_max_emissoes_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 40, comment: 'Teto de boletos emitidos por rodada (o resto sai no dia seguinte).' },
-        parcelas_criterio_sienge: {
-            type: DataTypes.STRING(20), allowNull: true, defaultValue: 'titulo_e_venda',
-            comment: "Quando o Sienge assume a cobranca: 'titulo_e_venda' (titulo gerado E venda faturada, regra do Faturamento) | 'titulo' | 'venda'.",
-        },
-        atraso_reemitir: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Parcela vencida e baixada e reemitida automaticamente (mesmo valor, vencimento novo).' },
+        // parcelas_criterio_sienge existe no banco mas nao e lida: o Sienge assume
+        // quando a venda esta FATURADA (financial_institution_date), so isso (07/09/2026).
+        atraso_reemitir: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false, comment: 'true = a rodada reemite parcela vencida sozinha. false (padrao) = a pedido: o cliente responde SIM ao aviso ou alguem clica Reemitir na tela. Sempre para o proximo dia util.' },
         atraso_max_reemissoes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 3, comment: 'Quantas vias novas por parcela antes de parar e chamar gente.' },
         // atraso_cobrar_encargos / atraso_multa_pct / atraso_juros_mes_pct existem
         // no banco mas nao sao lidas: multa e juros ficaram fora desta etapa (07/09/2026).

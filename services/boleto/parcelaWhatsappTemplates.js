@@ -3,15 +3,17 @@
 // Templates HSM (UTILITY) das PARCELAS mensais. Tres mensagens, tres templates,
 // porque a estrutura de um template e fixa na Meta:
 //
-//   boleto_parcela_v1           boleto da parcela, HEADER DOCUMENT (PDF anexo)
-//   boleto_parcela_lembrete_v1  lembrete D-N, so texto
-//   boleto_parcela_atraso_v1    parcela vencida, so texto
+//   boleto_parcela_v1           boleto da parcela (sai 10 dias antes), PDF no header
+//   boleto_parcela_lembrete_v1  "sua parcela vence em X dias", so texto
+//   boleto_parcela_atraso_v1    "sua parcela venceu; quer a nova via? responda SIM"
 //
-// Ate a Meta aprovar, o envio cai na janela de servico de 24h (texto livre,
-// quando o cliente nos escreveu ha pouco) ou e pulado com erro legivel - o
-// e-mail sai sempre. Aprovado e IMUTAVEL: mudou a copy, sobe a versao (v2...).
+// TEXTOS EM RASCUNHO (07/09/2026): aguardando o Gustavo aprovar antes de criar
+// na Meta. Ate aprovar, o envio cai na janela de servico de 24h (texto livre)
+// ou e pulado com erro legivel - o e-mail sai sempre. Aprovado e IMUTAVEL:
+// mudou a copy, sobe a versao (v2...).
 //
-// Mesmo tom e o MESMO rodape do ato (services/userede/useredeWhatsappTemplate.js).
+// A resposta "SIM" ao aviso de vencida e tratada por
+// ParcelaEmissaoService.tratarRespostaCliente (reemite para o proximo dia util).
 import { RODAPE } from '../userede/useredeWhatsappTemplate.js';
 
 export const LANG = 'pt_BR';
@@ -28,11 +30,10 @@ export function getParcelaTemplateDefinition() {
         // Header DOCUMENT: o handle do PDF de exemplo e injetado no controller.
         body:
             'Olá, *{{1}}*! 👋\n\n'
-            + 'Segue o boleto da *{{2}}* da sua unidade no empreendimento *{{3}}* ({{4}}). O PDF está em anexo.\n\n'
+            + 'Segue o boleto da *{{2}}* da sua unidade no *{{3}}* ({{4}}). O PDF está em anexo.\n\n'
             + '💰 *Valor:* {{5}}\n'
             + '📅 *Vencimento:* {{6}}\n\n'
-            + 'Pagando em dia você mantém o seu contrato regular. '
-            + 'Se já pagou, desconsidere esta mensagem.',
+            + 'Pagando em dia você mantém o seu contrato regular. Se já pagou, desconsidere esta mensagem.',
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', 'QD 08 - LT 08', 'R$ 496,74', '20/10/2026'],
         footerText: RODAPE,
         buttons: [],
@@ -44,13 +45,14 @@ export function getLembreteTemplateDefinition() {
         name: TPL_LEMBRETE,
         category: 'UTILITY',
         language: LANG,
+        // {{4}} = "em 3 dias" | "amanhã" | "hoje"
         body:
             'Olá, *{{1}}*! 👋\n\n'
-            + 'Lembrete: a *{{2}}* da sua unidade no empreendimento *{{3}}* vence em *{{4}}*.\n\n'
-            + '💰 *Valor:* {{5}}\n\n'
-            + 'O boleto foi enviado por e-mail e por aqui. Precisa da segunda via? Responda a esta mensagem ou fale com o seu corretor. '
-            + 'Se já pagou, desconsidere.',
-        examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', '20/10/2026', 'R$ 496,74'],
+            + 'Passando para lembrar: a *{{2}}* da sua unidade no *{{3}}* vence *{{4}}*, em {{5}}.\n\n'
+            + '💰 *Valor:* {{6}}\n\n'
+            + 'O boleto já foi enviado por aqui e por e-mail. Precisa de uma segunda via? '
+            + 'É só responder esta mensagem. Se já pagou, desconsidere.',
+        examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', 'em 3 dias', '20/10/2026', 'R$ 496,74'],
         footerText: RODAPE,
         buttons: [],
     };
@@ -63,10 +65,11 @@ export function getAtrasoTemplateDefinition() {
         language: LANG,
         body:
             'Olá, *{{1}}*.\n\n'
-            + 'Não identificamos o pagamento da *{{2}}* da sua unidade no empreendimento *{{3}}*, '
-            + 'que venceu em *{{4}}* ({{5}}).\n\n'
-            + 'Vamos gerar um novo boleto atualizado e enviar por aqui e por e-mail. '
-            + 'Se o pagamento já foi feito, desconsidere esta mensagem ou nos envie o comprovante.',
+            + 'A *{{2}}* da sua unidade no *{{3}}* venceu em *{{4}}* ({{5}}) e ainda não identificamos o pagamento. '
+            + 'O boleto vencido não pode mais ser pago.\n\n'
+            + 'Quer receber um novo boleto? Responda *SIM* que geramos uma nova via com vencimento no próximo dia útil '
+            + 'e enviamos por aqui e por e-mail.\n\n'
+            + 'Se já pagou, desconsidere esta mensagem ou nos envie o comprovante.',
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', '20/10/2026', 'R$ 496,74'],
         footerText: RODAPE,
         buttons: [],

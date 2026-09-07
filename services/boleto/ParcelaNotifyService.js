@@ -207,10 +207,14 @@ export async function sendLembrete({ titular, dados, historyId = null }) {
         descricao: dados.descricao, valorFormatado: formatCurrency(dados.valor), vencimentoFormatado: formatDateBr(dados.vencimento),
         nossoNumero: dados.nossoNumero, boletoUrl: shortUrl,
     };
-    const variables = [primeiroNome(titular?.nome), dados.descricao, dados.empreendimento || '', formatDateBr(dados.vencimento), formatCurrency(dados.valor)];
-    const textoLivre = `Olá, ${primeiroNome(titular?.nome) || 'cliente'}! Lembrete: a ${dados.descricao}`
-        + `${dados.empreendimento ? ` de ${dados.empreendimento}` : ''} vence em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}).`
-        + (shortUrl ? ` Boleto: ${shortUrl}` : '') + ' Se ja pagou, desconsidere.';
+    // "em 3 dias" | "amanhã" | "hoje" - a variavel {{4}} do template.
+    const d = Number(dados.diasParaVencer);
+    const quando = d === 0 ? 'hoje' : (d === 1 ? 'amanhã' : `em ${d} dias`);
+    emailData.quando = quando;
+    const variables = [primeiroNome(titular?.nome), dados.descricao, dados.empreendimento || '', quando, formatDateBr(dados.vencimento), formatCurrency(dados.valor)];
+    const textoLivre = `Olá, ${primeiroNome(titular?.nome) || 'cliente'}! Passando para lembrar: a ${dados.descricao}`
+        + `${dados.empreendimento ? ` da sua unidade no ${dados.empreendimento}` : ''} vence ${quando}, em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}).`
+        + (shortUrl ? ` Boleto: ${shortUrl}` : '') + ' Precisa de segunda via? Responda esta mensagem. Se já pagou, desconsidere.';
     const [email, whatsapp] = await Promise.all([
         enviarEmail(EmailType.BOLETO_PARCELA_LEMBRETE, titular, emailData, null),
         enviarWhatsApp({ titular, templateName: TPL_LEMBRETE, variables, textoLivre, resumo: `Lembrete parcela ${dados.rotulo} venc. ${formatDateBr(dados.vencimento)}` }),
@@ -219,7 +223,7 @@ export async function sendLembrete({ titular, dados, historyId = null }) {
     return { email, whatsapp };
 }
 
-/** Aviso D+N: venceu e nao foi pago; avisamos que um boleto atualizado vem ai. */
+/** Aviso D+N: venceu e nao foi pago; perguntamos se quer a nova via (responde SIM). */
 export async function sendAvisoAtraso({ titular, dados, historyId = null }) {
     if (isLocalEnvironment()) {
         const reason = skipLocal();
@@ -228,13 +232,12 @@ export async function sendAvisoAtraso({ titular, dados, historyId = null }) {
     const emailData = {
         titularPrimeiroNome: primeiroNome(titular?.nome), empreendimento: dados.empreendimento, unidade: dados.unidade || '',
         descricao: dados.descricao, valorFormatado: formatCurrency(dados.valor), vencimentoFormatado: formatDateBr(dados.vencimento),
-        reemitirAutomatico: !!dados.reemitirAutomatico,
     };
     const variables = [primeiroNome(titular?.nome), dados.descricao, dados.empreendimento || '', formatDateBr(dados.vencimento), formatCurrency(dados.valor)];
-    const textoLivre = `Olá, ${primeiroNome(titular?.nome) || 'cliente'}. Não identificamos o pagamento da ${dados.descricao}`
-        + `${dados.empreendimento ? ` de ${dados.empreendimento}` : ''}, vencida em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}).`
-        + (dados.reemitirAutomatico ? ' Vamos gerar um novo boleto atualizado e enviar por aqui e por e-mail.' : ' Fale com o seu corretor para regularizar.')
-        + ' Se já pagou, desconsidere ou envie o comprovante.';
+    const textoLivre = `Olá, ${primeiroNome(titular?.nome) || 'cliente'}. A ${dados.descricao}`
+        + `${dados.empreendimento ? ` da sua unidade no ${dados.empreendimento}` : ''} venceu em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}) e ainda não identificamos o pagamento. O boleto vencido não pode mais ser pago.`
+        + ' Quer receber um novo boleto? Responda SIM que geramos uma nova via com vencimento no próximo dia útil e enviamos por aqui e por e-mail.'
+        + ' Se já pagou, desconsidere esta mensagem ou nos envie o comprovante.';
     const [email, whatsapp] = await Promise.all([
         enviarEmail(EmailType.BOLETO_PARCELA_ATRASO, titular, emailData, null),
         enviarWhatsApp({ titular, templateName: TPL_ATRASO, variables, textoLivre, resumo: `Atraso parcela ${dados.rotulo} venc. ${formatDateBr(dados.vencimento)}` }),

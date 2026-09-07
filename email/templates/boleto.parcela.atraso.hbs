@@ -1,8 +1,9 @@
 <p style="margin:0 0 8px 0; font-size:18px; color:#0f172a;">Olá, {{titularPrimeiroNome}}.</p>
 <p style="margin:0 0 24px 0; font-size:15px; color:#475569;">
-    Não identificamos o pagamento da <strong style="color:#0f172a;">{{descricao}}</strong> da sua unidade no empreendimento
-    <strong style="color:#0f172a;">{{empreendimento}}</strong>{{#if unidade}} (unidade <strong style="color:#0f172a;">{{unidade}}</strong>){{/if}},
-    vencida em <strong style="color:#0f172a;">{{vencimentoFormatado}}</strong>.
+    A <strong style="color:#0f172a;">{{descricao}}</strong> da sua unidade no
+    <strong style="color:#0f172a;">{{empreendimento}}</strong>{{#if unidade}} ({{unidade}}){{/if}}
+    venceu em <strong style="color:#0f172a;">{{vencimentoFormatado}}</strong> e ainda não identificamos o pagamento.
+    O boleto vencido não pode mais ser pago.
 </p>
 
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0"
@@ -16,11 +17,8 @@
 </table>
 
 <p style="margin:0 0 16px 0; font-size:14px; color:#334155; line-height:1.6;">
-    {{#if reemitirAutomatico}}
-    O boleto vencido não pode mais ser pago. Vamos gerar um <strong>novo boleto</strong> com vencimento atualizado e enviar por e-mail e WhatsApp.
-    {{else}}
-    O boleto vencido não pode mais ser pago. Fale com o seu corretor para regularizar a parcela.
-    {{/if}}
+    <strong>Quer receber um novo boleto?</strong> Responda <strong>SIM</strong> à mensagem que enviamos no seu WhatsApp,
+    ou fale com o seu corretor. Geramos uma nova via com vencimento no próximo dia útil e enviamos por WhatsApp e por e-mail.
 </p>
 
 <p style="margin:0; font-size:13px; color:#64748b; line-height:1.6;">
