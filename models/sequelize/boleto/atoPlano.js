@@ -24,6 +24,7 @@ export default (sequelize, DataTypes) => {
         idempreendimento_cv: { type: DataTypes.INTEGER, allowNull: true },
         unidade: { type: DataTypes.STRING, allowNull: true },
         cnpj_empresa: { type: DataTypes.STRING, allowNull: true },
+        titular_fone: { type: DataTypes.STRING(20), allowNull: true, comment: 'E.164 sem +, gravado ao enviar o aviso de parcela vencida; reconhece o SIM do cliente no WhatsApp.' },
 
         status: {
             type: DataTypes.STRING(20), allowNull: false, defaultValue: 'ativo',

@@ -169,9 +169,20 @@ async function handleIncomingMessage(m, fromPhone) {
 
     // Auto-resposta pra remetentes externos (não-users) — fire-and-forget.
     // Sem await pra não atrasar o ACK do webhook pra Meta.
+    //
+    // Antes dela: cliente que recebeu o aviso de parcela vencida e tocou/escreveu
+    // "SIM" está pedindo a nova via - o módulo de parcelas do Ato reemite e
+    // responde ele mesmo; aí a auto-resposta genérica não faz sentido.
     if (!userId && fromPhone) {
-        maybeReplyToExternal(fromPhone).catch(err =>
-            console.error('[whatsapp/webhook] auto-reply erro:', err?.message || err));
+        (async () => {
+            try {
+                const { tratarRespostaCliente } = await import('../boleto/ParcelaEmissaoService.js');
+                if (await tratarRespostaCliente({ fromPhone, body })) return;
+            } catch (err) {
+                console.error('[whatsapp/webhook] resposta de parcela erro:', err?.message || err);
+            }
+            await maybeReplyToExternal(fromPhone);
+        })().catch(err => console.error('[whatsapp/webhook] auto-reply erro:', err?.message || err));
     }
 }
 
