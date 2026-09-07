@@ -90,12 +90,13 @@ export async function emitirParcela(parcelaId, opts = {}) {
         await encerrarPlano(plano, 'reserva_cancelada', { detalhe: `cancelada no CV em ${reserva.data_cancelamento || reserva.data_distrato}` });
         return { ok: false, skipped: true, erro: 'Reserva cancelada no CV - plano cancelado.' };
     }
-    // Sincroniza previstas com o CV antes de emitir (valor pode ter mudado).
+    // O plano e CONGELADO: a condicao do CV NAO muda a parcela. So registra a
+    // divergencia (a tela mostra) e emite o que esta gravado no Office.
     try {
         await criarOuSincronizarPlano(idreserva, { reservaCv: reserva, settings });
         await parcela.reload();
     } catch (err) {
-        console.warn(`${tag} sincronizacao com o CV falhou (segue com o gravado): ${err.message}`);
+        console.warn(`${tag} leitura de divergencias do CV falhou (segue com o gravado): ${err.message}`);
     }
     if (parcela.status === PARCELA_STATUS.TRANSFERIDA || parcela.status === PARCELA_STATUS.CANCELADA) {
         return { ok: false, skipped: true, erro: `Parcela ${parcela.status} depois da sincronizacao.` };

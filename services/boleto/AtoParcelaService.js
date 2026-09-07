@@ -214,9 +214,30 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
         return { plano, criado: true, resumo: { parcelas: derivadas.length, encerrado: motivo || null } };
     }
 
-    // ── Sincronizacao do plano existente ─────────────────────────────────────
+    // ── Plano existente: CONGELADO (decisao de 07/09/2026) ───────────────────
+    // Depois do Envio Sienge a condicao da reserva no CV nao muda mais o plano.
+    // Por padrao esta funcao so REGISTRA o que diverge (a tela mostra); nada e
+    // alterado. Mudanca no plano e so por admin, dentro do Office: editar a
+    // parcela (editarParcela) ou aplicar as condicoes do CV de proposito
+    // (`aplicarCv: true`, botao da tela).
     const gravadas = await AtoParcela.findAll({ where: { plano_id: plano.id }, raw: true });
     const d = diffPlano(gravadas, derivadas);
+
+    if (!opts.aplicarCv) {
+        const divergencias = [
+            ...d.atualizar.map(x => ({ tipo: 'prevista_mudou', parcelaId: x.id, numero: x.numero, cv: { valor: x.valor, vencimento: x.vencimento } })),
+            ...d.divergentes.map(x => ({ tipo: 'condicao_mudou', parcelaId: x.id, atual: x.atual, cv: x.cv })),
+            ...d.novas.map(x => ({ tipo: 'serie_nova', numero: x.numero, cv: { valor: x.valor, vencimento: x.vencimento } })),
+            ...d.remover.map(x => ({ tipo: 'serie_sumiu', parcelaId: x.id, numero: x.numero })),
+            ...d.orfas.map(x => ({ tipo: 'serie_sumiu', parcelaId: x.id, numero: x.numero })),
+        ];
+        await plano.update({
+            ...denormDaReserva(reserva, viaCv),
+            cv_sincronizado_em: new Date(),
+            divergencias: divergencias.length ? divergencias : null,
+        });
+        return { plano, criado: false, aplicado: false, resumo: { divergencias: divergencias.length } };
+    }
 
     if (d.novas.length) {
         await AtoParcela.bulkCreate(d.novas.map(n => ({
@@ -260,9 +281,34 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
     });
 
     return {
-        plano, criado: false,
+        plano, criado: false, aplicado: true,
         resumo: { novas: d.novas.length, atualizadas: d.atualizar.length, removidas: d.remover.length, divergencias: divergencias.length },
     };
+}
+
+/**
+ * Edicao manual de uma parcela (admin, dentro do Office): valor e/ou
+ * vencimento ORIGINAIS. So parcela sem boleto vivo (prevista, vencida, erro).
+ * E o unico caminho, alem de "aplicar CV", que muda um plano congelado.
+ */
+export async function editarParcela(parcela, { valor, vencimento, userId = null, motivo = null }) {
+    if (![PARCELA_STATUS.PREVISTA, PARCELA_STATUS.VENCIDA, PARCELA_STATUS.ERRO].includes(parcela.status)) {
+        throw new Error(`Parcela ${parcela.status} nao pode ser editada (baixe ou aguarde o boleto).`);
+    }
+    const upd = { updated_by: userId };
+    if (valor !== undefined && valor !== null && valor !== '') {
+        const v = Number(valor);
+        if (!Number.isFinite(v) || v <= 0) throw new Error('Valor deve ser um numero maior que zero.');
+        upd.valor = Number(v.toFixed(2));
+    }
+    if (vencimento) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(vencimento))) throw new Error('Vencimento deve ser uma data (AAAA-MM-DD).');
+        upd.vencimento = String(vencimento);
+    }
+    const antes = { valor: parcela.valor, vencimento: parcela.vencimento };
+    await parcela.update(upd);
+    console.log(`[PARCELAS] parcela ${parcela.id} editada por ${userId}: ${JSON.stringify(antes)} -> ${JSON.stringify({ valor: parcela.valor, vencimento: parcela.vencimento })}${motivo ? ` (${motivo})` : ''}`);
+    return parcela;
 }
 
 // ── Encerramento / pausa ──────────────────────────────────────────────────────
@@ -531,7 +577,7 @@ export async function detalhePlano(user, idreserva) {
 
 export default {
     getSettings, cfgParcelas, carregarReservaCv, atoPago, contratoSienge,
-    criarOuSincronizarPlano, encerrarPlano, pausarPlano, reativarPlano,
+    criarOuSincronizarPlano, editarParcela, encerrarPlano, pausarPlano, reativarPlano,
     verificarEncerramentos, aderirPendentes, listarPlanos, estatisticas, facetas, detalhePlano,
     _internal: { reservaCanceladaCv, situacaoMortaLocal, diffDays },
 };

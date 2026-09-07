@@ -61,13 +61,24 @@ async function carregarPlanoAutorizado(req, res) {
     return det.plano;
 }
 
+/** APLICA as condicoes atuais do CV nas parcelas previstas (configure). O plano e congelado; isto e a excecao deliberada. */
 export async function sincronizarPlano(req, res) {
     try {
         const plano = await carregarPlanoAutorizado(req, res);
         if (!plano) return;
-        const out = await Planos.criarOuSincronizarPlano(plano.idreserva, { userId: req.user?.id });
+        const out = await Planos.criarOuSincronizarPlano(plano.idreserva, { userId: req.user?.id, aplicarCv: true });
         return res.json({ ok: true, resumo: out.resumo });
     } catch (err) { return res.status(500).json({ error: err.message }); }
+}
+
+/** Edita valor/vencimento originais de uma parcela sem boleto vivo (configure). */
+export async function editarParcela(req, res) {
+    try {
+        const parcela = await carregarParcelaAutorizada(req, res);
+        if (!parcela) return;
+        await Planos.editarParcela(parcela, { valor: req.body?.valor, vencimento: req.body?.vencimento, userId: req.user?.id, motivo: req.body?.motivo });
+        return res.json({ ok: true, parcela });
+    } catch (err) { return res.status(400).json({ error: err.message }); }
 }
 
 export async function pausarPlano(req, res) {
@@ -209,6 +220,6 @@ export async function syncWhatsappTemplates(req, res) {
 }
 
 export default {
-    listPlanos, getStats, getFacets, getPlano, criarPlano, sincronizarPlano, pausarPlano, reativarPlano, encerrarPlano,
+    listPlanos, getStats, getFacets, getPlano, criarPlano, sincronizarPlano, editarParcela, pausarPlano, reativarPlano, encerrarPlano,
     emitirParcela, baixarParcela, marcarPaga, rodarCiclo, getStatus, getWhatsappTemplates, syncWhatsappTemplates,
 };

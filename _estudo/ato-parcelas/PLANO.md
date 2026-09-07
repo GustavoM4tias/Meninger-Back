@@ -23,6 +23,10 @@ reservas** (278 delas venceram nos ultimos 30 dias). Nos proximos 30 dias vencem
 1. **Plano de parcelas** nasce por reserva quando o ato e PAGO (boleto ou cartao).
    Parcelas derivadas de `condicoes.series[]` do CV: cada serie configurada gera
    `quantidade` parcelas mensais a partir do `vencimento` (dia preso ao fim do mes).
+1b. **Plano CONGELADO** (07/09/2026): depois do Envio Sienge a condicao do CV nao
+   altera mais o plano. Mudancas no CV so viram `divergencias` (aviso na tela).
+   Alterar e so admin, no Office: editar parcela (PATCH /parcelas/:id, configure)
+   ou "Aplicar condicoes do CV" (configure, `aplicarCv: true`).
 2. **Emissao antecipada**: o boleto da parcela sai N dias antes do vencimento
    (`parcelas_antecedencia_dias`, padrao 10), pelo mesmo Ecobranca, anexo no CV,
    e-mail + WhatsApp ao cliente, mensagem na reserva ("PARCELA n/N EMITIDA").

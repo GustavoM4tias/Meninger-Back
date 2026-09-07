@@ -29,7 +29,10 @@ router.get('/parcelas/facets', ...ver, P.getFacets);
 router.get('/parcelas/status', ...ver, P.getStatus);
 router.get('/parcelas/planos/:idreserva', ...ver, P.getPlano);
 router.post('/parcelas/planos', ...operar, P.criarPlano);
-router.post('/parcelas/planos/:idreserva/sincronizar', ...operar, P.sincronizarPlano);
+// O plano e congelado depois do Envio Sienge: aplicar o CV e editar parcela sao
+// excecoes de admin (configure), nunca da operacao.
+router.post('/parcelas/planos/:idreserva/sincronizar', ...configurar, P.sincronizarPlano);
+router.patch('/parcelas/:id', ...configurar, P.editarParcela);
 router.post('/parcelas/planos/:idreserva/pausar', ...operar, P.pausarPlano);
 router.post('/parcelas/planos/:idreserva/reativar', ...operar, P.reativarPlano);
 router.post('/parcelas/planos/:idreserva/encerrar', ...operar, P.encerrarPlano);
