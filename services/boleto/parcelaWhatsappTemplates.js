@@ -31,7 +31,7 @@ export function getParcelaTemplateDefinition() {
             + 'Segue o boleto da *{{2}}* da sua unidade no empreendimento *{{3}}* ({{4}}). O PDF está em anexo.\n\n'
             + '💰 *Valor:* {{5}}\n'
             + '📅 *Vencimento:* {{6}}\n\n'
-            + 'Pagando em dia você mantém o seu contrato regular e evita multa e juros. '
+            + 'Pagando em dia você mantém o seu contrato regular. '
             + 'Se já pagou, desconsidere esta mensagem.',
         examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', 'QD 08 - LT 08', 'R$ 496,74', '20/10/2026'],
         footerText: RODAPE,

@@ -102,9 +102,8 @@ export async function updateSettings(req, res) {
             'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago',
             'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado',
             'parcelas_vencidas_na_adesao', 'parcelas_prazo_vencida_dias',
-            'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada',
-            'atraso_reemitir', 'atraso_max_reemissoes', 'atraso_cobrar_encargos',
-            'atraso_multa_pct', 'atraso_juros_mes_pct',
+            'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada', 'parcelas_criterio_sienge',
+            'atraso_reemitir', 'atraso_max_reemissoes',
             'lembrete_dias_antes', 'aviso_atraso_dias_depois',
         ];
 
@@ -131,10 +130,12 @@ export async function updateSettings(req, res) {
             || intEntre('parcelas_max_emissoes_rodada', 1, 500)
             || intEntre('atraso_max_reemissoes', 0, 12)
             || intEntre('lembrete_dias_antes', 0, 30)
-            || intEntre('aviso_atraso_dias_depois', 0, 30)
-            || pctEntre('atraso_multa_pct')
-            || pctEntre('atraso_juros_mes_pct');
+            || intEntre('aviso_atraso_dias_depois', 0, 30);
         if (erroParcelas) return res.status(400).json({ error: erroParcelas });
+        if (req.body.parcelas_criterio_sienge !== undefined
+            && !['titulo_e_venda', 'titulo', 'venda'].includes(req.body.parcelas_criterio_sienge)) {
+            return res.status(400).json({ error: "parcelas_criterio_sienge deve ser 'titulo_e_venda', 'titulo' ou 'venda'." });
+        }
         if (req.body.parcelas_vencidas_na_adesao !== undefined
             && !['emitir', 'ignorar'].includes(req.body.parcelas_vencidas_na_adesao)) {
             return res.status(400).json({ error: "parcelas_vencidas_na_adesao deve ser 'emitir' ou 'ignorar'." });

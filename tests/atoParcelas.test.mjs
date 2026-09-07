@@ -130,12 +130,19 @@ test('condicaoDeEmissao: no prazo mantem; vencida sem boleto sai limpa; reemissa
     assert.equal(semEncargo.valor, 1000);
 });
 
-test('motivoEncerramento: faturado no Sienge encerra, cancelada ganha, contrato cancelado nao conta', () => {
-    assert.equal(motivoEncerramento({ contrato: { receivable_bill_id: 33058, situation: 'Emitido' } }), 'sienge_faturado');
+test('motivoEncerramento: Sienge so assume com titulo E venda faturada; cancelada ganha', () => {
+    const completo = { receivable_bill_id: 33058, financial_institution_date: '2026-09-01', situation: 'Emitido' };
+    const soTitulo = { receivable_bill_id: 33058, financial_institution_date: null, situation: 'Emitido' };
+    const soVenda = { receivable_bill_id: null, financial_institution_date: '2026-09-01', situation: 'Solicitado' };
+    assert.equal(motivoEncerramento({ contrato: completo }), 'sienge_faturado');
+    assert.equal(motivoEncerramento({ contrato: soTitulo }), null);           // caso real: 42 contratos em 07/09
+    assert.equal(motivoEncerramento({ contrato: soVenda }), null);
+    assert.equal(motivoEncerramento({ contrato: soTitulo, criterio: 'titulo' }), 'sienge_faturado');
+    assert.equal(motivoEncerramento({ contrato: soVenda, criterio: 'venda' }), 'sienge_faturado');
     assert.equal(motivoEncerramento({ contrato: { receivable_bill_id: null, situation: 'Autorizado' } }), null);
     assert.equal(motivoEncerramento({ contrato: null }), null);
-    assert.equal(motivoEncerramento({ contrato: { receivable_bill_id: 1, situation: 'Cancelado' } }), null);
-    assert.equal(motivoEncerramento({ contrato: { receivable_bill_id: 1 }, encerrarQuandoFaturado: false }), null);
-    assert.equal(motivoEncerramento({ contrato: { receivable_bill_id: 1 }, reservaCancelada: true }), 'reserva_cancelada');
+    assert.equal(motivoEncerramento({ contrato: { ...completo, situation: 'Cancelado' } }), null);
+    assert.equal(motivoEncerramento({ contrato: completo, encerrarQuandoFaturado: false }), null);
+    assert.equal(motivoEncerramento({ contrato: completo, reservaCancelada: true }), 'reserva_cancelada');
     assert.equal(motivoEncerramento({ contrato: null, situacaoMorta: true }), 'reserva_cancelada');
 });

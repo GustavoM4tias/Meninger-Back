@@ -10,7 +10,7 @@
 //
 // Ordem do ciclo (cada passo independe do anterior falhar):
 //   1. adesao        reservas com ato pago e sem plano ganham um
-//   2. encerramento  Sienge faturou / reserva morreu -> plano encerra, boletos vivos baixados
+//   2. encerramento  Sienge assumiu (titulo E venda faturada) / reserva morreu -> plano encerra, boletos vivos baixados
 //   3. emissao       previstas que vencem em N dias, vencidas a reemitir (teto por rodada)
 //   4. lembretes     D-N e D+N
 //

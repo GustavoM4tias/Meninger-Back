@@ -391,7 +391,7 @@ export async function aplicarResultadoParcela(r, history) {
             `Boleto da ${descricaoParcela(p)} venceu sem pagamento e foi baixado.`, '',
             `Nosso Numero: ${history.nosso_numero}`, `Valor: ${formatCurrency(history.valor)}`,
             history.vencimento ? `Vencimento: ${formatDate(history.vencimento)}` : null, '',
-            'A rodada de parcelas do Office decide a reemissao (com multa e juros, se configurado).',
+            'A rodada de parcelas do Office reemite o boleto com o mesmo valor e vencimento novo (ate o limite de vias configurado).',
         ].filter(Boolean).join('\n'))).catch(() => {});
         return;
     }

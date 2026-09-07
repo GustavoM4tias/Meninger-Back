@@ -46,6 +46,7 @@ export default (sequelize, DataTypes) => {
         // Contrato do Sienge (tabela local `contracts`, external_id = idreserva).
         sienge_contract_id: { type: DataTypes.BIGINT, allowNull: true },
         sienge_receivable_bill_id: { type: DataTypes.BIGINT, allowNull: true },
+        sienge_venda_faturada_em: { type: DataTypes.DATEONLY, allowNull: true, comment: 'contracts.financial_institution_date - "faturado como venda", regra do relatorio de Faturamento.' },
         sienge_verificado_em: { type: DataTypes.DATE, allowNull: true },
 
         // Ultima leitura das condicoes no CV (para a tela mostrar divergencias).

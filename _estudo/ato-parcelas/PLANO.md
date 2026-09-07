@@ -26,14 +26,18 @@ reservas** (278 delas venceram nos ultimos 30 dias). Nos proximos 30 dias vencem
 2. **Emissao antecipada**: o boleto da parcela sai N dias antes do vencimento
    (`parcelas_antecedencia_dias`, padrao 10), pelo mesmo Ecobranca, anexo no CV,
    e-mail + WhatsApp ao cliente, mensagem na reserva ("PARCELA n/N EMITIDA").
-3. **Parada automatica**: contrato com `receivable_bill_id` no Sienge = faturado. O
-   plano encerra (motivo `sienge_faturado`), parcelas previstas viram `transferida`.
-   Reserva cancelada = plano cancelado + boletos em aberto baixados.
+3. **Parada automatica**: o Sienge assumiu quando o contrato tem titulo gerado
+   (`contracts.receivable_bill_id`) E foi faturado como venda
+   (`financial_institution_date`, a mesma regra do relatorio de Faturamento) -
+   criterio `parcelas_criterio_sienge`, padrao `titulo_e_venda`. Medido em 07/09: 42
+   contratos tinham titulo sem venda faturada; so o titulo nao basta. O plano encerra
+   (motivo `sienge_faturado`), parcelas previstas viram `transferida`, boleto vivo e
+   baixado. Reserva cancelada = plano cancelado + boletos em aberto baixados.
 4. **Atraso**: boleto vencido e baixado pela rodada das 08h vira parcela `vencida`.
-   O ciclo reemite (`atraso_reemitir`) com multa `atraso_multa_pct` (2%) + juros
-   `atraso_juros_mes_pct` (1% a.m. pro rata), novo vencimento em `atraso_prazo_dias`
-   (5), ate `atraso_max_reemissoes` (3) vias. Parcela que ja estava vencida quando o
-   plano nasceu e emitida SEM encargos (nao foi culpa do cliente).
+   O ciclo reemite (`atraso_reemitir`) com o MESMO valor e vencimento novo em
+   `parcelas_prazo_vencida_dias` (5), ate `atraso_max_reemissoes` (3) vias. Multa e
+   juros ficaram FORA desta etapa (decisao de 07/09/2026); o calculo existe em
+   lib/atoParcelas.js para quando for a hora.
 5. **Lembretes**: D-3 antes do vencimento e D+1 depois (e-mail sempre; WhatsApp
    quando o template estiver aprovado). Um envio por boleto.
 6. **Interruptor mestre** `parcelas_ativo` nasce DESLIGADO: o deploy so calcula e

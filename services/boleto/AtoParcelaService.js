@@ -50,9 +50,16 @@ export function cfgParcelas(s) {
         maxEmissoesRodada: num(s?.parcelas_max_emissoes_rodada, D.maxEmissoesRodada),
         atrasoReemitir: s?.atraso_reemitir ?? D.atrasoReemitir,
         atrasoMaxReemissoes: num(s?.atraso_max_reemissoes, D.atrasoMaxReemissoes),
-        atrasoCobrarEncargos: s?.atraso_cobrar_encargos ?? D.atrasoCobrarEncargos,
-        atrasoMultaPct: num(s?.atraso_multa_pct, D.atrasoMultaPct),
-        atrasoJurosMesPct: num(s?.atraso_juros_mes_pct, D.atrasoJurosMesPct),
+        // Multa e juros ficaram FORA desta etapa (decisao de 07/09/2026): a
+        // reemissao por atraso sai com o valor original e vencimento novo. O
+        // calculo existe em lib/atoParcelas.js para quando for a hora.
+        atrasoCobrarEncargos: false,
+        atrasoMultaPct: 0,
+        atrasoJurosMesPct: 0,
+        // Quando o Sienge assume: titulo gerado E venda faturada (mesma regra do
+        // relatorio de Faturamento). Ver siengeAssumiu em lib/atoParcelas.js.
+        criterioSienge: ['titulo_e_venda', 'titulo', 'venda'].includes(s?.parcelas_criterio_sienge)
+            ? s.parcelas_criterio_sienge : D.criterioSienge,
         lembreteDiasAntes: num(s?.lembrete_dias_antes, D.lembreteDiasAntes),
         avisoAtrasoDiasDepois: num(s?.aviso_atraso_dias_depois, D.avisoAtrasoDiasDepois),
         situacoesMortas: Array.isArray(s?.cv_situacoes_reserva_morta) ? s.cv_situacoes_reserva_morta : [4],
@@ -99,7 +106,7 @@ export async function atoPago(idreserva) {
 /** Contrato local do Sienge da reserva (o nao-cancelado mais recente). */
 export async function contratoSienge(idreserva) {
     const [row] = await db.sequelize.query(
-        `SELECT id, situation, receivable_bill_id, contract_date, issue_date
+        `SELECT id, situation, receivable_bill_id, financial_institution_date, contract_date, issue_date
            FROM contracts
           WHERE external_id = :ext
           ORDER BY (lower(coalesce(situation,'')) = 'cancelado') ASC, id DESC
@@ -193,6 +200,7 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
             ato_pago_em: opts.atoPagoEm || null,
             sienge_contract_id: contrato?.id || null,
             sienge_receivable_bill_id: contrato?.receivable_bill_id || null,
+            sienge_venda_faturada_em: contrato?.financial_institution_date || null,
             sienge_verificado_em: new Date(),
             cv_sincronizado_em: new Date(),
             updated_by: opts.userId || null,
@@ -205,7 +213,7 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
             status: PARCELA_STATUS.PREVISTA,
         })));
         // Ja nasceu faturado/cancelado? Encerra na hora, sem emitir nada.
-        const motivo = motivoEncerramento({ contrato, reservaCancelada: cancelada, encerrarQuandoFaturado: cfg.encerrarQuandoFaturado });
+        const motivo = motivoEncerramento({ contrato, reservaCancelada: cancelada, encerrarQuandoFaturado: cfg.encerrarQuandoFaturado, criterio: cfg.criterioSienge });
         if (motivo) await encerrarPlano(plano, motivo, { detalhe: 'detectado na criacao do plano' });
         console.log(`[PARCELAS] Plano criado para a reserva ${idreserva}: ${derivadas.length} parcela(s)${motivo ? ` - encerrado (${motivo})` : ''}.`);
         return { plano, criado: true, resumo: { parcelas: derivadas.length, encerrado: motivo || null } };
@@ -327,16 +335,18 @@ export async function verificarEncerramentos(cfg) {
             await plano.update({
                 sienge_contract_id: contrato?.id || null,
                 sienge_receivable_bill_id: contrato?.receivable_bill_id || null,
+                sienge_venda_faturada_em: contrato?.financial_institution_date || null,
                 sienge_verificado_em: new Date(),
             });
             const motivo = motivoEncerramento({
                 contrato,
                 encerrarQuandoFaturado: cfg.encerrarQuandoFaturado,
                 situacaoMorta: situacaoMortaLocal(local, cfg.situacoesMortas),
+                criterio: cfg.criterioSienge,
             });
             if (!motivo) continue;
             const detalhe = motivo === 'sienge_faturado'
-                ? `contrato Sienge ${contrato.id} faturado (titulo ${contrato.receivable_bill_id})`
+                ? `contrato Sienge ${contrato.id}: titulo ${contrato.receivable_bill_id || '-'}, venda faturada em ${contrato.financial_institution_date || '-'}`
                 : `reserva na situacao "${local?.situacao?.situacao || '?'}" no CV`;
             const { parcelasComBoletoVivo } = await encerrarPlano(plano, motivo, { detalhe });
             encerrados.push({ plano, motivo, detalhe, parcelasComBoletoVivo });

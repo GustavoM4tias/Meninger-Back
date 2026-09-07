@@ -194,11 +194,14 @@ export default (sequelize, DataTypes) => {
         parcelas_prazo_vencida_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 5, comment: 'Dias corridos ate o novo vencimento de parcela ja vencida (adesao e reemissao).' },
         parcelas_hora_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 9, comment: 'Hora cheia (Brasilia) da rodada diaria de parcelas.' },
         parcelas_max_emissoes_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 40, comment: 'Teto de boletos emitidos por rodada (o resto sai no dia seguinte).' },
-        atraso_reemitir: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Parcela vencida e baixada e reemitida automaticamente.' },
+        parcelas_criterio_sienge: {
+            type: DataTypes.STRING(20), allowNull: true, defaultValue: 'titulo_e_venda',
+            comment: "Quando o Sienge assume a cobranca: 'titulo_e_venda' (titulo gerado E venda faturada, regra do Faturamento) | 'titulo' | 'venda'.",
+        },
+        atraso_reemitir: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Parcela vencida e baixada e reemitida automaticamente (mesmo valor, vencimento novo).' },
         atraso_max_reemissoes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 3, comment: 'Quantas vias novas por parcela antes de parar e chamar gente.' },
-        atraso_cobrar_encargos: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Reemissao por atraso leva multa + juros.' },
-        atraso_multa_pct: { type: DataTypes.DECIMAL(6, 2), allowNull: true, defaultValue: 2, comment: 'Multa (%) sobre o valor original, uma vez.' },
-        atraso_juros_mes_pct: { type: DataTypes.DECIMAL(6, 2), allowNull: true, defaultValue: 1, comment: 'Juros (% ao mes) pro rata dia sobre o valor original.' },
+        // atraso_cobrar_encargos / atraso_multa_pct / atraso_juros_mes_pct existem
+        // no banco mas nao sao lidas: multa e juros ficaram fora desta etapa (07/09/2026).
         lembrete_dias_antes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 3, comment: 'Lembrete ao cliente N dias antes do vencimento (0 desliga).' },
         aviso_atraso_dias_depois: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 1, comment: 'Aviso de vencido N dias depois do vencimento (0 desliga).' },
         parcelas_ultima_rodada_em: { type: DataTypes.DATE, allowNull: true, comment: 'Quando a rodada diaria de parcelas rodou pela ultima vez (sobrevive a restart).' },
