@@ -540,7 +540,7 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
 
     const ok = resultados.filter(x => x.r.ok);
     const texto = ok.length
-        ? `Perfeito! Geramos o novo boleto da ${ok.map(x => descricaoParcela(x.parcela)).join(' e da ')} com vencimento no próximo dia útil. Ele já foi enviado por aqui e por e-mail.`
+        ? `Perfeito! Geramos o novo boleto da ${ok.map(x => `${descricaoParcela(x.parcela)} com vencimento em ${formatDate(x.r.history?.vencimento)}`).join(' e da ')}. Ele já foi enviado por aqui e por e-mail.`
         : 'Recebemos o seu pedido, mas não conseguimos gerar o boleto agora. Nossa equipe vai verificar e te retornar.';
     try {
         const { default: WhatsAppService } = await import('../whatsapp/WhatsAppService.js');
