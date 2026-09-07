@@ -64,6 +64,10 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
             }
         } catch (err) { out.erros.push(`encerramentos: ${err.message}`); }
 
+        // 2b. boletos orfaos: parcela paga pelo boleto antigo com a nova via ainda viva
+        try { out.orfaos = await Emissao.baixarOrfaos({ settings }); }
+        catch (err) { out.erros.push(`orfaos: ${err.message}`); }
+
         // 3. emissao
         if (!cfg.ativo) {
             out.emissao = { skipped: 'parcelas_ativo=false' };

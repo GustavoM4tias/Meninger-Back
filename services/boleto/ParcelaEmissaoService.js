@@ -579,4 +579,71 @@ export async function limparTeste(idreserva) {
     return { ok: true, baixas, parcelas: ids.length, boletos: boletos.length };
 }
 
-export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, tratarRespostaCliente, pareceRespostaDeParcela, limparTeste };
+// ── Boletos orfaos: parcela PAGA que ainda tem outro boleto vivo ─────────────
+//
+// Acontece quando o cliente paga o boleto ANTIGO (a rodada das 08h so ve o
+// pagamento dias depois, na janela de revalidacao) e a nova via ja tinha saido.
+// A parcela vira paga pelo antigo; o novo continua vivo na Caixa e o cliente
+// poderia pagar duas vezes. Esta passada baixa todo boleto pendente de parcela
+// que ja esta paga. Roda na rodada de parcelas (fora do batch das 08h, que
+// segura o lock do Ecobranca).
+
+/** Boletos vivos de parcelas ja pagas por OUTRO boleto. So leitura. */
+export async function listarOrfaos() {
+    const [rows] = await db.sequelize.query(`
+        SELECT h.id FROM boleto_history h
+          JOIN ato_parcelas x ON x.id = h.parcela_id
+         WHERE h.status = 'success' AND h.payment_status = 'pending' AND NOT coalesce(h.ignorado, false)
+           AND h.nosso_numero IS NOT NULL AND x.status = 'paga' AND coalesce(x.boleto_history_id, -1) <> h.id`);
+    if (!rows.length) return [];
+    return BoletoHistory.findAll({ where: { id: rows.map(r => r.id) } });
+}
+
+export async function baixarOrfaos({ settings = null } = {}) {
+    settings = settings || await getSettings();
+    const orfaos = await listarOrfaos();
+    const stats = { encontrados: orfaos.length, baixados: 0, falhas: 0 };
+    for (const boleto of orfaos) {
+        const r = await baixarBoletoVivo(boleto, { motivo: 'parcela ja paga por outro boleto', settings });
+        if (r.ok) stats.baixados++; else stats.falhas++;
+    }
+    if (stats.encontrados) console.log('[PARCELAS] boletos orfaos:', JSON.stringify(stats));
+    return stats;
+}
+
+/** Baixa UM boleto de parcela na Caixa sem mexer no status da parcela. */
+async function baixarBoletoVivo(boleto, { motivo, settings }) {
+    let cnpj = String(boleto.cnpj_empresa || '').replace(/\D/g, '') || null;
+    if (!cnpj) {
+        const plano = await AtoPlano.findOne({ where: { idreserva: boleto.idreserva } });
+        cnpj = String(plano?.cnpj_empresa || '').replace(/\D/g, '') || null;
+    }
+    if (!cnpj) return { ok: false, detalhe: 'CNPJ nao encontrado' };
+    const owner = `baixa:orfao:hist=${boleto.id}:${new Date().toISOString()}`;
+    let locked = false;
+    for (let i = 0; i < 12 && !locked; i++) { locked = await EcoLock.acquire(owner, 10); if (!locked) await new Promise(r => setTimeout(r, 5000)); }
+    if (!locked) return { ok: false, detalhe: 'Ecobranca ocupado' };
+    let r = null;
+    try {
+        const out = await runEcoBatch({ credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
+            empresas: [{ cnpj_empresa: cnpj, boletos: [{ historyId: boleto.id, idreserva: boleto.idreserva, nossoNumero: boleto.nosso_numero, acao: 'baixar' }] }] });
+        r = out.results?.[0] || null;
+    } catch (err) { r = { ok: false, error: err?.message }; }
+    finally { await EcoLock.release(owner).catch(() => {}); }
+    const sit = String(r?.situacao || '').toUpperCase();
+    if (r?.ok && isSituacaoPaga(sit)) {
+        // O "orfao" tambem foi pago: cliente pagou duas vezes. Registra alto e chama gente.
+        await boleto.update({ payment_status: 'paid', paid_at: new Date(), last_checked_at: new Date(), last_check_situation: sit });
+        await EventLogger.log({ historyId: boleto.id, idreserva: boleto.idreserva, type: 'paid', severity: 'error', message: `PAGAMENTO EM DUPLICIDADE: este boleto e o anterior da mesma parcela constam pagos. Precisa de devolucao manual.`, data: { motivo } });
+        return { ok: false, detalhe: 'pago em duplicidade' };
+    }
+    if (r?.ok && (r.baixaConfirmada || /BAIXAD[OA]|CANCELAD[OA]|DEVOLVID[OA]/.test(sit) || r.found === false)) {
+        await boleto.update({ payment_status: 'cancelled', cancelled_at: new Date(), last_checked_at: new Date(), last_check_situation: r.baixaConfirmada ? 'BAIXADO' : (sit || 'NAO_ENCONTRADO') });
+        await EventLogger.log({ historyId: boleto.id, idreserva: boleto.idreserva, type: 'baixa_confirmed', severity: 'success', message: `Boleto baixado: ${motivo}.`, data: { motivo, situacao: sit } });
+        return { ok: true };
+    }
+    await EventLogger.log({ historyId: boleto.id, idreserva: boleto.idreserva, type: 'baixa_failed', severity: 'error', message: `Baixa (${motivo}) nao confirmada: ${r?.error || r?.abortReason || sit || '?'}` });
+    return { ok: false, detalhe: r?.error || sit };
+}
+
+export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, tratarRespostaCliente, pareceRespostaDeParcela, limparTeste, listarOrfaos, baixarOrfaos };
