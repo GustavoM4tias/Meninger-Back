@@ -45,6 +45,9 @@ export function cfgParcelas(s) {
         antecedenciaDias: num(s?.parcelas_antecedencia_dias, D.antecedenciaDias),
         encerrarQuandoFaturado: s?.parcelas_encerrar_quando_faturado ?? D.encerrarQuandoFaturado,
         vencidasNaAdesao: s?.parcelas_vencidas_na_adesao || D.vencidasNaAdesao,
+        // 'YYYY-MM-DD' ou null. Parcela com vencimento original antes disto e
+        // RETROATIVA: a rodada nao toca (trabalho manual pela tela).
+        cobrarAPartirDe: s?.parcelas_cobrar_a_partir_de ? String(s.parcelas_cobrar_a_partir_de).slice(0, 10) : null,
         horaRodada: num(s?.parcelas_hora_rodada, D.horaRodada),
         maxEmissoesRodada: num(s?.parcelas_max_emissoes_rodada, D.maxEmissoesRodada),
         atrasoReemitir: s?.atraso_reemitir ?? D.atrasoReemitir, // false = a pedido (cliente/tela)

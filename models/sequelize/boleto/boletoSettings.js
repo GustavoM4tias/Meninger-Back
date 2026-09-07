@@ -191,6 +191,10 @@ export default (sequelize, DataTypes) => {
         parcelas_antecedencia_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 10, comment: 'Boleto da parcela sai N dias corridos antes do vencimento.' },
         parcelas_encerrar_quando_faturado: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Encerra o plano quando o contrato ganha titulo no Sienge (contracts.receivable_bill_id).' },
         parcelas_vencidas_na_adesao: { type: DataTypes.STRING(10), allowNull: true, defaultValue: 'emitir', comment: "'emitir' (hoje + prazo, sem encargos) | 'ignorar' para parcelas ja vencidas quando o plano nasce." },
+        parcelas_cobrar_a_partir_de: {
+            type: DataTypes.DATEONLY, allowNull: true, defaultValue: null,
+            comment: 'A rodada so cobra parcela com vencimento ORIGINAL a partir desta data. Antes disso e retroativo: fica na tela para trabalho manual (Emitir agora). Vazio = sem corte.',
+        },
         // parcelas_prazo_vencida_dias existe no banco mas nao e lida: parcela
         // vencida sai sempre com vencimento no PROXIMO DIA UTIL (07/09/2026).
         parcelas_hora_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 9, comment: 'Hora cheia (Brasilia) da rodada diaria de parcelas.' },

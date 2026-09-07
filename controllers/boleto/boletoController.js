@@ -101,7 +101,7 @@ export async function updateSettings(req, res) {
             // Parcelas mensais (lib/atoParcelas.js)
             'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago',
             'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado',
-            'parcelas_vencidas_na_adesao',
+            'parcelas_vencidas_na_adesao', 'parcelas_cobrar_a_partir_de',
             'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada',
             'atraso_reemitir', 'atraso_max_reemissoes',
             'lembrete_dias_antes', 'aviso_atraso_dias_depois',
@@ -131,6 +131,13 @@ export async function updateSettings(req, res) {
             || intEntre('lembrete_dias_antes', 0, 30)
             || intEntre('aviso_atraso_dias_depois', 0, 30);
         if (erroParcelas) return res.status(400).json({ error: erroParcelas });
+        if (req.body.parcelas_cobrar_a_partir_de !== undefined) {
+            const v = req.body.parcelas_cobrar_a_partir_de;
+            if (v === '' || v === null) req.body.parcelas_cobrar_a_partir_de = null;
+            else if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) {
+                return res.status(400).json({ error: 'parcelas_cobrar_a_partir_de deve ser uma data (AAAA-MM-DD) ou vazio.' });
+            }
+        }
         if (req.body.parcelas_vencidas_na_adesao !== undefined
             && !['emitir', 'ignorar'].includes(req.body.parcelas_vencidas_na_adesao)) {
             return res.status(400).json({ error: "parcelas_vencidas_na_adesao deve ser 'emitir' ou 'ignorar'." });

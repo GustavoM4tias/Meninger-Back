@@ -87,7 +87,12 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
                 if ((p.tentativas_erro || 0) >= 5) return false;
                 return !p.updated_at || String(p.updated_at.toISOString()).slice(0, 10) !== hoje;
             });
+            stats.retroativas = 0;
             for (const p of fila) {
+                // RETROATIVO: vencimento original antes do corte configurado nao e
+                // tocado pela rodada (nem emissao nem reemissao). Fica na tela como
+                // atraso, para trabalho manual pelo botao "Emitir agora".
+                if (cfg.cobrarAPartirDe && String(p.vencimento).slice(0, 10) < cfg.cobrarAPartirDe) { stats.retroativas++; continue; }
                 const decisao = decidirParcela(p, cfg);
                 if (decisao === 'aguardar') continue;
                 if (decisao === 'parar') { stats.paradas++; continue; }
