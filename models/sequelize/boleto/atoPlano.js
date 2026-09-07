@@ -63,6 +63,13 @@ export default (sequelize, DataTypes) => {
             set(v) { this.setDataValue('divergencias', v == null ? null : JSON.stringify(v)); },
         },
 
+        // Plano de TESTE (origem = 'teste'): reserva que nao existe no CV;
+        // titular/unidade/series vivem aqui. Ver AtoParcelaService.criarPlanoTeste.
+        teste_dados: {
+            type: DataTypes.TEXT, allowNull: true,
+            get() { const raw = this.getDataValue('teste_dados'); if (!raw) return null; try { return JSON.parse(raw); } catch { return null; } },
+            set(v) { this.setDataValue('teste_dados', v == null ? null : JSON.stringify(v)); },
+        },
         observacao: { type: DataTypes.TEXT, allowNull: true },
         updated_by: { type: DataTypes.INTEGER, allowNull: true },
     }, {

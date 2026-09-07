@@ -198,15 +198,16 @@ export async function runDailyCheck({ idreservas = null } = {}) {
     const porEmpresa = new Map(); // cnpj → [boleto, ...]
 
     for (const b of boletos) {
-        let idempreendimento_cv = null;
-        try {
-            // history não armazena idempreendimento_cv hoje — busca da reserva.
-            // Caro mas inevitável; cacheado por reserva-id seria possível, mas
-            // diferentes reservas têm diferentes empreendimentos.
-            idempreendimento_cv = await fetchReservaIdEmpreendimento(b.idreserva);
-        } catch (_) {}
-
-        const cnpj = await fetchCnpjEmpresaCache(cnpjCache, idempreendimento_cv);
+        // O CNPJ gravado na emissão vale primeiro: evita uma chamada ao CV por
+        // boleto e cobre reserva que não existe lá (plano de teste das parcelas).
+        let cnpj = String(b.cnpj_empresa || '').replace(/\D/g, '') || null;
+        if (!cnpj) {
+            let idempreendimento_cv = null;
+            try {
+                idempreendimento_cv = await fetchReservaIdEmpreendimento(b.idreserva);
+            } catch (_) {}
+            cnpj = await fetchCnpjEmpresaCache(cnpjCache, idempreendimento_cv);
+        }
         if (!cnpj) {
             semCnpj.push(b);
             continue;

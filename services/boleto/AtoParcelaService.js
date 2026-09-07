@@ -72,6 +72,43 @@ export async function carregarReservaCv(idreserva) {
     return data;
 }
 
+/**
+ * Reserva "vista" pelo plano: do CV (normal) ou de `teste_dados` quando o plano
+ * e de TESTE (reserva ficticia, so no Office). Devolve o mesmo formato que a
+ * API do CV: { titular, unidade, condicoes, data_cancelamento }.
+ */
+export async function carregarReservaDoPlano(plano) {
+    if (plano?.origem === 'teste') {
+        const t = plano.teste_dados || {};
+        return { titular: t.titular || {}, unidade: t.unidade || {}, condicoes: { series: t.series || [] }, data_cancelamento: null, data_distrato: null };
+    }
+    return carregarReservaCv(plano.idreserva);
+}
+
+/**
+ * Plano de TESTE: reserva ficticia (id que nao existe no CV) com titular,
+ * unidade, CNPJ e series informados. Nasce com o ato "pago". Serve para
+ * exercitar o fluxo real de boleto/e-mail/WhatsApp sem criar reserva no CV.
+ * Apagar com ParcelaEmissaoService.limparTeste(idreserva).
+ */
+export async function criarPlanoTeste({ idreserva, titular, unidade, cnpj, series, userId = null, idseries }) {
+    const existente = await AtoPlano.findOne({ where: { idreserva } });
+    if (existente) throw new Error(`Ja existe plano para a reserva ${idreserva}.`);
+    const derivadas = derivarParcelas(series, { idseries: idseries || PARCELAS_DEFAULTS.idseries });
+    if (!derivadas.length) throw new Error('Series sem parcela mensal.');
+    const plano = await AtoPlano.create({
+        idreserva, idpessoa_cv: titular.idpessoa_cv || null, titular_nome: titular.nome, empreendimento: unidade.empreendimento,
+        idempreendimento_cv: unidade.idempreendimento_cv || null, unidade: unidade.unidade || null, cnpj_empresa: cnpj,
+        status: PLANO_STATUS.ATIVO, origem: 'teste', ato_pago_em: new Date(), cv_sincronizado_em: new Date(),
+        teste_dados: { titular, unidade, series }, observacao: 'PLANO DE TESTE - reserva nao existe no CV', updated_by: userId,
+    });
+    await AtoParcela.bulkCreate(derivadas.map(d => ({
+        plano_id: plano.id, idreserva, chave: chaveParcela(d), idserie: d.idserie, linha: d.linha, indice_na_serie: d.indice_na_serie,
+        serie_nome: d.serie_nome, sigla: d.sigla, numero: d.numero, total: d.total, vencimento: d.vencimento, valor: d.valor, status: PARCELA_STATUS.PREVISTA,
+    })));
+    return plano;
+}
+
 /** Reserva da tabela local (sync horario) - barata, serve para adesao em massa. */
 async function carregarReservaLocal(idreserva) {
     const [row] = await db.sequelize.query(
@@ -576,7 +613,7 @@ export async function detalhePlano(user, idreserva) {
 }
 
 export default {
-    getSettings, cfgParcelas, carregarReservaCv, atoPago, contratoSienge,
+    getSettings, cfgParcelas, carregarReservaCv, carregarReservaDoPlano, criarPlanoTeste, atoPago, contratoSienge,
     criarOuSincronizarPlano, editarParcela, encerrarPlano, pausarPlano, reativarPlano,
     verificarEncerramentos, aderirPendentes, listarPlanos, estatisticas, facetas, detalhePlano,
     _internal: { reservaCanceladaCv, situacaoMortaLocal, diffDays },

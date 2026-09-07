@@ -25,10 +25,27 @@ import { isSituacaoPaga } from './BoletoPaymentCheckService.js';
 import {
     PARCELA_STATUS, PLANO_STATUS, condicaoDeEmissao, descricaoParcela, rotuloParcela, hojeYmd, diffDays,
 } from '../../lib/atoParcelas.js';
-import { cfgParcelas, getSettings, carregarReservaCv, criarOuSincronizarPlano } from './AtoParcelaService.js';
+import { cfgParcelas, getSettings, carregarReservaDoPlano, criarOuSincronizarPlano } from './AtoParcelaService.js';
 
 const { AtoPlano, AtoParcela, BoletoHistory } = db;
-const { acquireEcoLockWithWait, formatCurrency, formatDate, sendCvMessage, uploadToSupabase, attachToCV } = _primitivos;
+const { acquireEcoLockWithWait, formatCurrency, formatDate, sendCvMessage: sendCvMessageReal, uploadToSupabase, attachToCV: attachToCVReal } = _primitivos;
+
+// ── Modo TESTE (plano com origem = "teste") ──────────────────────────────────
+// Reserva que NAO existe no CV: os dados do titular/unidade vivem em
+// ato_planos.teste_dados, e nada e postado nem anexado no CV. O boleto no
+// Ecobranca, o e-mail e o WhatsApp sao REAIS - e o objetivo do teste.
+async function ehTeste(idreserva) {
+    const p = await AtoPlano.findOne({ where: { idreserva }, attributes: ["origem"] });
+    return p?.origem === "teste";
+}
+async function sendCvMessage(idreserva, msg) {
+    if (await ehTeste(idreserva)) { console.log(`[PARCELA][TESTE] mensagem no CV pulada (reserva ${idreserva})`); return { ok: true, skipped: true }; }
+    return sendCvMessageReal(idreserva, msg);
+}
+async function attachToCV(idreserva, buffer, settings) {
+    if (await ehTeste(idreserva)) return { ok: false, skipped: true, error: "reserva de teste - sem CV" };
+    return attachToCVReal(idreserva, buffer, settings);
+}
 
 /** Primeira linha das mensagens de parcela na reserva (mesmo papel do STATUS DO ATO). */
 function comStatusParcela(status, p, corpo) {
@@ -81,7 +98,7 @@ export async function emitirParcela(parcelaId, opts = {}) {
     // Reserva ao vivo: titular, unidade e a condicao de hoje. Cancelou? Encerra.
     let reserva;
     try {
-        reserva = await carregarReservaCv(idreserva);
+        reserva = await carregarReservaDoPlano(plano);
     } catch (err) {
         return { ok: false, erro: `CV indisponivel: ${err.message}` };
     }
@@ -422,7 +439,7 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
     // nunca sairia, porque a baixa acontece antes do D+1.
     const parcelas = await AtoParcela.findAll({
         where: { status: { [Op.in]: [PARCELA_STATUS.EMITIDA, PARCELA_STATUS.VENCIDA] }, boleto_history_id: { [Op.ne]: null } },
-        include: [{ model: AtoPlano, as: 'plano', where: { status: PLANO_STATUS.ATIVO }, attributes: ['id', 'idreserva', 'empreendimento', 'unidade'] }],
+        include: [{ model: AtoPlano, as: 'plano', where: { status: PLANO_STATUS.ATIVO }, attributes: ["id", "idreserva", "empreendimento", "unidade", "origem", "teste_dados"] }],
     });
     for (const parcela of parcelas) {
         try {
@@ -436,7 +453,7 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
             if (!boleto) continue;
             if (querLembrete && boleto.payment_status !== 'pending') continue;
             if (querAviso && boleto.payment_status === 'paid') continue;
-            const reserva = await carregarReservaCv(parcela.idreserva);
+            const reserva = await carregarReservaDoPlano(parcela.plano);
             const p = { numero: parcela.numero, total: parcela.total };
             const dados = {
                 empreendimento: parcela.plano.empreendimento || reserva.unidade?.empreendimento, unidade: parcela.plano.unidade || reserva.unidade?.unidade || '',
@@ -520,4 +537,30 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
     return true;
 }
 
-export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, tratarRespostaCliente };
+// ── Limpeza de plano de TESTE ────────────────────────────────────────────────
+
+/**
+ * Apaga um plano de teste: baixa no Ecobranca o boleto que estiver vivo e
+ * remove plano, parcelas, boletos e eventos da reserva ficticia. So aceita
+ * plano com origem 'teste' - nunca toca em reserva de verdade.
+ */
+export async function limparTeste(idreserva) {
+    const plano = await AtoPlano.findOne({ where: { idreserva } });
+    if (!plano) return { ok: false, erro: 'plano nao encontrado' };
+    if (plano.origem !== 'teste') return { ok: false, erro: 'nao e plano de teste - nada feito' };
+    const parcelas = await AtoParcela.findAll({ where: { plano_id: plano.id } });
+    const baixas = [];
+    for (const p of parcelas) {
+        const vivo = await BoletoHistory.findOne({ where: { parcela_id: p.id, status: 'success', payment_status: 'pending', ignorado: false } });
+        if (vivo) baixas.push({ parcela: p.numero, ...(await baixarBoletoDaParcela(p.id, { motivo: 'limpeza do teste', statusFinal: PARCELA_STATUS.CANCELADA })) });
+    }
+    const ids = parcelas.map(p => p.id);
+    const boletos = await BoletoHistory.findAll({ where: { idreserva }, attributes: ['id'], raw: true });
+    await db.BoletoEvent.destroy({ where: { idreserva } });
+    await BoletoHistory.destroy({ where: { idreserva } });
+    await AtoParcela.destroy({ where: { plano_id: plano.id } });
+    await plano.destroy();
+    return { ok: true, baixas, parcelas: ids.length, boletos: boletos.length };
+}
+
+export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, tratarRespostaCliente, limparTeste };
