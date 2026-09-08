@@ -21,6 +21,15 @@ function estadoDoAssinante(s) {
     return 'parado';
 }
 
+// Estado da UNIDADE, que é como o time cobra: o documento só fecha quando
+// TODOS os assinantes dela assinam. Recusa conta como "tocou no documento".
+function estadoDaUnidade(concluida, signers) {
+    if (concluida) return 'concluida';
+    if (signers.some((s) => s.estado === 'assinado')) return 'parcial';
+    if (signers.some((s) => s.estado === 'abriu' || s.estado === 'recusado')) return 'abriu';
+    return 'parado';
+}
+
 function montar(linha) {
     const signers = (linha.signers ?? []).map((s) => ({
         nome: s.nome,
@@ -31,14 +40,16 @@ function montar(linha) {
         cliques: s.clicks ?? 0,
         link: linkPublico(s.token),
     }));
+    // A unidade só está pronta quando TODOS os assinantes dela assinaram.
+    const concluida = signers.length > 0 && signers.every((s) => s.estado === 'assinado');
     return {
         id: linha.id,
         unidade: linha.unidade,
         empreendimento: linha.empreendimento,
         envelope_id: linha.envelope_id,
         status: linha.status,
-        // A unidade só está pronta quando TODOS os assinantes dela assinaram.
-        concluida: signers.length > 0 && signers.every((s) => s.estado === 'assinado'),
+        concluida,
+        estado: estadoDaUnidade(concluida, signers),
         atualizado_em: linha.updated_at,
         signers,
     };
@@ -46,9 +57,13 @@ function montar(linha) {
 
 function resumir(unidades) {
     const pessoas = unidades.flatMap((u) => u.signers);
+    const porEstado = (e) => unidades.filter((u) => u.estado === e).length;
     return {
         unidades: unidades.length,
-        unidades_concluidas: unidades.filter((u) => u.concluida).length,
+        unidades_concluidas: porEstado('concluida'),
+        unidades_parciais: porEstado('parcial'),
+        unidades_abriram: porEstado('abriu'),
+        unidades_paradas: porEstado('parado'),
         assinantes: pessoas.length,
         assinaram: pessoas.filter((p) => p.estado === 'assinado').length,
         abriram: pessoas.filter((p) => p.estado === 'abriu').length,
