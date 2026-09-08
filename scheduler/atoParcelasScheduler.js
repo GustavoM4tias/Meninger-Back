@@ -95,10 +95,14 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
                 order: [['vencimento', 'ASC'], ['id', 'ASC']],
             });
             // Parcelas em erro: no maximo 1 tentativa por dia, e desiste depois de 5.
+            // O model e `underscored`: na instancia o carimbo e `updatedAt`
+            // (`p.updated_at` vinha undefined e a guarda nunca segurava - a
+            // rodada manual de 08/09 retentou os 19 erros do dia de novo).
             const fila = parcelas.filter(p => {
                 if (p.status !== PARCELA_STATUS.ERRO) return true;
                 if ((p.tentativas_erro || 0) >= 5) return false;
-                return !p.updated_at || String(p.updated_at.toISOString()).slice(0, 10) !== hoje;
+                const carimbo = p.updatedAt || p.updated_at;
+                return !carimbo || hojeYmd(new Date(carimbo)) !== hoje;
             });
             for (const p of fila) {
                 // Uma parcela com dado quebrado nao pode derrubar a rodada das

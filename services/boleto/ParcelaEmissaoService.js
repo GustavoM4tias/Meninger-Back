@@ -456,7 +456,8 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
             // receber o boleto (com a data de vencimento nele), e a rodada de
             // 08/09/2026 mandou "vence em 2 dias" minutos depois para 41 pessoas.
             // O lembrete fica para a proxima rodada, se ainda couber na janela.
-            if (querLembrete && hojeYmd(new Date(boleto.created_at)) === hoje) continue;
+            const emitidoEm = boleto.createdAt || boleto.created_at;
+            if (querLembrete && emitidoEm && hojeYmd(new Date(emitidoEm)) === hoje) continue;
             if (querAviso && boleto.payment_status === 'paid') continue;
             const reserva = await carregarReservaDoPlano(parcela.plano);
             const p = { numero: parcela.numero, total: parcela.total };
