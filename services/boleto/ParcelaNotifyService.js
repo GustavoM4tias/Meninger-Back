@@ -270,7 +270,7 @@ export async function sendAvisoBaixa({ titular, dados, historyId = null, canais 
         descricao: dados.descricao, valorFormatado: formatCurrency(dados.valor), vencimentoFormatado: formatDateBr(dados.vencimento),
         nossoNumero: dados.nossoNumero, enviadoEmFormatado: enviadoEm, contato: dados.contato,
     };
-    const variables = [nome, dados.descricao, dados.empreendimento || '', enviadoEm, dados.contato];
+    const variables = [nome, dados.descricao, dados.empreendimento || '', enviadoEm, dados.contato, dados.empreendimento || ''];
     const textoLivre = `Olá, ${nome}. O boleto da ${dados.descricao} da sua reserva no ${dados.empreendimento}, enviado em ${enviadoEm}, foi baixado e não deve ser pago.`
         + ' Se você já pagou, fale com a gente pelo número abaixo.'
         + ` O ${dados.empreendimento} entrou na lista de empreendimentos sem cobrança antes da assinatura do financiamento, por prazo indeterminado definido pela construtora.`

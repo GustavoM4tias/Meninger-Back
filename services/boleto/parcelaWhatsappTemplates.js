@@ -100,16 +100,17 @@ export function getBaixaTemplateDefinition() {
         category: 'UTILITY',
         language: LANG,
         // {{1}} nome, {{2}} "parcela 1 de 47", {{3}} empreendimento, {{4}} data do
-        // envio do boleto, {{5}} numero de contato (quem atende as duvidas).
+        // envio do boleto, {{5}} numero de contato (quem atende as duvidas),
+        // {{6}} o empreendimento de novo (a Meta nao repete variavel no corpo).
         // Nao pede resposta: leva o rodape; o contato vai em {{5}}.
         body:
             'Olá, *{{1}}*.\n\n'
             + 'O boleto da *{{2}}* da sua reserva no *{{3}}*, enviado em {{4}}, foi *baixado* e não deve ser pago. '
             + 'Se você já pagou, fale com a gente pelo número abaixo.\n\n'
-            + 'O *{{3}}* entrou na lista de empreendimentos *sem cobrança antes da assinatura do financiamento*, '
+            + 'O *{{6}}* entrou na lista de empreendimentos *sem cobrança antes da assinatura do financiamento*, '
             + 'por prazo indeterminado definido pela construtora. Nenhuma nova cobrança será feita até segunda ordem.\n\n'
             + '📞 Em caso de dúvidas, fale com a gente pelo número *{{5}}*.',
-        examples: ['Felipe', 'parcela 1 de 47', 'Park Alameda Sarandi', '08/09/2026', '(44) 99151-0579'],
+        examples: ['Felipe', 'parcela 1 de 47', 'Park Alameda Sarandi', '08/09/2026', '(44) 99151-0579', 'Park Alameda Sarandi'],
         footerText: RODAPE,
         buttons: [],
     };
