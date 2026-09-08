@@ -22,7 +22,7 @@ import db from '../models/sequelize/index.js';
 import Planos from '../services/boleto/AtoParcelaService.js';
 import Emissao from '../services/boleto/ParcelaEmissaoService.js';
 import { dentroDaJanela } from '../lib/boletoJanela.js';
-import { decidirParcela, hojeYmd, PARCELA_STATUS, PLANO_STATUS } from '../lib/atoParcelas.js';
+import { classificarParaRodada, hojeYmd, PARCELA_STATUS, PLANO_STATUS } from '../lib/atoParcelas.js';
 
 const TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
 const CRON_EXPR = '*/10 * * * *';
@@ -69,12 +69,13 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
         catch (err) { out.erros.push(`orfaos: ${err.message}`); }
 
         // 3. emissao
+        let emissaoFalhou = false;
         if (!cfg.ativo) {
             out.emissao = { skipped: 'parcelas_ativo=false' };
         } else if (!manual && !dentroDaJanela(settings)) {
             out.emissao = { skipped: 'fora_da_janela' };
-        } else {
-            const stats = { candidatas: 0, emitidas: 0, reemitidas: 0, falhas: 0, puladas: 0, paradas: 0, teto: cfg.maxEmissoesRodada };
+        } else try {
+            const stats = { candidatas: 0, emitidas: 0, reemitidas: 0, falhas: 0, puladas: 0, paradas: 0, retroativas: 0, teto: cfg.maxEmissoesRodada };
             const hoje = hojeYmd();
             const parcelas = await db.AtoParcela.findAll({
                 where: { status: { [Op.in]: [PARCELA_STATUS.PREVISTA, PARCELA_STATUS.VENCIDA, PARCELA_STATUS.ERRO] } },
@@ -87,17 +88,25 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
                 if ((p.tentativas_erro || 0) >= 5) return false;
                 return !p.updated_at || String(p.updated_at.toISOString()).slice(0, 10) !== hoje;
             });
-            stats.retroativas = 0;
             for (const p of fila) {
+                // Uma parcela com dado quebrado nao pode derrubar a rodada das
+                // outras: conta como falha e segue (a tela mostra o erro).
+                let decisao;
+                try { decisao = classificarParaRodada(p, cfg, hoje); }
+                catch (err) {
+                    stats.falhas++;
+                    console.warn(`[PARCELAS] parcela ${p.id} (reserva ${p.idreserva}) nao classificada: ${err.message}`);
+                    await p.update({ erro_mensagem: `Rodada: ${err.message}` }).catch(() => {});
+                    continue;
+                }
                 // RETROATIVO: vencimento original antes do corte configurado nao e
                 // tocado pela rodada (nem emissao nem reemissao). Fica na tela como
                 // atraso, para trabalho manual pelo botao "Emitir agora".
-                if (cfg.cobrarAPartirDe && String(p.vencimento).slice(0, 10) < cfg.cobrarAPartirDe) { stats.retroativas++; continue; }
-                const decisao = decidirParcela(p, cfg);
+                if (decisao === 'retroativa') { stats.retroativas++; continue; }
                 if (decisao === 'aguardar') continue;
                 if (decisao === 'parar') { stats.paradas++; continue; }
                 // Parcela vencida na adesao com politica 'ignorar': nao emite.
-                if (p.status === PARCELA_STATUS.PREVISTA && (p.emissoes || 0) === 0 && cfg.vencidasNaAdesao === 'ignorar' && p.vencimento < hoje) { stats.puladas++; continue; }
+                if (decisao === 'pulada') { stats.puladas++; continue; }
                 stats.candidatas++;
                 // Teto opcional (0 = sem teto: tudo que esta na janela sai HOJE).
                 const feitas = stats.emitidas + stats.reemitidas + stats.falhas;
@@ -117,13 +126,19 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
                 else stats.falhas++;
             }
             out.emissao = stats;
+        } catch (err) {
+            // Passo inteiro caiu (banco, portal): registra e NAO marca o dia como
+            // feito - o tick tenta de novo em 10 min enquanto a janela estiver aberta.
+            emissaoFalhou = true;
+            out.erros.push(`emissao: ${err.message}`);
+            console.error('[PARCELAS] passo de emissao falhou:', err);
         }
 
         // 4. lembretes/avisos
         try { out.lembretes = await Emissao.enviarLembretes(cfg, { settings }); }
         catch (err) { out.erros.push(`lembretes: ${err.message}`); }
 
-        await settings.update({ parcelas_ultima_rodada_em: new Date() }).catch(() => {});
+        if (!emissaoFalhou) await settings.update({ parcelas_ultima_rodada_em: new Date() }).catch(() => {});
         out.duracao_s = Math.round((Date.now() - inicio) / 1000);
         console.log('[PARCELAS] Rodada concluida:', JSON.stringify(out));
         return out;
@@ -136,7 +151,11 @@ async function tick() {
     try {
         const settings = await Planos.getSettings();
         const cfg = Planos.cfgParcelas(settings);
-        if (horaBrasilia() !== cfg.horaRodada) return;
+        // A partir da hora configurada, e nao so NELA: se o servidor estava em
+        // deploy/restart as 09h, ou a rodada caiu (08/09/2026), o dia nao pode
+        // ficar sem cobranca - o primeiro tick seguinte recupera. A janela do
+        // Ecobranca (06h-23h, na tela) continua sendo checada dentro do ciclo.
+        if (horaBrasilia() < cfg.horaRodada) return;
         const ultima = settings.parcelas_ultima_rodada_em ? hojeYmd(new Date(settings.parcelas_ultima_rodada_em)) : null;
         if (ultima === hojeYmd()) return;
         await runCiclo();

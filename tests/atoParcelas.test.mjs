@@ -4,8 +4,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     addMonthsClamp, addDays, diffDays, derivarParcelas, diffPlano, calcularEncargos,
-    decidirParcela, condicaoDeEmissao, proximoDiaUtil, motivoEncerramento, PARCELA_STATUS,
+    decidirParcela, classificarParaRodada, condicaoDeEmissao, proximoDiaUtil, motivoEncerramento, PARCELA_STATUS,
 } from '../lib/atoParcelas.js';
+
+test('classificarParaRodada: cfg da tela (sem hoje) + corte retroativo + politica ignorar', () => {
+    // Mesmo formato que cfgParcelas devolve: NAO tem `hoje`. Em 08/09/2026 a
+    // rodada passou este objeto direto para decidirParcela e caiu na 1a parcela.
+    const cfg = { antecedenciaDias: 10, atrasoReemitir: false, atrasoMaxReemissoes: 3, vencidasNaAdesao: 'ignorar', cobrarAPartirDe: '2026-09-08' };
+    const hoje = '2026-09-08';
+    assert.equal(classificarParaRodada({ status: 'prevista', vencimento: '2026-09-10', emissoes: 0 }, cfg, hoje), 'emitir');
+    assert.equal(classificarParaRodada({ status: 'prevista', vencimento: '2026-09-18', emissoes: 0 }, cfg, hoje), 'emitir');
+    assert.equal(classificarParaRodada({ status: 'prevista', vencimento: '2026-09-19', emissoes: 0 }, cfg, hoje), 'aguardar');
+    assert.equal(classificarParaRodada({ status: 'prevista', vencimento: '2026-06-06', emissoes: 0 }, cfg, hoje), 'retroativa');
+    assert.equal(classificarParaRodada({ status: 'vencida', vencimento: '2026-09-01', emissoes: 1 }, cfg, hoje), 'retroativa');
+    assert.equal(classificarParaRodada({ status: 'vencida', vencimento: '2026-09-10', emissoes: 1 }, cfg, '2026-09-12'), 'parar');
+    assert.equal(classificarParaRodada({ status: 'vencida', vencimento: '2026-09-10', emissoes: 1 }, { ...cfg, atrasoReemitir: true }, '2026-09-12'), 'reemitir');
+    // Sem corte: prevista ja vencida e nunca emitida obedece a politica da adesao.
+    const semCorte = { ...cfg, cobrarAPartirDe: null };
+    assert.equal(classificarParaRodada({ status: 'prevista', vencimento: '2026-09-01', emissoes: 0 }, semCorte, hoje), 'pulada');
+    assert.equal(classificarParaRodada({ status: 'prevista', vencimento: '2026-09-01', emissoes: 0 }, { ...semCorte, vencidasNaAdesao: 'emitir' }, hoje), 'emitir');
+    assert.throws(() => classificarParaRodada({ status: 'prevista', vencimento: '2026-09-10' }, cfg), /hoje/);
+});
 
 test('addMonthsClamp preserva o dia e presa ao fim do mes', () => {
     assert.equal(addMonthsClamp('2026-09-20', 1), '2026-10-20');
