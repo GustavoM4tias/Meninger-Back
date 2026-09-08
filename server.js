@@ -491,6 +491,11 @@ async function syncModelsAndPatches(fingerprint) {
     ['MetaCampaign', db.MetaCampaign],
     ['MetaAd', db.MetaAd],
     ['MetaAdSet', db.MetaAdSet],
+    // Fila de distribuição do CV: o rodízio do Office (2438f86) adicionou
+    // rodizio_pos ao model e a coluna nunca nasceu, porque o sync global roda
+    // com alter:false e esta tabela não estava aqui. Resultado: o despacho de
+    // lead quebrava na leitura da fila e 15 leads ficaram presos em 'routed'.
+    ['CvLeadQueue', db.CvLeadQueue],
     // Bolão da Copa (novo módulo em evolução)
     ['Bolao', db.Bolao],
     ['BolaoMatch', db.BolaoMatch],
