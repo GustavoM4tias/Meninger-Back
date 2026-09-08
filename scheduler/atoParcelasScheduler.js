@@ -60,6 +60,7 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
             const enc = await Planos.verificarEncerramentos(cfg);
             out.encerramentos = { planos: enc.length, baixas: 0, baixas_falha: 0 };
             const MOTIVO_BAIXA = {
+                sienge_faturado: 'venda faturada no Sienge',
                 repasse_contrato_emitido: 'contrato emitido pela Caixa (repasse no CV)',
                 reserva_cancelada: 'cancelamento da reserva',
             };

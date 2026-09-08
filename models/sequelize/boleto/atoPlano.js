@@ -3,15 +3,13 @@
 // Plano de parcelas de uma reserva: o que o Office cobra entre o ato pago e o
 // faturamento do contrato no Sienge. UMA linha por reserva.
 //
-// Nasce quando o ato e pago (boleto ou cartao) e morre de um de tres jeitos:
-//   repasse_contrato_emitido  o repasse no CV chegou a "Contrato Emitido CAIXA"
-//                      (ou etapa seguinte) -> o contrato cobra daqui em diante;
-//                      as parcelas previstas viram `transferida`.
+// Nasce quando o ato e pago (boleto ou cartao) e morre de um de quatro jeitos:
+//   sienge_faturado    a venda foi FATURADA no Sienge (financial_institution_date,
+//                      regra do relatorio de Faturamento) -> o ERP cobra daqui em
+//                      diante; previstas viram `transferida`. Titulo NAO conta.
+//   repasse_contrato_emitido  repasse no CV em "Contrato Emitido CAIXA" ou depois.
 //   reserva_cancelada  a reserva morreu no CV; boletos em aberto sao baixados.
 //   manual             alguem encerrou pela tela e disse por que.
-// (`sienge_faturado` e motivo HISTORICO: ate 08/09/2026 a venda faturada no
-// Sienge tambem encerrava. Titulo/faturamento sairam do criterio - o titulo
-// pode ser adiantamento e nao prova que o ERP cobra as mensais.)
 //
 // As parcelas ficam em `ato_parcelas`; os boletos continuam em `boleto_history`
 // (com `parcela_id` preenchido) para reaproveitar verificacao, baixa, PDF e
@@ -36,7 +34,7 @@ export default (sequelize, DataTypes) => {
         },
         encerrado_motivo: {
             type: DataTypes.STRING(40), allowNull: true,
-            comment: 'repasse_contrato_emitido | reserva_cancelada | manual | sem_series | sienge_faturado (historico)',
+            comment: 'sienge_faturado | repasse_contrato_emitido | reserva_cancelada | manual | sem_series',
         },
         encerrado_detalhe: { type: DataTypes.TEXT, allowNull: true },
         encerrado_em: { type: DataTypes.DATE, allowNull: true },
@@ -49,10 +47,10 @@ export default (sequelize, DataTypes) => {
         ato_pago_em: { type: DataTypes.DATE, allowNull: true },
 
         // Contrato do Sienge (tabela local `contracts`, external_id = idreserva).
-        // Contrato do Sienge e so INFORMACAO na tela (nao e criterio de encerramento).
-        // As colunas sienge_receivable_bill_id / sienge_venda_faturada_em continuam no
-        // banco por historico, fora do model.
         sienge_contract_id: { type: DataTypes.BIGINT, allowNull: true },
+        // sienge_receivable_bill_id continua no banco fora do model: o titulo nao
+        // e criterio (pode ser adiantamento) e saiu da tela em 08/09/2026.
+        sienge_venda_faturada_em: { type: DataTypes.DATEONLY, allowNull: true, comment: 'contracts.financial_institution_date - "faturado como venda", regra do relatorio de Faturamento.' },
         sienge_verificado_em: { type: DataTypes.DATE, allowNull: true },
         // Repasse do CV (ultimo da reserva): a partir de "Contrato Emitido CAIXA" o
         // plano encerra (regra de 08/09/2026, etapas em boleto_settings).
