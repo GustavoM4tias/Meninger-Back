@@ -109,7 +109,7 @@ export function getBaixaTemplateDefinition() {
             + 'Se você já pagou, fale com a gente pelo número abaixo.\n\n'
             + 'O *{{6}}* entrou na lista de empreendimentos *sem cobrança antes da assinatura do financiamento*, '
             + 'por prazo indeterminado definido pela construtora. Nenhuma nova cobrança será feita até segunda ordem.\n\n'
-            + '📞 Em caso de dúvidas, fale com a gente pelo número *{{5}}*.',
+            + '📞 Em caso de dúvidas, fale com a gente pelo número *{{5}}*. Estamos à disposição.',
         examples: ['Felipe', 'parcela 1 de 47', 'Park Alameda Sarandi', '08/09/2026', '(44) 99151-0579', 'Park Alameda Sarandi'],
         footerText: RODAPE,
         buttons: [],

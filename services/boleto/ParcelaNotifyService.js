@@ -275,7 +275,7 @@ export async function sendAvisoBaixa({ titular, dados, historyId = null, canais 
         + ' Se você já pagou, fale com a gente pelo número abaixo.'
         + ` O ${dados.empreendimento} entrou na lista de empreendimentos sem cobrança antes da assinatura do financiamento, por prazo indeterminado definido pela construtora.`
         + ' Nenhuma nova cobrança será feita até segunda ordem.'
-        + ` Em caso de dúvidas, fale com a gente pelo número ${dados.contato}.`;
+        + ` Em caso de dúvidas, fale com a gente pelo número ${dados.contato}. Estamos à disposição.`;
     const pulado = { ok: false, skipped: true, error: 'canal nao solicitado' };
     const [email, whatsapp] = await Promise.all([
         canais.includes('email') ? enviarEmail(EmailType.BOLETO_PARCELA_BAIXA, titular, emailData, null) : pulado,
