@@ -9,8 +9,9 @@
 // Fontes:
 //   - condicoes do CV: tabela local `reservas` (sync horario) para a adesao em
 //     massa; API do CV ao vivo quando vai emitir (ParcelaEmissaoService).
-//   - "Sienge faturou": tabela local `contracts` (sync horario, external_id =
-//     idreserva) pelo `receivable_bill_id`. E o mesmo sinal do `evndcontrato.nutitulo`.
+//   - "o contrato assumiu": etapa do repasse na tabela local `repasses` (ultimo
+//     idrepasse da reserva). O contrato do Sienge (`contracts`, external_id =
+//     idreserva) e so informacao na tela; nao e criterio desde 08/09/2026.
 //   - reserva morta: `reservas.situacao.idsituacao` em `cv_situacoes_reserva_morta`.
 import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
@@ -43,7 +44,6 @@ export function cfgParcelas(s) {
         idseries: ids,
         exigirAtoPago: s?.parcelas_exigir_ato_pago ?? D.exigirAtoPago,
         antecedenciaDias: num(s?.parcelas_antecedencia_dias, D.antecedenciaDias),
-        encerrarQuandoFaturado: s?.parcelas_encerrar_quando_faturado ?? D.encerrarQuandoFaturado,
         // CEP recusado pela Caixa -> endereco de contingencia (o da Menin) e alerta na reserva.
         cepContingenciaAtivo: s?.parcelas_cep_contingencia_ativo ?? D.cepContingenciaAtivo,
         cepContingencia: { ...D.cepContingencia, ...((s?.parcelas_cep_contingencia && typeof s.parcelas_cep_contingencia === 'object') ? s.parcelas_cep_contingencia : {}) },
@@ -183,7 +183,7 @@ export async function atoPago(idreserva) {
 /** Contrato local do Sienge da reserva (o nao-cancelado mais recente). */
 export async function contratoSienge(idreserva) {
     const [row] = await db.sequelize.query(
-        `SELECT id, situation, receivable_bill_id, financial_institution_date, contract_date, issue_date
+        `SELECT id, situation, contract_date, issue_date
            FROM contracts
           WHERE external_id = :ext
           ORDER BY (lower(coalesce(situation,'')) = 'cancelado') ASC, id DESC
@@ -268,7 +268,7 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
             if (!pago) return { plano: null, criado: false, skipped: 'ato_nao_pago', resumo: {} };
             opts.atoPagoEm = pago.paid_at;
         }
-        const contrato = await contratoSienge(idreserva);
+        const [contrato, repasse] = await Promise.all([contratoSienge(idreserva), repasseAtual(idreserva)]);
         plano = await AtoPlano.create({
             idreserva,
             ...denormDaReserva(reserva, viaCv),
@@ -276,9 +276,10 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
             origem: opts.origem || 'ato_pago',
             ato_pago_em: opts.atoPagoEm || null,
             sienge_contract_id: contrato?.id || null,
-            sienge_receivable_bill_id: contrato?.receivable_bill_id || null,
-            sienge_venda_faturada_em: contrato?.financial_institution_date || null,
             sienge_verificado_em: new Date(),
+            cv_repasse_id: repasse?.idrepasse || null,
+            cv_repasse_situacao_id: repasse?.idsituacao_repasse || null,
+            cv_repasse_situacao: repasse?.status_repasse || null,
             cv_sincronizado_em: new Date(),
             updated_by: opts.userId || null,
         });
@@ -289,8 +290,8 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
             numero: d.numero, total: d.total, vencimento: d.vencimento, valor: d.valor,
             status: PARCELA_STATUS.PREVISTA,
         })));
-        // Ja nasceu faturado/cancelado? Encerra na hora, sem emitir nada.
-        const motivo = motivoEncerramento({ contrato, reservaCancelada: cancelada, encerrarQuandoFaturado: cfg.encerrarQuandoFaturado });
+        // Ja nasceu cancelado, ou com o repasse alem de "Contrato Emitido CAIXA"? Encerra na hora, sem emitir nada.
+        const motivo = motivoEncerramento({ reservaCancelada: cancelada, repasseSituacaoId: repasse?.idsituacao_repasse || null, encerrarEtapasRepasse: cfg.encerrarEtapasRepasse });
         if (motivo) await encerrarPlano(plano, motivo, { detalhe: 'detectado na criacao do plano' });
         console.log(`[PARCELAS] Plano criado para a reserva ${idreserva}: ${derivadas.length} parcela(s)${motivo ? ` - encerrado (${motivo})` : ''}.`);
         return { plano, criado: true, resumo: { parcelas: derivadas.length, encerrado: motivo || null } };
@@ -457,26 +458,20 @@ export async function verificarEncerramentos(cfg) {
             const [contrato, local, repasse] = await Promise.all([contratoSienge(plano.idreserva), carregarReservaLocal(plano.idreserva), repasseAtual(plano.idreserva)]);
             await plano.update({
                 sienge_contract_id: contrato?.id || null,
-                sienge_receivable_bill_id: contrato?.receivable_bill_id || null,
-                sienge_venda_faturada_em: contrato?.financial_institution_date || null,
                 sienge_verificado_em: new Date(),
                 cv_repasse_id: repasse?.idrepasse || null,
                 cv_repasse_situacao_id: repasse?.idsituacao_repasse || null,
                 cv_repasse_situacao: repasse?.status_repasse || null,
             });
             const motivo = motivoEncerramento({
-                contrato,
-                encerrarQuandoFaturado: cfg.encerrarQuandoFaturado,
                 situacaoMorta: situacaoMortaLocal(local, cfg.situacoesMortas),
                 repasseSituacaoId: repasse?.idsituacao_repasse || null,
                 encerrarEtapasRepasse: cfg.encerrarEtapasRepasse,
             });
             if (!motivo) continue;
-            const detalhe = motivo === 'sienge_faturado'
-                ? `contrato Sienge ${contrato.id} faturado como venda em ${contrato.financial_institution_date}`
-                : motivo === 'repasse_contrato_emitido'
-                    ? `repasse ${repasse.idrepasse} na etapa "${repasse.status_repasse}" (${repasse.idsituacao_repasse}) no CV${repasse.data_status_repasse ? ` desde ${String(repasse.data_status_repasse).slice(0, 10)}` : ''}`
-                    : `reserva na situacao "${local?.situacao?.situacao || '?'}" no CV`;
+            const detalhe = motivo === 'repasse_contrato_emitido'
+                ? `repasse ${repasse.idrepasse} na etapa "${repasse.status_repasse}" (${repasse.idsituacao_repasse}) no CV${repasse.data_status_repasse ? ` desde ${String(repasse.data_status_repasse).slice(0, 10)}` : ''}`
+                : `reserva na situacao "${local?.situacao?.situacao || '?'}" no CV`;
             const { parcelasComBoletoVivo } = await encerrarPlano(plano, motivo, { detalhe });
             encerrados.push({ plano, motivo, detalhe, parcelasComBoletoVivo });
         } catch (err) {

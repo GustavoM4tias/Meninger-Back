@@ -100,7 +100,7 @@ export async function updateSettings(req, res) {
             'active',
             // Parcelas mensais (lib/atoParcelas.js)
             'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago',
-            'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado', 'parcelas_encerrar_etapas_repasse',
+            'parcelas_antecedencia_dias', 'parcelas_encerrar_etapas_repasse',
             'parcelas_cep_contingencia_ativo', 'parcelas_cep_contingencia',
             'parcelas_vencidas_na_adesao', 'parcelas_cobrar_a_partir_de',
             'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada', 'parcelas_lote_tamanho', 'parcelas_lote_pausa_min',

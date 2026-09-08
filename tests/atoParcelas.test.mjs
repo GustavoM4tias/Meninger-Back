@@ -159,19 +159,13 @@ test('condicaoDeEmissao: no prazo mantem; vencida sai com o mesmo valor e vencim
     assert.equal(comEncargo.valor, 1030);
 });
 
-test('motivoEncerramento: Sienge assume so pela venda faturada; titulo nao conta; cancelada ganha', () => {
-    const completo = { receivable_bill_id: 33058, financial_institution_date: '2026-09-01', situation: 'Emitido' };
-    const soTitulo = { receivable_bill_id: 33058, financial_institution_date: null, situation: 'Emitido' };
-    const soVenda = { receivable_bill_id: null, financial_institution_date: '2026-09-01', situation: 'Solicitado' };
-    assert.equal(motivoEncerramento({ contrato: completo }), 'sienge_faturado');
-    assert.equal(motivoEncerramento({ contrato: soTitulo }), null);           // caso real: 42 contratos em 07/09
-    assert.equal(motivoEncerramento({ contrato: soVenda }), 'sienge_faturado');
-    assert.equal(motivoEncerramento({ contrato: { receivable_bill_id: null, situation: 'Autorizado' } }), null);
-    assert.equal(motivoEncerramento({ contrato: null }), null);
-    assert.equal(motivoEncerramento({ contrato: { ...completo, situation: 'Cancelado' } }), null);
-    assert.equal(motivoEncerramento({ contrato: completo, encerrarQuandoFaturado: false }), null);
-    assert.equal(motivoEncerramento({ contrato: completo, reservaCancelada: true }), 'reserva_cancelada');
-    assert.equal(motivoEncerramento({ contrato: null, situacaoMorta: true }), 'reserva_cancelada');
+test('motivoEncerramento: o Sienge nao e criterio (titulo pode ser adiantamento); cancelada ganha', () => {
+    // 08/09/2026: contrato, titulo e venda faturada no ERP nao encerram nada.
+    assert.equal(motivoEncerramento({}), null);
+    assert.equal(motivoEncerramento(), null);
+    assert.equal(motivoEncerramento({ contrato: { receivable_bill_id: 33058, financial_institution_date: '2026-09-01' } }), null);
+    assert.equal(motivoEncerramento({ reservaCancelada: true }), 'reserva_cancelada');
+    assert.equal(motivoEncerramento({ situacaoMorta: true }), 'reserva_cancelada');
 });
 
 test('CEP recusado pela Caixa: reconhece a mensagem e troca so o endereco pelo de contingencia', () => {
@@ -189,22 +183,20 @@ test('CEP recusado pela Caixa: reconhece a mensagem e troca so o endereco pelo d
     assert.equal(t2.cep, '17500005'); assert.equal(t2.numero, '231'); assert.equal(t2.endereco, 'Rua São Luiz');
 });
 
-test('motivoEncerramento: repasse em Contrato Emitido CAIXA (ou depois) tambem encerra; qualquer regra basta', () => {
-    const soTitulo = { receivable_bill_id: 33058, financial_institution_date: null, situation: 'Emitido' };
+test('motivoEncerramento: a UNICA regra e o repasse em Contrato Emitido CAIXA (ou depois)', () => {
     // 45 Contrato Emitido CAIXA, 46 Contratos Assinados MCMV, 54 Faturado SIENGE MCMV: encerra.
-    assert.equal(motivoEncerramento({ contrato: soTitulo, repasseSituacaoId: 45 }), 'repasse_contrato_emitido');
-    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 46 }), 'repasse_contrato_emitido');
-    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: '54' }), 'repasse_contrato_emitido');
-    // 44 Em Contratacao CAIXA (antes), 51 Documento Pendente (desvio), 10 Cancelado: nao encerra por esta regra.
-    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 44 }), null);
-    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 51 }), null);
-    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 10 }), null);
-    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: null }), null);
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 45 }), 'repasse_contrato_emitido');
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 46 }), 'repasse_contrato_emitido');
+    assert.equal(motivoEncerramento({ repasseSituacaoId: '54' }), 'repasse_contrato_emitido');
+    // 44 Em Contratacao CAIXA (antes), 51 Documento Pendente (desvio), 10 Cancelado, 1 Em espera: nao encerra.
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 44 }), null);
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 51 }), null);
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 10 }), null);
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 1 }), null);
+    assert.equal(motivoEncerramento({ repasseSituacaoId: null }), null);
     // Etapas configuradas na tela mandam; [] desliga a regra.
-    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 44, encerrarEtapasRepasse: [44] }), 'repasse_contrato_emitido');
-    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 46, encerrarEtapasRepasse: [] }), null);
-    // Venda faturada continua ganhando do repasse; cancelada ganha de tudo.
-    const faturado = { receivable_bill_id: 1, financial_institution_date: '2026-09-01', situation: 'Emitido' };
-    assert.equal(motivoEncerramento({ contrato: faturado, repasseSituacaoId: 46 }), 'sienge_faturado');
-    assert.equal(motivoEncerramento({ contrato: faturado, repasseSituacaoId: 46, situacaoMorta: true }), 'reserva_cancelada');
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 44, encerrarEtapasRepasse: [44] }), 'repasse_contrato_emitido');
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 46, encerrarEtapasRepasse: [] }), null);
+    // Cancelada ganha de tudo.
+    assert.equal(motivoEncerramento({ repasseSituacaoId: 46, situacaoMorta: true }), 'reserva_cancelada');
 });

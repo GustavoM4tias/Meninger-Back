@@ -189,7 +189,8 @@ export default (sequelize, DataTypes) => {
         },
         parcelas_exigir_ato_pago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Plano so nasce com o ato pago (boleto ou cartao).' },
         parcelas_antecedencia_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 10, comment: 'Boleto da parcela sai N dias corridos antes do vencimento.' },
-        parcelas_encerrar_quando_faturado: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Encerra o plano quando a venda e faturada no Sienge (contracts.financial_institution_date).' },
+        // parcelas_encerrar_quando_faturado existe no banco mas nao e lida desde
+        // 08/09/2026: o Sienge saiu do criterio de encerramento (so o repasse do CV).
         parcelas_cep_contingencia_ativo: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'CEP recusado pela Caixa: emite com o endereco de contingencia e marca a reserva para corrigir o CV.' },
         parcelas_cep_contingencia: {
             type: DataTypes.JSONB, allowNull: true,
