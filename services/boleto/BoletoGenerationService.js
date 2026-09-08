@@ -8,6 +8,7 @@ import { sendBoletoToTitular } from './BoletoNotifyService.js';
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { ATO_STATUS, comStatusAto } from '../../lib/atoStatus.js';
+import { PARCELAS_DEFAULTS, ehErroDeCep, titularComEnderecoContingencia } from '../../lib/atoParcelas.js';
 import { dentroDaJanela, proximaAbertura, ajustarParaJanela, descreverJanela, formatarAgendamento } from '../../lib/boletoJanela.js';
 import { Op } from 'sequelize';
 
@@ -1309,26 +1310,42 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         }
 
         let boletoBuffer, nossoNumero, seuNumero, baixaPrevia;
+        let alertaCep = null;
+        const paramsEco = (end) => ({
+            credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
+            cnpj_empresa: cnpjEmpresa,
+            idpessoa_cv: titular.idpessoa_cv,
+            nossoNumero: nossoNumeroCalculado,
+            vencimento,
+            valor: serie.valor,
+            nome: titular.nome,
+            documento: titular.documento,
+            endereco: end.endereco,
+            numero: end.numero,
+            complemento: end.complemento || '',
+            bairro: end.bairro,
+            cep: end.cep,
+            cidade: end.cidade,
+            estado: end.estado,
+            baixaPreviaNossoNumero,    // opcional: se preenchido, baixa antes de emitir
+        });
         try {
             console.log(`[BOLETO] Iniciando Playwright Ecobrança${baixaPreviaNossoNumero ? ` (com baixa prévia ${baixaPreviaNossoNumero})` : ''}...`);
-            const ecoResult = await runEcoCobrancaBoleto({
-                credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
-                cnpj_empresa: cnpjEmpresa,
-                idpessoa_cv: titular.idpessoa_cv,
-                nossoNumero: nossoNumeroCalculado,
-                vencimento,
-                valor: serie.valor,
-                nome: titular.nome,
-                documento: titular.documento,
-                endereco: titularCobranca.endereco,
-                numero: titularCobranca.numero,
-                complemento: titularCobranca.complemento || '',
-                bairro: titularCobranca.bairro,
-                cep: titularCobranca.cep,
-                cidade: titularCobranca.cidade,
-                estado: titularCobranca.estado,
-                baixaPreviaNossoNumero,    // opcional: se preenchido, baixa antes de emitir
-            });
+            let ecoResult;
+            try {
+                ecoResult = await runEcoCobrancaBoleto(paramsEco(titularCobranca));
+            } catch (err) {
+                // CEP recusado pela Caixa (CEP genérico da cidade): o boleto sai
+                // mesmo assim com o endereço de contingência (o da Menin, que
+                // também está no contrato) e a reserva recebe o alerta para
+                // corrigir o cadastro. Mesma regra das parcelas (08/09/2026).
+                const contingenciaAtiva = settings.parcelas_cep_contingencia_ativo ?? PARCELAS_DEFAULTS.cepContingenciaAtivo;
+                if (!(contingenciaAtiva && ehErroDeCep(err.message))) throw err;
+                const alternativo = titularComEnderecoContingencia(titularCobranca, settings.parcelas_cep_contingencia);
+                console.warn(`[BOLETO] Caixa recusou o CEP ${titularCobranca.cep}: emitindo com o endereço de contingência (CEP ${alternativo.cep}).`);
+                ecoResult = await runEcoCobrancaBoleto(paramsEco(alternativo));
+                alertaCep = `CEP ${titularCobranca.cep || '(vazio)'} recusado pela Caixa. Boleto emitido com o endereço de contingência (${alternativo.endereco}, ${alternativo.numero}, CEP ${alternativo.cep}). Corrija o CEP do cliente no CV.`;
+            }
             boletoBuffer = ecoResult.boletoBuffer;
             nossoNumero  = ecoResult.nossoNumero;
             seuNumero    = ecoResult.seuNumero;
@@ -1336,6 +1353,10 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         } finally {
             // Sempre libera o lock — emite OK, falha ou exceção.
             await EcoLock.release(ecoOwner).catch(() => {});
+        }
+        if (alertaCep) {
+            warnings.push({ etapa: 'cep_contingencia', erro: alertaCep });
+            await EventLogger.log({ historyId: history.id, idreserva, type: 'cep_contingencia', severity: 'warning', message: alertaCep, data: { cepOriginal: titularCobranca.cep } });
         }
 
         // ── 7.5. Pós-baixa: atualiza histórico do boleto antigo (se foi substituído) ─
@@ -1506,6 +1527,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             manual
                 ? '🔁 Boleto Caixa reemitido com a condição atualizada (enviado ao cliente; etapa do CV mantida).'
                 : '✅ Boleto Caixa emitido com sucesso!',
+            ...(alertaCep ? ['', `⚠️ ATENÇÃO: ${alertaCep}`] : []),
             '',
             `📋 Empreendimento: ${unidade.empreendimento}`,
             `🏠 Unidade: ${unidade.unidade || unidade.bloco || '-'}`,
