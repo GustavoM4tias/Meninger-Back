@@ -29,6 +29,7 @@ router.get('/parcelas/facets', ...ver, P.getFacets);
 router.get('/parcelas/status', ...ver, P.getStatus);
 router.get('/parcelas/rodadas', ...ver, P.listRodadas);
 router.get('/parcelas/boletos', ...ver, P.listBoletos);
+router.get('/parcelas/repasse-etapas', ...ver, P.getRepasseEtapas);
 router.get('/parcelas/planos/:idreserva', ...ver, P.getPlano);
 router.post('/parcelas/planos', ...operar, P.criarPlano);
 // O plano e congelado depois do Envio Sienge: aplicar o CV e editar parcela sao

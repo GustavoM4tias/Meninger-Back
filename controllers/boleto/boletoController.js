@@ -100,7 +100,7 @@ export async function updateSettings(req, res) {
             'active',
             // Parcelas mensais (lib/atoParcelas.js)
             'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago',
-            'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado',
+            'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado', 'parcelas_encerrar_etapas_repasse',
             'parcelas_vencidas_na_adesao', 'parcelas_cobrar_a_partir_de',
             'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada', 'parcelas_lote_tamanho', 'parcelas_lote_pausa_min',
             'atraso_reemitir', 'atraso_max_reemissoes',
@@ -133,6 +133,14 @@ export async function updateSettings(req, res) {
             || intEntre('lembrete_dias_antes', 0, 30)
             || intEntre('aviso_atraso_dias_depois', 0, 30);
         if (erroParcelas) return res.status(400).json({ error: erroParcelas });
+        // Etapas do repasse que encerram o plano: lista de ids inteiros positivos ([] desliga).
+        if (req.body.parcelas_encerrar_etapas_repasse !== undefined) {
+            const v = req.body.parcelas_encerrar_etapas_repasse;
+            if (!Array.isArray(v) || v.some(x => !Number.isInteger(Number(x)) || Number(x) <= 0)) {
+                return res.status(400).json({ error: 'parcelas_encerrar_etapas_repasse deve ser uma lista de ids de situacao do repasse (inteiros positivos).' });
+            }
+            req.body.parcelas_encerrar_etapas_repasse = [...new Set(v.map(Number))];
+        }
         if (req.body.parcelas_cobrar_a_partir_de !== undefined) {
             const v = req.body.parcelas_cobrar_a_partir_de;
             if (v === '' || v === null) req.body.parcelas_cobrar_a_partir_de = null;

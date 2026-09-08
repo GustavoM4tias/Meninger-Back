@@ -49,6 +49,11 @@ export default (sequelize, DataTypes) => {
         sienge_receivable_bill_id: { type: DataTypes.BIGINT, allowNull: true },
         sienge_venda_faturada_em: { type: DataTypes.DATEONLY, allowNull: true, comment: 'contracts.financial_institution_date - "faturado como venda", regra do relatorio de Faturamento.' },
         sienge_verificado_em: { type: DataTypes.DATE, allowNull: true },
+        // Repasse do CV (ultimo da reserva): a partir de "Contrato Emitido CAIXA" o
+        // plano encerra (regra de 08/09/2026, etapas em boleto_settings).
+        cv_repasse_id: { type: DataTypes.INTEGER, allowNull: true },
+        cv_repasse_situacao_id: { type: DataTypes.INTEGER, allowNull: true },
+        cv_repasse_situacao: { type: DataTypes.STRING(120), allowNull: true },
 
         // Ultima leitura das condicoes no CV (para a tela mostrar divergencias).
         cv_sincronizado_em: { type: DataTypes.DATE, allowNull: true },

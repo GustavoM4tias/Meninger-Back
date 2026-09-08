@@ -172,3 +172,23 @@ test('motivoEncerramento: Sienge assume so pela venda faturada; titulo nao conta
     assert.equal(motivoEncerramento({ contrato: completo, reservaCancelada: true }), 'reserva_cancelada');
     assert.equal(motivoEncerramento({ contrato: null, situacaoMorta: true }), 'reserva_cancelada');
 });
+
+test('motivoEncerramento: repasse em Contrato Emitido CAIXA (ou depois) tambem encerra; qualquer regra basta', () => {
+    const soTitulo = { receivable_bill_id: 33058, financial_institution_date: null, situation: 'Emitido' };
+    // 45 Contrato Emitido CAIXA, 46 Contratos Assinados MCMV, 54 Faturado SIENGE MCMV: encerra.
+    assert.equal(motivoEncerramento({ contrato: soTitulo, repasseSituacaoId: 45 }), 'repasse_contrato_emitido');
+    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 46 }), 'repasse_contrato_emitido');
+    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: '54' }), 'repasse_contrato_emitido');
+    // 44 Em Contratacao CAIXA (antes), 51 Documento Pendente (desvio), 10 Cancelado: nao encerra por esta regra.
+    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 44 }), null);
+    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 51 }), null);
+    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 10 }), null);
+    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: null }), null);
+    // Etapas configuradas na tela mandam; [] desliga a regra.
+    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 44, encerrarEtapasRepasse: [44] }), 'repasse_contrato_emitido');
+    assert.equal(motivoEncerramento({ contrato: null, repasseSituacaoId: 46, encerrarEtapasRepasse: [] }), null);
+    // Venda faturada continua ganhando do repasse; cancelada ganha de tudo.
+    const faturado = { receivable_bill_id: 1, financial_institution_date: '2026-09-01', situation: 'Emitido' };
+    assert.equal(motivoEncerramento({ contrato: faturado, repasseSituacaoId: 46 }), 'sienge_faturado');
+    assert.equal(motivoEncerramento({ contrato: faturado, repasseSituacaoId: 46, situacaoMorta: true }), 'reserva_cancelada');
+});

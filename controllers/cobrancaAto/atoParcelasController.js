@@ -186,6 +186,12 @@ export async function listBoletos(req, res) {
     catch (err) { console.error('[PARCELAS] listBoletos:', err); return res.status(500).json({ error: `Falha ao listar os boletos de parcela: ${err.message}` }); }
 }
 
+/** Etapas do workflow de repasse do CV (para escolher quais encerram o plano). */
+export async function getRepasseEtapas(req, res) {
+    try { return res.json(await Planos.listarEtapasRepasse()); }
+    catch (err) { return res.status(500).json({ error: `Falha ao listar as etapas do repasse: ${err.message}` }); }
+}
+
 /** Ultima rodada e configuracao efetiva (para o card da tela). */
 export async function getStatus(req, res) {
     try {
@@ -233,5 +239,5 @@ export async function syncWhatsappTemplates(req, res) {
 
 export default {
     listPlanos, getStats, getFacets, getPlano, criarPlano, sincronizarPlano, editarParcela, pausarPlano, reativarPlano, encerrarPlano,
-    emitirParcela, baixarParcela, marcarPaga, rodarCiclo, getStatus, listRodadas, listBoletos, getWhatsappTemplates, syncWhatsappTemplates,
+    emitirParcela, baixarParcela, marcarPaga, rodarCiclo, getStatus, listRodadas, listBoletos, getRepasseEtapas, getWhatsappTemplates, syncWhatsappTemplates,
 };

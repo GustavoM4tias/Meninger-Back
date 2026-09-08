@@ -22,7 +22,7 @@ import db from '../models/sequelize/index.js';
 import Planos from '../services/boleto/AtoParcelaService.js';
 import Emissao from '../services/boleto/ParcelaEmissaoService.js';
 import { dentroDaJanela } from '../lib/boletoJanela.js';
-import { classificarParaRodada, hojeYmd, PARCELA_STATUS, PLANO_STATUS } from '../lib/atoParcelas.js';
+import { classificarParaRodada, hojeYmd, MOTIVOS_TRANSFERENCIA, PARCELA_STATUS, PLANO_STATUS } from '../lib/atoParcelas.js';
 
 const TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
 const CRON_EXPR = '*/10 * * * *';
@@ -59,11 +59,16 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
         try {
             const enc = await Planos.verificarEncerramentos(cfg);
             out.encerramentos = { planos: enc.length, baixas: 0, baixas_falha: 0 };
+            const MOTIVO_BAIXA = {
+                sienge_faturado: 'venda faturada no Sienge',
+                repasse_contrato_emitido: 'contrato emitido pela Caixa (repasse no CV)',
+                reserva_cancelada: 'cancelamento da reserva',
+            };
             for (const e of enc) {
                 for (const parcelaId of e.parcelasComBoletoVivo) {
                     const r = await Emissao.baixarBoletoDaParcela(parcelaId, {
-                        motivo: e.motivo === 'sienge_faturado' ? 'contrato faturado no Sienge' : 'cancelamento da reserva',
-                        statusFinal: e.motivo === 'sienge_faturado' ? PARCELA_STATUS.TRANSFERIDA : PARCELA_STATUS.CANCELADA,
+                        motivo: MOTIVO_BAIXA[e.motivo] || e.motivo,
+                        statusFinal: MOTIVOS_TRANSFERENCIA.includes(e.motivo) ? PARCELA_STATUS.TRANSFERIDA : PARCELA_STATUS.CANCELADA,
                         settings,
                     });
                     if (r.ok) out.encerramentos.baixas++; else out.encerramentos.baixas_falha++;

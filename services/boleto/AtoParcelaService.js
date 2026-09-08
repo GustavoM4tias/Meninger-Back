@@ -18,7 +18,7 @@ import { Op } from 'sequelize';
 import { allowedEnterpriseNames } from './boletoScope.js';
 import {
     PARCELAS_DEFAULTS, PLANO_STATUS, PARCELA_STATUS,
-    derivarParcelas, chaveParcela, diffPlano, motivoEncerramento, hojeYmd, diffDays, addDays,
+    derivarParcelas, chaveParcela, diffPlano, motivoEncerramento, MOTIVOS_TRANSFERENCIA, hojeYmd, diffDays, addDays,
 } from '../../lib/atoParcelas.js';
 
 const { AtoPlano, AtoParcela, BoletoHistory, BoletoSettings, UseredeLinkHistory } = db;
@@ -44,6 +44,10 @@ export function cfgParcelas(s) {
         exigirAtoPago: s?.parcelas_exigir_ato_pago ?? D.exigirAtoPago,
         antecedenciaDias: num(s?.parcelas_antecedencia_dias, D.antecedenciaDias),
         encerrarQuandoFaturado: s?.parcelas_encerrar_quando_faturado ?? D.encerrarQuandoFaturado,
+        // Etapas do repasse do CV que encerram o plano ([] = regra desligada; null/ausente = padrao).
+        encerrarEtapasRepasse: Array.isArray(s?.parcelas_encerrar_etapas_repasse)
+            ? s.parcelas_encerrar_etapas_repasse.map(Number).filter(n => Number.isInteger(n) && n > 0)
+            : D.encerrarEtapasRepasse,
         vencidasNaAdesao: s?.parcelas_vencidas_na_adesao || D.vencidasNaAdesao,
         // 'YYYY-MM-DD' ou null. Parcela com vencimento original antes disto e
         // RETROATIVA: a rodada nao toca (trabalho manual pela tela).
@@ -115,6 +119,39 @@ export async function criarPlanoTeste({ idreserva, titular, unidade, cnpj, serie
 }
 
 /** Reserva da tabela local (sync horario) - barata, serve para adesao em massa. */
+/**
+ * Ultimo repasse da reserva na tabela local `repasses` (sincronizada do CV).
+ * 112 reservas tem mais de um repasse (reentrada): vale o mais novo. A etapa
+ * do workflow e `idsituacao_repasse`/`status_repasse` - `etapa` e a FASE do
+ * empreendimento (MODULO 02), nao confundir.
+ */
+export async function repasseAtual(idreserva) {
+    const [row] = await db.sequelize.query(
+        `SELECT idrepasse, idsituacao_repasse, status_repasse, data_status_repasse
+           FROM repasses WHERE idreserva = :id
+          ORDER BY idrepasse DESC LIMIT 1`,
+        { replacements: { id: Number(idreserva) }, type: db.Sequelize.QueryTypes.SELECT },
+    );
+    return row || null;
+}
+
+/**
+ * Catalogo das etapas do repasse para a tela escolher quais encerram o plano:
+ * o workflow do CV (ordem oficial) e, se a API falhar, o que existe na base.
+ */
+export async function listarEtapasRepasse() {
+    try {
+        const { data } = await apiCv.get('/v1/cv/workflow/repasses');
+        const lista = (Array.isArray(data) ? data : []).map(x => ({ id: Number(x.idsituacao), nome: x.nome, ordem: Number(x.ordem) || 0 }))
+            .filter(x => x.id > 0).sort((a, b) => a.ordem - b.ordem);
+        if (lista.length) return { etapas: lista, fonte: 'cv' };
+    } catch (err) {
+        console.warn('[PARCELAS] workflow de repasses no CV falhou, usando a base local:', err.message);
+    }
+    const [rows] = await db.sequelize.query(`SELECT idsituacao_repasse id, max(status_repasse) nome FROM repasses WHERE idsituacao_repasse IS NOT NULL GROUP BY 1 ORDER BY 1`);
+    return { etapas: rows.map(r => ({ id: Number(r.id), nome: r.nome, ordem: Number(r.id) })), fonte: 'local' };
+}
+
 async function carregarReservaLocal(idreserva) {
     const [row] = await db.sequelize.query(
         `SELECT idreserva, titular, unidade_json, condicoes, situacao, empreendimento, unidade
@@ -363,7 +400,7 @@ export async function editarParcela(parcela, { valor, vencimento, userId = null,
  */
 export async function encerrarPlano(plano, motivo, { detalhe = null, userId = null } = {}) {
     const statusPlano = motivo === 'reserva_cancelada' ? PLANO_STATUS.CANCELADO : PLANO_STATUS.ENCERRADO;
-    const statusParcela = motivo === 'sienge_faturado' ? PARCELA_STATUS.TRANSFERIDA : PARCELA_STATUS.CANCELADA;
+    const statusParcela = MOTIVOS_TRANSFERENCIA.includes(motivo) ? PARCELA_STATUS.TRANSFERIDA : PARCELA_STATUS.CANCELADA;
     await AtoParcela.update(
         { status: statusParcela },
         { where: { plano_id: plano.id, status: { [Op.in]: [PARCELA_STATUS.PREVISTA, PARCELA_STATUS.ERRO, PARCELA_STATUS.VENCIDA] } } },
@@ -414,22 +451,29 @@ export async function verificarEncerramentos(cfg) {
     const encerrados = [];
     for (const plano of planos) {
         try {
-            const [contrato, local] = await Promise.all([contratoSienge(plano.idreserva), carregarReservaLocal(plano.idreserva)]);
+            const [contrato, local, repasse] = await Promise.all([contratoSienge(plano.idreserva), carregarReservaLocal(plano.idreserva), repasseAtual(plano.idreserva)]);
             await plano.update({
                 sienge_contract_id: contrato?.id || null,
                 sienge_receivable_bill_id: contrato?.receivable_bill_id || null,
                 sienge_venda_faturada_em: contrato?.financial_institution_date || null,
                 sienge_verificado_em: new Date(),
+                cv_repasse_id: repasse?.idrepasse || null,
+                cv_repasse_situacao_id: repasse?.idsituacao_repasse || null,
+                cv_repasse_situacao: repasse?.status_repasse || null,
             });
             const motivo = motivoEncerramento({
                 contrato,
                 encerrarQuandoFaturado: cfg.encerrarQuandoFaturado,
                 situacaoMorta: situacaoMortaLocal(local, cfg.situacoesMortas),
+                repasseSituacaoId: repasse?.idsituacao_repasse || null,
+                encerrarEtapasRepasse: cfg.encerrarEtapasRepasse,
             });
             if (!motivo) continue;
             const detalhe = motivo === 'sienge_faturado'
                 ? `contrato Sienge ${contrato.id} faturado como venda em ${contrato.financial_institution_date}`
-                : `reserva na situacao "${local?.situacao?.situacao || '?'}" no CV`;
+                : motivo === 'repasse_contrato_emitido'
+                    ? `repasse ${repasse.idrepasse} na etapa "${repasse.status_repasse}" (${repasse.idsituacao_repasse}) no CV${repasse.data_status_repasse ? ` desde ${String(repasse.data_status_repasse).slice(0, 10)}` : ''}`
+                    : `reserva na situacao "${local?.situacao?.situacao || '?'}" no CV`;
             const { parcelasComBoletoVivo } = await encerrarPlano(plano, motivo, { detalhe });
             encerrados.push({ plano, motivo, detalhe, parcelasComBoletoVivo });
         } catch (err) {
@@ -693,6 +737,6 @@ export default {
     getSettings, cfgParcelas, carregarReservaCv, carregarReservaDoPlano, criarPlanoTeste, atoPago, contratoSienge,
     criarOuSincronizarPlano, editarParcela, encerrarPlano, pausarPlano, reativarPlano,
     verificarEncerramentos, aderirPendentes, listarPlanos, estatisticas, facetas, detalhePlano,
-    listarRodadas, listarBoletosParcela,
+    listarRodadas, listarBoletosParcela, repasseAtual, listarEtapasRepasse,
     _internal: { reservaCanceladaCv, situacaoMortaLocal, diffDays },
 };
