@@ -136,8 +136,12 @@ async function encurtar(url) {
  * @param {object} p.dados { empreendimento, unidade, descricao ("parcela 3 de 60"), rotulo ("3/60"),
  *   valor, vencimento, nossoNumero, seuNumero, boletoUrl, encargos?, reemissao? }
  */
-export async function sendParcelaToTitular({ titular, dados, historyId = null, pdfBuffer = null }) {
+export async function sendParcelaToTitular({ titular, dados, historyId = null, pdfBuffer = null, canais = ['email', 'whatsapp'] }) {
     const tag = `[PARCELA][NOTIFY][hist ${historyId || '?'}]`;
+    // `canais` permite reenviar so um canal (ex.: WhatsApp que falhou por
+    // numero mal formatado) sem mandar o e-mail de novo.
+    const quer = (c) => (Array.isArray(canais) ? canais : ['email', 'whatsapp']).includes(c);
+    const pulado = { ok: false, skipped: true, error: 'canal nao solicitado' };
     if (isLocalEnvironment()) {
         const reason = skipLocal();
         console.warn(`${tag} ${reason}`);
@@ -184,12 +188,12 @@ export async function sendParcelaToTitular({ titular, dados, historyId = null, p
         + ' Pague até o vencimento para manter a sua reserva em dia. Em caso de atraso, procure o seu corretor com urgência: sem a confirmação do pagamento, a reserva pode ser cancelada. Se já pagou, desconsidere esta mensagem.';
 
     const [email, whatsapp] = await Promise.all([
-        enviarEmail(EmailType.BOLETO_PARCELA, titular, emailData, attachments),
-        enviarWhatsApp({
+        quer('email') ? enviarEmail(EmailType.BOLETO_PARCELA, titular, emailData, attachments) : Promise.resolve({ ...pulado, to: pickEmail(titular?.email) }),
+        quer('whatsapp') ? enviarWhatsApp({
             titular, templateName: TPL_PARCELA, variables, textoLivre,
             pdfBuffer, pdfFilename: filename, pdfLink: dados.boletoUrl,
             resumo: `Parcela ${dados.rotulo} ${formatCurrency(dados.valor)} venc. ${formatDateBr(dados.vencimento)}`,
-        }),
+        }) : Promise.resolve({ ...pulado, to: pickTitularPhone(titular)?.phone || null }),
     ]);
     console.log(`${tag} email=${email.ok ? 'OK' : (email.skipped ? 'pulado' : 'FALHA')} whatsapp=${whatsapp.ok ? 'OK' : (whatsapp.skipped ? 'pulado' : 'FALHA')}`);
     return { email, whatsapp };
