@@ -198,7 +198,9 @@ export default (sequelize, DataTypes) => {
         // parcelas_prazo_vencida_dias existe no banco mas nao e lida: parcela
         // vencida sai sempre com vencimento no PROXIMO DIA UTIL (07/09/2026).
         parcelas_hora_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 9, comment: 'Hora cheia (Brasilia) da rodada diaria de parcelas.' },
-        parcelas_max_emissoes_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 40, comment: 'Teto de boletos emitidos por rodada (o resto sai no dia seguinte).' },
+        parcelas_max_emissoes_rodada: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 0, comment: 'Teto de boletos por rodada. 0 = sem teto: tudo que esta na janela sai no mesmo dia.' },
+        parcelas_lote_tamanho: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 10, comment: 'Emissoes por lote; entre lotes a rodada pausa (parcelas_lote_pausa_min).' },
+        parcelas_lote_pausa_min: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 5, comment: 'Minutos de pausa entre lotes de emissao. 0 = sem pausa.' },
         // parcelas_criterio_sienge existe no banco mas nao e lida: o Sienge assume
         // quando a venda esta FATURADA (financial_institution_date), so isso (07/09/2026).
         atraso_reemitir: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false, comment: 'true = a rodada reemite parcela vencida sozinha. false (padrao) = a pedido: o cliente responde SIM ao aviso ou alguem clica Reemitir na tela. Sempre para o proximo dia util.' },

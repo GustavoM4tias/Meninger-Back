@@ -102,7 +102,7 @@ export async function updateSettings(req, res) {
             'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago',
             'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado',
             'parcelas_vencidas_na_adesao', 'parcelas_cobrar_a_partir_de',
-            'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada',
+            'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada', 'parcelas_lote_tamanho', 'parcelas_lote_pausa_min',
             'atraso_reemitir', 'atraso_max_reemissoes',
             'lembrete_dias_antes', 'aviso_atraso_dias_depois',
         ];
@@ -126,7 +126,9 @@ export async function updateSettings(req, res) {
         };
         const erroParcelas = intEntre('parcelas_antecedencia_dias', 0, 60)
             || intEntre('parcelas_hora_rodada', 0, 23)
-            || intEntre('parcelas_max_emissoes_rodada', 1, 500)
+            || intEntre('parcelas_max_emissoes_rodada', 0, 1000)
+            || intEntre('parcelas_lote_tamanho', 1, 200)
+            || intEntre('parcelas_lote_pausa_min', 0, 120)
             || intEntre('atraso_max_reemissoes', 0, 12)
             || intEntre('lembrete_dias_antes', 0, 30)
             || intEntre('aviso_atraso_dias_depois', 0, 30);

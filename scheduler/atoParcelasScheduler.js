@@ -99,7 +99,18 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
                 // Parcela vencida na adesao com politica 'ignorar': nao emite.
                 if (p.status === PARCELA_STATUS.PREVISTA && (p.emissoes || 0) === 0 && cfg.vencidasNaAdesao === 'ignorar' && p.vencimento < hoje) { stats.puladas++; continue; }
                 stats.candidatas++;
-                if (stats.emitidas + stats.reemitidas + stats.falhas >= cfg.maxEmissoesRodada) continue;
+                // Teto opcional (0 = sem teto: tudo que esta na janela sai HOJE).
+                const feitas = stats.emitidas + stats.reemitidas + stats.falhas;
+                if (cfg.maxEmissoesRodada > 0 && feitas >= cfg.maxEmissoesRodada) { stats.sobraram = (stats.sobraram || 0) + 1; continue; }
+                // Fim da janela do Ecobranca: o que sobrar fica para a proxima rodada.
+                if (!manual && !dentroDaJanela(settings)) { stats.fora_da_janela = (stats.fora_da_janela || 0) + 1; continue; }
+                // Lotes: a cada N emissoes, pausa de X minutos. Cada emissao ja leva
+                // ~1 min (login + formulario + PDF no portal); a pausa espalha o
+                // envio ao cliente pelo dia em vez de uma rajada de WhatsApp.
+                if (feitas > 0 && cfg.loteTamanho > 0 && feitas % cfg.loteTamanho === 0 && cfg.lotePausaMin > 0) {
+                    console.log(`[PARCELAS] lote de ${cfg.loteTamanho} concluido (${feitas} no total) - pausa de ${cfg.lotePausaMin} min.`);
+                    await new Promise(r => setTimeout(r, cfg.lotePausaMin * 60 * 1000));
+                }
                 const r = await Emissao.emitirParcela(p.id, { settings, userId });
                 if (r.ok) { if (decisao === 'reemitir') stats.reemitidas++; else stats.emitidas++; }
                 else if (r.skipped) stats.puladas++;

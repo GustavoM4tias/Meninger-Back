@@ -49,7 +49,9 @@ export function cfgParcelas(s) {
         // RETROATIVA: a rodada nao toca (trabalho manual pela tela).
         cobrarAPartirDe: s?.parcelas_cobrar_a_partir_de ? String(s.parcelas_cobrar_a_partir_de).slice(0, 10) : null,
         horaRodada: num(s?.parcelas_hora_rodada, D.horaRodada),
-        maxEmissoesRodada: num(s?.parcelas_max_emissoes_rodada, D.maxEmissoesRodada),
+        maxEmissoesRodada: num(s?.parcelas_max_emissoes_rodada, D.maxEmissoesRodada), // 0 = sem teto
+        loteTamanho: num(s?.parcelas_lote_tamanho, D.loteTamanho),
+        lotePausaMin: num(s?.parcelas_lote_pausa_min, D.lotePausaMin),
         atrasoReemitir: s?.atraso_reemitir ?? D.atrasoReemitir, // false = a pedido (cliente/tela)
         atrasoMaxReemissoes: num(s?.atraso_max_reemissoes, D.atrasoMaxReemissoes),
         // Multa e juros ficaram FORA desta etapa (decisao de 07/09/2026): a
