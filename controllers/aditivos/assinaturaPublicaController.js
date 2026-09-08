@@ -1,7 +1,7 @@
 // controllers/aditivos/assinaturaPublicaController.js
 //
 // API PÚBLICA da assinatura de aditivo. Quem mostra a tela é a LP
-// (lp.menin.com.br/aditivo/<token>) — o cliente nunca vê a URL do backend.
+// (lp.menin.com.br/<token>) — o cliente nunca vê a URL do backend.
 //
 // Por que existe: no DocuSign o link do e-mail não é acessível por API, e o
 // link do modo "embedded" vive poucos minutos. Aqui o token é fixo e a URL do
