@@ -15,6 +15,7 @@ export const EmailType = {
     BOLETO_PARCELA: 'boleto.parcela',
     BOLETO_PARCELA_LEMBRETE: 'boleto.parcela.lembrete',
     BOLETO_PARCELA_ATRASO: 'boleto.parcela.atraso',
+    BOLETO_PARCELA_BAIXA: 'boleto.parcela.baixa',
 };
 
 // Contratos mínimos de dados por tipo (JSDoc p/ intellisense)

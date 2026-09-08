@@ -173,6 +173,12 @@ const META = {
         file: 'boleto.parcela.atraso.hbs',
         headerLight: true,
     },
+    'boleto.parcela.baixa': {
+        subject: (d) => `Boleto da ${d.descricao || 'parcela'} baixado - ${d.empreendimento || 'Sua reserva'}`,
+        preview: (d) => `Não pague o boleto enviado em ${d.enviadoEmFormatado || ''}`,
+        file: 'boleto.parcela.baixa.hbs',
+        headerLight: true,
+    },
 };
 
 function compileTemplateOnce(file) {

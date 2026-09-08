@@ -1,0 +1,41 @@
+<p style="margin:0 0 8px 0; font-size:18px; color:#0f172a;">Olá, {{titularPrimeiroNome}}.</p>
+<p style="margin:0 0 24px 0; font-size:15px; color:#475569;">
+    O boleto da <strong style="color:#0f172a;">{{descricao}}</strong> da sua reserva no
+    <strong style="color:#0f172a;">{{empreendimento}}</strong>{{#if unidade}} ({{unidade}}){{/if}},
+    enviado em <strong style="color:#0f172a;">{{enviadoEmFormatado}}</strong>, foi
+    <strong style="color:#0f172a;">baixado</strong> e não deve ser pago.
+    Se você já pagou, fale com a gente pelo número abaixo.
+</p>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; margin:0 0 24px 0; background:#f8fafc;">
+    <tr>
+        <td style="padding:20px 28px;">
+            <p style="margin:0 0 6px 0; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#64748b; font-weight:600;">Boleto baixado</p>
+            <p style="margin:0; font-size:22px; font-weight:700; color:#0f172a; text-decoration:line-through;">{{valorFormatado}}</p>
+            <p style="margin:6px 0 0 0; font-size:13px; color:#64748b;">Vencimento {{vencimentoFormatado}}{{#if nossoNumero}} • Nosso Número {{nossoNumero}}{{/if}}</p>
+        </td>
+    </tr>
+</table>
+
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+    style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; margin:0 0 20px 0;">
+    <tr>
+        <td style="padding:16px 20px; color:#1e3a8a; font-size:14px; line-height:1.6;">
+            O <strong>{{empreendimento}}</strong> entrou na lista de empreendimentos
+            <strong>sem cobrança antes da assinatura do financiamento</strong>, por prazo indeterminado definido pela construtora.
+            Nenhuma nova cobrança será feita até segunda ordem.
+        </td>
+    </tr>
+</table>
+
+<p style="margin:0; font-size:15px; color:#0f172a; line-height:1.6;">
+    📞 Em caso de dúvidas, fale com a gente pelo número <strong>{{contato}}</strong>.
+</p>
+
+<div class="divider"></div>
+
+<p style="margin:0; font-size:12px; color:#94a3b8; text-align:center; line-height:1.6;">
+    📬 Este é um e-mail automático <strong>somente para envio</strong> de comunicados.<br>
+    Por favor, <strong>não responda a esta mensagem</strong> — respostas a este endereço não são monitoradas.
+</p>

@@ -21,7 +21,7 @@ import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
 import ShortLinkService from '../shortLink/ShortLinkService.js';
 import BoletoNotify from './BoletoNotifyService.js';
 import db from '../../models/sequelize/index.js';
-import { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO } from './parcelaWhatsappTemplates.js';
+import { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_BAIXA } from './parcelaWhatsappTemplates.js';
 
 const { WhatsappMessage } = db;
 const { toE164Br, pickEmail, primeiroNome, formatCurrency, formatDateBr, pickTitularPhone, isLocalEnvironment } = BoletoNotify._internal;
@@ -251,4 +251,38 @@ export async function sendAvisoAtraso({ titular, dados, historyId = null }) {
     return { email, whatsapp };
 }
 
-export default { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, _internal: { toE164Br } };
+/**
+ * Aviso de baixa: o boleto ja enviado foi baixado e o empreendimento esta sem
+ * cobranca ate a assinatura do financiamento. `dados.contato` e o numero que
+ * atende as duvidas (obrigatorio: o texto termina nele).
+ * @param {object} p.dados { empreendimento, unidade, descricao, rotulo, valor, vencimento, nossoNumero, enviadoEm, contato }
+ */
+export async function sendAvisoBaixa({ titular, dados, historyId = null, canais = ['email', 'whatsapp'] }) {
+    if (isLocalEnvironment()) {
+        const reason = skipLocal();
+        return { email: { ok: false, skipped: true, error: reason }, whatsapp: { ok: false, skipped: true, error: reason } };
+    }
+    if (!dados?.contato) throw new Error('sendAvisoBaixa: informe dados.contato (numero para duvidas).');
+    const nome = primeiroNome(titular?.nome) || 'cliente';
+    const enviadoEm = formatDateBr(dados.enviadoEm);
+    const emailData = {
+        titularPrimeiroNome: nome, empreendimento: dados.empreendimento, unidade: dados.unidade || '',
+        descricao: dados.descricao, valorFormatado: formatCurrency(dados.valor), vencimentoFormatado: formatDateBr(dados.vencimento),
+        nossoNumero: dados.nossoNumero, enviadoEmFormatado: enviadoEm, contato: dados.contato,
+    };
+    const variables = [nome, dados.descricao, dados.empreendimento || '', enviadoEm, dados.contato];
+    const textoLivre = `Olá, ${nome}. O boleto da ${dados.descricao} da sua reserva no ${dados.empreendimento}, enviado em ${enviadoEm}, foi baixado e não deve ser pago.`
+        + ' Se você já pagou, fale com a gente pelo número abaixo.'
+        + ` O ${dados.empreendimento} entrou na lista de empreendimentos sem cobrança antes da assinatura do financiamento, por prazo indeterminado definido pela construtora.`
+        + ' Nenhuma nova cobrança será feita até segunda ordem.'
+        + ` Em caso de dúvidas, fale com a gente pelo número ${dados.contato}.`;
+    const pulado = { ok: false, skipped: true, error: 'canal nao solicitado' };
+    const [email, whatsapp] = await Promise.all([
+        canais.includes('email') ? enviarEmail(EmailType.BOLETO_PARCELA_BAIXA, titular, emailData, null) : pulado,
+        canais.includes('whatsapp') ? enviarWhatsApp({ titular, templateName: TPL_BAIXA, variables, textoLivre, resumo: `Baixa parcela ${dados.rotulo} (${dados.empreendimento})` }) : pulado,
+    ]);
+    console.log(`[PARCELA][BAIXA][hist ${historyId || '?'}] email=${email.ok ? 'OK' : 'nao'} whatsapp=${whatsapp.ok ? 'OK' : 'nao'}`);
+    return { email, whatsapp };
+}
+
+export default { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoBaixa, _internal: { toE164Br } };

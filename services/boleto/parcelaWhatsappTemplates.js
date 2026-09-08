@@ -7,6 +7,10 @@
 //   boleto_parcela_lembrete_v1  "sua parcela vence em X dias", so texto
 //   boleto_parcela_atraso_v1    "sua parcela venceu; a reserva pode ser cancelada;
 //                               responda SIM (botao) para a nova via"
+//   boleto_parcela_baixa_v1     "o boleto foi baixado, nao pague; o empreendimento
+//                               esta sem cobranca ate a assinatura do financiamento"
+//                               (08/09/2026, Park Alameda Sarandi; empreendimento e
+//                               numero de contato sao variaveis para servir a outros casos)
 //
 // Regras de texto (Gustavo, 07/09/2026): o cliente tem uma RESERVA, nao um
 // contrato - nunca falar em "contrato"; os dois primeiros NAO pedem resposta
@@ -24,6 +28,7 @@ export const LANG = 'pt_BR';
 export const TPL_PARCELA = 'boleto_parcela_v1';
 export const TPL_LEMBRETE = 'boleto_parcela_lembrete_v1';
 export const TPL_ATRASO = 'boleto_parcela_atraso_v1';
+export const TPL_BAIXA = 'boleto_parcela_baixa_v1';
 
 // Mesmo aviso do ato (AVISO_PRAZO do link/boleto), dito para a parcela.
 export const AVISO_PARCELA =
@@ -89,10 +94,32 @@ export function getAtrasoTemplateDefinition() {
     };
 }
 
+export function getBaixaTemplateDefinition() {
+    return {
+        name: TPL_BAIXA,
+        category: 'UTILITY',
+        language: LANG,
+        // {{1}} nome, {{2}} "parcela 1 de 47", {{3}} empreendimento, {{4}} data do
+        // envio do boleto, {{5}} numero de contato (quem atende as duvidas).
+        // Nao pede resposta: leva o rodape; o contato vai em {{5}}.
+        body:
+            'Olá, *{{1}}*.\n\n'
+            + 'O boleto da *{{2}}* da sua reserva no *{{3}}*, enviado em {{4}}, foi *baixado* e não deve ser pago. '
+            + 'Se você já pagou, fale com a gente pelo número abaixo.\n\n'
+            + 'O *{{3}}* entrou na lista de empreendimentos *sem cobrança antes da assinatura do financiamento*, '
+            + 'por prazo indeterminado definido pela construtora. Nenhuma nova cobrança será feita até segunda ordem.\n\n'
+            + '📞 Em caso de dúvidas, fale com a gente pelo número *{{5}}*.',
+        examples: ['Felipe', 'parcela 1 de 47', 'Park Alameda Sarandi', '08/09/2026', '(44) 99151-0579'],
+        footerText: RODAPE,
+        buttons: [],
+    };
+}
+
 export const TODOS = [
     { name: TPL_PARCELA, def: getParcelaTemplateDefinition, comDocumento: true },
     { name: TPL_LEMBRETE, def: getLembreteTemplateDefinition, comDocumento: false },
     { name: TPL_ATRASO, def: getAtrasoTemplateDefinition, comDocumento: false },
+    { name: TPL_BAIXA, def: getBaixaTemplateDefinition, comDocumento: false },
 ];
 
-export default { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TODOS, getParcelaTemplateDefinition, getLembreteTemplateDefinition, getAtrasoTemplateDefinition };
+export default { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_BAIXA, TODOS, getParcelaTemplateDefinition, getLembreteTemplateDefinition, getAtrasoTemplateDefinition, getBaixaTemplateDefinition };
