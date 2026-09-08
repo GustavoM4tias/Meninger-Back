@@ -9,6 +9,7 @@
 //  - os helpers retornam null quando a central ainda não tem valor; aí o
 //    chamador cai pra config própria do módulo + .env (migração sem regressão).
 
+import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { encrypt, decrypt } from '../../utils/encryption.js';
 
@@ -43,6 +44,7 @@ function rowToConfig(row, { withSecrets = false } = {}) {
         meta_campaigns_last_refresh_at:    row.meta_campaigns_last_refresh_at,
         meta_campaigns_last_refresh_ok:    row.meta_campaigns_last_refresh_ok,
         meta_campaigns_last_refresh_error: row.meta_campaigns_last_refresh_error,
+        meta_campaigns_last_alert_at:      row.meta_campaigns_last_alert_at,
     };
     if (!withSecrets) return base;
     return {
@@ -173,8 +175,39 @@ async function recordCampaignsRefresh({ ok, error = null, expiresAt = undefined 
     }
 }
 
+/**
+ * Reserva o direito de mandar UM alerta de expiração dentro da janela pedida.
+ * Atômico de propósito: o UPDATE condicional é a trava entre as instâncias que
+ * rodam o mesmo cron (duas hoje) - quem grava a data primeiro alerta, a outra
+ * recebe 0 linhas e cala. Retorna true se o alerta é seu.
+ */
+async function claimCampaignsAlert(throttleMs) {
+    try {
+        await loadRow();   // garante o singleton
+        const cutoff = new Date(Date.now() - throttleMs);
+        const [affected] = await db.MetaAppConfig.update(
+            { meta_campaigns_last_alert_at: new Date() },
+            {
+                where: {
+                    id: SINGLETON_ID,
+                    [Op.or]: [
+                        { meta_campaigns_last_alert_at: null },
+                        { meta_campaigns_last_alert_at: { [Op.lt]: cutoff } },
+                    ],
+                },
+            },
+        );
+        invalidateCache();
+        return affected > 0;
+    } catch (err) {
+        console.error('[meta-app-config] claimCampaignsAlert falhou:', err.message);
+        return false;
+    }
+}
+
 export default {
     getConfig, updateConfig, recordTest, invalidateCache,
     getAppSecret, getAppId, getGraphVersion,
     getCampaignsToken, updateCampaignsToken, recordCampaignsRefresh,
+    claimCampaignsAlert,
 };

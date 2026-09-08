@@ -32,6 +32,10 @@ export default (sequelize, DataTypes) => {
     meta_campaigns_last_refresh_at:    { type: DataTypes.DATE },
     meta_campaigns_last_refresh_ok:    { type: DataTypes.BOOLEAN },
     meta_campaigns_last_refresh_error: { type: DataTypes.TEXT },
+    // Quando o alerta de expiração foi disparado pela última vez. Mora no banco
+    // (e não em memória) porque o cron roda em mais de uma instância: o throttle
+    // em variável local mandava um aviso por instância a cada restart.
+    meta_campaigns_last_alert_at:      { type: DataTypes.DATE },
   }, {
     tableName: 'meta_app_configs',
     underscored: true,

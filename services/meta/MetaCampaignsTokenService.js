@@ -25,8 +25,9 @@ const ALERT_WINDOW_DAYS   = 7;    // alerta admins quando faltam <= 7 dias e nã
 // Escopos necessários pra ler campanhas/insights de todas as contas do admin.
 export const CAMPAIGNS_OAUTH_SCOPES = ['ads_read', 'read_insights', 'business_management'];
 
-let _lastAlertAt = 0;
-const ALERT_THROTTLE_MS = 12 * 60 * 60 * 1000;   // no máx. 1 alerta / 12h
+const ALERT_THROTTLE_MS = 12 * 60 * 60 * 1000;   // no máx. 1 alerta / 12h (trava no banco)
+
+let _lastExpiredWarnAt = 0;                      // só pra não poluir o log do sync
 
 async function appCreds() {
     const cfg = await MetaAppConfigService.getConfig({ withSecrets: true, useCache: false });
@@ -40,6 +41,11 @@ async function appCreds() {
 function daysUntil(date) {
     if (!date) return null;
     return Math.floor((new Date(date).getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+}
+
+/** Já venceu? (null/sem expiração = não). */
+function isExpired(date) {
+    return !!date && new Date(date).getTime() <= Date.now();
 }
 
 /** Troca um token de usuário por um de longa duração (~60 dias). */
@@ -214,9 +220,12 @@ export async function status({ liveCount = false } = {}) {
         last_refresh_at: cfg?.meta_campaigns_last_refresh_at || null,
         last_refresh_ok: cfg?.meta_campaigns_last_refresh_ok ?? null,
         last_refresh_error: cfg?.meta_campaigns_last_refresh_error || null,
+        // Token vencido continua gravado, mas não vale nada: o sync o ignora e
+        // cai no System User. A UI precisa disso pra não pintar de verde.
+        expired: connected && isExpired(expiresAt),
         accounts_count: null,
     };
-    if (connected && liveCount) {
+    if (connected && !out.expired && liveCount) {
         try {
             const token = await MetaAppConfigService.getCampaignsToken();
             const creds = await appCreds();
@@ -234,16 +243,36 @@ export async function status({ liveCount = false } = {}) {
  * preservando o comportamento atual.
  */
 export async function getCreds() {
-    const token = await MetaAppConfigService.getCampaignsToken();
+    const cfg = await MetaAppConfigService.getConfig({ withSecrets: true, useCache: false });
+    const token = cfg?.meta_campaigns_token;
     if (!token) return null;
-    const version = (await MetaAppConfigService.getGraphVersion()) || 'v21.0';
+
+    // Token vencido é PIOR que token nenhum: com ele todas as chamadas do sync
+    // voltam erro 190 e o relatório inteiro morre, em vez de degradar pro System
+    // User (que enxerga menos contas, mas enxerga). Trata como não configurado.
+    if (isExpired(cfg.meta_campaigns_token_expires_at)) {
+        if (Date.now() - _lastExpiredWarnAt >= 60 * 60 * 1000) {
+            _lastExpiredWarnAt = Date.now();
+            console.warn('⚠️  [meta-campaigns-token] token expirado — sync usando o System User até reconectar.');
+        }
+        return null;
+    }
+
+    const version = cfg.meta_graph_api_version || 'v21.0';
     return { token, version, base: `https://graph.facebook.com/${version}` };
 }
 
 /**
  * Chamado pelo scheduler (full sync): renova o token se estiver perto de expirar
- * e alerta os admins se não der pra renovar e estiver quase caindo. No-op se não
- * há token de campanhas. Nunca lança (best-effort).
+ * e alerta os admins enquanto ainda dá tempo de reconectar. No-op se não há
+ * token de campanhas. Nunca lança (best-effort).
+ *
+ * Regra do alerta: olha a expiração RESULTANTE, não o sucesso da renovação. A
+ * Meta responde 200 ao trocar um token que já é de longa duração e devolve a
+ * MESMA data de expiração — "renovou" sem ganhar um dia. Alertar só no erro da
+ * troca foi o que matou o token calado em 04/09/2026: o primeiro aviso saiu 2h
+ * DEPOIS de ele já estar vencido, e aí não havia mais o que renovar (token
+ * expirado só volta com login de novo).
  */
 export async function maybeRefreshAndAlert() {
     try {
@@ -254,27 +283,42 @@ export async function maybeRefreshAndAlert() {
         const left = daysUntil(expiresAt);
         if (left == null || left > REFRESH_WINDOW_DAYS) return;
 
-        const res = await refresh();
-        if (res.refreshed) {
-            console.log(`✅ [meta-campaigns-token] renovado; expira em ${res.days_left} dias.`);
+        // Token vencido não tem renovação possível; só gasta chamada e enche o
+        // log de erro. Pula direto pro alerta.
+        const res = isExpired(expiresAt) ? { refreshed: false, reason: 'token expirado' } : await refresh();
+
+        const after = await MetaAppConfigService.getConfig({ useCache: false });
+        const leftAfter = daysUntil(after?.meta_campaigns_token_expires_at) ?? left;
+
+        if (res.refreshed && leftAfter > ALERT_WINDOW_DAYS) {
+            console.log(`✅ [meta-campaigns-token] renovado; expira em ${leftAfter} dias.`);
+            return;
+        }
+        if (leftAfter > ALERT_WINDOW_DAYS) {
+            console.warn(`⚠️  [meta-campaigns-token] não renovou (${res.reason}); ainda faltam ${leftAfter} dias.`);
             return;
         }
 
-        // Não renovou e está perto de cair → alerta (throttle 12h).
-        if (left <= ALERT_WINDOW_DAYS && Date.now() - _lastAlertAt >= ALERT_THROTTLE_MS) {
-            _lastAlertAt = Date.now();
-            const userIds = await MarketingConfigService.getAlertRecipients();
-            if (userIds.length) {
-                await NotificationService.notify({
-                    type: NotificationType.META_CAMPAIGNS_TOKEN_EXPIRING,
-                    recipients: { users: userIds },
-                    title: 'Token de campanhas do Meta expirando',
-                    body: `O token de gestão de campanhas do Meta expira em ${left} dia(s) e não foi possível renovar automaticamente. Reconecte em Configurações › Meta para o relatório de campanhas continuar atualizando. (Os leads não são afetados.)`,
-                    link: '/settings/meta',
-                    importance: 7,
-                });
-                console.warn(`🔔 [meta-campaigns-token] alerta enviado: expira em ${left} dias, refresh falhou.`);
-            }
+        // Dentro da janela de aviso — renovando ou não, quem resolve é gente.
+        if (!(await MetaAppConfigService.claimCampaignsAlert(ALERT_THROTTLE_MS))) return;
+
+        const venceu = leftAfter < 0;
+        const quando = new Date(after?.meta_campaigns_token_expires_at || expiresAt).toLocaleDateString('pt-BR');
+        const body = venceu
+            ? `O token de gestão de campanhas do Meta EXPIROU em ${quando} e não tem renovação possível: reconecte em Configurações › Meta ("Reconectar com Facebook"). Até lá o relatório de campanhas roda com o token do System User, que enxerga só as contas atribuídas a ele. (Os leads não são afetados.)`
+            : `O token de gestão de campanhas do Meta expira em ${leftAfter} dia(s), em ${quando}, e a renovação automática não estende esse prazo. Reconecte em Configurações › Meta antes disso para o relatório de campanhas continuar completo. (Os leads não são afetados.)`;
+
+        const userIds = await MarketingConfigService.getAlertRecipients();
+        if (userIds.length) {
+            await NotificationService.notify({
+                type: NotificationType.META_CAMPAIGNS_TOKEN_EXPIRING,
+                recipients: { users: userIds },
+                title: venceu ? 'Token de campanhas do Meta expirou' : 'Token de campanhas do Meta expirando',
+                body,
+                link: '/settings/meta',
+                importance: venceu ? 8 : 7,
+            });
+            console.warn(`🔔 [meta-campaigns-token] alerta enviado: ${venceu ? 'expirado' : `expira em ${leftAfter} dias`}.`);
         }
     } catch (e) {
         console.error('[meta-campaigns-token] maybeRefreshAndAlert falhou:', e.message);
