@@ -94,21 +94,20 @@ function primeiroNome(nomeCompleto) {
  */
 function toE164Br(phone) {
     if (!phone) return null;
-    const digits = String(phone).replace(/\D/g, '');
-    if (!digits) return null;
-    // Já vem com DDI 55 (12 ou 13 dígitos: 55 + 10/11)
-    if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) {
-        // Sanity check: DDD não pode começar com 0 (ex.: "55001434021111" tem DDD "00")
-        const ddd = digits.slice(2, 4);
-        if (ddd.startsWith('0')) return null;
-        return digits;
-    }
-    // 10 = fixo (DDD+8), 11 = celular (DDD+9). Adiciona 55.
-    if (digits.length === 10 || digits.length === 11) {
-        if (digits.startsWith('0')) return null; // DDD não pode começar com 0
-        return '55' + digits;
-    }
-    return null;
+    let d = String(phone).replace(/\D/g, '');
+    if (!d) return null;
+    // Trabalha só com DDD + número; o DDI 55 volta no fim.
+    if (d.startsWith('55') && d.length >= 12) d = d.slice(2);
+    // Zero de tronco antes do DDD: o CV grava "043 99964-6016" como
+    // "55043999646016" (medido em 08/09/2026: 16 de 16 clientes do Anjos, em
+    // Bandeirantes/PR, ficaram sem WhatsApp por isso). Tira o zero.
+    if (d.startsWith('0') && (d.length === 11 || d.length === 12)) d = d.slice(1);
+    // Celular antigo sem o nono dígito (DDD + 8 dígitos começando por 6-9): põe o 9.
+    if (d.length === 10 && /^[1-9][1-9][6-9]/.test(d)) d = d.slice(0, 2) + '9' + d.slice(2);
+    // 10 = fixo (DDD+8), 11 = celular (DDD+9); DDD válido vai de 11 a 99.
+    if (!(d.length === 10 || d.length === 11)) return null;
+    if (!/^[1-9][1-9]/.test(d)) return null;
+    return '55' + d;
 }
 
 /**
