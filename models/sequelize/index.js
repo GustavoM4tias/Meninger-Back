@@ -144,6 +144,7 @@ import BoletoEcoLockDefine from './boleto/boletoEcoLock.js';
 // Parcelas do Ato (plano por reserva + parcelas) - ver lib/atoParcelas.js.
 import AtoPlanoDefine from './boleto/atoPlano.js';
 import AtoParcelaDefine from './boleto/atoParcela.js';
+import AtoParcelaRodadaDefine from './boleto/atoParcelaRodada.js';
 // Link de Cartão (Userede) — credenciais e sessão persistente do portal.
 import UseredeSettingsDefine from './userede/useredeSettings.js';
 import UseredeLinkHistoryDefine from './userede/useredeLinkHistory.js';
@@ -465,6 +466,7 @@ db.BoletoEvent         = BoletoEventDefine(sequelize, DataTypes);
 db.BoletoEcoLock       = BoletoEcoLockDefine(sequelize, DataTypes);
 db.AtoPlano            = AtoPlanoDefine(sequelize, DataTypes);
 db.AtoParcela          = AtoParcelaDefine(sequelize, DataTypes);
+db.AtoParcelaRodada    = AtoParcelaRodadaDefine(sequelize, DataTypes);
 db.UseredeSettings     = UseredeSettingsDefine(sequelize, DataTypes);
 db.UseredeLinkHistory  = UseredeLinkHistoryDefine(sequelize, DataTypes);
 db.UseredeLinkEvent    = UseredeLinkEventDefine(sequelize, DataTypes);

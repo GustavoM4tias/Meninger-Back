@@ -20,17 +20,17 @@ const filtros = (q) => ({
 
 export async function listPlanos(req, res) {
     try { return res.json(await Planos.listarPlanos(req.user, filtros(req.query))); }
-    catch (err) { console.error('[PARCELAS] listPlanos:', err); return res.status(500).json({ error: 'Falha ao listar os planos.' }); }
+    catch (err) { console.error('[PARCELAS] listPlanos:', err); return res.status(500).json({ error: `Falha ao listar os planos: ${err.message}` }); }
 }
 
 export async function getStats(req, res) {
     try { return res.json(await Planos.estatisticas(req.user, filtros(req.query))); }
-    catch (err) { console.error('[PARCELAS] getStats:', err); return res.status(500).json({ error: 'Falha ao calcular os indicadores.' }); }
+    catch (err) { console.error('[PARCELAS] getStats:', err); return res.status(500).json({ error: `Falha ao calcular os indicadores: ${err.message}` }); }
 }
 
 export async function getFacets(req, res) {
     try { return res.json(await Planos.facetas(req.user)); }
-    catch (err) { return res.status(500).json({ error: 'Falha ao carregar os filtros.' }); }
+    catch (err) { console.error('[PARCELAS] getFacets:', err); return res.status(500).json({ error: `Falha ao carregar os filtros: ${err.message}` }); }
 }
 
 export async function getPlano(req, res) {
@@ -38,7 +38,7 @@ export async function getPlano(req, res) {
         const out = await Planos.detalhePlano(req.user, req.params.idreserva);
         if (!out) return res.status(404).json({ error: 'Plano nao encontrado.' });
         return res.json(out);
-    } catch (err) { console.error('[PARCELAS] getPlano:', err); return res.status(500).json({ error: 'Falha ao carregar o plano.' }); }
+    } catch (err) { console.error('[PARCELAS] getPlano:', err); return res.status(500).json({ error: `Falha ao carregar o plano: ${err.message}` }); }
 }
 
 /** Cria o plano de uma reserva pela tela (mesmo sem ato pago: origem manual). */
@@ -174,6 +174,18 @@ export async function rodarCiclo(req, res) {
         .catch(err => console.error('[PARCELAS] ciclo manual falhou:', err.message));
 }
 
+/** Ultimas rodadas do ciclo (historico concreto: quando rodou, o que fez, onde caiu). */
+export async function listRodadas(req, res) {
+    try { return res.json({ rows: await Planos.listarRodadas(req.user, { limit: req.query.limit }) }); }
+    catch (err) { console.error('[PARCELAS] listRodadas:', err); return res.status(500).json({ error: `Falha ao listar as rodadas: ${err.message}` }); }
+}
+
+/** Boletos de parcela do periodo, boleto a boleto, com canal e motivo. */
+export async function listBoletos(req, res) {
+    try { return res.json(await Planos.listarBoletosParcela(req.user, { periodo: req.query.periodo, dia: req.query.dia, status: req.query.status, q: req.query.q, limit: req.query.limit })); }
+    catch (err) { console.error('[PARCELAS] listBoletos:', err); return res.status(500).json({ error: `Falha ao listar os boletos de parcela: ${err.message}` }); }
+}
+
 /** Ultima rodada e configuracao efetiva (para o card da tela). */
 export async function getStatus(req, res) {
     try {
@@ -221,5 +233,5 @@ export async function syncWhatsappTemplates(req, res) {
 
 export default {
     listPlanos, getStats, getFacets, getPlano, criarPlano, sincronizarPlano, editarParcela, pausarPlano, reativarPlano, encerrarPlano,
-    emitirParcela, baixarParcela, marcarPaga, rodarCiclo, getStatus, getWhatsappTemplates, syncWhatsappTemplates,
+    emitirParcela, baixarParcela, marcarPaga, rodarCiclo, getStatus, listRodadas, listBoletos, getWhatsappTemplates, syncWhatsappTemplates,
 };

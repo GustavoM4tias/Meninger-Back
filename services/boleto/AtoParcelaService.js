@@ -18,7 +18,7 @@ import { Op } from 'sequelize';
 import { allowedEnterpriseNames } from './boletoScope.js';
 import {
     PARCELAS_DEFAULTS, PLANO_STATUS, PARCELA_STATUS,
-    derivarParcelas, chaveParcela, diffPlano, motivoEncerramento, hojeYmd, diffDays,
+    derivarParcelas, chaveParcela, diffPlano, motivoEncerramento, hojeYmd, diffDays, addDays,
 } from '../../lib/atoParcelas.js';
 
 const { AtoPlano, AtoParcela, BoletoHistory, BoletoSettings, UseredeLinkHistory } = db;
@@ -617,9 +617,82 @@ export async function detalhePlano(user, idreserva) {
     return { plano, parcelas, boletos, contrato, hoje: hojeYmd() };
 }
 
+// ── Acompanhamento: rodadas e boletos de parcela ──────────────────────────────
+
+/** Ultimas rodadas do ciclo (automaticas e manuais), mais recente primeiro. */
+export async function listarRodadas(user, { limit = 30 } = {}) {
+    const rows = await db.AtoParcelaRodada.findAll({
+        order: [['inicio', 'DESC']],
+        limit: Math.min(Math.max(Number(limit) || 30, 1), 200),
+    });
+    const ids = [...new Set(rows.map(r => r.user_id).filter(Boolean))];
+    const nomes = ids.length ? await db.User.findAll({ where: { id: ids }, attributes: ['id', 'username'] }) : [];
+    const nome = Object.fromEntries(nomes.map(u => [u.id, u.username]));
+    return rows.map(r => ({ ...r.get({ plain: true }), user_nome: r.user_id ? (nome[r.user_id] || null) : null }));
+}
+
+/**
+ * Boletos de PARCELA emitidos (ou que falharam) num periodo, com o canal de
+ * cada um e o motivo quando nao saiu. E o "boleto a boleto" da aba Parcelas.
+ * Periodo pela data de Brasilia da emissao: hoje | 7d | 30d | dia=YYYY-MM-DD.
+ */
+export async function listarBoletosParcela(user, f = {}) {
+    const nomes = await allowedEnterpriseNames(user);
+    const cond = ["h.tipo = 'parcela'"];
+    const rep = { limit: Math.min(Math.max(Number(f.limit) || 500, 1), 2000) };
+    if (nomes !== null) {
+        cond.push("lower(coalesce(p.empreendimento, h.empreendimento, '')) IN (:escopo)");
+        rep.escopo = nomes.length ? nomes : [''];
+    }
+    const hoje = hojeYmd();
+    const dias = { hoje: 0, '7d': 6, '30d': 29 };
+    if (f.dia && /^\d{4}-\d{2}-\d{2}$/.test(String(f.dia))) {
+        cond.push("(h.created_at AT TIME ZONE 'America/Sao_Paulo')::date = :dia"); rep.dia = String(f.dia);
+    } else {
+        const n = dias[f.periodo] ?? 0;
+        cond.push("(h.created_at AT TIME ZONE 'America/Sao_Paulo')::date >= :de"); rep.de = addDays(hoje, -n);
+    }
+    if (f.status && ['success', 'error', 'processing'].includes(String(f.status))) { cond.push('h.status = :st'); rep.st = String(f.status); }
+    if (f.q) {
+        const q = String(f.q).trim();
+        if (/^\d+$/.test(q)) { cond.push('h.idreserva = :qn'); rep.qn = Number(q); }
+        else { cond.push('h.titular_nome ILIKE :q'); rep.q = `%${q}%`; }
+    }
+    const [rows] = await db.sequelize.query(`
+        SELECT h.id, h.idreserva, h.parcela_id, h.status, h.payment_status, h.titular_nome, h.empreendimento,
+               h.valor, h.vencimento, h.nosso_numero, h.error_message, h.warnings, h.boleto_supabase_url,
+               h.cliente_email_enviado, h.cliente_whatsapp_enviado, h.cv_documento_anexado,
+               h.created_at, h.paid_at, h.cancelled_at,
+               x.numero, x.total, x.status AS parcela_status, x.emissoes,
+               p.unidade, p.status AS plano_status,
+               (SELECT e.message FROM boleto_events e WHERE e.boleto_history_id = h.id AND e.type = 'client_whatsapp_skipped' ORDER BY e.id DESC LIMIT 1) AS whatsapp_motivo,
+               (SELECT e.message FROM boleto_events e WHERE e.boleto_history_id = h.id AND e.type = 'client_email_skipped' ORDER BY e.id DESC LIMIT 1) AS email_motivo,
+               (SELECT e.message FROM boleto_events e WHERE e.boleto_history_id = h.id AND e.type = 'cv_attach_failed' ORDER BY e.id DESC LIMIT 1) AS cv_anexo_motivo
+          FROM boleto_history h
+          LEFT JOIN ato_parcelas x ON x.id = h.parcela_id
+          LEFT JOIN ato_planos p ON p.id = x.plano_id
+         WHERE ${cond.join(' AND ')}
+         ORDER BY h.id DESC
+         LIMIT :limit`, { replacements: rep });
+    const resumo = { total: rows.length, sucesso: 0, erro: 0, processando: 0, whatsapp_nao_enviado: 0, email_nao_enviado: 0, cv_nao_anexado: 0, pagos: 0 };
+    for (const r of rows) {
+        if (r.status === 'success') resumo.sucesso++;
+        else if (r.status === 'error') resumo.erro++;
+        else resumo.processando++;
+        if (r.status === 'success') {
+            if (!r.cliente_whatsapp_enviado) resumo.whatsapp_nao_enviado++;
+            if (!r.cliente_email_enviado) resumo.email_nao_enviado++;
+            if (!r.cv_documento_anexado) resumo.cv_nao_anexado++;
+            if (r.payment_status === 'paid') resumo.pagos++;
+        }
+    }
+    return { rows, resumo, hoje };
+}
+
 export default {
     getSettings, cfgParcelas, carregarReservaCv, carregarReservaDoPlano, criarPlanoTeste, atoPago, contratoSienge,
     criarOuSincronizarPlano, editarParcela, encerrarPlano, pausarPlano, reativarPlano,
     verificarEncerramentos, aderirPendentes, listarPlanos, estatisticas, facetas, detalhePlano,
+    listarRodadas, listarBoletosParcela,
     _internal: { reservaCanceladaCv, situacaoMortaLocal, diffDays },
 };

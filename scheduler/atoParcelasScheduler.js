@@ -39,10 +39,17 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
     rodando = true;
     const inicio = Date.now();
     const out = { hoje: hojeYmd(), manual, adesao: null, encerramentos: null, emissao: null, lembretes: null, erros: [] };
+    // Historico da rodada na tabela (a tela le): nasce 'rodando' e fecha no fim.
+    const rodada = await db.AtoParcelaRodada.create({ hoje: out.hoje, inicio: new Date(), status: 'rodando', manual, user_id: userId })
+        .catch(err => { console.error('[PARCELAS] nao gravou a rodada:', err.message); return null; });
     try {
         const settings = await Planos.getSettings();
         const cfg = Planos.cfgParcelas(settings);
-        if (!cfg.moduloAtivo) { out.skipped = 'modulo_inativo'; return out; }
+        if (!cfg.moduloAtivo) {
+            out.skipped = 'modulo_inativo';
+            await rodada?.update({ fim: new Date(), status: 'concluida', resultado: out }).catch(() => {});
+            return out;
+        }
 
         // 1. adesao
         try { out.adesao = await Planos.aderirPendentes(cfg, { settings }); }
@@ -141,7 +148,21 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
         if (!emissaoFalhou) await settings.update({ parcelas_ultima_rodada_em: new Date() }).catch(() => {});
         out.duracao_s = Math.round((Date.now() - inicio) / 1000);
         console.log('[PARCELAS] Rodada concluida:', JSON.stringify(out));
+        await rodada?.update({
+            fim: new Date(), status: out.erros.length ? 'com_erros' : 'concluida', duracao_s: out.duracao_s,
+            adesoes: Number(out.adesao?.criados ?? out.adesao?.criado ?? 0) || 0,
+            encerramentos: Number(out.encerramentos?.planos || 0),
+            candidatas: Number(out.emissao?.candidatas || 0), emitidas: Number(out.emissao?.emitidas || 0),
+            reemitidas: Number(out.emissao?.reemitidas || 0), falhas: Number(out.emissao?.falhas || 0),
+            lembretes: Number(out.lembretes?.lembretes || 0), avisos: Number(out.lembretes?.avisos || 0),
+            resultado: out, erros: out.erros.length ? out.erros : null,
+        }).catch(err => console.error('[PARCELAS] nao fechou a rodada:', err.message));
         return out;
+    } catch (err) {
+        // Caiu antes de terminar: fica registrado onde, para a tela mostrar.
+        out.duracao_s = Math.round((Date.now() - inicio) / 1000);
+        await rodada?.update({ fim: new Date(), status: 'falhou', duracao_s: out.duracao_s, resultado: out, erros: [...out.erros, `ciclo: ${err.message}`] }).catch(() => {});
+        throw err;
     } finally {
         rodando = false;
     }
