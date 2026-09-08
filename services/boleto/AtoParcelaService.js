@@ -44,6 +44,9 @@ export function cfgParcelas(s) {
         exigirAtoPago: s?.parcelas_exigir_ato_pago ?? D.exigirAtoPago,
         antecedenciaDias: num(s?.parcelas_antecedencia_dias, D.antecedenciaDias),
         encerrarQuandoFaturado: s?.parcelas_encerrar_quando_faturado ?? D.encerrarQuandoFaturado,
+        // CEP recusado pela Caixa -> endereco de contingencia (o da Menin) e alerta na reserva.
+        cepContingenciaAtivo: s?.parcelas_cep_contingencia_ativo ?? D.cepContingenciaAtivo,
+        cepContingencia: { ...D.cepContingencia, ...((s?.parcelas_cep_contingencia && typeof s.parcelas_cep_contingencia === 'object') ? s.parcelas_cep_contingencia : {}) },
         // Etapas do repasse do CV que encerram o plano ([] = regra desligada; null/ausente = padrao).
         encerrarEtapasRepasse: Array.isArray(s?.parcelas_encerrar_etapas_repasse)
             ? s.parcelas_encerrar_etapas_repasse.map(Number).filter(n => Number.isInteger(n) && n > 0)
@@ -708,7 +711,7 @@ export async function listarBoletosParcela(user, f = {}) {
                h.cliente_email_enviado, h.cliente_whatsapp_enviado, h.cv_documento_anexado,
                h.created_at, h.paid_at, h.cancelled_at,
                x.numero, x.total, x.status AS parcela_status, x.emissoes,
-               p.unidade, p.status AS plano_status,
+               p.unidade, p.status AS plano_status, p.cadastro_alerta,
                (SELECT e.message FROM boleto_events e WHERE e.boleto_history_id = h.id AND e.type = 'client_whatsapp_skipped' ORDER BY e.id DESC LIMIT 1) AS whatsapp_motivo,
                (SELECT e.message FROM boleto_events e WHERE e.boleto_history_id = h.id AND e.type = 'client_email_skipped' ORDER BY e.id DESC LIMIT 1) AS email_motivo,
                (SELECT e.message FROM boleto_events e WHERE e.boleto_history_id = h.id AND e.type = 'cv_attach_failed' ORDER BY e.id DESC LIMIT 1) AS cv_anexo_motivo
@@ -718,16 +721,19 @@ export async function listarBoletosParcela(user, f = {}) {
          WHERE ${cond.join(' AND ')}
          ORDER BY h.id DESC
          LIMIT :limit`, { replacements: rep });
-    const resumo = { total: rows.length, sucesso: 0, erro: 0, processando: 0, whatsapp_nao_enviado: 0, email_nao_enviado: 0, cv_nao_anexado: 0, pagos: 0 };
+    const resumo = { total: rows.length, sucesso: 0, erro: 0, processando: 0, whatsapp_nao_enviado: 0, email_nao_enviado: 0, cv_nao_anexado: 0, pagos: 0, cep_contingencia: 0 };
     for (const r of rows) {
         if (r.status === 'success') resumo.sucesso++;
         else if (r.status === 'error') resumo.erro++;
         else resumo.processando++;
+        const avisos = Array.isArray(r.warnings) ? r.warnings : [];
+        r.cep_contingencia = avisos.find(w => w?.etapa === 'cep_contingencia')?.erro || null;
         if (r.status === 'success') {
             if (!r.cliente_whatsapp_enviado) resumo.whatsapp_nao_enviado++;
             if (!r.cliente_email_enviado) resumo.email_nao_enviado++;
             if (!r.cv_documento_anexado) resumo.cv_nao_anexado++;
             if (r.payment_status === 'paid') resumo.pagos++;
+            if (r.cep_contingencia) resumo.cep_contingencia++;
         }
     }
     return { rows, resumo, hoje };

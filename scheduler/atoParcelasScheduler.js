@@ -22,7 +22,7 @@ import db from '../models/sequelize/index.js';
 import Planos from '../services/boleto/AtoParcelaService.js';
 import Emissao from '../services/boleto/ParcelaEmissaoService.js';
 import { dentroDaJanela } from '../lib/boletoJanela.js';
-import { classificarParaRodada, hojeYmd, MOTIVOS_TRANSFERENCIA, PARCELA_STATUS, PLANO_STATUS } from '../lib/atoParcelas.js';
+import { classificarParaRodada, hojeYmd, ehErroDeCep, MOTIVOS_TRANSFERENCIA, PARCELA_STATUS, PLANO_STATUS } from '../lib/atoParcelas.js';
 
 const TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
 const CRON_EXPR = '*/10 * * * *';
@@ -101,6 +101,9 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
             const fila = parcelas.filter(p => {
                 if (p.status !== PARCELA_STATUS.ERRO) return true;
                 if ((p.tentativas_erro || 0) >= 5) return false;
+                // Erro de CEP com a contingencia ligada nao precisa esperar o dia
+                // seguinte: a proxima rodada (ou o botao Rodar ciclo) ja resolve.
+                if (cfg.cepContingenciaAtivo && ehErroDeCep(p.erro_mensagem)) return true;
                 const carimbo = p.updatedAt || p.updated_at;
                 return !carimbo || hojeYmd(new Date(carimbo)) !== hoje;
             });

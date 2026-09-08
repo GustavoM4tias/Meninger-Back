@@ -23,7 +23,7 @@ import { _primitivos } from './BoletoGenerationService.js';
 import { sendParcelaToTitular, sendLembrete, sendAvisoAtraso } from './ParcelaNotifyService.js';
 import { isSituacaoPaga } from './BoletoPaymentCheckService.js';
 import {
-    PARCELA_STATUS, PLANO_STATUS, condicaoDeEmissao, descricaoParcela, rotuloParcela, hojeYmd, diffDays,
+    PARCELA_STATUS, PLANO_STATUS, condicaoDeEmissao, descricaoParcela, rotuloParcela, hojeYmd, diffDays, ehErroDeCep, titularComEnderecoContingencia,
 } from '../../lib/atoParcelas.js';
 import { cfgParcelas, getSettings, carregarReservaDoPlano, criarOuSincronizarPlano } from './AtoParcelaService.js';
 
@@ -187,21 +187,42 @@ export async function emitirParcela(parcelaId, opts = {}) {
             throw e;
         }
         let eco;
+        let alertaCep = null;
+        const paramsEco = (t) => ({
+            credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
+            cnpj_empresa: cnpjEmpresa,
+            idpessoa_cv: t.idpessoa_cv,
+            nossoNumero: nossoNumeroCalculado,
+            vencimento: cond.vencimento,
+            valor: cond.valor,
+            nome: t.nome, documento: t.documento,
+            endereco: t.endereco, numero: t.numero, complemento: t.complemento || '',
+            bairro: t.bairro, cep: t.cep, cidade: t.cidade, estado: t.estado,
+            baixaPreviaNossoNumero,
+        });
         try {
-            eco = await runEcoCobrancaBoleto({
-                credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
-                cnpj_empresa: cnpjEmpresa,
-                idpessoa_cv: titular.idpessoa_cv,
-                nossoNumero: nossoNumeroCalculado,
-                vencimento: cond.vencimento,
-                valor: cond.valor,
-                nome: titular.nome, documento: titular.documento,
-                endereco: titular.endereco, numero: titular.numero, complemento: titular.complemento || '',
-                bairro: titular.bairro, cep: titular.cep, cidade: titular.cidade, estado: titular.estado,
-                baixaPreviaNossoNumero,
-            });
+            try {
+                eco = await runEcoCobrancaBoleto(paramsEco(titular));
+            } catch (err) {
+                // CEP recusado pela Caixa (CEP generico da cidade, por exemplo): o
+                // boleto sai mesmo assim com o endereco de contingencia (o da
+                // Menin, que tambem esta no contrato) e a reserva ganha o alerta.
+                if (!(cfg.cepContingenciaAtivo && ehErroDeCep(err.message))) throw err;
+                const alternativo = titularComEnderecoContingencia(titular, cfg.cepContingencia);
+                console.warn(`${tag} Caixa recusou o CEP ${titular.cep}: emitindo com o endereco de contingencia (CEP ${alternativo.cep}).`);
+                eco = await runEcoCobrancaBoleto(paramsEco(alternativo));
+                alertaCep = `CEP ${titular.cep || '(vazio)'} recusado pela Caixa. Boleto da ${descricaoParcela(p)} emitido com o endereco de contingencia (${alternativo.endereco}, ${alternativo.numero}, CEP ${alternativo.cep}). Corrija o CEP do cliente no CV.`;
+            }
         } finally {
             await EcoLock.release(ecoOwner).catch(() => {});
+        }
+        if (alertaCep) {
+            warnings.push({ etapa: 'cep_contingencia', erro: alertaCep });
+            await EventLogger.log({ historyId: history.id, idreserva, type: 'cep_contingencia', severity: 'warning', message: alertaCep, data: { cepOriginal: titular.cep, cepContingencia: cfg.cepContingencia?.cep } });
+            await plano.update({ cadastro_alerta: alertaCep }).catch(() => {});
+        } else if (plano.cadastro_alerta) {
+            // A Caixa aceitou o endereco do CV: o cadastro foi corrigido.
+            await plano.update({ cadastro_alerta: null }).catch(() => {});
         }
 
         if (vivo && eco.baixaPrevia?.baixaConfirmada) {
@@ -253,6 +274,7 @@ export async function emitirParcela(parcelaId, opts = {}) {
             linhaValor,
             `Vencimento: ${formatDate(cond.vencimento)}${cond.vencimento !== parcela.vencimento ? ` (original ${formatDate(parcela.vencimento)})` : ''}`,
             `Nosso Numero: ${eco.nossoNumero}`,
+            ...(alertaCep ? ['', `ATENCAO: ${alertaCep}`] : []),
             '',
             `${anexado ? 'OK' : 'X'} Anexo no CV${anexado ? '' : `: ${anexo.error || 'falhou'}`}`,
             `${envio.email.ok ? 'OK' : (envio.email.skipped ? '-' : 'X')} E-mail${envio.email.to ? ` (${envio.email.to})` : ''}${envio.email.ok ? '' : `: ${envio.email.error}`}`,

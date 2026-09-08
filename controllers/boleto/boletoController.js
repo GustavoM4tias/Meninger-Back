@@ -101,6 +101,7 @@ export async function updateSettings(req, res) {
             // Parcelas mensais (lib/atoParcelas.js)
             'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago',
             'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado', 'parcelas_encerrar_etapas_repasse',
+            'parcelas_cep_contingencia_ativo', 'parcelas_cep_contingencia',
             'parcelas_vencidas_na_adesao', 'parcelas_cobrar_a_partir_de',
             'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada', 'parcelas_lote_tamanho', 'parcelas_lote_pausa_min',
             'atraso_reemitir', 'atraso_max_reemissoes',
@@ -133,6 +134,21 @@ export async function updateSettings(req, res) {
             || intEntre('lembrete_dias_antes', 0, 30)
             || intEntre('aviso_atraso_dias_depois', 0, 30);
         if (erroParcelas) return res.status(400).json({ error: erroParcelas });
+        // Endereco de contingencia do sacado: CEP de 8 digitos e os campos que o portal exige.
+        if (req.body.parcelas_cep_contingencia !== undefined) {
+            const c = req.body.parcelas_cep_contingencia;
+            if (!c || typeof c !== 'object' || Array.isArray(c)) return res.status(400).json({ error: 'parcelas_cep_contingencia deve ser um objeto com cep, endereco, numero, bairro, cidade e estado.' });
+            const cep = String(c.cep || '').replace(/\D/g, '');
+            if (!/^\d{8}$/.test(cep)) return res.status(400).json({ error: 'O CEP de contingencia deve ter 8 digitos.' });
+            for (const k of ['endereco', 'numero', 'bairro', 'cidade']) {
+                if (!String(c[k] || '').trim()) return res.status(400).json({ error: `O endereco de contingencia precisa de ${k}.` });
+            }
+            if (!/^[A-Za-z]{2}$/.test(String(c.estado || ''))) return res.status(400).json({ error: 'O estado do endereco de contingencia deve ser a sigla (ex.: SP).' });
+            req.body.parcelas_cep_contingencia = {
+                cep, endereco: String(c.endereco).trim(), numero: String(c.numero).trim(), complemento: String(c.complemento || '').trim(),
+                bairro: String(c.bairro).trim(), cidade: String(c.cidade).trim(), estado: String(c.estado).toUpperCase(),
+            };
+        }
         // Etapas do repasse que encerram o plano: lista de ids inteiros positivos ([] desliga).
         if (req.body.parcelas_encerrar_etapas_repasse !== undefined) {
             const v = req.body.parcelas_encerrar_etapas_repasse;

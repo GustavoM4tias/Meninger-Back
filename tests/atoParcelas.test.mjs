@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
     addMonthsClamp, addDays, diffDays, derivarParcelas, diffPlano, calcularEncargos,
     decidirParcela, classificarParaRodada, condicaoDeEmissao, proximoDiaUtil, motivoEncerramento, PARCELA_STATUS,
+    ehErroDeCep, titularComEnderecoContingencia,
 } from '../lib/atoParcelas.js';
 
 test('classificarParaRodada: cfg da tela (sem hoje) + corte retroativo + politica ignorar', () => {
@@ -171,6 +172,21 @@ test('motivoEncerramento: Sienge assume so pela venda faturada; titulo nao conta
     assert.equal(motivoEncerramento({ contrato: completo, encerrarQuandoFaturado: false }), null);
     assert.equal(motivoEncerramento({ contrato: completo, reservaCancelada: true }), 'reserva_cancelada');
     assert.equal(motivoEncerramento({ contrato: null, situacaoMorta: true }), 'reserva_cancelada');
+});
+
+test('CEP recusado pela Caixa: reconhece a mensagem e troca so o endereco pelo de contingencia', () => {
+    assert.equal(ehErroDeCep('Falha na emissao (emissao): Portal Ecobrança: CEP SACADO INVALIDO'), true);
+    assert.equal(ehErroDeCep('Portal Ecobrança: CEP INVALIDO'), true);
+    assert.equal(ehErroDeCep('Boleto não emitido — botão de impressão não apareceu'), false);
+    assert.equal(ehErroDeCep(null), false);
+    const titular = { nome: 'MARIA', documento: '12345678900', idpessoa_cv: 1, cep: '86360000', endereco: 'Rua 0', numero: '0', complemento: 'casa', bairro: 'Vila Rural', cidade: 'Bandeirantes', estado: 'PR' };
+    const t = titularComEnderecoContingencia(titular);
+    assert.deepEqual({ cep: t.cep, endereco: t.endereco, numero: t.numero, complemento: t.complemento, bairro: t.bairro, cidade: t.cidade, estado: t.estado },
+        { cep: '17500005', endereco: 'Rua São Luiz', numero: '231', complemento: '', bairro: 'Centro', cidade: 'Marília', estado: 'SP' });
+    assert.equal(t.nome, 'MARIA'); assert.equal(t.documento, '12345678900'); assert.equal(t.idpessoa_cv, 1);
+    // Configurado na tela manda (e o CEP entra sem mascara).
+    const t2 = titularComEnderecoContingencia(titular, { cep: '17.500-005', numero: 231 });
+    assert.equal(t2.cep, '17500005'); assert.equal(t2.numero, '231'); assert.equal(t2.endereco, 'Rua São Luiz');
 });
 
 test('motivoEncerramento: repasse em Contrato Emitido CAIXA (ou depois) tambem encerra; qualquer regra basta', () => {

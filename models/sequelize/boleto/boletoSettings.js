@@ -190,6 +190,12 @@ export default (sequelize, DataTypes) => {
         parcelas_exigir_ato_pago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Plano so nasce com o ato pago (boleto ou cartao).' },
         parcelas_antecedencia_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 10, comment: 'Boleto da parcela sai N dias corridos antes do vencimento.' },
         parcelas_encerrar_quando_faturado: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Encerra o plano quando a venda e faturada no Sienge (contracts.financial_institution_date).' },
+        parcelas_cep_contingencia_ativo: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'CEP recusado pela Caixa: emite com o endereco de contingencia e marca a reserva para corrigir o CV.' },
+        parcelas_cep_contingencia: {
+            type: DataTypes.JSONB, allowNull: true,
+            defaultValue: { cep: '17500005', endereco: 'Rua São Luiz', numero: '231', complemento: '', bairro: 'Centro', cidade: 'Marília', estado: 'SP' },
+            comment: 'Endereco do sacado usado quando a Caixa recusa o CEP do CV (o da Menin, que tambem esta no contrato).',
+        },
         parcelas_encerrar_etapas_repasse: {
             type: DataTypes.JSONB, allowNull: true, defaultValue: [45, 27, 57, 47, 48, 46, 54, 33, 34, 35, 36],
             comment: 'Ids de situacao do REPASSE no CV em que o plano encerra e os boletos vivos sao baixados (a partir de "Contrato Emitido CAIXA"). [] desliga a regra.',

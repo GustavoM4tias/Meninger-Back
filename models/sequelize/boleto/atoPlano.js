@@ -54,6 +54,9 @@ export default (sequelize, DataTypes) => {
         cv_repasse_id: { type: DataTypes.INTEGER, allowNull: true },
         cv_repasse_situacao_id: { type: DataTypes.INTEGER, allowNull: true },
         cv_repasse_situacao: { type: DataTypes.STRING(120), allowNull: true },
+        // Alerta de cadastro (texto): CEP recusado pela Caixa, boleto saiu com o
+        // endereco da Menin. Limpa sozinho quando a Caixa volta a aceitar o do CV.
+        cadastro_alerta: { type: DataTypes.TEXT, allowNull: true },
 
         // Ultima leitura das condicoes no CV (para a tela mostrar divergencias).
         cv_sincronizado_em: { type: DataTypes.DATE, allowNull: true },
