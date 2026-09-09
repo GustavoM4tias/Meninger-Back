@@ -245,5 +245,5 @@ export async function syncWhatsappTemplates(req, res) {
 
 export default {
     listPlanos, getStats, getFacets, getPlano, criarPlano, sincronizarPlano, editarParcela, pausarPlano, reativarPlano, encerrarPlano,
-    emitirParcela, baixarParcela, marcarPaga, rodarCiclo, getStatus, listRodadas, listBoletos, getRepasseEtapas, getWhatsappTemplates, syncWhatsappTemplates,
+    emitirParcela, baixarParcela, marcarPaga, rodarCiclo, getStatus, listRodadas, listBoletos, getRepasseEtapas, getEmpreendimentos, getWhatsappTemplates, syncWhatsappTemplates,
 };
