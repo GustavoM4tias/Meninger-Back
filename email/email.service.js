@@ -181,7 +181,7 @@ const META = {
     },
     'boleto.parcela.baixa': {
         subject: (d) => `Boleto da ${d.descricao || 'parcela'} baixado - ${d.empreendimento || 'Sua reserva'}`,
-        preview: (d) => `Não pague o boleto enviado em ${d.enviadoEmFormatado || ''}`,
+        preview: (d) => `O boleto não precisa ser pago por enquanto`,
         file: 'boleto.parcela.baixa.hbs',
         headerLight: true,
     },

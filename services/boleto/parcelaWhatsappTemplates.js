@@ -11,10 +11,12 @@
 //                               via; procure o seu corretor" (09/09/2026: sai quando as
 //                               vias acabam ou o aviso fica N dias sem resposta; a v1
 //                               tinha numero de contato e foi apagada antes de aprovar)
-//   boleto_parcela_baixa_v1     "o boleto foi baixado, nao pague; o empreendimento
-//                               esta sem cobranca ate a assinatura do financiamento"
-//                               (08/09/2026, Park Alameda Sarandi; empreendimento e
-//                               numero de contato sao variaveis para servir a outros casos)
+//   boleto_parcela_baixa_v2     "o boleto foi baixado, nao precisa ser pago por enquanto;
+//                               o empreendimento esta sem cobranca ate a assinatura do
+//                               financiamento" (v1 em 08/09/2026 para o Park Alameda
+//                               Sarandi, com data de envio e numero de contato; v2 em
+//                               09/09, texto do Gustavo, sem data nem contato, para o
+//                               Santa Stella e o Viva Sul)
 //
 // Regras de texto (Gustavo, 07/09/2026): o cliente tem uma RESERVA, nao um
 // contrato - nunca falar em "contrato"; os dois primeiros NAO pedem resposta
@@ -32,7 +34,7 @@ export const LANG = 'pt_BR';
 export const TPL_PARCELA = 'boleto_parcela_v1';
 export const TPL_LEMBRETE = 'boleto_parcela_lembrete_v1';
 export const TPL_ATRASO = 'boleto_parcela_atraso_v1';
-export const TPL_BAIXA = 'boleto_parcela_baixa_v1';
+export const TPL_BAIXA = 'boleto_parcela_baixa_v2';
 export const TPL_FINAL = 'boleto_parcela_final_v2';
 
 // Mesmo aviso do ato (AVISO_PRAZO do link/boleto), dito para a parcela.
@@ -123,18 +125,17 @@ export function getBaixaTemplateDefinition() {
         name: TPL_BAIXA,
         category: 'UTILITY',
         language: LANG,
-        // {{1}} nome, {{2}} "parcela 1 de 47", {{3}} empreendimento, {{4}} data do
-        // envio do boleto, {{5}} numero de contato (quem atende as duvidas),
-        // {{6}} o empreendimento de novo (a Meta nao repete variavel no corpo).
-        // Nao pede resposta: leva o rodape; o contato vai em {{5}}.
+        // {{1}} nome, {{2}} "parcela 1 de 47", {{3}} empreendimento, {{4}} o
+        // empreendimento de novo (a Meta nao repete variavel no corpo). Nao pede
+        // resposta: leva o rodape. O corpo fecha com o agradecimento (a Meta nao
+        // aceita variavel no fim).
         body:
             'Olá, *{{1}}*.\n\n'
-            + 'O boleto da *{{2}}* da sua reserva no *{{3}}*, enviado em {{4}}, foi *baixado* e não deve ser pago. '
-            + 'Se você já pagou, fale com a gente pelo número abaixo.\n\n'
-            + 'O *{{6}}* entrou na lista de empreendimentos *sem cobrança antes da assinatura do financiamento*, '
-            + 'por prazo indeterminado definido pela construtora. Nenhuma nova cobrança será feita até segunda ordem.\n\n'
-            + '📞 Em caso de dúvidas, fale com a gente pelo número *{{5}}*. Estamos à disposição.',
-        examples: ['Felipe', 'parcela 1 de 47', 'Park Alameda Sarandi', '08/09/2026', '(44) 99151-0579', 'Park Alameda Sarandi'],
+            + 'O boleto da *{{2}}* da sua reserva no *{{3}}* foi *baixado* e não precisa ser pago por enquanto.\n\n'
+            + 'O *{{4}}* entrou na lista de empreendimentos *sem cobrança antes da assinatura do financiamento*, '
+            + 'por prazo indeterminado definido pela construtora. Nenhuma nova cobrança será feita até a assinatura.\n\n'
+            + 'Agradecemos a compreensão! 🙏',
+        examples: ['Felipe', 'parcela 1 de 47', 'Santa Stella', 'Santa Stella'],
         footerText: RODAPE,
         buttons: [],
     };

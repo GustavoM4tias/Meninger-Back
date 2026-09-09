@@ -280,29 +280,25 @@ export async function sendAvisoFinal({ titular, dados, historyId = null }) {
 
 /**
  * Aviso de baixa: o boleto ja enviado foi baixado e o empreendimento esta sem
- * cobranca ate a assinatura do financiamento. `dados.contato` e o numero que
- * atende as duvidas (obrigatorio: o texto termina nele).
- * @param {object} p.dados { empreendimento, unidade, descricao, rotulo, valor, vencimento, nossoNumero, enviadoEm, contato }
+ * cobranca ate a assinatura do financiamento (texto v2, 09/09/2026: sem data
+ * de envio e sem numero de contato).
+ * @param {object} p.dados { empreendimento, unidade, descricao, rotulo, valor, vencimento, nossoNumero }
  */
 export async function sendAvisoBaixa({ titular, dados, historyId = null, canais = ['email', 'whatsapp'] }) {
     if (isLocalEnvironment()) {
         const reason = skipLocal();
         return { email: { ok: false, skipped: true, error: reason }, whatsapp: { ok: false, skipped: true, error: reason } };
     }
-    if (!dados?.contato) throw new Error('sendAvisoBaixa: informe dados.contato (numero para duvidas).');
     const nome = primeiroNome(titular?.nome) || 'cliente';
-    const enviadoEm = formatDateBr(dados.enviadoEm);
     const emailData = {
         titularPrimeiroNome: nome, empreendimento: dados.empreendimento, unidade: dados.unidade || '',
         descricao: dados.descricao, valorFormatado: formatCurrency(dados.valor), vencimentoFormatado: formatDateBr(dados.vencimento),
-        nossoNumero: dados.nossoNumero, enviadoEmFormatado: enviadoEm, contato: dados.contato,
+        nossoNumero: dados.nossoNumero,
     };
-    const variables = [nome, dados.descricao, dados.empreendimento || '', enviadoEm, dados.contato, dados.empreendimento || ''];
-    const textoLivre = `Olá, ${nome}. O boleto da ${dados.descricao} da sua reserva no ${dados.empreendimento}, enviado em ${enviadoEm}, foi baixado e não deve ser pago.`
-        + ' Se você já pagou, fale com a gente pelo número abaixo.'
+    const variables = [nome, dados.descricao, dados.empreendimento || '', dados.empreendimento || ''];
+    const textoLivre = `Olá, ${nome}. O boleto da ${dados.descricao} da sua reserva no ${dados.empreendimento} foi baixado e não precisa ser pago por enquanto.`
         + ` O ${dados.empreendimento} entrou na lista de empreendimentos sem cobrança antes da assinatura do financiamento, por prazo indeterminado definido pela construtora.`
-        + ' Nenhuma nova cobrança será feita até segunda ordem.'
-        + ` Em caso de dúvidas, fale com a gente pelo número ${dados.contato}. Estamos à disposição.`;
+        + ' Nenhuma nova cobrança será feita até a assinatura. Agradecemos a compreensão!';
     const pulado = { ok: false, skipped: true, error: 'canal nao solicitado' };
     const [email, whatsapp] = await Promise.all([
         canais.includes('email') ? enviarEmail(EmailType.BOLETO_PARCELA_BAIXA, titular, emailData, null) : pulado,
