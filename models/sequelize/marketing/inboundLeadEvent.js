@@ -14,6 +14,8 @@ export default (sequelize, DataTypes) => {
     // received | validated | spam_flagged | routed | held | reentry_detected
     //  | dispatch_attempt | dry_run | cv_delivered | cv_rejected
     //  | dispatch_failed | dead_letter | recovered_stuck | manual_redispatch
+    //  | atendimento_mantido | retorno_distribuido | retorno_represado
+    //  | lead_returned | lead_return_failed
     event_type:  { type: DataTypes.STRING(40), allowNull: false },
 
     status_from: { type: DataTypes.STRING(20) },

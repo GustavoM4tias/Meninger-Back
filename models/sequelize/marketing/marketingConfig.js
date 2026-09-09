@@ -32,6 +32,14 @@ export default (sequelize, DataTypes) => {
     // empreendimento. Só age fora das etapas de qualificação.
     lead_return_auto: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
 
+    // Nova conversão no MESMO empreendimento que a pessoa já tem de interesse:
+    //   manter_com_dono (padrão) = tem corretor/imobiliária? só marca o interesse
+    //                              e mantém o atendimento; sem dono vai à fila.
+    //   manter_sempre            = mesmo empreendimento nunca volta à fila.
+    //   devolver                 = devolve sempre (comportamento antigo).
+    // STRING (não ENUM) para não travar o sync({ alter: true }).
+    lead_return_mesmo_empreendimento: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'manter_com_dono' },
+
     // ── Roteamento / vínculo ─────────────────────────────────────────────────
     // Escopo do fallback de vínculo pelo FORMULÁRIO (resolveLeadBinding):
     //   'no_campaign' (default) = o form só decide quando o lead NÃO tem campanha

@@ -32,14 +32,23 @@
 //   3. Não desfaz. Situação e dono novos não voltam por API — o estado anterior
 //      fica em `antes`, na resposta e no evento, para refazer à mão no painel.
 //
-// A trava é a faixa (services/marketing/cvLeadWorkflow.js): lead em etapa
-// BLINDADA (Lead Qualificado em diante) não volta para fila nenhuma, porque
-// devolver é tirar de quem está fechando.
+// São duas travas, e as duas são recusa de regra (não erro), vencidas só com
+// `force: true`:
+//
+//   1. FAIXA (services/marketing/cvLeadWorkflow.js): lead em etapa BLINDADA
+//      (Lead Qualificado em diante) não volta para fila nenhuma, porque devolver
+//      é tirar de quem está fechando.
+//   2. MESMO EMPREENDIMENTO (09/09/2026): reconversão no empreendimento que a
+//      pessoa JÁ tem de interesse, com atendimento em curso, também não devolve -
+//      marca o interesse e mantém quem atende. A política é de tela
+//      (lead_return_mesmo_empreendimento) e é a mesma que o despacho automático
+//      usa, para API e tela não divergirem.
 
 import apiCv from '../../lib/apiCv.js';
 import db from '../../models/sequelize/index.js';
 import { recordLeadEvent } from './leadEventLog.js';
 import MarketingConfigService from './MarketingConfigService.js';
+import { decidirReconversao, idsDeInteresse, normalizarMesmoEmpreendimento } from '../../lib/leadReturnRule.js';
 import { classifySituacao, situacaoInicio, FAIXA } from './cvLeadWorkflow.js';
 import { proximoDoRodizio } from './CvLeadQueueService.js';
 
@@ -97,6 +106,40 @@ function retrato(lead, situacao) {
     };
 }
 
+async function getPoliticaMesmoEmpreendimento() {
+    try {
+        const cfg = await MarketingConfigService.getConfig();
+        if (cfg?.lead_return_mesmo_empreendimento) return normalizarMesmoEmpreendimento(cfg.lead_return_mesmo_empreendimento);
+    } catch { /* cai no env */ }
+    return normalizarMesmoEmpreendimento(process.env.MARKETING_LEAD_RETURN_MESMO_EMPREENDIMENTO);
+}
+
+/**
+ * Interesses e dono ATUAIS, lidos ao vivo quando o CV responde.
+ *
+ * O espelho sincroniza a cada 30 min, e a trava de "já está em atendimento neste
+ * empreendimento" não pode depender de uma foto de meia hora atrás. Interesses
+ * são a união das duas listas (interesse não sai por aqui, só pelo painel
+ * Gestor); o dono vem do ao vivo quando ele respondeu, porque é o único lugar
+ * que conta a verdade sobre dono (o eco do POST ecoa o anterior).
+ */
+async function estadoAtual(lead, antes) {
+    const doEspelho = {
+        interesses: antes.interesses.map(e => e.id).filter(Number.isInteger),
+        corretor: antes.corretor,
+        imobiliaria: antes.imobiliaria,
+        fonte: 'espelho',
+    };
+    const vivo = await readLiveLead(lead.idlead);
+    if (!vivo) return doEspelho;
+    return {
+        interesses: [...new Set([...idsDeInteresse(vivo.empreendimento), ...doEspelho.interesses])],
+        corretor: nomeDe(vivo.corretor),
+        imobiliaria: nomeDe(vivo.imobiliaria),
+        fonte: 'cv_ao_vivo',
+    };
+}
+
 function montarInteracao({ idempreendimento, empreendimentoNome, conversao, motivo }) {
     const linhas = ['Retorno de lead registrado pelo Office'];
     linhas.push(`Novo interesse: ${empreendimentoNome || 'empreendimento ' + idempreendimento}`);
@@ -125,7 +168,8 @@ function montarInteracao({ idempreendimento, empreendimentoNome, conversao, moti
  *                                        CV avalia as regras dele e pode represar
  * @param {boolean} [p.dryRun=true]       true = só monta o payload, não envia
  * @param {boolean} [p.forcarDistribuicao=false]  manda forcar_distribuicao_lead
- * @param {boolean} [p.force=false]       ignora a trava de faixa blindada
+ * @param {boolean} [p.force=false]       ignora as travas (faixa blindada e
+ *                                        mesmo empreendimento em atendimento)
  * @param {string}  [p.actor='system']
  */
 export async function returnLeadToQueue({
@@ -176,7 +220,36 @@ export async function returnLeadToQueue({
         };
     }
 
-    const jaTemInteresse = antes.interesses.some(e => e.id === Number(idempreendimento));
+    // ── Trava: mesmo empreendimento com atendimento em curso ───────────────
+    // Mesma regra do despacho automático (CvLeadDispatchService) e mesma fonte
+    // de verdade, para tela e API não divergirem: reconversão no empreendimento
+    // que a pessoa já tem não devolve quem está atendendo. `force: true` passa
+    // por cima e fica gravado no evento com quem pediu.
+    const estado = await estadoAtual(lead, antes);
+    const temDono = !!(estado.corretor || estado.imobiliaria);
+    const decisao = decidirReconversao({
+        interesses: estado.interesses,
+        alvo: idempreendimento,
+        temDono,
+        politica: await getPoliticaMesmoEmpreendimento(),
+    });
+    const jaTemInteresse = decisao.mesmoEmpreendimento;
+    const politica = decisao.politica;
+
+    if (decisao.manter && !force) {
+        return {
+            ok: false,
+            motivo_bloqueio: 'em_atendimento_mesmo_empreendimento',
+            mensagem: temDono
+                ? `O lead já tem o empreendimento ${idempreendimento} como interesse e está em atendimento com ${estado.corretor || estado.imobiliaria}: a regra mantém quem atende e só marca o interesse.`
+                : `O lead já tem o empreendimento ${idempreendimento} como interesse e a política atual ("${politica}") não devolve reconversão no mesmo empreendimento.`,
+            politica,
+            fonte: estado.fonte,
+            faixa: situacao.faixa,
+            antes,
+        };
+    }
+
     const inicio = await situacaoInicio();
 
     const payload = {
@@ -211,9 +284,14 @@ export async function returnLeadToQueue({
     const plano = {
         de_situacao: `${lead.situacao_nome} (${lead.situacao_id})`,
         para_situacao: `${inicio.nome} (${inicio.id})`,
-        solta_dono: { imobiliaria: antes.imobiliaria, corretor: antes.corretor },
+        // Dono do estado ATUAL (ao vivo quando o CV respondeu): com o espelho
+        // atrasado, o plano nomearia o corretor errado como quem perde o lead.
+        solta_dono: { imobiliaria: estado.imobiliaria, corretor: estado.corretor },
         interesse_novo: Number(idempreendimento),
         interesse_ja_existia: jaTemInteresse,
+        politica_mesmo_empreendimento: politica,
+        estado_lido_de: estado.fonte,
+        forcado: !!(decisao.manter && force),
         interesses_que_permanecem: antes.interesses,
         fila: idfila
             ? `fila ${idfila} (explícita; se o CV não associar ninguém, o rodízio do Office associa o próximo corretor)`
@@ -433,6 +511,10 @@ export async function inspectLead(idlead) {
         situacao,
         faixa: situacao.faixa,
         pode_voltar: situacao.faixa !== FAIXA.BLINDADO,
+        // A segunda trava depende do empreendimento da conversão, que o inspect
+        // não conhece: a tela mostra a política vigente e o dono atual para a
+        // pessoa saber, antes de pedir, que reconversão no mesmo produto mantém.
+        politica_mesmo_empreendimento: await getPoliticaMesmoEmpreendimento(),
         conversoes_do_office: inbounds.map(i => ({
             id: i.id,
             em: i.created_at,

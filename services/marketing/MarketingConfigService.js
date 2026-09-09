@@ -9,6 +9,13 @@
 import db from '../../models/sequelize/index.js';
 import { encrypt, decrypt } from '../../utils/encryption.js';
 import MetaAppConfigService from '../meta/MetaAppConfigService.js';
+// A regra (valores válidos e normalização) é pura e mora no lib, compartilhada
+// com o despacho e a devolução manual: ver lib/leadReturnRule.js.
+import {
+    MESMO_EMPREENDIMENTO_VALORES,
+    MESMO_EMPREENDIMENTO_PADRAO,
+    normalizarMesmoEmpreendimento,
+} from '../../lib/leadReturnRule.js';
 
 const SINGLETON_ID = 1;
 const CACHE_TTL_MS = 30_000;
@@ -57,6 +64,12 @@ async function ensureReguaColumn() {
         await db.sequelize.query(
             `ALTER TABLE marketing_configs
              ADD COLUMN IF NOT EXISTS lead_return_auto BOOLEAN NOT NULL DEFAULT true`);
+        // Política do mesmo empreendimento (2026-09-09). Coluna nasce com o
+        // padrão novo; quem já tinha o comportamento antigo troca na tela.
+        await db.sequelize.query(
+            `ALTER TABLE marketing_configs
+             ADD COLUMN IF NOT EXISTS lead_return_mesmo_empreendimento VARCHAR(24)
+             NOT NULL DEFAULT '${MESMO_EMPREENDIMENTO_PADRAO}'`);
         _reguaColumnEnsured = true;
     } catch (err) {
         console.warn('[marketing-config] ensure das colunas de retorno de lead falhou:', err.message);
@@ -98,6 +111,7 @@ function rowToConfig(row, { withSecrets = false } = {}) {
         cv_leads_endpoint: row.cv_leads_endpoint,
         lead_return_ordem_blindada: row.lead_return_ordem_blindada,
         lead_return_auto: row.lead_return_auto,
+        lead_return_mesmo_empreendimento: normalizarMesmoEmpreendimento(row.lead_return_mesmo_empreendimento),
         alert_recipient_user_ids: row.alert_recipient_user_ids || null,
         meta_form_fallback_scope: row.meta_form_fallback_scope || 'no_campaign',
         meta_app_id: row.meta_app_id,
@@ -131,6 +145,7 @@ function envFallback({ withSecrets }) {
         cv_leads_endpoint: process.env.CV_LEADS_ENDPOINT || '/v1/comercial/leads',
         lead_return_ordem_blindada: Number(process.env.CV_LEAD_ORDEM_BLINDADA) || 4,
         lead_return_auto: process.env.MARKETING_LEAD_RETURN_AUTO !== 'false',
+        lead_return_mesmo_empreendimento: normalizarMesmoEmpreendimento(process.env.MARKETING_LEAD_RETURN_MESMO_EMPREENDIMENTO),
         alert_recipient_user_ids: null,
         meta_form_fallback_scope: process.env.META_FORM_FALLBACK_SCOPE === 'always' ? 'always' : 'no_campaign',
         meta_app_id: process.env.META_APP_ID || '785502081163165',
@@ -224,6 +239,19 @@ async function updateConfig(patch = {}) {
     ];
     for (const k of direct) {
         if (patch[k] !== undefined && patch[k] !== null) row[k] = patch[k];
+    }
+
+    // Política do mesmo empreendimento: só aceita os valores conhecidos, para
+    // a tela nunca gravar um estado que o despacho não sabe interpretar.
+    if (patch.lead_return_mesmo_empreendimento !== undefined) {
+        if (!MESMO_EMPREENDIMENTO_VALORES.includes(patch.lead_return_mesmo_empreendimento)) {
+            // 400, não 500: é valor recusado pela validação, e a tela precisa ver
+            // o motivo em vez de um "erro ao salvar" genérico.
+            const err = new Error(`Política de reconversão inválida: use ${MESMO_EMPREENDIMENTO_VALORES.join(', ')}.`);
+            err.status = 400;
+            throw err;
+        }
+        row.lead_return_mesmo_empreendimento = patch.lead_return_mesmo_empreendimento;
     }
 
     // Escopo do fallback do formulário: só aceita os dois valores conhecidos.

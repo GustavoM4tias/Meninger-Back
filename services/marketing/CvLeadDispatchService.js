@@ -24,6 +24,7 @@ import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
 import { recordLeadEvent } from './leadEventLog.js';
 import MarketingConfigService from './MarketingConfigService.js';
+import { decidirReconversao, idsDeInteresse, normalizarMesmoEmpreendimento } from '../../lib/leadReturnRule.js';
 import { classifySituacao, situacaoInicio, FAIXA } from './cvLeadWorkflow.js';
 import { resolveFila } from './CvLeadQueueService.js';
 import { readLiveLead, distribuirPeloOffice } from './CvLeadReturnService.js';
@@ -55,6 +56,14 @@ async function isAutoReturnOn() {
     const cfg = await getCfg();
     if (cfg && cfg.lead_return_auto != null) return !!cfg.lead_return_auto;
     return process.env.MARKETING_LEAD_RETURN_AUTO !== 'false';
+}
+
+// O que fazer quando a nova conversão é no MESMO empreendimento que a pessoa já
+// tem de interesse. Ver MarketingConfigService.MESMO_EMPREENDIMENTO.
+async function getPoliticaMesmoEmpreendimento() {
+    const cfg = await getCfg();
+    if (cfg?.lead_return_mesmo_empreendimento) return normalizarMesmoEmpreendimento(cfg.lead_return_mesmo_empreendimento);
+    return normalizarMesmoEmpreendimento(process.env.MARKETING_LEAD_RETURN_MESMO_EMPREENDIMENTO);
 }
 
 async function getCvLeadsEndpoint() {
@@ -158,9 +167,9 @@ function buildInteracaoExtras(lead) {
 }
 
 // ── Quem já é lead no CV ────────────────────────────────────────────────────
-// Lê a pessoa no espelho para saber em que etapa ela está e o que já é interesse
-// dela. Só serve ao retorno por segundo interesse — o resto do comportamento do
-// CV (reativação, troca de atendente) fica como sempre foi.
+// Lê a pessoa para saber em que etapa ela está, o que já é interesse dela e
+// quem atende hoje. Só serve ao retorno por segundo interesse — o resto do
+// comportamento do CV (reativação, troca de atendente) fica como sempre foi.
 async function resolveRetorno(lead, payload) {
     let mirror;
     try {
@@ -171,13 +180,74 @@ async function resolveRetorno(lead, payload) {
     }
     if (!mirror) return null;   // pessoa nova no CV: não há interesse anterior
 
+    const estado = await lerEstadoNoCv(mirror);
+
     // Nome primeiro: o id do espelho mente para Descartado (ver cvLeadWorkflow).
-    const situacao = await classifySituacao({ id: mirror.situacao_id, nome: mirror.situacao_nome });
+    const situacao = await classifySituacao({ id: estado.situacao_id, nome: estado.situacao_nome });
 
     // Etapa de qualificação em diante não se mexe.
-    if (situacao.faixa === FAIXA.BLINDADO) return { ...situacao, acao: 'etapa_qualificada' };
+    if (situacao.faixa === FAIXA.BLINDADO) {
+        return { ...situacao, fonte: estado.fonte, acao: 'etapa_qualificada' };
+    }
 
-    return { ...situacao, ...(await applySecondInterestReturn(lead, payload, mirror, situacao)) };
+    return {
+        ...situacao,
+        fonte: estado.fonte,
+        ...(await applySecondInterestReturn(lead, payload, estado, situacao)),
+    };
+}
+
+/** Nome de corretor/imobiliária: o CV devolve ora objeto, ora string solta. */
+function nomeDe(json) {
+    if (!json) return null;
+    if (typeof json === 'string') return json.trim() || null;
+    return json.nome || json.name || null;
+}
+
+/**
+ * Estado atual da pessoa no CV: etapa, interesses e dono.
+ *
+ * POR QUE NÃO BASTA O ESPELHO (incidente de 09/09/2026): a tabela `leads`
+ * sincroniza a cada 30 min (scheduler/leadCvScheduler.js) e meia hora é tempo de
+ * sobra para a mesma pessoa converter duas vezes. Espelho atrasado faz o
+ * interesse que ela JÁ tem parecer novo — e era isso que devolvia à fila cliente
+ * que já estava em atendimento no MESMO empreendimento, tirando o lead de quem
+ * estava falando com ele. Então a decisão lê o lead AO VIVO e só cai no espelho
+ * quando o CV não responde (a decisão registra em `fonte` quem decidiu).
+ *
+ * Duas escolhas de direção segura:
+ *   interesses — UNIÃO do ao vivo com o espelho. Interesse não é removido por
+ *                este fluxo (só pelo painel Gestor), então somar as duas listas
+ *                nunca inventa interesse e protege contra formato de item que a
+ *                leitura ao vivo devolva diferente do esperado.
+ *   dono       — o ao vivo MANDA quando respondeu, inclusive para dizer "não tem
+ *                dono". O eco do POST mente sobre dono (ver CvLeadReturnService),
+ *                mas a leitura ao vivo é a verdade; o espelho só entra quando o
+ *                CV não respondeu.
+ */
+async function lerEstadoNoCv(mirror) {
+    const doEspelho = {
+        idlead: Number(mirror.idlead),
+        situacao_id: mirror.situacao_id ?? null,
+        situacao_nome: mirror.situacao_nome || null,
+        interesses: idsDeInteresse(mirror.empreendimento),
+        corretor: nomeDe(mirror.corretor),
+        imobiliaria: nomeDe(mirror.imobiliaria),
+        fonte: 'espelho',
+    };
+
+    const vivo = await readLiveLead(mirror.idlead);
+    if (!vivo) return doEspelho;
+
+    return {
+        idlead: Number(mirror.idlead),
+        situacao_id: vivo.situacao?.id != null ? Number(vivo.situacao.id) : doEspelho.situacao_id,
+        situacao_nome: vivo.situacao?.nome || doEspelho.situacao_nome,
+        interesses: [...new Set([...idsDeInteresse(vivo.empreendimento), ...doEspelho.interesses])],
+        corretor: nomeDe(vivo.corretor),
+        imobiliaria: nomeDe(vivo.imobiliaria),
+        fonte: 'cv_ao_vivo',
+    };
 }
 
 // ── Retorno por segundo interesse ───────────────────────────────────────────
@@ -190,28 +260,60 @@ async function resolveRetorno(lead, payload) {
 // interesse, então soltar o dono e voltar a etapa junto evita uma segunda
 // chamada e o intervalo em que o lead ficaria meio movido.
 //
+// MESMO EMPREENDIMENTO NÃO É SEGUNDO INTERESSE (regra de 09/09/2026): quem já
+// está em atendimento e volta a converter no mesmo produto só tem o interesse
+// marcado e segue com quem atende. A política é de tela
+// (lead_return_mesmo_empreendimento):
+//   manter_com_dono (padrão) — tem corretor/imobiliária? mantém. Sem dono vai
+//                              para a fila, porque lead solto precisa de dono.
+//   manter_sempre            — nunca devolve no mesmo empreendimento.
+//   devolver                 — devolve sempre (comportamento anterior à regra).
+//
 // Duas recusas, cada uma por um motivo medido:
 //   - sem fila resolvida não mexe. O CV represa em silêncio quando não acha
 //     fila compatível, e aí o lead fica sem etapa E sem dono. O vínculo
 //     empreendimento -> fila é por id e declarado na tela (CvLeadQueueService).
-//   - interesse que a pessoa já tinha não conta como segundo interesse: é
-//     reconversão na mesma coisa, e tirar da corretora seria gratuito.
-async function applySecondInterestReturn(lead, payload, mirror, situacao) {
+//   - mais de um empreendimento na mesma conversão não tem fila única de
+//     destino, então não há para onde devolver.
+async function applySecondInterestReturn(lead, payload, estado, situacao) {
     if (!(await isAutoReturnOn())) return { acao: 'auto_desligado' };
 
     const novos = Array.isArray(lead.bound_empreendimentos) ? lead.bound_empreendimentos.map(Number) : [];
     if (novos.length !== 1) return { acao: novos.length ? 'multiplos_empreendimentos' : 'sem_empreendimento' };
     const alvo = novos[0];
 
-    const atuais = (Array.isArray(mirror.empreendimento) ? mirror.empreendimento : [])
-        .map(e => Number(e?.id ?? e?.idempreendimento))
-        .filter(Number.isInteger);
-    if (atuais.includes(alvo)) return { acao: 'interesse_ja_existia' };
+    const dono = { corretor: estado.corretor, imobiliaria: estado.imobiliaria };
+    const temDono = !!(estado.corretor || estado.imobiliaria);
+
+    const decisao = decidirReconversao({
+        interesses: estado.interesses,
+        alvo,
+        temDono,
+        politica: await getPoliticaMesmoEmpreendimento(),
+    });
+
+    if (decisao.manter) {
+        marcarInteresseSemDevolver(payload, { alvo, estado, situacao });
+        console.log(`[marketing-capture] lead ${lead.id}: reconversão no mesmo empreendimento (${alvo}) em "${situacao.nome || estado.situacao_nome}" — mantido com ${estado.corretor || estado.imobiliaria || 'quem já tinha o lead'}.`);
+        return {
+            acao: 'atendimento_mantido',
+            empreendimento: alvo,
+            politica: decisao.politica,
+            motivo: decisao.motivo,
+            fonte: estado.fonte,
+            dono,
+            sem_dono: !temDono,
+        };
+    }
+
+    // Sobrou devolver: interesse realmente novo, a operação escolheu 'devolver',
+    // ou é o mesmo empreendimento mas SEM dono - e aí a fila é o que dá dono.
+    const motivo = decisao.motivo;
 
     const fila = await resolveFila(alvo);
     if (!fila) {
-        console.warn(`[marketing-capture] lead ${lead.id}: empreendimento ${alvo} é interesse novo mas não tem fila vinculada — retorno não aplicado.`);
-        return { acao: 'sem_fila', empreendimento: alvo };
+        console.warn(`[marketing-capture] lead ${lead.id}: empreendimento ${alvo} precisa de fila (${motivo}) e não tem vínculo — retorno não aplicado.`);
+        return { acao: 'sem_fila', empreendimento: alvo, motivo };
     }
 
     let inicio;
@@ -235,15 +337,50 @@ async function applySecondInterestReturn(lead, payload, mirror, situacao) {
     // mostra o lead solto.
     payload.forcar_distribuicao_lead = true;
 
-    console.log(`[marketing-capture] lead ${lead.id}: segundo interesse (${alvo}) em etapa "${situacao.nome}" — devolvendo para ${fila.nome}.`);
+    console.log(`[marketing-capture] lead ${lead.id}: ${motivo} (${alvo}) em etapa "${situacao.nome}" — devolvendo para ${fila.nome}.`);
     return {
         acao: 'retornado',
+        motivo,
         empreendimento: alvo,
+        fonte: estado.fonte,
         fila: { id: fila.idfila, nome: fila.nome, origem: fila.origem },
         de_situacao: situacao.nome,
         para_situacao: inicio.nome,
-        dono_anterior: { imobiliaria: mirror.imobiliaria?.nome || null, corretor: mirror.corretor?.nome || null },
+        dono_anterior: dono,
     };
+}
+
+/**
+ * Reconversão que NÃO devolve: o POST segue só com o `idempreendimento` (que é
+ * aditivo e marca o interesse) e sem nenhum campo de devolução — nada de
+ * idsituacao, remover_corretor/imobiliaria ou fila. A interação registra no CV
+ * que houve conversão nova, para o corretor ver o movimento sem perder o lead.
+ */
+function marcarInteresseSemDevolver(payload, { alvo, estado, situacao }) {
+    const donoTexto = estado.corretor || estado.imobiliaria || null;
+    const linhas = [
+        'Nova conversao no MESMO empreendimento de interesse - atendimento mantido pelo Office.',
+        `Empreendimento: ${alvo}`,
+        `Etapa atual: ${situacao.nome || estado.situacao_nome || 'nao identificada'}`,
+        donoTexto ? `Segue em atendimento com: ${donoTexto}` : 'Lead sem corretor associado no momento da conversao.',
+        'O lead NAO foi devolvido a fila: a regra do Office mantem quem ja atende quando a conversao e no mesmo empreendimento.',
+    ];
+    const texto = linhas.join('\n');
+
+    const atuais = Array.isArray(payload.interacoes) ? [...payload.interacoes] : [];
+    if (atuais.length) {
+        atuais[0] = { ...atuais[0], descricao: `${atuais[0].descricao}\n\n${texto}` };
+        payload.interacoes = atuais;
+        return;
+    }
+    // Interação SOLTA (lead sem campos extras nem contexto de campanha) vai no
+    // formato que já é aceito em produção pelo CvLeadReturnService: `tipo` junto
+    // com `descricao` (doc CV 2.10, 'A' = Anotação). Interação recusada derruba
+    // o POST inteiro, e aí o lead ficaria `rejected` por causa de uma anotação.
+    payload.interacoes = [{
+        tipo: process.env.CV_INTERACAO_TIPO || 'A',
+        descricao: texto,
+    }];
 }
 
 /**
@@ -384,8 +521,9 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
         message: `Tentativa ${lead.dispatch_attempts} de envio ao CV.`,
         detail: {
             dry_run: dryRun,
-            ...(decisao ? { situacao_no_cv: decisao.nome, faixa: decisao.faixa, acao: decisao.acao } : {}),
+            ...(decisao ? { situacao_no_cv: decisao.nome, faixa: decisao.faixa, acao: decisao.acao, fonte: decisao.fonte } : {}),
             ...(decisao?.acao === 'retornado' ? { retorno: decisao } : {}),
+            ...(decisao?.acao === 'atendimento_mantido' ? { atendimento_mantido: decisao } : {}),
         },
     });
 
@@ -412,6 +550,7 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
         if (body.sucesso === true && body.id != null) {
             const r = await markDelivered(lead, body, actor);
             if (decisao?.acao === 'retornado') await conferirDistribuicao(lead, decisao, actor);
+            else if (decisao?.acao === 'atendimento_mantido') await registrarAtendimentoMantido(lead, decisao, actor);
             return r;
         }
         // HTTP 200 mas sucesso:false → recusa lógica do CV.
@@ -425,6 +564,28 @@ export async function dispatchLead(leadOrId, { actor = 'system' } = {}) {
         // 5xx / rede / timeout — falha transitória.
         return await markFailed(lead, err, actor);
     }
+}
+
+// Reconversão no mesmo empreendimento que ficou com quem já atendia. Vira evento
+// próprio porque a timeline do lead é onde a operação confere o "por que esse
+// lead não foi redistribuído" - sem isso, o desfecho ficaria só no log.
+async function registrarAtendimentoMantido(lead, decisao, actor) {
+    const dono = decisao.dono?.corretor || decisao.dono?.imobiliaria || null;
+    await recordLeadEvent({
+        leadId: lead.id,
+        type: 'atendimento_mantido',
+        actor,
+        message: dono
+            ? `Reconversão no mesmo empreendimento (${decisao.empreendimento}): interesse marcado e atendimento mantido com ${dono}.`
+            : `Reconversão no mesmo empreendimento (${decisao.empreendimento}): interesse marcado, lead mantido onde estava (sem corretor associado).`,
+        detail: {
+            empreendimento: decisao.empreendimento,
+            politica: decisao.politica,
+            fonte: decisao.fonte,
+            dono: decisao.dono,
+            situacao: decisao.nome || null,
+        },
+    });
 }
 
 // A API não conta se a fila está ativa nem quem está nela por grupo, então não

@@ -29,6 +29,9 @@ export async function updateConfig(req, res) {
         return res.json({ ok: true, config: updated });
     } catch (err) {
         console.error(`❌ [marketing-config] update: ${err.message}`);
+        // Recusa de validação (err.status = 400) devolve o motivo; o resto segue
+        // como erro de servidor com mensagem genérica.
+        if (err.status === 400) return res.status(400).json({ ok: false, error: err.message });
         return res.status(500).json({ ok: false, error: 'Erro ao salvar configurações.' });
     }
 }
