@@ -227,7 +227,35 @@ const corsOptions = {
   credentials: true
 };
 
-app.use(cors(corsOptions));
+// As rotas PÚBLICAS de captação (`/public`) trazem o próprio
+// `cors({ origin: true })`: a página que chama cada uma pode estar em QUALQUER
+// domínio — o site institucional, uma LP hospedada fora, um parceiro —, e essa
+// lista não cabe no `corsOptions`.
+//
+// Mas não basta o router liberar: para uma origem fora da lista global, o
+// pacote `cors` ENCERRA o preflight com 204 sem `Access-Control-Allow-Origin`.
+// A requisição morre aqui e nunca chega ao router que a liberaria. O sintoma
+// engana, porque só o POST quebra: o GET do MESMO endpoint é requisição
+// simples, não tem preflight, o middleware global apenas deixa passar e o
+// router responde com o cabeçalho certo. Foi assim que o formulário embutido
+// em menin.com.br parou de enviar enquanto a LP dele continuava carregando.
+//
+// Por isso o CORS global pula esses prefixos em vez de responder por eles. O
+// bolão resolve o mesmo problema sendo montado acima; quem vier depois já
+// nasce coberto ao entrar nesta lista.
+const PREFIXOS_PUBLICOS = [
+  '/api/bolao/public',
+  '/api/marketing/public',
+  '/api/realestate/public',
+  '/api/correspondents/public',
+  '/api/reports/public',
+];
+const corsGlobal = cors(corsOptions);
+app.use((req, res, next) =>
+  PREFIXOS_PUBLICOS.some((prefixo) => req.path.startsWith(prefixo))
+    ? next()
+    : corsGlobal(req, res, next)
+);
 
 // ⚠️ Webhook do WhatsApp precisa do raw body para validar HMAC.
 // Por isso é montado ANTES do express.json() global.
