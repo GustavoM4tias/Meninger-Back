@@ -7,6 +7,9 @@
 //   boleto_parcela_lembrete_v1  "sua parcela vence em X dias", so texto
 //   boleto_parcela_atraso_v1    "sua parcela venceu; a reserva pode ser cancelada;
 //                               responda SIM (botao) para a nova via"
+//   boleto_parcela_final_v1     "sem pagamento depois dos avisos; nao vamos gerar nova
+//                               via; fale com a gente pelo numero X" (09/09/2026: sai
+//                               quando as vias acabam ou o aviso fica N dias sem resposta)
 //   boleto_parcela_baixa_v1     "o boleto foi baixado, nao pague; o empreendimento
 //                               esta sem cobranca ate a assinatura do financiamento"
 //                               (08/09/2026, Park Alameda Sarandi; empreendimento e
@@ -29,6 +32,7 @@ export const TPL_PARCELA = 'boleto_parcela_v1';
 export const TPL_LEMBRETE = 'boleto_parcela_lembrete_v1';
 export const TPL_ATRASO = 'boleto_parcela_atraso_v1';
 export const TPL_BAIXA = 'boleto_parcela_baixa_v1';
+export const TPL_FINAL = 'boleto_parcela_final_v1';
 
 // Mesmo aviso do ato (AVISO_PRAZO do link/boleto), dito para a parcela.
 export const AVISO_PARCELA =
@@ -94,6 +98,25 @@ export function getAtrasoTemplateDefinition() {
     };
 }
 
+export function getFinalTemplateDefinition() {
+    return {
+        name: TPL_FINAL,
+        category: 'UTILITY',
+        language: LANG,
+        // {{1}} nome, {{2}} "parcela 3 de 60", {{3}} empreendimento, {{4}} vencimento,
+        // {{5}} valor, {{6}} numero de contato. Nao pede resposta: leva o rodape.
+        body:
+            'Olá, *{{1}}*.\n\n'
+            + 'A *{{2}}* da sua reserva no *{{3}}*, vencida em *{{4}}* ({{5}}), segue sem pagamento depois dos avisos que enviamos. '
+            + 'Não vamos gerar novas vias automaticamente.\n\n'
+            + '⚠️ Sem a regularização, a sua reserva pode ser cancelada.\n\n'
+            + '📞 Para regularizar ou tirar dúvidas, fale com a gente pelo número *{{6}}*. Se preferir, procure o seu corretor. Estamos à disposição.',
+        examples: ['Gustavo', 'parcela 3 de 60', 'Jardim dos Anjos', '20/10/2026', 'R$ 496,74', '(44) 99151-0579'],
+        footerText: RODAPE,
+        buttons: [],
+    };
+}
+
 export function getBaixaTemplateDefinition() {
     return {
         name: TPL_BAIXA,
@@ -120,7 +143,8 @@ export const TODOS = [
     { name: TPL_PARCELA, def: getParcelaTemplateDefinition, comDocumento: true },
     { name: TPL_LEMBRETE, def: getLembreteTemplateDefinition, comDocumento: false },
     { name: TPL_ATRASO, def: getAtrasoTemplateDefinition, comDocumento: false },
+    { name: TPL_FINAL, def: getFinalTemplateDefinition, comDocumento: false },
     { name: TPL_BAIXA, def: getBaixaTemplateDefinition, comDocumento: false },
 ];
 
-export default { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_BAIXA, TODOS, getParcelaTemplateDefinition, getLembreteTemplateDefinition, getAtrasoTemplateDefinition, getBaixaTemplateDefinition };
+export default { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_FINAL, TPL_BAIXA, TODOS, getParcelaTemplateDefinition, getLembreteTemplateDefinition, getAtrasoTemplateDefinition, getFinalTemplateDefinition, getBaixaTemplateDefinition };

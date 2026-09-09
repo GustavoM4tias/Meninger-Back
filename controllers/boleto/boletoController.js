@@ -106,6 +106,7 @@ export async function updateSettings(req, res) {
             'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada', 'parcelas_lote_tamanho', 'parcelas_lote_pausa_min',
             'atraso_reemitir', 'atraso_max_reemissoes',
             'lembrete_dias_antes', 'aviso_atraso_dias_depois',
+            'aviso_final_sem_resposta_dias', 'parcelas_contato',
         ];
 
         // Parcelas: inteiros nao-negativos onde e contagem de dias, percentuais
@@ -132,8 +133,14 @@ export async function updateSettings(req, res) {
             || intEntre('parcelas_lote_pausa_min', 0, 120)
             || intEntre('atraso_max_reemissoes', 0, 12)
             || intEntre('lembrete_dias_antes', 0, 30)
-            || intEntre('aviso_atraso_dias_depois', 0, 30);
+            || intEntre('aviso_atraso_dias_depois', 0, 30)
+            || intEntre('aviso_final_sem_resposta_dias', 0, 90);
         if (erroParcelas) return res.status(400).json({ error: erroParcelas });
+        if (req.body.parcelas_contato !== undefined) {
+            const c = String(req.body.parcelas_contato || '').trim();
+            if (!c || c.length > 40) return res.status(400).json({ error: 'parcelas_contato: informe o numero de contato (ate 40 caracteres).' });
+            req.body.parcelas_contato = c;
+        }
         // Endereco de contingencia do sacado: CEP de 8 digitos e os campos que o portal exige.
         if (req.body.parcelas_cep_contingencia !== undefined) {
             const c = req.body.parcelas_cep_contingencia;

@@ -173,6 +173,12 @@ const META = {
         file: 'boleto.parcela.atraso.hbs',
         headerLight: true,
     },
+    'boleto.parcela.final': {
+        subject: (d) => `${d.descricao || 'Parcela'} em aberto: aviso final - ${d.empreendimento || 'Sua reserva'}`,
+        preview: (d) => `Vencida em ${d.vencimentoFormatado || ''} • fale com a gente pelo ${d.contato || ''}`,
+        file: 'boleto.parcela.final.hbs',
+        headerLight: true,
+    },
     'boleto.parcela.baixa': {
         subject: (d) => `Boleto da ${d.descricao || 'parcela'} baixado - ${d.empreendimento || 'Sua reserva'}`,
         preview: (d) => `Não pague o boleto enviado em ${d.enviadoEmFormatado || ''}`,

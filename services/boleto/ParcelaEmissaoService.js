@@ -20,7 +20,7 @@ import { validateTitular, formatTitularErrorsMessage } from './titularValidator.
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { _primitivos } from './BoletoGenerationService.js';
-import { sendParcelaToTitular, sendLembrete, sendAvisoAtraso } from './ParcelaNotifyService.js';
+import { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoFinal } from './ParcelaNotifyService.js';
 import { isSituacaoPaga } from './BoletoPaymentCheckService.js';
 import {
     PARCELA_STATUS, PLANO_STATUS, condicaoDeEmissao, descricaoParcela, rotuloParcela, hojeYmd, diffDays, ehErroDeCep, titularComEnderecoContingencia,
@@ -454,11 +454,17 @@ export async function aplicarResultadoParcela(r, history) {
  */
 export async function enviarLembretes(cfg, { settings = null } = {}) {
     const hoje = hojeYmd();
-    const stats = { lembretes: 0, avisos: 0, falhas: 0 };
+    const stats = { lembretes: 0, avisos: 0, finais: 0, falhas: 0 };
     if (!cfg.ativo) return stats;
     // Emitida (boleto vivo) para o lembrete; emitida OU vencida (boleto ja
     // baixado pela rodada das 08h) para o aviso de atraso - sem isso o aviso
     // nunca sairia, porque a baixa acontece antes do D+1.
+    //
+    // Aviso de atraso x aviso FINAL (09/09/2026): cada aviso de atraso oferece
+    // uma via nova (o cliente responde SIM). Vias novas por parcela =
+    // cfg.atrasoMaxReemissoes. Quando a via que venceu era a ultima, ou quando o
+    // aviso ficou cfg.avisoFinalSemRespostaDias sem resposta, sai o aviso final:
+    // sem via, com o numero de contato. Uma vez por parcela.
     const parcelas = await AtoParcela.findAll({
         where: { status: { [Op.in]: [PARCELA_STATUS.EMITIDA, PARCELA_STATUS.VENCIDA] }, boleto_history_id: { [Op.ne]: null } },
         include: [{ model: AtoPlano, as: 'plano', where: { status: PLANO_STATUS.ATIVO }, attributes: ["id", "idreserva", "empreendimento", "unidade", "origem", "teste_dados"] }],
@@ -469,11 +475,18 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
             const faltam = diffDays(hoje, venc); // negativo = ja venceu
             const querLembrete = parcela.status === PARCELA_STATUS.EMITIDA
                 && cfg.lembreteDiasAntes > 0 && !parcela.lembrete_enviado_em && faltam >= 0 && faltam <= cfg.lembreteDiasAntes;
-            const querAviso = cfg.avisoAtrasoDiasDepois > 0 && !parcela.aviso_atraso_enviado_em && faltam < 0 && (-faltam) >= cfg.avisoAtrasoDiasDepois;
-            if (!querLembrete && !querAviso) continue;
+            const querAvisoBase = cfg.avisoAtrasoDiasDepois > 0 && !parcela.aviso_atraso_enviado_em && faltam < 0 && (-faltam) >= cfg.avisoAtrasoDiasDepois;
+            const reemissoesFeitas = Math.max(0, (Number(parcela.emissoes) || 1) - 1);
+            const viasEsgotadas = reemissoesFeitas >= cfg.atrasoMaxReemissoes;
+            const diasSemResposta = parcela.aviso_atraso_enviado_em ? diffDays(hojeYmd(new Date(parcela.aviso_atraso_enviado_em)), hoje) : null;
+            const semResposta = diasSemResposta != null && cfg.avisoFinalSemRespostaDias > 0 && diasSemResposta >= cfg.avisoFinalSemRespostaDias;
+            const querFinal = !parcela.aviso_final_enviado_em && faltam < 0 && ((querAvisoBase && viasEsgotadas) || semResposta);
+            const querAviso = querAvisoBase && !viasEsgotadas;
+            if (!querLembrete && !querAviso && !querFinal) continue;
             const boleto = await BoletoHistory.findByPk(parcela.boleto_history_id);
             if (!boleto) continue;
             if (querLembrete && boleto.payment_status !== 'pending') continue;
+            if (querFinal && boleto.payment_status === 'paid') continue;
             // Boleto emitido HOJE nao ganha lembrete hoje: o cliente acabou de
             // receber o boleto (com a data de vencimento nele), e a rodada de
             // 08/09/2026 mandou "vence em 2 dias" minutos depois para 41 pessoas.
@@ -494,6 +507,19 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
                 await parcela.update({ lembrete_enviado_em: new Date() });
                 await EventLogger.log({ historyId: boleto.id, idreserva: parcela.idreserva, type: 'reminder_sent', severity: 'info', message: `Lembrete de vencimento enviado (e-mail ${r.email.ok ? 'OK' : 'nao'}, WhatsApp ${r.whatsapp.ok ? 'OK' : 'nao'}).`, data: r });
                 stats.lembretes++;
+            } else if (querFinal) {
+                const porque = viasEsgotadas
+                    ? `${reemissoesFeitas} via(s) nova(s) ja emitida(s), limite ${cfg.atrasoMaxReemissoes}`
+                    : `aviso de atraso ha ${diasSemResposta} dia(s) sem resposta`;
+                const r = await sendAvisoFinal({ titular: reserva.titular, dados: { ...dados, contato: cfg.contatoDuvidas }, historyId: boleto.id });
+                await parcela.update({ aviso_final_enviado_em: new Date(), aviso_atraso_enviado_em: parcela.aviso_atraso_enviado_em || new Date() });
+                await EventLogger.log({ historyId: boleto.id, idreserva: parcela.idreserva, type: 'final_notice_sent', severity: 'warning', message: `Aviso final enviado (${porque}; e-mail ${r.email.ok ? 'OK' : 'nao'}, WhatsApp ${r.whatsapp.ok ? 'OK' : 'nao'}). Sem novas vias automaticas: o cliente foi orientado a falar com ${cfg.contatoDuvidas}. A parcela fica em atraso para alguem decidir.`, data: { ...r, porque } });
+                await sendCvMessage(parcela.idreserva, comStatusParcela('VENCIDA', p, [
+                    `Aviso FINAL da ${descricaoParcela(p)} enviado ao cliente (${porque}).`, '',
+                    `Valor: ${formatCurrency(dados.valor)}`, `Vencimento: ${formatDate(venc)}`, '',
+                    `O Office nao vai gerar nova via sozinho. O cliente foi orientado a falar com ${cfg.contatoDuvidas} ou com o corretor.`,
+                ].join('\n'))).catch(() => {});
+                stats.finais++;
             } else if (querAviso) {
                 const r = await sendAvisoAtraso({ titular: reserva.titular, dados, historyId: boleto.id });
                 await parcela.update({ aviso_atraso_enviado_em: new Date() });
@@ -533,6 +559,7 @@ async function parcelasAguardandoResposta(fromPhone, body) {
             plano_id: { [Op.in]: planos.map(p => p.id) },
             status: { [Op.in]: [PARCELA_STATUS.VENCIDA, PARCELA_STATUS.EMITIDA] },
             aviso_atraso_enviado_em: { [Op.gte]: desde },
+            aviso_final_enviado_em: null, // depois do aviso final nao ha mais via por SIM
         },
         order: [['vencimento', 'ASC']],
     });
@@ -553,10 +580,14 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
     const vencidas = await parcelasAguardandoResposta(fone, body);
     if (!vencidas.length) return false;
 
+    const cfg = cfgParcelas(await getSettings());
     const resultados = [];
+    const esgotadas = [];
     for (const parcela of vencidas) {
         const boleto = parcela.boleto_history_id ? await BoletoHistory.findByPk(parcela.boleto_history_id) : null;
         if (boleto?.payment_status === 'paid') continue;
+        // Vias novas acabaram (limite mudou depois do aviso, ou SIM repetido): nao reemite.
+        if (Math.max(0, (Number(parcela.emissoes) || 1) - 1) >= cfg.atrasoMaxReemissoes) { esgotadas.push(parcela); continue; }
         if (parcela.status === PARCELA_STATUS.EMITIDA && boleto?.payment_status === 'pending') {
             // Boleto ainda vivo (a rodada das 08h nao baixou): a reemissao faz a baixa previa.
         }
@@ -564,12 +595,14 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
         const r = await emitirParcela(parcela.id, { forcar: true });
         resultados.push({ parcela, r });
     }
-    if (!resultados.length) return false;
+    if (!resultados.length && !esgotadas.length) return false;
 
     const ok = resultados.filter(x => x.r.ok);
     const texto = ok.length
         ? `Perfeito! Geramos o novo boleto da ${ok.map(x => `${descricaoParcela(x.parcela)} com vencimento em ${formatDate(x.r.history?.vencimento)}`).join(' e da ')}. Ele já foi enviado por aqui e por e-mail.`
-        : 'Recebemos o seu pedido, mas não conseguimos gerar o boleto agora. Nossa equipe vai verificar e te retornar.';
+        : (resultados.length
+            ? 'Recebemos o seu pedido, mas não conseguimos gerar o boleto agora. Nossa equipe vai verificar e te retornar.'
+            : `Já enviamos as vias novas da ${esgotadas.map(x => descricaoParcela(x)).join(' e da ')} e não conseguimos gerar outra por aqui. Para regularizar, fale com a gente pelo número ${cfg.contatoDuvidas} ou procure o seu corretor.`);
     try {
         const { default: WhatsAppService } = await import('../whatsapp/WhatsAppService.js');
         const { id } = await WhatsAppService.sendText({ to: fone, body: texto });
@@ -577,7 +610,7 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
     } catch (err) {
         console.warn(`[PARCELAS] resposta ao cliente ${fone} falhou: ${err.message}`);
     }
-    console.log(`[PARCELAS] resposta do cliente ${fone}: ${ok.length}/${resultados.length} reemissao(oes) OK.`);
+    console.log(`[PARCELAS] resposta do cliente ${fone}: ${ok.length}/${resultados.length} reemissao(oes) OK${esgotadas.length ? `, ${esgotadas.length} sem via (limite)` : ''}.`);
     return true;
 }
 

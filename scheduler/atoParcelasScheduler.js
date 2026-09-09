@@ -166,7 +166,7 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
             encerramentos: Number(out.encerramentos?.planos || 0),
             candidatas: Number(out.emissao?.candidatas || 0), emitidas: Number(out.emissao?.emitidas || 0),
             reemitidas: Number(out.emissao?.reemitidas || 0), falhas: Number(out.emissao?.falhas || 0),
-            lembretes: Number(out.lembretes?.lembretes || 0), avisos: Number(out.lembretes?.avisos || 0),
+            lembretes: Number(out.lembretes?.lembretes || 0), avisos: Number(out.lembretes?.avisos || 0) + Number(out.lembretes?.finais || 0),
             resultado: out, erros: out.erros.length ? out.erros : null,
         }).catch(err => console.error('[PARCELAS] nao fechou a rodada:', err.message));
         return out;

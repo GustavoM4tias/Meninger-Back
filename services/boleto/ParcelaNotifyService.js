@@ -21,7 +21,7 @@ import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
 import ShortLinkService from '../shortLink/ShortLinkService.js';
 import BoletoNotify from './BoletoNotifyService.js';
 import db from '../../models/sequelize/index.js';
-import { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_BAIXA } from './parcelaWhatsappTemplates.js';
+import { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_FINAL, TPL_BAIXA } from './parcelaWhatsappTemplates.js';
 
 const { WhatsappMessage } = db;
 const { toE164Br, pickEmail, primeiroNome, formatCurrency, formatDateBr, pickTitularPhone, isLocalEnvironment } = BoletoNotify._internal;
@@ -252,6 +252,35 @@ export async function sendAvisoAtraso({ titular, dados, historyId = null }) {
 }
 
 /**
+ * Aviso FINAL: as vias novas acabaram (ou o aviso de atraso ficou N dias sem
+ * resposta). Nao oferece via; manda o cliente falar com `dados.contato`.
+ * @param {object} p.dados { empreendimento, unidade, descricao, rotulo, valor, vencimento, contato }
+ */
+export async function sendAvisoFinal({ titular, dados, historyId = null }) {
+    if (isLocalEnvironment()) {
+        const reason = skipLocal();
+        return { email: { ok: false, skipped: true, error: reason }, whatsapp: { ok: false, skipped: true, error: reason } };
+    }
+    if (!dados?.contato) throw new Error('sendAvisoFinal: informe dados.contato (numero para regularizar).');
+    const nome = primeiroNome(titular?.nome) || 'cliente';
+    const emailData = {
+        titularPrimeiroNome: nome, empreendimento: dados.empreendimento, unidade: dados.unidade || '',
+        descricao: dados.descricao, valorFormatado: formatCurrency(dados.valor), vencimentoFormatado: formatDateBr(dados.vencimento),
+        contato: dados.contato,
+    };
+    const variables = [nome, dados.descricao, dados.empreendimento || '', formatDateBr(dados.vencimento), formatCurrency(dados.valor), dados.contato];
+    const textoLivre = `Olá, ${nome}. A ${dados.descricao} da sua reserva no ${dados.empreendimento}, vencida em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}), segue sem pagamento depois dos avisos que enviamos.`
+        + ' Não vamos gerar novas vias automaticamente. Sem a regularização, a sua reserva pode ser cancelada.'
+        + ` Para regularizar ou tirar dúvidas, fale com a gente pelo número ${dados.contato}. Se preferir, procure o seu corretor.`;
+    const [email, whatsapp] = await Promise.all([
+        enviarEmail(EmailType.BOLETO_PARCELA_FINAL, titular, emailData, null),
+        enviarWhatsApp({ titular, templateName: TPL_FINAL, variables, textoLivre, resumo: `Aviso final parcela ${dados.rotulo} venc. ${formatDateBr(dados.vencimento)}` }),
+    ]);
+    console.log(`[PARCELA][FINAL][hist ${historyId || '?'}] email=${email.ok ? 'OK' : 'nao'} whatsapp=${whatsapp.ok ? 'OK' : 'nao'}`);
+    return { email, whatsapp };
+}
+
+/**
  * Aviso de baixa: o boleto ja enviado foi baixado e o empreendimento esta sem
  * cobranca ate a assinatura do financiamento. `dados.contato` e o numero que
  * atende as duvidas (obrigatorio: o texto termina nele).
@@ -285,4 +314,4 @@ export async function sendAvisoBaixa({ titular, dados, historyId = null, canais 
     return { email, whatsapp };
 }
 
-export default { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoBaixa, _internal: { toE164Br } };
+export default { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoFinal, sendAvisoBaixa, _internal: { toE164Br } };

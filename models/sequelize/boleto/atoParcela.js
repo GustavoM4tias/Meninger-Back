@@ -59,6 +59,8 @@ export default (sequelize, DataTypes) => {
         // Comunicacao ao cliente (um envio de cada por boleto vivo).
         lembrete_enviado_em: { type: DataTypes.DATE, allowNull: true },
         aviso_atraso_enviado_em: { type: DataTypes.DATE, allowNull: true },
+        // Aviso FINAL (sem nova via): uma vez por parcela, nao zera na reemissao.
+        aviso_final_enviado_em: { type: DataTypes.DATE, allowNull: true },
 
         updated_by: { type: DataTypes.INTEGER, allowNull: true },
     }, {

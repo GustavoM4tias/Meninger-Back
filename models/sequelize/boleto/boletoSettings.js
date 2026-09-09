@@ -171,12 +171,12 @@ export default (sequelize, DataTypes) => {
         parcelas_ativo: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         parcelas_idseries: {
             type: DataTypes.TEXT,
-            defaultValue: '[20,1,37]',
-            comment: 'IDs de serie do CV tratadas como mensais (JSON array).',
+            defaultValue: '[20]',
+            comment: 'IDs de serie do CV tratadas como mensais (JSON array). So a 20 (Recurso Proprio Parcelado) desde 09/09/2026.',
             get() {
                 const raw = this.getDataValue('parcelas_idseries');
                 let parsed;
-                try { parsed = JSON.parse(raw ?? '[20,1,37]'); } catch { return [20, 1, 37]; }
+                try { parsed = JSON.parse(raw ?? '[20]'); } catch { return [20]; }
                 if (!Array.isArray(parsed)) parsed = [parsed];
                 const flat = parsed.flat(Infinity).map(Number).filter(n => Number.isFinite(n) && n > 0);
                 return Array.from(new Set(flat));
@@ -214,11 +214,13 @@ export default (sequelize, DataTypes) => {
         // parcelas_criterio_sienge existe no banco mas nao e lida: o Sienge assume
         // quando a venda esta FATURADA (financial_institution_date), so isso (07/09/2026).
         atraso_reemitir: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false, comment: 'true = a rodada reemite parcela vencida sozinha. false (padrao) = a pedido: o cliente responde SIM ao aviso ou alguem clica Reemitir na tela. Sempre para o proximo dia util.' },
-        atraso_max_reemissoes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 3, comment: 'Quantas vias novas por parcela antes de parar e chamar gente.' },
+        atraso_max_reemissoes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 2, comment: 'Vias novas por parcela (= avisos de atraso com oferta de via). Depois sai o aviso final, sem via, e a parcela fica para gente decidir.' },
         // atraso_cobrar_encargos / atraso_multa_pct / atraso_juros_mes_pct existem
         // no banco mas nao sao lidas: multa e juros ficaram fora desta etapa (07/09/2026).
         lembrete_dias_antes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 3, comment: 'Lembrete ao cliente N dias antes do vencimento (0 desliga).' },
         aviso_atraso_dias_depois: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 1, comment: 'Aviso de vencido N dias depois do vencimento (0 desliga).' },
+        aviso_final_sem_resposta_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 15, comment: 'Aviso final (sem nova via) N dias depois de um aviso de vencida sem resposta (0 desliga). Tambem sai quando as vias acabam.' },
+        parcelas_contato: { type: DataTypes.STRING(40), allowNull: true, defaultValue: '(44) 99151-0579', comment: 'Numero que atende o cliente nos avisos (final e baixa).' },
         parcelas_ultima_rodada_em: { type: DataTypes.DATE, allowNull: true, comment: 'Quando a rodada diaria de parcelas rodou pela ultima vez (sobrevive a restart).' },
 
         // ── Controle ───────────────────────────────────────────────────────────
