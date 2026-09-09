@@ -43,7 +43,9 @@ export function cfgParcelas(s) {
         ativo: !!s?.parcelas_ativo,
         moduloAtivo: !!s?.active,
         idseries: ids,
-        empreendimentosExcluidos: Array.isArray(s?.parcelas_empreendimentos_excluidos) ? s.parcelas_empreendimentos_excluidos : D.empreendimentosExcluidos,
+        empreendimentosExcluidos: Array.isArray(s?.parcelas_empreendimentos_excluidos)
+            ? s.parcelas_empreendimentos_excluidos.map(Number).filter(n => Number.isInteger(n) && n > 0)
+            : D.empreendimentosExcluidos,
         exigirAtoPago: s?.parcelas_exigir_ato_pago ?? D.exigirAtoPago,
         antecedenciaDias: num(s?.parcelas_antecedencia_dias, D.antecedenciaDias),
         encerrarQuandoFaturado: s?.parcelas_encerrar_quando_faturado ?? D.encerrarQuandoFaturado,
@@ -270,7 +272,7 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
         if (cancelada) return { plano: null, criado: false, skipped: 'reserva_cancelada', resumo: {} };
         if (!derivadas.length) return { plano: null, criado: false, skipped: 'sem_series', resumo: {} };
         // Empreendimento fora da cobranca (Configuracoes): a reserva nao entra.
-        if (empreendimentoExcluido(denormDaReserva(reserva, viaCv).empreendimento, cfg.empreendimentosExcluidos) && opts.origem !== 'manual') {
+        if (empreendimentoExcluido(denormDaReserva(reserva, viaCv).idempreendimento_cv, cfg.empreendimentosExcluidos) && opts.origem !== 'manual') {
             return { plano: null, criado: false, skipped: 'empreendimento_excluido', resumo: {} };
         }
         if (cfg.exigirAtoPago && opts.origem !== 'manual') {
@@ -447,7 +449,7 @@ export async function aplicarExclusoes(cfg, { userId = null } = {}) {
     const out = { pausados: 0, reativados: 0, boletosVivos: 0, empreendimentos: cfg.empreendimentosExcluidos || [] };
     const vivos = await AtoPlano.findAll({ where: { status: { [Op.in]: [PLANO_STATUS.ATIVO, PLANO_STATUS.PAUSADO] } } });
     for (const plano of vivos) {
-        const excluido = empreendimentoExcluido(plano.empreendimento, cfg.empreendimentosExcluidos);
+        const excluido = empreendimentoExcluido(plano.idempreendimento_cv, cfg.empreendimentosExcluidos);
         if (plano.status === PLANO_STATUS.ATIVO && excluido) {
             await plano.update({ status: PLANO_STATUS.PAUSADO, pausado_em: new Date(), pausado_por: userId, observacao: OBS_EXCLUIDO, updated_by: userId });
             out.pausados++;
@@ -462,20 +464,30 @@ export async function aplicarExclusoes(cfg, { userId = null } = {}) {
 }
 
 /**
- * Empreendimentos conhecidos (reservas locais + planos), com quantos planos
- * ativos cada um tem - para a tela escolher quais ficam fora da cobranca.
+ * Empreendimentos conhecidos (reservas locais + planos) por ID do CV, com o nome
+ * MAIS RECENTE (o CV renomeia: PARK ALAMEDA -> PARK ALAMEDA - SARANDI, id 36) e
+ * quantos planos ativos/pausados cada um tem - para a tela escolher quais ficam
+ * fora da cobranca. `nomes_antigos` lista os outros nomes ja usados.
  */
 export async function listarEmpreendimentos() {
     const [rows] = await db.sequelize.query(`
-        WITH nomes AS (
-            SELECT upper(trim(unidade_json->>'empreendimento')) AS nome FROM reservas WHERE coalesce(unidade_json->>'empreendimento', '') <> ''
-            UNION SELECT upper(trim(empreendimento)) FROM ato_planos WHERE coalesce(empreendimento, '') <> ''
+        WITH fonte AS (
+            SELECT (unidade_json->>'idempreendimento_cv')::int AS id, upper(trim(unidade_json->>'empreendimento')) AS nome, idreserva AS ordem
+              FROM reservas WHERE (unidade_json->>'idempreendimento_cv') ~ '^[0-9]+$' AND coalesce(unidade_json->>'empreendimento', '') <> ''
+            UNION ALL
+            SELECT idempreendimento_cv, upper(trim(empreendimento)), idreserva FROM ato_planos WHERE idempreendimento_cv IS NOT NULL AND coalesce(empreendimento, '') <> ''
+        ), por_nome AS (
+            SELECT id, nome, max(ordem) AS ultima FROM fonte GROUP BY 1, 2
+        ), atual AS (
+            SELECT DISTINCT ON (id) id, nome FROM por_nome ORDER BY id, ultima DESC
         )
-        SELECT n.nome,
-               (SELECT count(*) FROM ato_planos p WHERE upper(trim(p.empreendimento)) = n.nome AND p.status = 'ativo')::int AS ativos,
-               (SELECT count(*) FROM ato_planos p WHERE upper(trim(p.empreendimento)) = n.nome AND p.status = 'pausado')::int AS pausados
-          FROM nomes n ORDER BY ativos DESC, n.nome`);
-    return { empreendimentos: rows };
+        SELECT a.id, a.nome,
+               array_remove(array_agg(DISTINCT n.nome) FILTER (WHERE n.nome <> a.nome), NULL) AS nomes_antigos,
+               (SELECT count(*) FROM ato_planos p WHERE p.idempreendimento_cv = a.id AND p.status = 'ativo')::int AS ativos,
+               (SELECT count(*) FROM ato_planos p WHERE p.idempreendimento_cv = a.id AND p.status = 'pausado')::int AS pausados
+          FROM atual a JOIN por_nome n ON n.id = a.id
+         GROUP BY a.id, a.nome ORDER BY ativos DESC, a.nome`);
+    return { empreendimentos: rows.map(r => ({ ...r, id: Number(r.id), nomes_antigos: r.nomes_antigos || [] })) };
 }
 
 export async function pausarPlano(plano, userId = null) {

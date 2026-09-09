@@ -189,10 +189,10 @@ export default (sequelize, DataTypes) => {
         },
         parcelas_empreendimentos_excluidos: {
             type: DataTypes.JSONB, allowNull: true, defaultValue: [],
-            comment: 'Empreendimentos FORA da cobranca de parcelas (nomes da reserva do CV). Plano ativo deles e pausado; reserva nova nao entra.',
+            comment: 'Empreendimentos FORA da cobranca de parcelas (ids do CV, idempreendimento_cv). Plano ativo deles e pausado; reserva nova nao entra.',
             get() {
                 const raw = this.getDataValue('parcelas_empreendimentos_excluidos');
-                return Array.isArray(raw) ? raw.map(x => String(x || '').trim()).filter(Boolean) : [];
+                return Array.isArray(raw) ? [...new Set(raw.map(Number).filter(n => Number.isInteger(n) && n > 0))] : [];
             },
         },
         parcelas_exigir_ato_pago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Plano so nasce com o ato pago (boleto ou cartao).' },

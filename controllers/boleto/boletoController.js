@@ -151,13 +151,13 @@ export async function updateSettings(req, res) {
                 bairro: String(c.bairro).trim(), cidade: String(c.cidade).trim(), estado: String(c.estado).toUpperCase(),
             };
         }
-        // Empreendimentos fora da cobranca de parcelas: lista de nomes ([] = todos cobram).
+        // Empreendimentos fora da cobranca de parcelas: ids do CV ([] = todos cobram).
         if (req.body.parcelas_empreendimentos_excluidos !== undefined) {
             const v = req.body.parcelas_empreendimentos_excluidos;
-            if (!Array.isArray(v) || v.some(x => typeof x !== 'string')) {
-                return res.status(400).json({ error: 'parcelas_empreendimentos_excluidos deve ser uma lista de nomes de empreendimento.' });
+            if (!Array.isArray(v) || v.some(x => !Number.isInteger(Number(x)) || Number(x) <= 0)) {
+                return res.status(400).json({ error: 'parcelas_empreendimentos_excluidos deve ser uma lista de ids de empreendimento do CV (inteiros positivos).' });
             }
-            req.body.parcelas_empreendimentos_excluidos = [...new Set(v.map(x => x.trim().toUpperCase().replace(/\s+/g, ' ')).filter(Boolean))].slice(0, 200);
+            req.body.parcelas_empreendimentos_excluidos = [...new Set(v.map(Number))].slice(0, 200);
         }
         // Etapas do repasse que encerram o plano: lista de ids inteiros positivos ([] desliga).
         if (req.body.parcelas_encerrar_etapas_repasse !== undefined) {
