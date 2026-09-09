@@ -253,25 +253,23 @@ export async function sendAvisoAtraso({ titular, dados, historyId = null }) {
 
 /**
  * Aviso FINAL: as vias novas acabaram (ou o aviso de atraso ficou N dias sem
- * resposta). Nao oferece via; manda o cliente falar com `dados.contato`.
- * @param {object} p.dados { empreendimento, unidade, descricao, rotulo, valor, vencimento, contato }
+ * resposta). Nao oferece via; manda o cliente procurar o corretor.
+ * @param {object} p.dados { empreendimento, unidade, descricao, rotulo, valor, vencimento }
  */
 export async function sendAvisoFinal({ titular, dados, historyId = null }) {
     if (isLocalEnvironment()) {
         const reason = skipLocal();
         return { email: { ok: false, skipped: true, error: reason }, whatsapp: { ok: false, skipped: true, error: reason } };
     }
-    if (!dados?.contato) throw new Error('sendAvisoFinal: informe dados.contato (numero para regularizar).');
     const nome = primeiroNome(titular?.nome) || 'cliente';
     const emailData = {
         titularPrimeiroNome: nome, empreendimento: dados.empreendimento, unidade: dados.unidade || '',
         descricao: dados.descricao, valorFormatado: formatCurrency(dados.valor), vencimentoFormatado: formatDateBr(dados.vencimento),
-        contato: dados.contato,
     };
-    const variables = [nome, dados.descricao, dados.empreendimento || '', formatDateBr(dados.vencimento), formatCurrency(dados.valor), dados.contato];
+    const variables = [nome, dados.descricao, dados.empreendimento || '', formatDateBr(dados.vencimento), formatCurrency(dados.valor)];
     const textoLivre = `Olá, ${nome}. A ${dados.descricao} da sua reserva no ${dados.empreendimento}, vencida em ${formatDateBr(dados.vencimento)} (${formatCurrency(dados.valor)}), segue sem pagamento depois dos avisos que enviamos.`
         + ' Não vamos gerar novas vias automaticamente. Sem a regularização, a sua reserva pode ser cancelada.'
-        + ` Para regularizar ou tirar dúvidas, fale com a gente pelo número ${dados.contato}. Se preferir, procure o seu corretor.`;
+        + ' Para regularizar ou tirar dúvidas procure o seu corretor. Estamos à disposição.';
     const [email, whatsapp] = await Promise.all([
         enviarEmail(EmailType.BOLETO_PARCELA_FINAL, titular, emailData, null),
         enviarWhatsApp({ titular, templateName: TPL_FINAL, variables, textoLivre, resumo: `Aviso final parcela ${dados.rotulo} venc. ${formatDateBr(dados.vencimento)}` }),

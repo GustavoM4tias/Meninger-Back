@@ -220,7 +220,6 @@ export default (sequelize, DataTypes) => {
         lembrete_dias_antes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 3, comment: 'Lembrete ao cliente N dias antes do vencimento (0 desliga).' },
         aviso_atraso_dias_depois: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 1, comment: 'Aviso de vencido N dias depois do vencimento (0 desliga).' },
         aviso_final_sem_resposta_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 15, comment: 'Aviso final (sem nova via) N dias depois de um aviso de vencida sem resposta (0 desliga). Tambem sai quando as vias acabam.' },
-        parcelas_contato: { type: DataTypes.STRING(40), allowNull: true, defaultValue: '(44) 99151-0579', comment: 'Numero que atende o cliente nos avisos (final e baixa).' },
         parcelas_ultima_rodada_em: { type: DataTypes.DATE, allowNull: true, comment: 'Quando a rodada diaria de parcelas rodou pela ultima vez (sobrevive a restart).' },
 
         // ── Controle ───────────────────────────────────────────────────────────

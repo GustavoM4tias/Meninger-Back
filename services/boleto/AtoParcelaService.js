@@ -74,7 +74,6 @@ export function cfgParcelas(s) {
         // Aviso FINAL (sem nova via): sai quando as vias acabaram ou quando o
         // ultimo aviso de atraso ficou N dias sem resposta (0 desliga a 2a condicao).
         avisoFinalSemRespostaDias: num(s?.aviso_final_sem_resposta_dias, D.avisoFinalSemRespostaDias),
-        contatoDuvidas: String(s?.parcelas_contato || '').trim() || D.contatoDuvidas,
         situacoesMortas: Array.isArray(s?.cv_situacoes_reserva_morta) ? s.cv_situacoes_reserva_morta : [4],
         valorMaximo: s?.valor_maximo != null ? Number(s.valor_maximo) : null,
     };

@@ -175,7 +175,7 @@ const META = {
     },
     'boleto.parcela.final': {
         subject: (d) => `${d.descricao || 'Parcela'} em aberto: aviso final - ${d.empreendimento || 'Sua reserva'}`,
-        preview: (d) => `Vencida em ${d.vencimentoFormatado || ''} • fale com a gente pelo ${d.contato || ''}`,
+        preview: (d) => `Vencida em ${d.vencimentoFormatado || ''} • procure o seu corretor`,
         file: 'boleto.parcela.final.hbs',
         headerLight: true,
     },

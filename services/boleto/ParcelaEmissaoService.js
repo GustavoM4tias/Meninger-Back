@@ -464,7 +464,7 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
     // uma via nova (o cliente responde SIM). Vias novas por parcela =
     // cfg.atrasoMaxReemissoes. Quando a via que venceu era a ultima, ou quando o
     // aviso ficou cfg.avisoFinalSemRespostaDias sem resposta, sai o aviso final:
-    // sem via, com o numero de contato. Uma vez por parcela.
+    // sem via, "procure o seu corretor". Uma vez por parcela.
     const parcelas = await AtoParcela.findAll({
         where: { status: { [Op.in]: [PARCELA_STATUS.EMITIDA, PARCELA_STATUS.VENCIDA] }, boleto_history_id: { [Op.ne]: null } },
         include: [{ model: AtoPlano, as: 'plano', where: { status: PLANO_STATUS.ATIVO }, attributes: ["id", "idreserva", "empreendimento", "unidade", "origem", "teste_dados"] }],
@@ -511,13 +511,13 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
                 const porque = viasEsgotadas
                     ? `${reemissoesFeitas} via(s) nova(s) ja emitida(s), limite ${cfg.atrasoMaxReemissoes}`
                     : `aviso de atraso ha ${diasSemResposta} dia(s) sem resposta`;
-                const r = await sendAvisoFinal({ titular: reserva.titular, dados: { ...dados, contato: cfg.contatoDuvidas }, historyId: boleto.id });
+                const r = await sendAvisoFinal({ titular: reserva.titular, dados, historyId: boleto.id });
                 await parcela.update({ aviso_final_enviado_em: new Date(), aviso_atraso_enviado_em: parcela.aviso_atraso_enviado_em || new Date() });
-                await EventLogger.log({ historyId: boleto.id, idreserva: parcela.idreserva, type: 'final_notice_sent', severity: 'warning', message: `Aviso final enviado (${porque}; e-mail ${r.email.ok ? 'OK' : 'nao'}, WhatsApp ${r.whatsapp.ok ? 'OK' : 'nao'}). Sem novas vias automaticas: o cliente foi orientado a falar com ${cfg.contatoDuvidas}. A parcela fica em atraso para alguem decidir.`, data: { ...r, porque } });
+                await EventLogger.log({ historyId: boleto.id, idreserva: parcela.idreserva, type: 'final_notice_sent', severity: 'warning', message: `Aviso final enviado (${porque}; e-mail ${r.email.ok ? 'OK' : 'nao'}, WhatsApp ${r.whatsapp.ok ? 'OK' : 'nao'}). Sem novas vias automaticas: o cliente foi orientado a procurar o corretor. A parcela fica em atraso para alguem decidir.`, data: { ...r, porque } });
                 await sendCvMessage(parcela.idreserva, comStatusParcela('VENCIDA', p, [
                     `Aviso FINAL da ${descricaoParcela(p)} enviado ao cliente (${porque}).`, '',
                     `Valor: ${formatCurrency(dados.valor)}`, `Vencimento: ${formatDate(venc)}`, '',
-                    `O Office nao vai gerar nova via sozinho. O cliente foi orientado a falar com ${cfg.contatoDuvidas} ou com o corretor.`,
+                    'O Office nao vai gerar nova via sozinho. O cliente foi orientado a procurar o corretor.',
                 ].join('\n'))).catch(() => {});
                 stats.finais++;
             } else if (querAviso) {
@@ -602,7 +602,7 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
         ? `Perfeito! Geramos o novo boleto da ${ok.map(x => `${descricaoParcela(x.parcela)} com vencimento em ${formatDate(x.r.history?.vencimento)}`).join(' e da ')}. Ele já foi enviado por aqui e por e-mail.`
         : (resultados.length
             ? 'Recebemos o seu pedido, mas não conseguimos gerar o boleto agora. Nossa equipe vai verificar e te retornar.'
-            : `Já enviamos as vias novas da ${esgotadas.map(x => descricaoParcela(x)).join(' e da ')} e não conseguimos gerar outra por aqui. Para regularizar, fale com a gente pelo número ${cfg.contatoDuvidas} ou procure o seu corretor.`);
+            : `Já enviamos as vias novas da ${esgotadas.map(x => descricaoParcela(x)).join(' e da ')} e não conseguimos gerar outra por aqui. Para regularizar ou tirar dúvidas procure o seu corretor.`);
     try {
         const { default: WhatsAppService } = await import('../whatsapp/WhatsAppService.js');
         const { id } = await WhatsAppService.sendText({ to: fone, body: texto });
