@@ -22,6 +22,8 @@ import db from '../models/sequelize/index.js';
 import Planos from '../services/boleto/AtoParcelaService.js';
 import Emissao from '../services/boleto/ParcelaEmissaoService.js';
 import { dentroDaJanela } from '../lib/boletoJanela.js';
+import WhatsAppTemplateService from '../services/whatsapp/WhatsAppTemplateService.js';
+import { TODOS as TEMPLATES_PARCELAS, LANG as TEMPLATES_LANG } from '../services/boleto/parcelaWhatsappTemplates.js';
 import { classificarParaRodada, hojeYmd, ehErroDeCep, MOTIVOS_TRANSFERENCIA, PARCELA_STATUS, PLANO_STATUS } from '../lib/atoParcelas.js';
 
 const TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
@@ -156,6 +158,29 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
             out.erros.push(`emissao: ${err.message}`);
             console.error('[PARCELAS] passo de emissao falhou:', err);
         }
+
+        // 3b. templates de WhatsApp: o envio le o cache local (whatsapp_templates)
+        // e a Meta aprova sem avisar. Enquanto algum template das parcelas nao
+        // estiver APPROVED no cache, a rodada sincroniza sozinha (um GET) antes
+        // dos avisos - sem isso o WhatsApp so voltava depois de alguem clicar
+        // "sincronizar" na tela (09/09/2026).
+        try {
+            const pendentes = [];
+            for (const t of TEMPLATES_PARCELAS) {
+                const local = await WhatsAppTemplateService.getByName(t.name, TEMPLATES_LANG);
+                if (String(local?.status || '').toUpperCase() !== 'APPROVED') pendentes.push(t.name);
+            }
+            if (pendentes.length) {
+                await WhatsAppTemplateService.syncFromMeta();
+                const aprovados = [];
+                for (const name of pendentes) {
+                    const local = await WhatsAppTemplateService.getByName(name, TEMPLATES_LANG);
+                    if (String(local?.status || '').toUpperCase() === 'APPROVED') aprovados.push(name);
+                }
+                out.templates = { pendentes, aprovados_agora: aprovados };
+                if (aprovados.length) console.log(`[PARCELAS] template(s) aprovado(s) na Meta: ${aprovados.join(', ')}`);
+            }
+        } catch (err) { out.erros.push(`templates: ${err.message}`); }
 
         // 4. lembretes/avisos
         try { out.lembretes = await Emissao.enviarLembretes(cfg, { settings }); }
