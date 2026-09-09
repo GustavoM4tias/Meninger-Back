@@ -38,7 +38,7 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
     if (rodando) return { skipped: true, reason: 'ja_rodando' };
     rodando = true;
     const inicio = Date.now();
-    const out = { hoje: hojeYmd(), manual, adesao: null, encerramentos: null, emissao: null, lembretes: null, erros: [] };
+    const out = { hoje: hojeYmd(), manual, exclusoes: null, adesao: null, encerramentos: null, emissao: null, lembretes: null, erros: [] };
     // Historico da rodada na tabela (a tela le): nasce 'rodando' e fecha no fim.
     const rodada = await db.AtoParcelaRodada.create({ hoje: out.hoje, inicio: new Date(), status: 'rodando', manual, user_id: userId })
         .catch(err => { console.error('[PARCELAS] nao gravou a rodada:', err.message); return null; });
@@ -50,6 +50,10 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
             await rodada?.update({ fim: new Date(), status: 'concluida', resultado: out }).catch(() => {});
             return out;
         }
+
+        // 0. empreendimentos fora da cobranca (pausa/reativa; a tela tambem aplica ao salvar)
+        try { out.exclusoes = await Planos.aplicarExclusoes(cfg, { userId }); }
+        catch (err) { out.erros.push(`exclusoes: ${err.message}`); }
 
         // 1. adesao
         try { out.adesao = await Planos.aderirPendentes(cfg, { settings }); }

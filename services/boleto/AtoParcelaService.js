@@ -20,7 +20,7 @@ import { Op } from 'sequelize';
 import { allowedEnterpriseNames } from './boletoScope.js';
 import {
     PARCELAS_DEFAULTS, PLANO_STATUS, PARCELA_STATUS,
-    derivarParcelas, chaveParcela, diffPlano, motivoEncerramento, MOTIVOS_TRANSFERENCIA, hojeYmd, diffDays, addDays,
+    derivarParcelas, chaveParcela, diffPlano, motivoEncerramento, MOTIVOS_TRANSFERENCIA, hojeYmd, diffDays, addDays, empreendimentoExcluido,
 } from '../../lib/atoParcelas.js';
 
 const { AtoPlano, AtoParcela, BoletoHistory, BoletoSettings, UseredeLinkHistory } = db;
@@ -43,6 +43,7 @@ export function cfgParcelas(s) {
         ativo: !!s?.parcelas_ativo,
         moduloAtivo: !!s?.active,
         idseries: ids,
+        empreendimentosExcluidos: Array.isArray(s?.parcelas_empreendimentos_excluidos) ? s.parcelas_empreendimentos_excluidos : D.empreendimentosExcluidos,
         exigirAtoPago: s?.parcelas_exigir_ato_pago ?? D.exigirAtoPago,
         antecedenciaDias: num(s?.parcelas_antecedencia_dias, D.antecedenciaDias),
         encerrarQuandoFaturado: s?.parcelas_encerrar_quando_faturado ?? D.encerrarQuandoFaturado,
@@ -268,6 +269,10 @@ export async function criarOuSincronizarPlano(idreserva, opts = {}) {
     if (!plano) {
         if (cancelada) return { plano: null, criado: false, skipped: 'reserva_cancelada', resumo: {} };
         if (!derivadas.length) return { plano: null, criado: false, skipped: 'sem_series', resumo: {} };
+        // Empreendimento fora da cobranca (Configuracoes): a reserva nao entra.
+        if (empreendimentoExcluido(denormDaReserva(reserva, viaCv).empreendimento, cfg.empreendimentosExcluidos) && opts.origem !== 'manual') {
+            return { plano: null, criado: false, skipped: 'empreendimento_excluido', resumo: {} };
+        }
         if (cfg.exigirAtoPago && opts.origem !== 'manual') {
             const pago = await atoPago(idreserva);
             if (!pago) return { plano: null, criado: false, skipped: 'ato_nao_pago', resumo: {} };
@@ -429,6 +434,50 @@ export async function encerrarPlano(plano, motivo, { detalhe = null, userId = nu
     return { parcelasComBoletoVivo: vivas.map(v => v.id) };
 }
 
+const OBS_EXCLUIDO = 'PAUSADO: empreendimento fora da cobranca de parcelas (Configuracoes > Parcelas mensais)';
+
+/**
+ * Aplica a lista de empreendimentos excluidos (cfg.empreendimentosExcluidos):
+ * plano ATIVO de empreendimento excluido e pausado (boletos ja emitidos ficam
+ * valendo; a tela baixa se precisar); plano que ESTA pausado por esta regra e
+ * cujo empreendimento saiu da lista volta a ativo. Roda ao salvar a
+ * configuracao e no inicio de toda rodada. Idempotente.
+ */
+export async function aplicarExclusoes(cfg, { userId = null } = {}) {
+    const out = { pausados: 0, reativados: 0, boletosVivos: 0, empreendimentos: cfg.empreendimentosExcluidos || [] };
+    const vivos = await AtoPlano.findAll({ where: { status: { [Op.in]: [PLANO_STATUS.ATIVO, PLANO_STATUS.PAUSADO] } } });
+    for (const plano of vivos) {
+        const excluido = empreendimentoExcluido(plano.empreendimento, cfg.empreendimentosExcluidos);
+        if (plano.status === PLANO_STATUS.ATIVO && excluido) {
+            await plano.update({ status: PLANO_STATUS.PAUSADO, pausado_em: new Date(), pausado_por: userId, observacao: OBS_EXCLUIDO, updated_by: userId });
+            out.pausados++;
+            out.boletosVivos += await BoletoHistory.count({ where: { idreserva: plano.idreserva, tipo: 'parcela', status: 'success', payment_status: 'pending', ignorado: false } });
+        } else if (plano.status === PLANO_STATUS.PAUSADO && !excluido && plano.observacao === OBS_EXCLUIDO) {
+            await plano.update({ status: PLANO_STATUS.ATIVO, pausado_em: null, pausado_por: null, observacao: null, updated_by: userId });
+            out.reativados++;
+        }
+    }
+    if (out.pausados || out.reativados) console.log(`[PARCELAS] exclusoes por empreendimento: ${out.pausados} pausado(s), ${out.reativados} reativado(s), ${out.boletosVivos} boleto(s) vivo(s) nos pausados.`);
+    return out;
+}
+
+/**
+ * Empreendimentos conhecidos (reservas locais + planos), com quantos planos
+ * ativos cada um tem - para a tela escolher quais ficam fora da cobranca.
+ */
+export async function listarEmpreendimentos() {
+    const [rows] = await db.sequelize.query(`
+        WITH nomes AS (
+            SELECT upper(trim(unidade_json->>'empreendimento')) AS nome FROM reservas WHERE coalesce(unidade_json->>'empreendimento', '') <> ''
+            UNION SELECT upper(trim(empreendimento)) FROM ato_planos WHERE coalesce(empreendimento, '') <> ''
+        )
+        SELECT n.nome,
+               (SELECT count(*) FROM ato_planos p WHERE upper(trim(p.empreendimento)) = n.nome AND p.status = 'ativo')::int AS ativos,
+               (SELECT count(*) FROM ato_planos p WHERE upper(trim(p.empreendimento)) = n.nome AND p.status = 'pausado')::int AS pausados
+          FROM nomes n ORDER BY ativos DESC, n.nome`);
+    return { empreendimentos: rows };
+}
+
 export async function pausarPlano(plano, userId = null) {
     if (plano.status !== PLANO_STATUS.ATIVO) throw new Error('So um plano ativo pode ser pausado.');
     await plano.update({ status: PLANO_STATUS.PAUSADO, pausado_em: new Date(), pausado_por: userId, updated_by: userId });
@@ -517,13 +566,14 @@ export async function aderirPendentes(cfg, { limite = 150, settings = null } = {
          ORDER BY p.paid_at DESC NULLS LAST
          LIMIT :limite`, { replacements: { limite } });
 
-    const stats = { candidatas: rows.length, criados: 0, sem_series: 0, canceladas: 0, erros: 0 };
+    const stats = { candidatas: rows.length, criados: 0, sem_series: 0, canceladas: 0, excluidos: 0, erros: 0 };
     for (const r of rows) {
         try {
             const out = await criarOuSincronizarPlano(r.idreserva, { preferirLocal: true, origem: 'ato_pago', atoPagoEm: r.paid_at, settings });
             if (out.criado) stats.criados++;
             else if (out.skipped === 'sem_series') stats.sem_series++;
             else if (out.skipped === 'reserva_cancelada') stats.canceladas++;
+            else if (out.skipped === 'empreendimento_excluido') stats.excluidos++;
         } catch (err) {
             stats.erros++;
             console.warn(`[PARCELAS] adesao falhou na reserva ${r.idreserva}: ${err.message}`);

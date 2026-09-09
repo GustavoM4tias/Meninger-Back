@@ -187,6 +187,14 @@ export default (sequelize, DataTypes) => {
                 this.setDataValue('parcelas_idseries', JSON.stringify(Array.from(new Set(flat))));
             },
         },
+        parcelas_empreendimentos_excluidos: {
+            type: DataTypes.JSONB, allowNull: true, defaultValue: [],
+            comment: 'Empreendimentos FORA da cobranca de parcelas (nomes da reserva do CV). Plano ativo deles e pausado; reserva nova nao entra.',
+            get() {
+                const raw = this.getDataValue('parcelas_empreendimentos_excluidos');
+                return Array.isArray(raw) ? raw.map(x => String(x || '').trim()).filter(Boolean) : [];
+            },
+        },
         parcelas_exigir_ato_pago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Plano so nasce com o ato pago (boleto ou cartao).' },
         parcelas_antecedencia_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 10, comment: 'Boleto da parcela sai N dias corridos antes do vencimento.' },
         parcelas_encerrar_quando_faturado: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Encerra o plano quando a venda e faturada no Sienge (contracts.financial_institution_date).' },

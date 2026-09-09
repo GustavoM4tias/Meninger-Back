@@ -99,7 +99,7 @@ export async function updateSettings(req, res) {
             'janela_ativa', 'janela_inicio_hora', 'janela_fim_hora',
             'active',
             // Parcelas mensais (lib/atoParcelas.js)
-            'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago',
+            'parcelas_ativo', 'parcelas_idseries', 'parcelas_exigir_ato_pago', 'parcelas_empreendimentos_excluidos',
             'parcelas_antecedencia_dias', 'parcelas_encerrar_quando_faturado', 'parcelas_encerrar_etapas_repasse',
             'parcelas_cep_contingencia_ativo', 'parcelas_cep_contingencia',
             'parcelas_vencidas_na_adesao', 'parcelas_cobrar_a_partir_de',
@@ -150,6 +150,14 @@ export async function updateSettings(req, res) {
                 cep, endereco: String(c.endereco).trim(), numero: String(c.numero).trim(), complemento: String(c.complemento || '').trim(),
                 bairro: String(c.bairro).trim(), cidade: String(c.cidade).trim(), estado: String(c.estado).toUpperCase(),
             };
+        }
+        // Empreendimentos fora da cobranca de parcelas: lista de nomes ([] = todos cobram).
+        if (req.body.parcelas_empreendimentos_excluidos !== undefined) {
+            const v = req.body.parcelas_empreendimentos_excluidos;
+            if (!Array.isArray(v) || v.some(x => typeof x !== 'string')) {
+                return res.status(400).json({ error: 'parcelas_empreendimentos_excluidos deve ser uma lista de nomes de empreendimento.' });
+            }
+            req.body.parcelas_empreendimentos_excluidos = [...new Set(v.map(x => x.trim().toUpperCase().replace(/\s+/g, ' ')).filter(Boolean))].slice(0, 200);
         }
         // Etapas do repasse que encerram o plano: lista de ids inteiros positivos ([] desliga).
         if (req.body.parcelas_encerrar_etapas_repasse !== undefined) {
@@ -257,6 +265,18 @@ export async function updateSettings(req, res) {
         const json = s.toJSON();
         if (json.eco_senha) json.eco_senha_set = true;
         delete json.eco_senha;
+
+        // Lista de exclusao mudou: pausa/reativa os planos na hora, e a tela
+        // mostra quantos (nao espera a rodada das 09h).
+        if (updates.parcelas_empreendimentos_excluidos !== undefined) {
+            try {
+                const { cfgParcelas, aplicarExclusoes } = await import('../../services/boleto/AtoParcelaService.js');
+                json.parcelas_exclusoes = await aplicarExclusoes(cfgParcelas(s), { userId: req.user?.id || null });
+            } catch (err) {
+                console.error('[PARCELAS] aplicarExclusoes ao salvar:', err.message);
+                json.parcelas_exclusoes = { erro: err.message };
+            }
+        }
 
         return res.json(json);
     } catch (err) {

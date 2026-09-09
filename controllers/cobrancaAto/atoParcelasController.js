@@ -192,6 +192,12 @@ export async function getRepasseEtapas(req, res) {
     catch (err) { return res.status(500).json({ error: `Falha ao listar as etapas do repasse: ${err.message}` }); }
 }
 
+/** Empreendimentos conhecidos com planos ativos/pausados (para a lista de exclusao). */
+export async function getEmpreendimentos(req, res) {
+    try { return res.json(await Planos.listarEmpreendimentos()); }
+    catch (err) { return res.status(500).json({ error: `Falha ao listar os empreendimentos: ${err.message}` }); }
+}
+
 /** Ultima rodada e configuracao efetiva (para o card da tela). */
 export async function getStatus(req, res) {
     try {
