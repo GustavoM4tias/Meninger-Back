@@ -106,7 +106,7 @@ export async function updateSettings(req, res) {
             'parcelas_hora_rodada', 'parcelas_max_emissoes_rodada', 'parcelas_lote_tamanho', 'parcelas_lote_pausa_min',
             'atraso_reemitir', 'atraso_max_reemissoes',
             'lembrete_dias_antes', 'aviso_atraso_dias_depois',
-            'aviso_final_sem_resposta_dias',
+            'aviso_final_sem_resposta_dias', 'parcelas_aviso_encerramento',
         ];
 
         // Parcelas: inteiros nao-negativos onde e contagem de dias, percentuais

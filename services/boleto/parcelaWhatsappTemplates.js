@@ -11,6 +11,11 @@
 //                               via; procure o seu corretor" (09/09/2026: sai quando as
 //                               vias acabam ou o aviso fica N dias sem resposta; a v1
 //                               tinha numero de contato e foi apagada antes de aprovar)
+//   boleto_parcela_encerramento_v1  "o contrato chegou a emissao pela Caixa; as parcelas
+//                               passam para a Confissao de Divida" + frase da situacao
+//                               (boleto baixado / parcela paga / sem boleto). Sai quando a
+//                               rodada encerra o plano por venda faturada ou etapa do
+//                               repasse (10/09/2026, texto do Gustavo).
 //   boleto_parcela_baixa_v2     "o boleto foi baixado, nao precisa ser pago por enquanto;
 //                               o empreendimento esta sem cobranca ate a assinatura do
 //                               financiamento" (v1 em 08/09/2026 para o Park Alameda
@@ -36,6 +41,7 @@ export const TPL_LEMBRETE = 'boleto_parcela_lembrete_v1';
 export const TPL_ATRASO = 'boleto_parcela_atraso_v1';
 export const TPL_BAIXA = 'boleto_parcela_baixa_v2';
 export const TPL_FINAL = 'boleto_parcela_final_v2';
+export const TPL_ENCERRAMENTO = 'boleto_parcela_encerramento_v1';
 
 // Mesmo aviso do ato (AVISO_PRAZO do link/boleto), dito para a parcela.
 export const AVISO_PARCELA =
@@ -120,6 +126,28 @@ export function getFinalTemplateDefinition() {
     };
 }
 
+export function getEncerramentoTemplateDefinition() {
+    return {
+        name: TPL_ENCERRAMENTO,
+        category: 'UTILITY',
+        language: LANG,
+        // {{1}} nome, {{2}} empreendimento, {{3}} frase da situacao do cliente
+        // (ParcelaNotifyService.fraseSituacaoEncerramento): boleto baixado, parcela
+        // paga ou sem boleto. Nao pede resposta: leva o rodape.
+        body:
+            'Olá, *{{1}}*.\n\n'
+            + 'O seu contrato no *{{2}}* chegou à etapa de *emissão pela Caixa*. A partir de agora as parcelas serão calculadas '
+            + 'de acordo com a Confissão de Dívida, que será assinada junto do contrato de financiamento. '
+            + 'As próximas parcelas serão enviadas e acompanhadas por outro canal da construtora.\n\n'
+            + '{{3}}\n\n'
+            + 'Se tiver dúvidas sobre a assinatura, fale com o seu corretor.\n\n'
+            + 'Agradecemos a confiança! 🙏',
+        examples: ['Gustavo', 'Jardim dos Anjos', 'O boleto da parcela 3 de 60 que enviamos foi baixado e não precisa ser pago.'],
+        footerText: RODAPE,
+        buttons: [],
+    };
+}
+
 export function getBaixaTemplateDefinition() {
     return {
         name: TPL_BAIXA,
@@ -147,6 +175,7 @@ export const TODOS = [
     { name: TPL_ATRASO, def: getAtrasoTemplateDefinition, comDocumento: false },
     { name: TPL_FINAL, def: getFinalTemplateDefinition, comDocumento: false },
     { name: TPL_BAIXA, def: getBaixaTemplateDefinition, comDocumento: false },
+    { name: TPL_ENCERRAMENTO, def: getEncerramentoTemplateDefinition, comDocumento: false },
 ];
 
-export default { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_FINAL, TPL_BAIXA, TODOS, getParcelaTemplateDefinition, getLembreteTemplateDefinition, getAtrasoTemplateDefinition, getFinalTemplateDefinition, getBaixaTemplateDefinition };
+export default { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_FINAL, TPL_BAIXA, TPL_ENCERRAMENTO, TODOS, getParcelaTemplateDefinition, getLembreteTemplateDefinition, getAtrasoTemplateDefinition, getFinalTemplateDefinition, getBaixaTemplateDefinition, getEncerramentoTemplateDefinition };

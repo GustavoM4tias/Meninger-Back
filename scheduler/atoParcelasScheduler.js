@@ -64,7 +64,7 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
         // 2. encerramentos (+ baixa dos boletos vivos)
         try {
             const enc = await Planos.verificarEncerramentos(cfg);
-            out.encerramentos = { planos: enc.length, baixas: 0, baixas_falha: 0 };
+            out.encerramentos = { planos: enc.length, baixas: 0, baixas_falha: 0, avisos: 0, avisos_falha: 0 };
             const MOTIVO_BAIXA = {
                 sienge_faturado: 'venda faturada no Sienge',
                 repasse_contrato_emitido: 'contrato emitido pela Caixa (repasse no CV)',
@@ -78,6 +78,16 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
                         settings,
                     });
                     if (r.ok) out.encerramentos.baixas++; else out.encerramentos.baixas_falha++;
+                }
+                // Aviso ao cliente: so quando o Sienge/Caixa assumiu (nao no cancelamento).
+                if (cfg.avisoEncerramento && MOTIVOS_TRANSFERENCIA.includes(e.motivo)) {
+                    try {
+                        const a = await Emissao.avisarEncerramento(e);
+                        if (a.ok) out.encerramentos.avisos++; else out.encerramentos.avisos_falha++;
+                    } catch (err) {
+                        out.encerramentos.avisos_falha++;
+                        console.warn(`[PARCELAS] aviso de encerramento falhou (reserva ${e.plano?.idreserva}): ${err.message}`);
+                    }
                 }
             }
         } catch (err) { out.erros.push(`encerramentos: ${err.message}`); }

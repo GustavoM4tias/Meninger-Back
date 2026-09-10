@@ -179,6 +179,12 @@ const META = {
         file: 'boleto.parcela.final.hbs',
         headerLight: true,
     },
+    'boleto.parcela.encerramento': {
+        subject: (d) => `Seu contrato chegou à emissão pela Caixa - ${d.empreendimento || 'Sua reserva'}`,
+        preview: (d) => `As parcelas passam para a Confissão de Dívida`,
+        file: 'boleto.parcela.encerramento.hbs',
+        headerLight: true,
+    },
     'boleto.parcela.baixa': {
         subject: (d) => `Boleto da ${d.descricao || 'parcela'} baixado - ${d.empreendimento || 'Sua reserva'}`,
         preview: (d) => `O boleto não precisa ser pago por enquanto`,

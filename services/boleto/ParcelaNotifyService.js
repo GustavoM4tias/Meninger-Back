@@ -21,7 +21,7 @@ import WhatsAppWindowService from '../whatsapp/WhatsAppWindowService.js';
 import ShortLinkService from '../shortLink/ShortLinkService.js';
 import BoletoNotify from './BoletoNotifyService.js';
 import db from '../../models/sequelize/index.js';
-import { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_FINAL, TPL_BAIXA } from './parcelaWhatsappTemplates.js';
+import { LANG, TPL_PARCELA, TPL_LEMBRETE, TPL_ATRASO, TPL_FINAL, TPL_BAIXA, TPL_ENCERRAMENTO } from './parcelaWhatsappTemplates.js';
 
 const { WhatsappMessage } = db;
 const { toE164Br, pickEmail, primeiroNome, formatCurrency, formatDateBr, pickTitularPhone, isLocalEnvironment } = BoletoNotify._internal;
@@ -279,6 +279,49 @@ export async function sendAvisoFinal({ titular, dados, historyId = null }) {
 }
 
 /**
+ * Frase da situacao do cliente no aviso de encerramento (uma por caso; o
+ * Office sabe em qual ele esta). Com *negrito* do WhatsApp; o e-mail converte.
+ * @param {{ situacao: 'baixado'|'pago'|'sem_boleto', descricao?: string }} dados
+ */
+export function fraseSituacaoEncerramento(dados) {
+    const d = dados?.descricao || 'parcela';
+    if (dados?.situacao === 'baixado') return `O boleto da *${d}* que enviamos foi *baixado* e não precisa ser pago.`;
+    if (dados?.situacao === 'pago') return `A *${d}* que você pagou está registrada com a gente e será considerada no acerto do contrato.`;
+    return 'Você não tem nenhum boleto de parcela em aberto com a gente. Não precisa fazer nada.';
+}
+
+/**
+ * Aviso de ENCERRAMENTO: o plano encerrou porque o contrato chegou a emissao
+ * pela Caixa (repasse) ou a venda foi faturada no Sienge. As parcelas passam
+ * para a Confissao de Divida. Uma frase muda conforme a situacao do cliente.
+ * @param {object} p.dados { empreendimento, unidade, situacao, descricao, rotulo }
+ */
+export async function sendAvisoEncerramento({ titular, dados, historyId = null }) {
+    if (isLocalEnvironment()) {
+        const reason = skipLocal();
+        return { email: { ok: false, skipped: true, error: reason }, whatsapp: { ok: false, skipped: true, error: reason } };
+    }
+    const nome = primeiroNome(titular?.nome) || 'cliente';
+    const frase = fraseSituacaoEncerramento(dados);
+    const emailData = {
+        titularPrimeiroNome: nome, empreendimento: dados.empreendimento, unidade: dados.unidade || '',
+        situacaoHtml: frase.replace(/\*([^*]+)\*/g, '<strong>$1</strong>'),
+    };
+    const variables = [nome, dados.empreendimento || '', frase];
+    const textoLivre = `Olá, ${nome}. O seu contrato no ${dados.empreendimento} chegou à etapa de emissão pela Caixa.`
+        + ' A partir de agora as parcelas serão calculadas de acordo com a Confissão de Dívida, que será assinada junto do contrato de financiamento.'
+        + ' As próximas parcelas serão enviadas e acompanhadas por outro canal da construtora.'
+        + ` ${frase.replace(/\*/g, '')}`
+        + ' Se tiver dúvidas sobre a assinatura, fale com o seu corretor. Agradecemos a confiança!';
+    const [email, whatsapp] = await Promise.all([
+        enviarEmail(EmailType.BOLETO_PARCELA_ENCERRAMENTO, titular, emailData, null),
+        enviarWhatsApp({ titular, templateName: TPL_ENCERRAMENTO, variables, textoLivre, resumo: `Encerramento das parcelas (${dados.empreendimento}) - ${dados.situacao}` }),
+    ]);
+    console.log(`[PARCELA][ENCERRAMENTO][hist ${historyId || '?'}] ${dados.situacao} email=${email.ok ? 'OK' : 'nao'} whatsapp=${whatsapp.ok ? 'OK' : 'nao'}`);
+    return { email, whatsapp, frase };
+}
+
+/**
  * Aviso de baixa: o boleto ja enviado foi baixado e o empreendimento esta sem
  * cobranca ate a assinatura do financiamento (texto v2, 09/09/2026: sem data
  * de envio e sem numero de contato).
@@ -308,4 +351,4 @@ export async function sendAvisoBaixa({ titular, dados, historyId = null, canais 
     return { email, whatsapp };
 }
 
-export default { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoFinal, sendAvisoBaixa, _internal: { toE164Br } };
+export default { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoFinal, sendAvisoBaixa, sendAvisoEncerramento, fraseSituacaoEncerramento, _internal: { toE164Br } };

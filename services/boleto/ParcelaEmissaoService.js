@@ -20,7 +20,7 @@ import { validateTitular, formatTitularErrorsMessage } from './titularValidator.
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { _primitivos } from './BoletoGenerationService.js';
-import { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoFinal } from './ParcelaNotifyService.js';
+import { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoFinal, sendAvisoEncerramento } from './ParcelaNotifyService.js';
 import { isSituacaoPaga } from './BoletoPaymentCheckService.js';
 import {
     PARCELA_STATUS, PLANO_STATUS, condicaoDeEmissao, descricaoParcela, rotuloParcela, hojeYmd, diffDays, ehErroDeCep, titularComEnderecoContingencia,
@@ -536,6 +536,49 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
     return stats;
 }
 
+// ── Aviso de encerramento (contrato emitido pela Caixa / venda faturada) ─────
+
+/**
+ * Depois que a rodada encerrou o plano e baixou os boletos vivos, avisa o
+ * cliente (e-mail + WhatsApp), registra o evento no historico do boleto e manda
+ * a mensagem ao corretor no CV. A frase da situacao segue a prioridade: boleto
+ * baixado agora > parcela paga > sem boleto. Chamado pela rodada; a tela nao usa.
+ * @param {{ plano, motivo, parcelasComBoletoVivo: number[] }} e  item de verificarEncerramentos
+ */
+export async function avisarEncerramento(e) {
+    const plano = e.plano;
+    let parcela = null; let situacao = 'sem_boleto';
+    if (e.parcelasComBoletoVivo?.length) {
+        parcela = await AtoParcela.findOne({ where: { id: { [Op.in]: e.parcelasComBoletoVivo } }, order: [['vencimento', 'ASC']] });
+        situacao = 'baixado';
+    } else {
+        parcela = await AtoParcela.findOne({ where: { plano_id: plano.id, status: PARCELA_STATUS.PAGA }, order: [['pago_em', 'DESC'], ['numero', 'DESC']] });
+        if (parcela) situacao = 'pago';
+    }
+    // Historico: o boleto da parcela; sem parcela, o ultimo boleto da reserva (o do ato).
+    const boleto = parcela?.boleto_history_id
+        ? await BoletoHistory.findByPk(parcela.boleto_history_id)
+        : await BoletoHistory.findOne({ where: { idreserva: plano.idreserva, status: 'success' }, order: [['id', 'DESC']] });
+    const { titular } = await carregarReservaDoPlano(plano);
+    const p = parcela ? { numero: parcela.numero, total: parcela.total } : null;
+    const dados = { empreendimento: plano.empreendimento, unidade: plano.unidade || '', situacao, descricao: p ? descricaoParcela(p) : null, rotulo: p ? rotuloParcela(p) : null };
+    const r = await sendAvisoEncerramento({ titular, dados, historyId: boleto?.id || null });
+    const como = `e-mail ${r.email.ok ? 'OK' : 'nao'}, WhatsApp ${r.whatsapp.ok ? 'OK' : 'nao'}`;
+    await EventLogger.log({
+        historyId: boleto?.id, idreserva: plano.idreserva, type: 'closure_notice_sent', severity: 'info',
+        message: `Aviso de encerramento enviado ao cliente (${situacao}; ${como}). Motivo: ${e.detalhe || e.motivo}.`,
+        data: { situacao, motivo: e.motivo, frase: r.frase, email: r.email, whatsapp: r.whatsapp },
+    });
+    const cabec = p ? comStatusParcela('TRANSFERIDA', p, '') : 'PARCELAS TRANSFERIDAS\n\n';
+    await sendCvMessage(plano.idreserva, cabec + [
+        `Aviso de encerramento das parcelas enviado ao cliente (${como}).`, '',
+        `Motivo: ${e.detalhe || e.motivo}.`,
+        `Situacao informada: ${r.frase.replace(/\*/g, '')}`, '',
+        'As parcelas passam para a Confissao de Divida; o Office nao emite mais boletos desta reserva.',
+    ].join('\n')).catch(() => {});
+    return { ok: r.email.ok || r.whatsapp.ok, situacao, email: r.email, whatsapp: r.whatsapp };
+}
+
 // ── Resposta do cliente no WhatsApp ("SIM, quero a nova via") ────────────────
 
 const RE_SIM = /^\s*(sim|s|quero|pode|ok|manda|reemit|reemis|boleto|nova via|segunda via)/i;
@@ -707,4 +750,4 @@ async function baixarBoletoVivo(boleto, { motivo, settings }) {
     return { ok: false, detalhe: r?.error || sit };
 }
 
-export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, tratarRespostaCliente, pareceRespostaDeParcela, limparTeste, listarOrfaos, baixarOrfaos };
+export default { emitirParcela, baixarBoletoDaParcela, aplicarResultadoParcela, enviarLembretes, avisarEncerramento, tratarRespostaCliente, pareceRespostaDeParcela, limparTeste, listarOrfaos, baixarOrfaos };
