@@ -12,6 +12,7 @@
 //     (qual contrato, qual campo, de X para Y, detectada quando) e notifica
 //     os admins. O snapshot consolidado NUNCA muda sozinho — só por
 //     reconsolidação explícita, que versiona a anterior.
+import { createHash } from 'node:crypto';
 import db from '../../models/sequelize/index.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
@@ -35,12 +36,16 @@ export function periodBounds(period) {
 
 // Campos do contrato que participam do resultado do Faturamento. Qualquer
 // mudança em um deles num mês consolidado é divergência.
+//
+// `enterprise_name` NÃO entra: é só rótulo. Em 05/08/2026 o Sienge renomeou o
+// centro de custo 10401 (Anjos) e a vigilância abriu 143 divergências (uma por
+// contrato) sem um centavo ter mudado. O que move dinheiro é `enterprise_id`,
+// e esse segue vigiado. O nome continua na foto só para o detalhe.
 const TRACKED_FIELDS = [
     'situation',
     'financial_institution_date',
     'cancellation_date',
     'enterprise_id',
-    'enterprise_name',
     'company_id',
     'land_value',
     'conditions_fingerprint',
@@ -133,13 +138,16 @@ export async function buildInputsSnapshot(period) {
     }
 
     // Hash por tabela de regra: mudança de regra também explica número diferente.
+    //
+    // `contract_adjustments` NÃO entra aqui: o efeito do ajuste já é vigiado
+    // contrato a contrato (data efetiva no recorte + assinatura das séries no
+    // fingerprint). Um hash da tabela inteira marcava TODOS os meses
+    // consolidados por um ajuste que só mexia em um deles.
     const RULE_TABLES = [
         'enterprise_value_rules',
         'stage_commission_rules',
         'tr_satellite_enterprises',
-        'hidden_dashboard_enterprises',
-        'enterprise_erp_links',
-        'contract_adjustments'
+        'enterprise_erp_links'
     ];
     const rules = {};
     for (const t of RULE_TABLES) {
@@ -152,6 +160,28 @@ export async function buildInputsSnapshot(period) {
         } catch {
             rules[t] = { hash: null, count: null };
         }
+    }
+
+    // Ocultos: só o que decide o recorte (quais empreendimentos estão ocultos).
+    // O md5 da linha inteira mudava com o `updated_at` de um restaurar/ocultar
+    // e acusava "58 → 58 regra(s)" sem dizer o quê. Guardamos os ids com nome
+    // para a divergência nomear quem entrou ou saiu.
+    try {
+        const rows = await db.sequelize.query(
+            `SELECT enterprise_id, enterprise_name
+               FROM hidden_dashboard_enterprises
+              WHERE active = true
+              ORDER BY enterprise_id`,
+            { type: db.Sequelize.QueryTypes.SELECT }
+        );
+        const items = Object.fromEntries(rows.map(r => [String(r.enterprise_id), r.enterprise_name ?? null]));
+        rules.hidden_dashboard_enterprises = {
+            hash: createHash('md5').update(Object.keys(items).join('|')).digest('hex'),
+            count: rows.length,
+            items
+        };
+    } catch {
+        rules.hidden_dashboard_enterprises = { hash: null, count: null };
     }
 
     return { contracts: byId, rules, captured_at: new Date().toISOString() };
@@ -224,6 +254,23 @@ export async function consolidate({ period, lines, totals, notes, user }) {
 }
 
 // ── Vigilância: refotografa e compara ───────────────────────────────────────
+// Explica a mudança nos ocultos pelo nome: quem voltou a aparecer e quem foi
+// ocultado. Só dá para nomear quando as duas fotos guardam os ids (fechamentos
+// de antes de 2026-09-10 têm só o hash antigo); fora disso devolve null e vale
+// o texto genérico.
+function hiddenChangeWhy(stored, current) {
+    if (!stored?.items || !current?.items) return null;
+    const rotulo = (items, id) => items[id] ? `${id} - ${items[id]}` : String(id);
+    const restaurados = Object.keys(stored.items).filter(id => !(id in current.items)).map(id => rotulo(stored.items, id));
+    const ocultados = Object.keys(current.items).filter(id => !(id in stored.items)).map(id => rotulo(current.items, id));
+    const partes = [];
+    if (restaurados.length) partes.push(`Voltou a aparecer no relatório: ${restaurados.join('; ')}.`);
+    if (ocultados.length) partes.push(`Passou a ficar oculto: ${ocultados.join('; ')}.`);
+    if (!partes.length) return null;
+    partes.push('Os números congelados foram calculados com a lista de ocultos de antes.');
+    return partes.join(' ');
+}
+
 export async function checkDivergences({ notify = true } = {}) {
     const closings = await SalesClosing.findAll({ where: { status: 'consolidado' } });
     const created = [];
@@ -283,18 +330,24 @@ export async function checkDivergences({ notify = true } = {}) {
             }
         }
 
-        // Regras (VGV, comissão, TR, ocultos, vínculos)
+        // Regras (VGV, comissão, TR, ocultos, vínculos). Tabela ausente na foto
+        // gravada = fechamento feito antes de ela entrar na vigilância; comparar
+        // "nada" com o hash de hoje acusaria divergência em todo mês consolidado
+        // (foi o "? regra(s) → 0 regra(s)" de 08/08/2026). Mesma regra dos campos.
         for (const t of Object.keys(current.rules)) {
+            if (!(t in storedRules)) continue;
             const oldH = storedRules[t]?.hash ?? null;
             const newH = current.rules[t]?.hash ?? null;
-            if (oldH !== newH) {
-                divergences.push({
-                    kind: 'rules_changed', contract_id: null, field: t,
-                    old_value: `${storedRules[t]?.count ?? '?'} regra(s)`,
-                    new_value: `${current.rules[t]?.count ?? '?'} regra(s)`,
-                    details: { why: 'Tabela de regras alterada depois do fechamento; os números congelados foram calculados com as regras antigas.' }
-                });
-            }
+            if (oldH === newH) continue;
+            divergences.push({
+                kind: 'rules_changed', contract_id: null, field: t,
+                old_value: `${storedRules[t]?.count ?? '?'} regra(s)`,
+                new_value: `${current.rules[t]?.count ?? '?'} regra(s)`,
+                details: {
+                    why: hiddenChangeWhy(storedRules[t], current.rules[t])
+                        ?? 'Tabela de regras alterada depois do fechamento; os números congelados foram calculados com as regras antigas.'
+                }
+            });
         }
 
         // Divergência que se resolveu sozinha: o dado voltou a ser igual ao do
@@ -314,25 +367,43 @@ export async function checkDivergences({ notify = true } = {}) {
             await row.save();
         }
 
-        // Persiste só o que ainda não está aberto com a mesma assinatura
+        // Persiste só o que ainda não está aberto com a mesma assinatura. Se a
+        // linha já existe e só o valor NOVO mudou (o dado mexeu de novo antes
+        // de alguém revisar), ela é atualizada em vez de ganhar uma irmã: a
+        // chave de dedupe e a de auto-resolução acima são a mesma, senão a
+        // antiga nunca fechava e cada mês acumulava uma linha por valor.
+        const abertasPorChave = new Map(
+            abertas
+                .filter(r => r.status === 'open')
+                .map(r => [`${r.kind}|${r.contract_id ?? ''}|${r.field ?? ''}`, r])
+        );
         for (const d of divergences) {
-            const [row, isNew] = await SalesClosingDivergence.findOrCreate({
-                where: {
-                    closing_id: closing.id,
-                    kind: d.kind,
-                    contract_id: d.contract_id ?? null,
-                    field: d.field ?? null,
-                    new_value: d.new_value ?? null,
-                    status: 'open'
-                },
-                defaults: {
-                    period: closing.period,
-                    old_value: d.old_value,
-                    details: d.details,
-                    detected_at: new Date()
-                }
+            const chave = `${d.kind}|${d.contract_id ?? ''}|${d.field ?? ''}`;
+            const existente = abertasPorChave.get(chave);
+            if (existente) {
+                if ((existente.new_value ?? null) === (d.new_value ?? null)) continue;
+                existente.new_value = d.new_value ?? null;
+                existente.details = d.details;
+                existente.changed('details', true);
+                existente.detected_at = new Date();
+                await existente.save();
+                created.push(existente);
+                continue;
+            }
+            const row = await SalesClosingDivergence.create({
+                closing_id: closing.id,
+                period: closing.period,
+                kind: d.kind,
+                contract_id: d.contract_id ?? null,
+                field: d.field ?? null,
+                old_value: d.old_value,
+                new_value: d.new_value ?? null,
+                details: d.details,
+                status: 'open',
+                detected_at: new Date()
             });
-            if (isNew) created.push(row);
+            abertasPorChave.set(chave, row);
+            created.push(row);
         }
     }
 
