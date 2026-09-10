@@ -159,23 +159,34 @@ async function fetchReservaCore(idreserva) {
     const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}`);
     return data?.[String(idreserva)] || null;
 }
+// Complementos toleram 400/404 ("não tem isso"), o core não ("não existe").
+// Mesma regra do ReservaFullSweepService - ver o comentário lá: /campanhas
+// passou a responder 400 para reserva viva em 09/2026 e derrubava o upsert.
+async function complemento(path, vazio, config) {
+    try {
+        const { data } = await httpGet(path, config);
+        return data;
+    } catch (e) {
+        const status = e?.response?.status;
+        if (status === 400 || status === 404) return vazio;
+        throw e;
+    }
+}
 async function fetchReservaDocumentos(idreserva) {
-    const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}/documentos`);
-    return data ?? {};
+    return (await complemento(`/v1/comercial/reservas/${idreserva}/documentos`, {})) ?? {};
 }
 async function fetchReservaErpSienge(idreserva) {
-    const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}/erp/sienge`);
-    return data ?? {};
+    return (await complemento(`/v1/comercial/reservas/${idreserva}/erp/sienge`, {})) ?? {};
 }
 async function fetchReservaCampanhas(idreserva) {
-    const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}/campanhas`);
+    const data = await complemento(`/v1/comercial/reservas/${idreserva}/campanhas`, []);
     return Array.isArray(data) ? data : [];
 }
 async function fetchReservaMensagensAll(idreserva) {
     const all = [];
     let pagina = 1;
     while (true) {
-        const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}/mensagens`, { params: { pagina } });
+        const data = await complemento(`/v1/comercial/reservas/${idreserva}/mensagens`, null, { params: { pagina } });
         const dados = data?.dados ?? [];
         all.push(...dados);
         const totalPag = data?.paginacao?.total_de_paginas || 1;
@@ -284,7 +295,15 @@ export default class ReservaSyncService {
 
         // 2) Discovery em PARALELO: listar global + listar por cada idsituacao
         console.log(`🔍 [Reservas] discovery em paralelo...`);
-        const discoveryPromises = [
+        // A listagem global é obrigatória: sem ela não há delta. As listagens
+        // por situação são complemento (Cancelada/Vencida/Distrato que a
+        // global omite), e uma falhar não pode derrubar a rodada inteira:
+        // desde 01/09/2026 o CV responde 400 "Ocorreu um erro inesperado"
+        // para situacao=1,11,13,15,16,26 (3, 4, 17 e todas respondem), e com
+        // Promise.all o delta ficou 252 rodadas seguidas em erro sem gravar
+        // nada. O que falhar fica no log; o vigia de lacunas e o webhook
+        // cobrem o que essa situação esconderia.
+        const [globalResult, ...porSituacao] = await Promise.allSettled([
             fetchReservaListarAll({ situacao: 'todas', retornar_integradas: true }, 'global'),
             ...idsituacoes.map(idsit =>
                 fetchReservaListarAll({ situacao: idsit, retornar_integradas: true }).then(items => {
@@ -292,8 +311,18 @@ export default class ReservaSyncService {
                     return items;
                 })
             ),
-        ];
-        const discoveryResults = await Promise.all(discoveryPromises);
+        ]);
+        if (globalResult.status === 'rejected') throw globalResult.reason;
+
+        const discoveryResults = [globalResult.value];
+        const situacoesComErro = [];
+        porSituacao.forEach((r, i) => {
+            if (r.status === 'fulfilled') discoveryResults.push(r.value);
+            else situacoesComErro.push(`${idsituacoes[i]} (${r.reason?.response?.status || r.reason?.message})`);
+        });
+        if (situacoesComErro.length) {
+            console.warn(`⚠️  [Reservas] listagem por situação falhou e foi ignorada: ${situacoesComErro.join(', ')}`);
+        }
 
         const dedup = new Map();
         for (const arr of discoveryResults) {

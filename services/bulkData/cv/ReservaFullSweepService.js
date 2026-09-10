@@ -60,9 +60,19 @@ export function minutosAteReconsultar(attempts) {
     return Math.min(RECHECK_BASE_MIN * 2 ** (Math.max(1, attempts || 1) - 1), RECHECK_CAP_MIN);
 }
 
+// Enterro falso: o corpo "A reserva informada não foi encontrada" nunca veio
+// do core - id inexistente recebe "Ocorreu um erro inesperado". Ele veio do
+// /campanhas (ver `complemento`), e o sweep de antes gravava a reserva viva
+// como morta. Quem carrega esse corpo não está enterrado de verdade: volta à
+// fila já, sem espera, e o sweep corrigido o ressuscita ao ver o core 200.
+// A regra fica aqui, e não num patch de boot, porque em produção a fase de
+// schema é pulada (SKIP_DB_SYNC) e um patch poderia nunca rodar.
+const ENTERRO_FALSO = /reserva informada n.o foi encontrada/i;
+
 /** true = ainda dentro da espera: pular nesta rodada. */
 export function aindaEnterrado(row, agora = Date.now()) {
     if (Number(row?.last_status) !== 400) return true;
+    if (ENTERRO_FALSO.test(row?.message || '')) return false;
     const ultimo = row.last_check_at ? new Date(row.last_check_at).getTime() : 0;
     return agora < ultimo + minutosAteReconsultar(row.attempts) * 60_000;
 }
@@ -70,7 +80,10 @@ export function aindaEnterrado(row, agora = Date.now()) {
 /** O mesmo teste em SQL. Alias `d` = cv_reserva_id_dead. */
 export const SQL_AINDA_ENTERRADO = `(
     d.last_status IS DISTINCT FROM 400
-    OR d.last_check_at > now() - (LEAST(${RECHECK_BASE_MIN} * power(2, GREATEST(COALESCE(d.attempts, 1), 1) - 1), ${RECHECK_CAP_MIN}) * interval '1 minute')
+    OR (
+        COALESCE(d.message, '') NOT ILIKE '%reserva informada n%o foi encontrada%'
+        AND d.last_check_at > now() - (LEAST(${RECHECK_BASE_MIN} * power(2, GREATEST(COALESCE(d.attempts, 1), 1) - 1), ${RECHECK_CAP_MIN}) * interval '1 minute')
+    )
 )`;
 
 // ===================== Utils =====================
@@ -171,23 +184,39 @@ async function fetchReservaCore(idreserva) {
     const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}`);
     return data?.[String(idreserva)] || null;
 }
+// Complementos (documentos, ERP, campanhas, mensagens): um 400/404 aqui é
+// "esta reserva não tem isso", nunca "esta reserva não existe" - quem decide
+// existência é o core, que já respondeu 200 antes de chegar aqui. Medido em
+// 10/09/2026: /campanhas passou a devolver 400 "A reserva informada não foi
+// encontrada" para reservas vivas (8300, 8390, 8400: core, documentos, erp e
+// mensagens 200; campanhas 400). Como o catch do processador trata todo 400
+// como id inexistente, 45 reservas reais (8396-8440, 28 em Envio Sienge)
+// foram para o cemitério e o Office ficou sem reserva nova desde 03/09.
+async function complemento(path, vazio, config) {
+    try {
+        const { data } = await httpGet(path, config);
+        return data;
+    } catch (e) {
+        const status = e?.response?.status;
+        if (status === 400 || status === 404) return vazio;
+        throw e;
+    }
+}
 async function fetchReservaDocumentos(idreserva) {
-    const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}/documentos`);
-    return data ?? {};
+    return (await complemento(`/v1/comercial/reservas/${idreserva}/documentos`, {})) ?? {};
 }
 async function fetchReservaErpSienge(idreserva) {
-    const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}/erp/sienge`);
-    return data ?? {};
+    return (await complemento(`/v1/comercial/reservas/${idreserva}/erp/sienge`, {})) ?? {};
 }
 async function fetchReservaCampanhas(idreserva) {
-    const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}/campanhas`);
+    const data = await complemento(`/v1/comercial/reservas/${idreserva}/campanhas`, []);
     return Array.isArray(data) ? data : [];
 }
 async function fetchReservaMensagensAll(idreserva) {
     const all = [];
     let pagina = 1;
     while (true) {
-        const { data } = await httpGet(`/v1/comercial/reservas/${idreserva}/mensagens`, { params: { pagina } });
+        const data = await complemento(`/v1/comercial/reservas/${idreserva}/mensagens`, null, { params: { pagina } });
         const dados = data?.dados ?? [];
         all.push(...dados);
         const totalPag = data?.paginacao?.total_de_paginas || 1;
