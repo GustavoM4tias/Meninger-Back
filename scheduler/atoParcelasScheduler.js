@@ -244,6 +244,15 @@ const atoParcelasScheduler = {
             console.log('⏭️  atoParcelasScheduler desligado fora de producao (ENABLE_ATO_PARCELAS_IN_DEV=true para ligar).');
             return;
         }
+        // Rodada que ficou "rodando" e de um processo que morreu no meio (deploy
+        // as 09h24 de 10/09/2026 matou a rodada 4 na 33a emissao; a tela mostrava
+        // "rodando" para sempre). Fecha como falhou; o tick seguinte ja recuperou
+        // o dia (o `boleto vivo` da parcela impede boleto duplicado).
+        db.AtoParcelaRodada.update(
+            { status: 'falhou', fim: new Date(), erros: ['processo reiniciado durante a rodada (deploy/restart); o tick seguinte recupera o dia'] },
+            { where: { status: 'rodando' } },
+        ).then(([n]) => { if (n) console.warn(`[PARCELAS] ${n} rodada(s) interrompida(s) por restart marcada(s) como falhou.`); })
+            .catch(err => console.warn('[PARCELAS] limpeza de rodadas interrompidas falhou:', err.message));
         cron.schedule(CRON_EXPR, tick, { timezone: TIMEZONE });
         console.log(`✅ atoParcelasScheduler iniciado (${CRON_EXPR} ${TIMEZONE}; roda na hora de boleto_settings.parcelas_hora_rodada).`);
     },

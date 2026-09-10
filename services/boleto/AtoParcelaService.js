@@ -814,7 +814,7 @@ export async function listarBoletosParcela(user, f = {}) {
 export default {
     getSettings, cfgParcelas, carregarReservaCv, carregarReservaDoPlano, criarPlanoTeste, atoPago, contratoSienge,
     criarOuSincronizarPlano, editarParcela, encerrarPlano, pausarPlano, reativarPlano,
-    verificarEncerramentos, aderirPendentes, listarPlanos, estatisticas, facetas, detalhePlano,
+    verificarEncerramentos, aderirPendentes, aplicarExclusoes, listarPlanos, estatisticas, facetas, detalhePlano,
     listarRodadas, listarBoletosParcela, repasseAtual, listarEtapasRepasse, listarEmpreendimentos,
     _internal: { reservaCanceladaCv, situacaoMortaLocal, diffDays },
 };
