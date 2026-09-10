@@ -641,9 +641,36 @@ const AGREGADO = `
       FROM ato_planos p
       LEFT JOIN ato_parcelas x ON x.plano_id = p.id`;
 
+/* Colunas por que a lista de planos pode ser ordenada.
+
+   DUAS armadilhas moravam aqui, e as duas quebravam justamente o "ordenar
+   pela coluna que eu quiser":
+
+   1. As chaves eram apelidos curtos (`reserva`, `titular`), mas quem manda o
+      `sortBy` e o DataTable da tela, que manda a `key` da COLUNA
+      (`idreserva`, `titular_nome`). Nao batia, caia no `|| proxima_vencimento`
+      e a lista nao mexia: a setinha do cabecalho virava e a ordem ficava.
+
+   2. Os valores vinham prefixados com `p.` (`p.status`), mas a ordenacao roda
+      no SELECT DE FORA - `SELECT * FROM (base) t ORDER BY ...` - onde o alias
+      `p` nao existe. `status` era a unica chave que batia com a coluna da
+      tela, entao clicar em "Plano" mandava `ORDER BY p.status` e o Postgres
+      respondia "missing FROM-clause entry for table p": a lista quebrava.
+
+   Agora as chaves sao as da tabela da tela e os valores sao nomes validos
+   em `t` (as colunas de `p.*` e os apelidos do agregado). */
 const ORDENAVEIS = {
-    reserva: 'p.idreserva', titular: 'p.titular_nome', empreendimento: 'p.empreendimento',
-    status: 'p.status', proxima: 'proxima_vencimento', atraso: 'valor_atraso', criado: 'p.created_at',
+    idreserva: 'idreserva',
+    titular_nome: 'titular_nome',
+    empreendimento: 'empreendimento',
+    status: 'status',
+    proxima: 'proxima_vencimento',
+    atraso: 'valor_atraso',
+    // quanto do plano ja foi pago, em proporcao: 2/4 vem antes de 3/12
+    progresso: '(CASE WHEN parcelas_total > 0 THEN parcelas_pagas::numeric / parcelas_total ELSE 0 END)',
+    sienge: 'sienge_venda_faturada_em',
+    // apelidos antigos, para quem chama a rota direto
+    reserva: 'idreserva', titular: 'titular_nome', criado: 'created_at',
 };
 
 /** Lista de planos com agregados das parcelas (uma linha por reserva). */
@@ -652,7 +679,11 @@ export async function listarPlanos(user, f = {}) {
     const { where, rep } = escopoSql(nomes, f);
     const page = Math.max(1, Number(f.page) || 1);
     const limit = Math.min(200, Math.max(1, Number(f.limit) || 50));
-    const coluna = ORDENAVEIS[f.sortBy] || 'proxima_vencimento';
+    /* `hasOwn`: sem ele, sortBy=constructor devolveria algo herdado do
+       Object e iria parar dentro do ORDER BY. */
+    const coluna = Object.hasOwn(ORDENAVEIS, String(f.sortBy ?? ''))
+        ? ORDENAVEIS[f.sortBy]
+        : 'proxima_vencimento';
     const dir = String(f.sortDir).toLowerCase() === 'desc' ? 'DESC' : 'ASC';
     const having = f.comAtraso === '1' || f.comAtraso === true
         ? `HAVING count(x.id) FILTER (WHERE x.status = 'vencida' OR (x.status = 'emitida' AND x.vencimento_cobrado < CURRENT_DATE) OR (x.status IN ('prevista','erro') AND x.vencimento < CURRENT_DATE)) > 0`
