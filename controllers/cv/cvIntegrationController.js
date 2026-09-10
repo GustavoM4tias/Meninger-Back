@@ -23,6 +23,7 @@ import {
     recriarWebhook,
 } from '../../services/cv/cvWebhookRegistry.js';
 import { registrar } from '../../services/cv/cvIntegrationLog.js';
+import { avaliar as avaliarSaude } from '../../services/cv/cvWebhookHealthService.js';
 
 const baseDoOffice = () =>
     (process.env.PUBLIC_BACKEND_URL || 'https://menin.up.railway.app').replace(/\/+$/, '');
@@ -41,10 +42,14 @@ const quem = (req) => req.user?.email || req.user?.username || `usuário ${req.u
 export async function listar(req, res) {
     try {
         const base = baseDoOffice();
-        const [webhooks, endpoints] = await Promise.all([
+        const [webhooks, endpoints, saudeLista] = await Promise.all([
             listarWebhooks(base),
             db.CvWebhookEndpoint.findAll({ order: [['funcionalidade', 'ASC']] }),
+            // Mesmo caminho de avaliação do cron que avisa (ver
+            // services/cv/cvWebhookHealthService.js).
+            avaliarSaude().catch(() => []),
         ]);
+        const saude = new Map(saudeLista.map(e => [e.funcionalidade, e]));
 
         const porUrl = new Map();
         for (const e of endpoints) porUrl.set(`${base}/api/cv/webhook/${e.funcionalidade}/${e.token}`, e);
@@ -76,6 +81,8 @@ export async function listar(req, res) {
                 last_status: e.last_status,
                 last_message: e.last_message,
                 eventos_recebidos: Number(e.eventos_recebidos || 0),
+                alerta_silencio_horas: e.alerta_silencio_horas,
+                saude: saude.get(e.funcionalidade) || null,
             })),
             funcionalidades: FUNCIONALIDADES_CV,
             cv_para_local: CV_PARA_LOCAL,

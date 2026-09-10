@@ -38,6 +38,7 @@ import enterpriseCvScheduler from '../../scheduler/enterpriseCvScheduler.js';
 import cvExtrasScheduler from '../../scheduler/cvExtrasScheduler.js';
 import correspondentCvScheduler from '../../scheduler/correspondentCvScheduler.js';
 import imobiliariaCvScheduler from '../../scheduler/imobiliariaCvScheduler.js';
+import cvWebhookHealthScheduler from '../../scheduler/cvWebhookHealthScheduler.js';
 
 const TZ = 'America/Sao_Paulo';
 const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
@@ -158,6 +159,18 @@ export const CV_JOBS = [
         envCron: 'CORRESPONDENT_CV_CRON_EXPRESSION',
         envAtivo: 'ENABLE_CV_CORRESPONDENT_SCHEDULE',
         semear: () => ligadoPorPadraoEmProd('ENABLE_CV_CORRESPONDENT_SCHEDULE'),
+    },
+    {
+        key: 'webhook_silencio',
+        label: 'Vigia dos webhooks (silêncio)',
+        descricao: 'Confere se cada webhook LIGADO do CV continua chegando e avisa quando passa do teto de horas sem evento. Só lê o banco local - não chama o CV. O teto é por funcionalidade, em CV CRM > Integrações.',
+        modulo: cvWebhookHealthScheduler,
+        padrao: '7 * * * *',
+        envCron: 'CV_WEBHOOK_HEALTH_CRON_EXPRESSION',
+        envAtivo: 'ENABLE_CV_WEBHOOK_HEALTH',
+        // Nasce LIGADO em produção: é vigia, e vigia que nasce desligado não
+        // vigia nada. Custa uma leitura local por hora.
+        semear: () => ligadoPorPadraoEmProd('ENABLE_CV_WEBHOOK_HEALTH'),
     },
     {
         key: 'imobiliarias',

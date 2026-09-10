@@ -11,6 +11,11 @@ import crypto from 'crypto';
 import db from '../../models/sequelize/index.js';
 import { extrairId, agendarProcessamento, reprocessar } from '../../services/cv/cvWebhookService.js';
 import { registrar, listar, resumo } from '../../services/cv/cvIntegrationLog.js';
+import {
+    avaliar as avaliarSaude,
+    TETO_MIN_HORAS,
+    TETO_MAX_HORAS,
+} from '../../services/cv/cvWebhookHealthService.js';
 
 // ── Endpoint público ─────────────────────────────────────────────────────────
 
@@ -80,6 +85,11 @@ export async function listarEndpoints(req, res) {
         // Mesma convenção do webhook da Meta (marketingConfigController).
         const base = (process.env.PUBLIC_BACKEND_URL || 'https://menin.up.railway.app').replace(/\/+$/, '');
 
+        // Estado de silêncio pelo MESMO caminho que o cron avalia - tela e aviso
+        // divergirem aqui seria o pior dos mundos: a tela dizendo que está tudo
+        // bem enquanto o aviso sai, ou o contrário.
+        const saude = new Map((await avaliarSaude()).map(e => [e.funcionalidade, e]));
+
         return res.json(linhas.map(l => ({
             funcionalidade: l.funcionalidade,
             active: l.active,
@@ -93,6 +103,12 @@ export async function listarEndpoints(req, res) {
             last_status: l.last_status,
             last_message: l.last_message,
             eventos_recebidos: Number(l.eventos_recebidos || 0),
+            // Vigilância de silêncio: o teto configurado e como este endpoint
+            // está contra ele.
+            alerta_silencio_horas: l.alerta_silencio_horas,
+            saude: saude.get(l.funcionalidade) || null,
+            teto_min_horas: TETO_MIN_HORAS,
+            teto_max_horas: TETO_MAX_HORAS,
         })));
     } catch (err) {
         return res.status(500).json({ error: err.message });
@@ -108,6 +124,28 @@ export async function salvarEndpoint(req, res) {
         const patch = {};
         if (req.body?.active !== undefined) patch.active = !!req.body.active;
         if (req.body?.processa !== undefined) patch.processa = !!req.body.processa;
+
+        // Teto de silêncio: 0 desliga a vigilância desta funcionalidade (e é
+        // escolha legítima), null devolve ao fallback do código. Fora da faixa é
+        // recusa com motivo, não 500 - a tela precisa poder mostrar o porquê.
+        if (req.body?.alerta_silencio_horas !== undefined) {
+            const v = req.body.alerta_silencio_horas;
+            if (v === null || v === '') {
+                patch.alerta_silencio_horas = null;
+            } else {
+                const n = Number(v);
+                if (!Number.isInteger(n) || n < 0 || (n > 0 && (n < TETO_MIN_HORAS || n > TETO_MAX_HORAS))) {
+                    return res.status(400).json({
+                        error: `Teto de silêncio inválido: use 0 (sem vigilância) ou de ${TETO_MIN_HORAS} a ${TETO_MAX_HORAS} horas.`,
+                    });
+                }
+                patch.alerta_silencio_horas = n;
+            }
+            // Teto novo começa um episódio novo: manter o carimbo antigo
+            // silenciaria o primeiro aviso sob a regra nova.
+            patch.silencio_alertado_em = null;
+        }
+
         if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nada a salvar.' });
 
         await endpoint.update(patch);
@@ -117,7 +155,12 @@ export async function salvarEndpoint(req, res) {
             status: 'ok',
             mensagem: `Configuração alterada por ${req.user?.email || 'admin'}: `
                     + `${patch.active !== undefined ? `recebimento ${patch.active ? 'ligado' : 'desligado'}; ` : ''}`
-                    + `${patch.processa !== undefined ? `modo ${patch.processa ? 'processando' : 'escuta'}` : ''}`,
+                    + `${patch.processa !== undefined ? `modo ${patch.processa ? 'processando' : 'escuta'}; ` : ''}`
+                    + `${patch.alerta_silencio_horas !== undefined
+                        ? `teto de silêncio ${patch.alerta_silencio_horas === null
+                            ? 'no padrão do sistema'
+                            : (patch.alerta_silencio_horas === 0 ? 'desligado' : `${patch.alerta_silencio_horas}h`)}`
+                        : ''}`,
         });
         return listarEndpoints(req, res);
     } catch (err) {

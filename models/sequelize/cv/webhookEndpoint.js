@@ -50,6 +50,18 @@ export default (sequelize, DataTypes) => {
             allowNull: false,
             defaultValue: 0,
         },
+
+        // Vigilância de silêncio. `last_event_at` sozinho só servia para quem
+        // abrisse a tela; com um teto por funcionalidade o silêncio virou aviso
+        // (services/cv/cvWebhookHealthService.js).
+        alerta_silencio_horas: {
+            type: DataTypes.INTEGER,
+            comment: 'Horas sem evento que disparam aviso; NULL = fallback do código',
+        },
+        silencio_alertado_em: {
+            type: DataTypes.DATE,
+            comment: 'Um aviso por episódio; evento novo limpa',
+        },
     }, {
         tableName: 'cv_webhook_endpoints',
         underscored: true,

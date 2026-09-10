@@ -50,6 +50,10 @@ export const NotificationType = {
     // senha, e sem aviso o dado só envelhece calado.
     CV_PANEL_CREDENTIAL_FAILED: 'integracao.cv.credencial',
 
+    // Webhook do CV que parou de chegar. Mesmo mal da credencial: webhook não
+    // quebra com erro, ele emudece - e o espelho envelhece sem nada na tela.
+    CV_WEBHOOK_SILENT: 'integracao.cv.webhook_silencioso',
+
     // Validador de contratos — o contrato que a automação NÃO conseguiu
     // resolver fica parado de propósito, e sem aviso ninguém percebe.
     CONTRACT_VALIDATOR_STUCK: 'validador.contrato.parado',
@@ -182,6 +186,19 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         // Vale e-mail: a venda para de andar até alguém agir, e quem age pode
         // estar fora do Office.
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CV_WEBHOOK_SILENT]: {
+        label: 'Webhook do CV parou de chegar',
+        group: 'Sistema',
+        description: 'Quando um webhook ligado do CV (leads, reservas, repasses, pré-cadastros) passa do '
+            + 'tempo máximo sem evento. É o jeito que essa integração quebra: ela emudece, e o espelho '
+            + 'envelhece sem nada acusar.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        // Vale e-mail: quem religa isso (no CV ou na tela de Integrações) pode
+        // estar fora do Office, e o dado envelhece enquanto ninguém age.
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },
@@ -854,6 +871,8 @@ const SCREENS_BY_TYPE = {
     [NotificationType.LEAD_WEBHOOK_REJECTED]: ['/meta', '/marketing/leads'],
     [NotificationType.LEAD_BINDING_MISSING]:  ['/meta', '/marketing/leads'],
     [NotificationType.META_CAMPAIGNS_TOKEN_EXPIRING]: ['/meta'],
+
+    [NotificationType.CV_WEBHOOK_SILENT]: ['/crm/integracoes'],
 
     [NotificationType.SALES_CLOSING_DIVERGENCE]:  ['/comercial/relatorios/faturamento'],
     [NotificationType.CONTRACT_ADJUSTMENT_DRIFT]: ['/comercial/relatorios/faturamento'],
