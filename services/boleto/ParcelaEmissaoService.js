@@ -124,7 +124,10 @@ export async function emitirParcela(parcelaId, opts = {}) {
     // Parcela ja vencida sai com o mesmo valor e vencimento no proximo dia util.
     const cond = condicaoDeEmissao(parcela, { hoje, cobrarEncargos: cfg.atrasoCobrarEncargos });
     const reemissao = (Number(parcela.emissoes) || 0) > 0;
-    const p = { numero: parcela.numero, total: parcela.total };
+    const p = { numero: parcela.numero, total: parcela.total, vencimento: parcela.vencimento };
+    // Texto do CLIENTE: `porMes` identifica a parcela pelo mes do vencimento
+    // ORIGINAL (nao o do boleto, que na vencida vai para o proximo dia util).
+    const tx = { porMes: !!plano.numeracao_oculta };
 
     const history = await BoletoHistory.create({
         idreserva, status: 'processing', tipo: 'parcela', parcela_id: parcela.id,
@@ -251,7 +254,9 @@ export async function emitirParcela(parcelaId, opts = {}) {
                 empreendimento: unidade.empreendimento, unidade: unidade.unidade || unidade.bloco || '',
                 // Na segunda via o cliente le "nova via da parcela 3 de 60" no
                 // MESMO template - a variavel carrega a diferenca.
-                descricao: reemissao ? `nova via da ${descricaoParcela(p)}` : descricaoParcela(p), rotulo: rotuloParcela(p),
+                // `porMes` troca o "3 de 60" pelo mes do vencimento (plano com
+                // retroativa nunca cobrada): so no texto do CLIENTE.
+                descricao: reemissao ? `nova via da ${descricaoParcela(p, tx)}` : descricaoParcela(p, tx), rotulo: rotuloParcela(p, tx),
                 valor: cond.valor, valorOriginal: Number(parcela.valor), encargos: cond.encargos, reemissao,
                 vencimento: cond.vencimento, nossoNumero: eco.nossoNumero, seuNumero: eco.seuNumero, boletoUrl: supabaseUrl,
             },
@@ -467,7 +472,7 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
     // sem via, "procure o seu corretor". Uma vez por parcela.
     const parcelas = await AtoParcela.findAll({
         where: { status: { [Op.in]: [PARCELA_STATUS.EMITIDA, PARCELA_STATUS.VENCIDA] }, boleto_history_id: { [Op.ne]: null } },
-        include: [{ model: AtoPlano, as: 'plano', where: { status: PLANO_STATUS.ATIVO }, attributes: ["id", "idreserva", "empreendimento", "unidade", "origem", "teste_dados"] }],
+        include: [{ model: AtoPlano, as: 'plano', where: { status: PLANO_STATUS.ATIVO }, attributes: ["id", "idreserva", "empreendimento", "unidade", "origem", "teste_dados", "numeracao_oculta"] }],
     });
     for (const parcela of parcelas) {
         try {
@@ -495,10 +500,11 @@ export async function enviarLembretes(cfg, { settings = null } = {}) {
             if (querLembrete && emitidoEm && hojeYmd(new Date(emitidoEm)) === hoje) continue;
             if (querAviso && boleto.payment_status === 'paid') continue;
             const reserva = await carregarReservaDoPlano(parcela.plano);
-            const p = { numero: parcela.numero, total: parcela.total };
+            const p = { numero: parcela.numero, total: parcela.total, vencimento: parcela.vencimento };
+            const tx = { porMes: !!parcela.plano.numeracao_oculta };
             const dados = {
                 empreendimento: parcela.plano.empreendimento || reserva.unidade?.empreendimento, unidade: parcela.plano.unidade || reserva.unidade?.unidade || '',
-                descricao: descricaoParcela(p), rotulo: rotuloParcela(p),
+                descricao: descricaoParcela(p, tx), rotulo: rotuloParcela(p, tx),
                 valor: Number(parcela.valor_cobrado || parcela.valor), vencimento: venc, diasParaVencer: faltam,
                 nossoNumero: boleto.nosso_numero, boletoUrl: boleto.boleto_supabase_url,
             };
@@ -560,8 +566,9 @@ export async function avisarEncerramento(e) {
         ? await BoletoHistory.findByPk(parcela.boleto_history_id)
         : await BoletoHistory.findOne({ where: { idreserva: plano.idreserva, status: 'success' }, order: [['id', 'DESC']] });
     const { titular } = await carregarReservaDoPlano(plano);
-    const p = parcela ? { numero: parcela.numero, total: parcela.total } : null;
-    const dados = { empreendimento: plano.empreendimento, unidade: plano.unidade || '', situacao, descricao: p ? descricaoParcela(p) : null, rotulo: p ? rotuloParcela(p) : null };
+    const p = parcela ? { numero: parcela.numero, total: parcela.total, vencimento: parcela.vencimento } : null;
+    const tx = { porMes: !!plano.numeracao_oculta };
+    const dados = { empreendimento: plano.empreendimento, unidade: plano.unidade || '', situacao, descricao: p ? descricaoParcela(p, tx) : null, rotulo: p ? rotuloParcela(p, tx) : null };
     const r = await sendAvisoEncerramento({ titular, dados, historyId: boleto?.id || null });
     const como = `e-mail ${r.email.ok ? 'OK' : 'nao'}, WhatsApp ${r.whatsapp.ok ? 'OK' : 'nao'}`;
     await EventLogger.log({
@@ -624,6 +631,13 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
     if (!vencidas.length) return false;
 
     const cfg = cfgParcelas(await getSettings());
+    // Plano com `numeracao_oculta`: a resposta no WhatsApp tambem fala do mes,
+    // nao de "parcela 3 de 60" (o evento e a mensagem no CV seguem numerando).
+    const planos = await AtoPlano.findAll({
+        where: { id: { [Op.in]: [...new Set(vencidas.map(x => x.plano_id))] } },
+        attributes: ['id', 'numeracao_oculta'],
+    });
+    const txDe = (parcela) => ({ porMes: !!planos.find(pl => pl.id === parcela.plano_id)?.numeracao_oculta });
     const resultados = [];
     const esgotadas = [];
     for (const parcela of vencidas) {
@@ -642,10 +656,10 @@ export async function tratarRespostaCliente({ fromPhone, body }) {
 
     const ok = resultados.filter(x => x.r.ok);
     const texto = ok.length
-        ? `Perfeito! Geramos o novo boleto da ${ok.map(x => `${descricaoParcela(x.parcela)} com vencimento em ${formatDate(x.r.history?.vencimento)}`).join(' e da ')}. Ele já foi enviado por aqui e por e-mail.`
+        ? `Perfeito! Geramos o novo boleto da ${ok.map(x => `${descricaoParcela(x.parcela, txDe(x.parcela))} com vencimento em ${formatDate(x.r.history?.vencimento)}`).join(' e da ')}. Ele já foi enviado por aqui e por e-mail.`
         : (resultados.length
             ? 'Recebemos o seu pedido, mas não conseguimos gerar o boleto agora. Nossa equipe vai verificar e te retornar.'
-            : `Já enviamos as vias novas da ${esgotadas.map(x => descricaoParcela(x)).join(' e da ')} e não conseguimos gerar outra por aqui. Para regularizar ou tirar dúvidas procure o seu corretor.`);
+            : `Já enviamos as vias novas da ${esgotadas.map(x => descricaoParcela(x, txDe(x))).join(' e da ')} e não conseguimos gerar outra por aqui. Para regularizar ou tirar dúvidas procure o seu corretor.`);
     try {
         const { default: WhatsAppService } = await import('../whatsapp/WhatsAppService.js');
         const { id } = await WhatsAppService.sendText({ to: fone, body: texto });

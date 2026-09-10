@@ -99,6 +99,23 @@ export async function reativarPlano(req, res) {
     } catch (err) { return res.status(400).json({ error: err.message }); }
 }
 
+/**
+ * Como a parcela e identificada nas mensagens ao CLIENTE: "parcela 3 de 60"
+ * (padrao) ou pelo mes do vencimento, "parcela de outubro/2026" (10/09/2026).
+ * Vale para quem tem parcela anterior que o Office nunca cobrou - o numero da
+ * sequencia entregaria uma divida que ninguem cobrou. CV, evento e tela seguem
+ * numerando: quem atende precisa saber de qual parcela se trata.
+ */
+export async function numeracaoPlano(req, res) {
+    try {
+        const plano = await carregarPlanoAutorizado(req, res);
+        if (!plano) return;
+        const oculta = req.body?.oculta === true || req.body?.oculta === 'true';
+        await plano.update({ numeracao_oculta: oculta, updated_by: req.user?.id || null });
+        return res.json({ ok: true, numeracao_oculta: plano.numeracao_oculta });
+    } catch (err) { return res.status(400).json({ error: err.message }); }
+}
+
 /** Encerramento manual: exige motivo. Boletos vivos sao baixados em seguida (em background). */
 export async function encerrarPlano(req, res) {
     try {
@@ -244,6 +261,6 @@ export async function syncWhatsappTemplates(req, res) {
 }
 
 export default {
-    listPlanos, getStats, getFacets, getPlano, criarPlano, sincronizarPlano, editarParcela, pausarPlano, reativarPlano, encerrarPlano,
+    listPlanos, getStats, getFacets, getPlano, criarPlano, sincronizarPlano, editarParcela, pausarPlano, reativarPlano, encerrarPlano, numeracaoPlano,
     emitirParcela, baixarParcela, marcarPaga, rodarCiclo, getStatus, listRodadas, listBoletos, getRepasseEtapas, getEmpreendimentos, getWhatsappTemplates, syncWhatsappTemplates,
 };

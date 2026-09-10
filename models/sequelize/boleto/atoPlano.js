@@ -61,6 +61,16 @@ export default (sequelize, DataTypes) => {
         // endereco da Menin. Limpa sozinho quando a Caixa volta a aceitar o do CV.
         cadastro_alerta: { type: DataTypes.TEXT, allowNull: true },
 
+        // 10/09/2026 (Gustavo): planos com parcela anterior que o Office nunca
+        // cobrou (retroativa fora do corte de 08/09). "parcela 3 de 60" entrega
+        // ao cliente uma divida de 1 e 2 que ninguem cobrou dele - nas mensagens
+        // ao CLIENTE a parcela passa a ser identificada pelo MES do vencimento
+        // ("parcela de outubro/2026"). CV, evento e tela seguem numerando.
+        numeracao_oculta: {
+            type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false,
+            comment: 'Mensagens ao cliente identificam a parcela pelo mes do vencimento, nao por "N de TOTAL".',
+        },
+
         // Ultima leitura das condicoes no CV (para a tela mostrar divergencias).
         cv_sincronizado_em: { type: DataTypes.DATE, allowNull: true },
         divergencias: {

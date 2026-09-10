@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
     addMonthsClamp, addDays, diffDays, derivarParcelas, diffPlano, calcularEncargos,
     decidirParcela, classificarParaRodada, condicaoDeEmissao, proximoDiaUtil, motivoEncerramento, PARCELA_STATUS,
-    ehErroDeCep, titularComEnderecoContingencia,
+    ehErroDeCep, titularComEnderecoContingencia, descricaoParcela, rotuloParcela, mesAnoParcela,
 } from '../lib/atoParcelas.js';
 
 test('classificarParaRodada: cfg da tela (sem hoje) + corte retroativo + politica ignorar', () => {
@@ -207,4 +207,21 @@ test('motivoEncerramento: repasse em Contrato Emitido CAIXA (ou depois) tambem e
     const faturado = { receivable_bill_id: 1, financial_institution_date: '2026-09-01', situation: 'Emitido' };
     assert.equal(motivoEncerramento({ contrato: faturado, repasseSituacaoId: 46 }), 'sienge_faturado');
     assert.equal(motivoEncerramento({ contrato: faturado, repasseSituacaoId: 46, situacaoMorta: true }), 'reserva_cancelada');
+});
+
+test('descricaoParcela/rotuloParcela: porMes troca "3 de 60" pelo mes do vencimento', () => {
+    const p = { numero: 3, total: 60, vencimento: '2026-10-20' };
+    // Padrao: quem nao tem buraco na sequencia continua lendo o numero.
+    assert.equal(descricaoParcela(p), 'parcela 3 de 60');
+    assert.equal(rotuloParcela(p), '3/60');
+    // Plano com retroativa nunca cobrada: o numero entregaria a divida de 1 e 2.
+    assert.equal(descricaoParcela(p, { porMes: true }), 'parcela de outubro/2026');
+    assert.equal(rotuloParcela(p, { porMes: true }), 'outubro/2026');
+    // Date do Sequelize (DATEONLY vem string, mas a instancia pode trazer Date).
+    assert.equal(mesAnoParcela('2026-01-05'), 'janeiro/2026');
+    assert.equal(mesAnoParcela('2027-12-31'), 'dezembro/2027');
+    // Sem vencimento utilizavel, cai no numero - nunca fica sem descricao.
+    assert.equal(descricaoParcela({ numero: 1, total: 12 }, { porMes: true }), 'parcela 1 de 12');
+    assert.equal(rotuloParcela({ numero: 1, total: 12, vencimento: null }, { porMes: true }), '1/12');
+    assert.equal(mesAnoParcela(''), null);
 });

@@ -39,6 +39,7 @@ router.post('/parcelas/planos/:idreserva/sincronizar', ...configurar, P.sincroni
 router.patch('/parcelas/:id', ...configurar, P.editarParcela);
 router.post('/parcelas/planos/:idreserva/pausar', ...operar, P.pausarPlano);
 router.post('/parcelas/planos/:idreserva/reativar', ...operar, P.reativarPlano);
+router.post('/parcelas/planos/:idreserva/numeracao', ...configurar, P.numeracaoPlano);
 router.post('/parcelas/planos/:idreserva/encerrar', ...operar, P.encerrarPlano);
 router.post('/parcelas/:id/emitir', ...operar, P.emitirParcela);
 router.post('/parcelas/:id/baixar', ...operar, P.baixarParcela);
