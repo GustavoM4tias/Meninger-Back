@@ -230,6 +230,7 @@ export default (sequelize, DataTypes) => {
         parcelas_aviso_encerramento: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, comment: 'Avisa o cliente (e-mail + WhatsApp) quando o plano encerra por venda faturada ou etapa do repasse; registra no historico e no CV.' },
         aviso_final_sem_resposta_dias: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 15, comment: 'Aviso final (sem nova via) N dias depois de um aviso de vencida sem resposta (0 desliga). Tambem sai quando as vias acabam.' },
         parcelas_ultima_rodada_em: { type: DataTypes.DATE, allowNull: true, comment: 'Quando a rodada diaria de parcelas rodou pela ultima vez (sobrevive a restart).' },
+        check_ultima_rodada_em: { type: DataTypes.DATE, allowNull: true, comment: 'Quando a rodada das 08h (pagamento/baixa) completou pela ultima vez. Restart no meio: o tick seguinte refaz o dia.' },
 
         // ── Controle ───────────────────────────────────────────────────────────
         active: {

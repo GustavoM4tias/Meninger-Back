@@ -25,6 +25,36 @@ import { dentroDaJanela } from '../lib/boletoJanela.js';
 import WhatsAppTemplateService from '../services/whatsapp/WhatsAppTemplateService.js';
 import { TODOS as TEMPLATES_PARCELAS, LANG as TEMPLATES_LANG } from '../services/boleto/parcelaWhatsappTemplates.js';
 import { classificarParaRodada, hojeYmd, ehErroDeCep, MOTIVOS_TRANSFERENCIA, PARCELA_STATUS, PLANO_STATUS } from '../lib/atoParcelas.js';
+import EventLogger from '../services/boleto/BoletoEventLogger.js';
+
+const BOOT_DELAY_MS = 120 * 1000; // depois da rodada das 08h (90 s) e do resto do boot
+
+/**
+ * Restart no meio de uma EMISSAO (deploy as 09h24 de 10/09/2026): o
+ * boleto_history fica 'processing' e ninguem sabe se o portal chegou a
+ * registrar o boleto. Fecha o registro como erro, deixa o motivo escrito e
+ * trava a retentativa automatica da parcela (tentativas_erro = 5): alguem
+ * confere no Ecobranca e usa "Emitir agora". Se a parcela ja foi reemitida por
+ * uma rodada seguinte (a de 10/09 foi), so o historico ganha o evento.
+ */
+async function fecharEmissoesInterrompidas() {
+    const presas = await db.BoletoHistory.findAll({
+        where: { tipo: 'parcela', status: 'processing', createdAt: { [Op.lt]: new Date(Date.now() - 10 * 60 * 1000) } },
+    });
+    for (const h of presas) {
+        const msg = 'Emissao interrompida por restart do servidor (deploy). O boleto PODE ter sido registrado no Ecobranca sem ficar gravado aqui: confira na Caixa antes de emitir de novo.';
+        await h.update({ status: 'error', error_message: msg }).catch(() => {});
+        const parcela = h.parcela_id ? await db.AtoParcela.findByPk(h.parcela_id) : null;
+        let acao = 'parcela ja reemitida depois; so o historico registra';
+        if (parcela && ((parcela.boleto_history_id === h.id && parcela.status === PARCELA_STATUS.EMITIDA) || [PARCELA_STATUS.PREVISTA, PARCELA_STATUS.ERRO].includes(parcela.status))) {
+            await parcela.update({ status: PARCELA_STATUS.ERRO, erro_mensagem: msg, tentativas_erro: 5 }).catch(() => {});
+            acao = 'parcela em erro, sem retentativa automatica (Emitir agora depois de conferir)';
+        }
+        await EventLogger.log({ historyId: h.id, idreserva: h.idreserva, type: 'emission_interrupted', severity: 'error', message: `${msg} ${acao}.` });
+        console.warn(`[PARCELAS] emissao interrompida fechada: hist ${h.id} (reserva ${h.idreserva}) - ${acao}.`);
+    }
+    return presas.length;
+}
 
 const TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
 const CRON_EXPR = '*/10 * * * *';
@@ -249,14 +279,20 @@ const atoParcelasScheduler = {
         // "rodando" para sempre). Fecha como falhou; o tick seguinte ja recuperou
         // o dia (o `boleto vivo` da parcela impede boleto duplicado).
         db.AtoParcelaRodada.update(
-            { status: 'falhou', fim: new Date(), erros: ['processo reiniciado durante a rodada (deploy/restart); o tick seguinte recupera o dia'] },
+            { status: 'falhou', fim: new Date(), erros: ['processo reiniciado durante a rodada (deploy/restart); a rodada seguinte retoma o dia'] },
             { where: { status: 'rodando' } },
         ).then(([n]) => { if (n) console.warn(`[PARCELAS] ${n} rodada(s) interrompida(s) por restart marcada(s) como falhou.`); })
-            .catch(err => console.warn('[PARCELAS] limpeza de rodadas interrompidas falhou:', err.message));
+            .then(() => fecharEmissoesInterrompidas())
+            .catch(err => console.warn('[PARCELAS] limpeza pos-restart falhou:', err.message));
         cron.schedule(CRON_EXPR, tick, { timezone: TIMEZONE });
+        // Retomada: o dia so e marcado quando a emissao termina; subiu depois da
+        // hora com o dia em aberto, roda ja (o "boleto vivo" da parcela impede
+        // duplicar o que a rodada interrompida ja emitiu).
+        setTimeout(() => tick().catch(() => {}), BOOT_DELAY_MS).unref?.();
         console.log(`✅ atoParcelasScheduler iniciado (${CRON_EXPR} ${TIMEZONE}; roda na hora de boleto_settings.parcelas_hora_rodada).`);
     },
     runNow: runCiclo,
+    fecharEmissoesInterrompidas,
 };
 
 export default atoParcelasScheduler;
