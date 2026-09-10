@@ -773,9 +773,17 @@ export async function listarBoletosParcela(user, f = {}) {
     }
     if (f.status && ['success', 'error', 'processing'].includes(String(f.status))) { cond.push('h.status = :st'); rep.st = String(f.status); }
     if (f.q) {
-        const q = String(f.q).trim();
-        if (/^\d+$/.test(q)) { cond.push('h.idreserva = :qn'); rep.qn = Number(q); }
-        else { cond.push('h.titular_nome ILIKE :q'); rep.q = `%${q}%`; }
+        /* MESMA regra da busca de planos, em `escopoSql` acima. Aqui era
+           `titular_nome ILIKE` cru, e as duas caixas de busca da aba Parcelas
+           se comportavam diferente:
+             - sem `unaccent`, "jose" nao achava "José" e "araraquara" nao
+               achava "Araçatuba" grafado com cedilha;
+             - numero exigia ser digitado INTEIRO (`idreserva = :qn`), entao
+               "80" nao achava a reserva 8050, enquanto na busca de planos
+               achava.
+           Agora as duas procuram igual: sem acento e por pedaco do numero. */
+        cond.push(`(unaccent(lower(coalesce(h.titular_nome, ''))) LIKE unaccent(lower(:q)) OR CAST(h.idreserva AS text) LIKE :q)`);
+        rep.q = `%${String(f.q).trim()}%`;
     }
     const [rows] = await db.sequelize.query(`
         SELECT h.id, h.idreserva, h.parcela_id, h.status, h.payment_status, h.titular_nome, h.empreendimento,
