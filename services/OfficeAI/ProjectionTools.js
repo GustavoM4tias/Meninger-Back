@@ -20,6 +20,7 @@ import { registerTool } from './ToolRegistry.js';
 import { visibleErpIds } from '../permissions/accessScopeService.js';
 import { getClosing } from '../comercial/salesClosingService.js';
 import { livePartialAggregate } from './SalesClosingTools.js';
+import { datasetBlock, kpisBlock, abrirTela, visualPedido, VISUAL_PARAM } from './blocks.js';
 
 const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 const fmtMoney = (v) => BRL.format(Number(v || 0));
@@ -239,6 +240,7 @@ registerTool({
             data_inicio: { type: 'string', description: 'Mês inicial (YYYY-MM). Padrão: mês atual.' },
             data_fim: { type: 'string', description: 'Mês final (YYYY-MM). Padrão: igual ao inicial (um mês).' },
             empreendimento: { type: 'string', description: 'Nome (ou parte) do empreendimento para focar.' },
+            visual: VISUAL_PARAM,
         },
     },
     requiredPermissions: ['/comercial/relatorios/projecao'],
@@ -296,17 +298,54 @@ registerTool({
                 atingido: pct == null ? '-' : `${pct}%`,
                 situacao: LABEL[statusDe(pct)],
                 _pct: pct ?? -1,
+                _raw: { meta_vgv: Math.round(meta.vgv), vgv: Math.round(r.vgv), atingido: pct },
             });
         }
         linhas.sort((a, b) => b._pct - a._pct);
-        for (const l of linhas) delete l._pct;
+        // Contrato novo: valores crus e tipados (o antigo abaixo segue formatado).
+        const rowsBlock = linhas.map(l => ({
+            empreendimento: l.empreendimento, meta_unidades: l.meta_unidades, vendas: l.vendas,
+            meta_vgv: l._raw.meta_vgv, vgv: l._raw.vgv, atingido: l._raw.atingido, situacao: l.situacao,
+        }));
+        for (const l of linhas) { delete l._pct; delete l._raw; }
 
         const pctUn = metaUn ? Math.round((vendUn / metaUn) * 1000) / 10 : null;
         const pctVgv = metaVgv ? Math.round((vendVgv / metaVgv) * 1000) / 10 : null;
         const abaixo = linhas.filter(l => l.situacao === 'Em risco' || l.situacao === 'Sem venda').length;
 
+        const blocks = [
+            kpisBlock({
+                inline: true,
+                kpis: [
+                    { label: 'Vendas', value: vendUn, type: 'number', hint: `de ${metaUn} projetadas` },
+                    { label: 'Atingido (un)', value: pctUn ?? 0, type: 'percent', tone: pctUn != null && pctUn >= tempoPct ? 'pos' : 'warn' },
+                    { label: 'VGV', value: Math.round(vendVgv), type: 'currency', hint: `de ${fmtMoney(metaVgv)}` },
+                    { label: 'Tempo decorrido', value: tempoPct, type: 'percent' },
+                ],
+            }),
+            datasetBlock({
+                title: 'Vendas x Projeção',
+                subtitle: `${m.projection.name} · ${m.periodoTxt}${parciais.length ? ' · parcial' : ''}`,
+                source: parciais.length ? `Fechamento (${consolidados.join(', ') || 'nenhum consolidado'}) + parcial (${parciais.join(', ')})` : 'Fechamento consolidado',
+                visual: visualPedido(args) || 'table',
+                columns: [
+                    { key: 'empreendimento', label: 'Empreendimento', type: 'text' },
+                    { key: 'vendas', label: 'Vendas', type: 'number' },
+                    { key: 'meta_unidades', label: 'Meta (un)', type: 'number' },
+                    { key: 'atingido', label: 'Atingido', type: 'percent' },
+                    { key: 'situacao', label: 'Situação', type: 'badge' },
+                    { key: 'vgv', label: 'VGV', type: 'currency' },
+                    { key: 'meta_vgv', label: 'Meta (VGV)', type: 'currency' },
+                ],
+                rows: rowsBlock,
+                series: [{ key: 'vendas', label: 'Vendas' }, { key: 'meta_unidades', label: 'Meta', role: 'meta' }],
+                actions: [abrirTela('/comercial/relatorios/projecao', 'Abrir relatório')],
+            }),
+        ];
+
         return {
             result: {
+                blocks,
                 type: 'table',
                 title: `Vendas x Projeção - ${m.periodoTxt}`,
                 subtitle: `${vendUn} de ${metaUn} unidade(s) (${pctUn ?? '-'}%) · ${fmtMoney(vendVgv)} de ${fmtMoney(metaVgv)} (${pctVgv ?? '-'}%) · ${tempoPct}% do período decorrido`,

@@ -23,6 +23,7 @@ import { registerTool } from './ToolRegistry.js';
 import { montarPanorama } from '../correspondent/correspondentService.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
 import { PRECAD_BUCKET_CASE } from './ComercialTools.js';
+import { datasetBlock, cardsBlock, abrirTela, visualPedido, VISUAL_PARAM } from './blocks.js';
 
 const SCREEN = '/crm/correspondentes';
 const MAX_LINHAS = 25;
@@ -105,6 +106,7 @@ registerTool({
             cidade: { type: 'string', description: 'Filtra pelas cidades onde a CCA atua.' },
             empreendimento: { type: 'string', description: 'Só CCAs que atendem este empreendimento (segundo a Ficha Comercial). Nome ou parte.' },
             dias: { type: 'number', description: 'Janela dos pré-cadastros contados, em dias. Padrão 90.' },
+            visual: VISUAL_PARAM,
         },
     },
     requiredPermissions: [SCREEN],
@@ -184,8 +186,66 @@ registerTool({
         } : undefined;
 
         const totalPrecad = shown.reduce((s, e) => s + (e.precad?.total || 0), 0);
+
+        // Contrato novo: uma CCA é uma ENTIDADE com contato - card, não linha.
+        // Com mais de 6, ou quando a pergunta é "quem analisa mais", vira
+        // dataset (ranking por pastas). A pessoa troca pelo botão.
+        const cards = shown.map(e => {
+            const gerentes = (e.usuarios || []).filter(u => u.gerente && u.ativo_login);
+            const p = e.precad;
+            return {
+                title: e.nome,
+                subtitle: (e.cidades || []).join(' · ') || undefined,
+                icon: 'fas fa-building-columns',
+                badges: [
+                    ...(p ? [{ label: `${p.total} pasta(s) ${dias}d`, variant: 'accent' }] : []),
+                    ...(e.origem === 'pendente' ? [{ label: 'cadastro pendente', variant: 'warning' }] : []),
+                ],
+                fields: [
+                    { label: 'Gerente(s)', value: gerentes.slice(0, 3).map(u => u.nome).join(', ') || '-', wide: true },
+                    { label: 'Atende (ficha)', value: e.atende.join(', ') || '-', wide: true },
+                    ...(p ? [
+                        { label: 'Aprov.+Reserva', value: p.aprovado + p.reserva, type: 'number' },
+                        { label: 'Reprovados', value: p.reprovado, type: 'number' },
+                        { label: 'Aprovação', value: p.total ? Number((((p.aprovado + p.reserva) / p.total) * 100).toFixed(1)) : 0, type: 'percent' },
+                    ] : []),
+                    ...(e.email ? [{ label: 'E-mail', value: e.email }] : []),
+                    ...(e.telefone ? [{ label: 'Telefone', value: e.telefone }] : []),
+                    ...gerentes.slice(0, 2).map(u => ({ label: u.nome, value: [u.email, u.celular || u.telefone].filter(Boolean).join(' · ') || '-', wide: true })),
+                ],
+                actions: [abrirTela(SCREEN, 'Abrir')],
+            };
+        });
+        const pedido = visualPedido(args);
+        const blocks = pedido || shown.length > 6
+            ? [datasetBlock({
+                title: 'Correspondentes (CCAs)',
+                subtitle: `${total} empresa(s) · pastas dos últimos ${dias} dias`,
+                source: 'CV + Fichas Comerciais',
+                visual: pedido || 'rank',
+                columns: [
+                    { key: 'cca', label: 'CCA', type: 'text' },
+                    { key: 'pre_cadastros', label: `Pastas ${dias}d`, type: 'number' },
+                    { key: 'aprovados', label: 'Aprov.+Reserva', type: 'number' },
+                    { key: 'reprovados', label: 'Reprovados', type: 'number' },
+                    { key: 'cidades', label: 'Atua em', type: 'text' },
+                    { key: 'empreendimentos', label: 'Atende (ficha)', type: 'text' },
+                ],
+                rows: linhas,
+                total,
+                actions: [abrirTela(SCREEN, 'Abrir tela')],
+            })]
+            : [cardsBlock({
+                title: 'Correspondentes (CCAs)',
+                subtitle: `${total} empresa(s) · ${totalPrecad} pasta(s) nos últimos ${dias} dias`,
+                source: 'CV + Fichas Comerciais',
+                cards,
+                actions: [abrirTela(SCREEN, 'Abrir tela')],
+            })];
+
         return {
             result: {
+                blocks,
                 type: 'table',
                 title: 'Correspondentes (CCAs)',
                 subtitle: `${total} empresa(s) · ${totalPrecad} pré-cadastro(s) nos últimos ${dias} dias`,

@@ -27,6 +27,7 @@ import { registerTool, userHasPermissions } from './ToolRegistry.js';
 import { queryContractSales } from '../../controllers/sienge/contractSalesController.js';
 import { loadSerieAdjustments, serieValueDelta } from '../comercial/contractAdjustmentsService.js';
 import { resolverPeriodo, PERIODO_PARAM } from './periodo.js';
+import { datasetBlock, kpisBlock, abrirTela, visualPedido, VISUAL_PARAM } from './blocks.js';
 
 const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 const fmtMoney = (v) => BRL.format(Number(v || 0));
@@ -175,6 +176,7 @@ registerTool({
             cidade: { type: 'string', description: 'Filtra pela cidade do empreendimento.' },
             valor: { type: 'string', enum: ['vgv', 'vgv_dc'], description: '"vgv" (padrão, sem desconto) ou "vgv_dc" (com DC).' },
             limite: { type: 'number', description: 'Quantas posições do ranking devolver. Padrão 15, máximo 50.' },
+            visual: VISUAL_PARAM,
         },
     },
     // Visível a todos; a alçada é da GUIA de cada dimensão e é checada no handler.
@@ -230,8 +232,39 @@ registerTool({
             com_lead: l.comLead,
         }));
 
+        // Contrato novo (EmeBlock): valor CRU e tipado; o chat escolhe o visual
+        // (ranking por padrão) e a pessoa troca sem voltar aqui. O formato
+        // antigo (`type: 'table'`) segue junto para alertas e relatórios.
+        const blocks = [
+            kpisBlock({
+                inline: true,
+                kpis: [
+                    { label: 'Vendas', value: totalVendas, type: 'number' },
+                    { label: usaDc ? 'VGV+DC' : 'VGV', value: Math.round(totalValor), type: 'currency' },
+                    { label: 'De lead nosso', value: deLead, type: 'number', hint: totalVendas ? `${((deLead / totalVendas) * 100).toFixed(1)}%` : undefined, tone: 'pos' },
+                ],
+            }),
+            datasetBlock({
+                title: `Vendas por ${def.label.toLowerCase()}`,
+                subtitle: periodoTxt,
+                source: 'Faturamento (contratos)',
+                visual: visualPedido(args) || 'rank',
+                columns: [
+                    { key: dimensao, label: def.label, type: 'text' },
+                    { key: 'valor', label: usaDc ? 'VGV+DC' : 'VGV', type: 'currency' },
+                    { key: 'vendas', label: 'Vendas', type: 'number' },
+                    { key: 'participacao', label: 'Part.', type: 'percent' },
+                    { key: 'com_lead', label: 'De lead', type: 'number' },
+                ],
+                rows: top.map(l => ({ [dimensao]: l.label, valor: Math.round(l.valor), vendas: l.vendas, participacao: totalValor ? Number(((l.valor / totalValor) * 100).toFixed(1)) : 0, com_lead: l.comLead })),
+                total: linhas.length, truncated: linhas.length > top.length,
+                actions: [abrirTela(tela, 'Abrir relatório')],
+            }),
+        ];
+
         return {
             result: {
+                blocks,
                 type: 'table',
                 title: `Vendas por ${def.label.toLowerCase()} - ${periodoTxt}`,
                 subtitle: `${totalVendas} venda(s) · ${fmtMoney(totalValor)} ${usaDc ? 'VGV+DC' : 'VGV'} · ${deLead} de lead nosso`,

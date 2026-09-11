@@ -26,6 +26,7 @@ import db from '../../models/sequelize/index.js';
 import { computeModuleCostSummary, aggregateCostSummaries } from '../comercial/conditionCostSummary.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
 import { loadManagerMap, managerOf, managersOfCondition } from '../comercial/conditionManagers.js';
+import { datasetBlock, abrirTela } from './blocks.js';
 
 const {
     EnterpriseCondition,
@@ -528,7 +529,25 @@ async function executeQuerySheets(args, user) {
     }
     const resumo = Object.fromEntries(Object.entries(porSerie).slice(0, 40).map(([k, v]) => [k, v.join(', ')]));
 
+    const blocks = [datasetBlock({
+        title: 'Fichas Comerciais',
+        subtitle: `${rows.length} ficha(s)`,
+        source: 'Fichas Comerciais',
+        visual: 'table',
+        columns: [
+            { key: 'empreendimento', label: 'Empreendimento', type: 'text' },
+            { key: 'gestor', label: 'Gestor', type: 'text' },
+            { key: 'mes', label: 'Mês', type: 'text' },
+            { key: 'status', label: 'Status', type: 'badge' },
+            { key: 'cidade', label: 'Cidade', type: 'text' },
+            { key: 'modulos', label: 'Módulos', type: 'text' },
+        ],
+        rows,
+        actions: [abrirTela('/comercial/conditions', 'Abrir fichas')],
+    })];
+
     return {
+        blocks,
         type: 'table',
         title: 'Fichas Comerciais',
         columns: [

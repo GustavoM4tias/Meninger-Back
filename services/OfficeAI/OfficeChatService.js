@@ -2406,6 +2406,27 @@ function summarizeForGemini(result) {
       summary.data   = dataArr.slice(0, 10);
       summary.truncated = `Mais ${labelsArr.length - 10} categorias não mostradas — todas com valor menor que ${dataArr[9]}.`;
     }
+  } else if (type === 'blocks' || (!type && Array.isArray(result.blocks))) {
+    // Tool que só fala o contrato novo (EmeBlock). O modelo recebe os KPIs
+    // inteiros, as primeiras linhas de cada dataset e os títulos dos cards -
+    // o visual JÁ está na UI, ele só comenta.
+    summary.message = result.message
+      || '[POLÍTICA #0] O resultado JÁ está renderizado na UI em blocos. Responda em 1-2 frases usando SOMENTE estes dados; nunca invente.';
+    summary.blocks = (result.blocks || []).slice(0, 6).map(b => {
+      if (b.kind === 'dataset') {
+        const rows = b.dataset?.rows || [];
+        return { kind: b.kind, title: b.title, total: b.dataset?.total ?? rows.length, rows: rows.slice(0, 30).map(r => compactForModel(r, 1, { maxStr: 200 })), rows_omitidas: rows.length > 30 ? rows.length - 30 : undefined };
+      }
+      if (b.kind === 'kpis') return { kind: b.kind, title: b.title, kpis: b.kpis };
+      if (b.kind === 'cards') return { kind: b.kind, title: b.title, total: b.cards?.length, cards: (b.cards || []).slice(0, 20).map(c => compactForModel({ title: c.title, subtitle: c.subtitle, fields: c.fields }, 1, { maxStr: 200 })) };
+      if (b.kind === 'detail') return { kind: b.kind, title: b.title, detail: compactForModel(b.detail, 0, { maxDepth: 4 }) };
+      return { kind: b.kind, title: b.title };
+    });
+    const RENDER_KEYS = new Set(['type', 'title', 'subtitle', 'blocks', 'message', 'context']);
+    for (const [k, v] of Object.entries(result)) {
+      if (RENDER_KEYS.has(k)) continue;
+      summary[k] = compactForModel(v, 0, { maxArray: 60, maxStr: 600, maxDepth: 5 });
+    }
   } else if (type === 'navigate') {
     summary.route   = result.route;
     summary.filters = result.filters;
