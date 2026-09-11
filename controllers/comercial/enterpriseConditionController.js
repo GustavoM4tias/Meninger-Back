@@ -3,6 +3,7 @@ import db from '../../models/sequelize/index.js';
 import NotificationService from '../../services/notification/NotificationService.js';
 import { NotificationType } from '../../services/notification/notificationTypes.js';
 import { computeModuleCostSummary, aggregateCostSummaries } from '../../services/comercial/conditionCostSummary.js';
+import { loadManagerMap, managersOfCondition } from '../../services/comercial/conditionManagers.js';
 import Docusign from '../../services/comercial/DocusignService.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 
@@ -334,12 +335,26 @@ export const listConditions = async (req, res) => {
             where,
             include: [
                 { model: CvEnterprise, as: 'enterprise', attributes: ['idempreendimento', 'nome', 'cidade', 'segmento_nome', 'situacao_comercial_nome', 'logo'] },
-                { model: EnterpriseConditionModule, as: 'modules', attributes: ['id', 'module_name', 'total_units', 'min_demand', 'sort_order'] },
+                {
+                    model: EnterpriseConditionModule, as: 'modules',
+                    attributes: ['id', 'module_name', 'total_units', 'min_demand', 'sort_order',
+                        'manager_user_id', 'manager_mode', 'manager_name'],
+                },
             ],
             order: [['reference_month', 'DESC'], ['idempreendimento', 'ASC']],
         });
 
-        return res.json(conditions);
+        // Gestor responsável na LISTAGEM: sem isso só se descobre quem responde
+        // por um empreendimento abrindo ficha por ficha. Vai resolvido (nome,
+        // cargo e se o usuário ainda está ativo) para a tela poder filtrar por
+        // responsável e marcar quem ficou apontando para alguém que saiu.
+        const todosModulos = conditions.flatMap(c => c.modules || []);
+        const managerMap = await loadManagerMap(todosModulos);
+
+        return res.json(conditions.map(c => ({
+            ...c.toJSON(),
+            gestores: managersOfCondition(c.modules || [], managerMap),
+        })));
     } catch (e) {
         console.error('[conditions] listConditions:', e);
         return res.status(500).json({ error: e?.message || String(e) });

@@ -25,6 +25,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { computeModuleCostSummary, aggregateCostSummaries } from '../comercial/conditionCostSummary.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
+import { loadManagerMap, managerOf, managersOfCondition } from '../comercial/conditionManagers.js';
 
 const {
     EnterpriseCondition,
@@ -71,7 +72,7 @@ const TOOL_DECLARATIONS = [
     {
         name: 'query_condition_sheets',
         description:
-            'Lista as Fichas Comerciais (condições comerciais mensais por empreendimento) visíveis ao usuário: quais empreendimentos/produtos têm ficha, meses disponíveis e status de cada uma. Use para descobrir o que existe antes de detalhar, ou quando o usuário perguntar "quais fichas temos", "de quais meses", "tem ficha do X?", "quais fichas em [cidade]?". Para perguntas de condições comerciais por CIDADE, use esta tool (o filtro empreendimento também casa cidade) — NUNCA conclua que não há fichas usando query_enterprises.',
+            'Lista as Fichas Comerciais (condições comerciais mensais por empreendimento) visíveis ao usuário: quais empreendimentos/produtos têm ficha, meses disponíveis, status e o GESTOR RESPONSÁVEL de cada uma. Use para descobrir o que existe antes de detalhar, ou quando o usuário perguntar "quais fichas temos", "de quais meses", "tem ficha do X?", "quais fichas em [cidade]?". É TAMBÉM a tool para responsável por empreendimento: "quem é o gestor do X?", "quais empreendimentos o Fulano gerencia?", "quem responde por cada empreendimento?" — o gestor mora na Ficha Comercial, não há cadastro à parte. Para perguntas de condições comerciais por CIDADE, use esta tool (o filtro empreendimento também casa cidade) — NUNCA conclua que não há fichas usando query_enterprises.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -316,8 +317,21 @@ function priceTableNames(ids, map) {
     return (ids || []).map(id => map.get(Number(id))?.nome || `Tabela #${id}`);
 }
 
+// Uma linha só: "Fulano - Gestor Comercial (inativo no Office)". O aviso de
+// inativo vai junto de propósito, para a Eme não indicar como contato alguém
+// que já saiu.
+function gestorLabel(g) {
+    if (!g) return undefined;
+    const partes = [g.nome];
+    if (g.cargo) partes.push(g.cargo);
+    let txt = partes.join(' - ');
+    if (g.externo) txt += ' (contato externo)';
+    else if (!g.ativo) txt += ' (INATIVO no Office - ficha precisa de gestor novo)';
+    return txt;
+}
+
 // ── Payload compacto de um módulo (dado que o modelo lê para responder) ───────
-function buildModulePayload(mod, ptMap) {
+function buildModulePayload(mod, ptMap, mgrMap) {
     const custo = computeModuleCostSummary(mod.toJSON ? mod.toJSON() : mod);
     const faixas = Array.isArray(mod.appraisal_faixas)
         ? mod.appraisal_faixas.filter(f => f?.enabled).map(f => ({
@@ -398,7 +412,10 @@ function buildModulePayload(mod, ptMap) {
                 custo: numOrNull(mod.digital_cert_cost),
                 pago_por: PAYER_LABEL[mod.digital_cert_paid_by || 'menin'],
             }) : undefined,
-            gestor: mod.manager_name,
+            // `manager_name` só existe no modo manual (contato externo). Quase
+            // toda ficha usa manager_user_id, então ler o campo cru fazia a Eme
+            // responder "sem gestor" para empreendimento que tem um.
+            gestor: gestorLabel(managerOf(mod, mgrMap)),
         },
         campanhas: (mod.campaigns || []).map(c => clean({
             titulo: c.title,
@@ -462,17 +479,25 @@ async function executeQuerySheets(args, user) {
         where,
         include: [
             { model: CvEnterprise, as: 'enterprise', attributes: ['idempreendimento', 'nome', 'cidade'] },
-            { model: EnterpriseConditionModule, as: 'modules', attributes: ['id', 'module_name'] },
+            {
+                model: EnterpriseConditionModule, as: 'modules',
+                attributes: ['id', 'module_name', 'manager_user_id', 'manager_mode', 'manager_name'],
+            },
         ],
         order: [['reference_month', 'DESC']],
         limit: 120,
     });
+
+    // "Quem é o gestor de cada empreendimento?" é pergunta de lista, não de
+    // ficha aberta uma a uma - por isso o responsável vem já nesta tabela.
+    const mgrMap = await loadManagerMap(conditions.flatMap(c => c.modules || []));
 
     const rows = conditions.map(c => ({
         empreendimento: c.enterprise?.nome || c.display_name || `Ficha #${c.id}`,
         cidade: c.enterprise?.cidade || (c.idempreendimento == null ? 'Avulsa' : null),
         mes: fmtMonth(c.reference_month),
         status: STATUS_LABEL[c.status] || c.status,
+        gestor: managersOfCondition(c.modules || [], mgrMap).map(gestorLabel).join(' · ') || null,
         modulos: (c.modules || []).map(m => m.module_name).join(', ') || null,
     }));
 
@@ -491,6 +516,7 @@ async function executeQuerySheets(args, user) {
             { key: 'cidade',         label: 'Cidade' },
             { key: 'mes',            label: 'Mês' },
             { key: 'status',         label: 'Status' },
+            { key: 'gestor',         label: 'Gestor' },
             { key: 'modulos',        label: 'Módulos' },
         ],
         rows,
@@ -559,7 +585,9 @@ async function executeGetSheet(args, user) {
         }
     }
 
-    const ptMap = await loadPriceTableMap([cond, condAutorizada].filter(Boolean));
+    const fichas = [cond, condAutorizada].filter(Boolean);
+    const ptMap = await loadPriceTableMap(fichas);
+    const mgrMap = await loadManagerMap(fichas.flatMap(c => c.modules || []));
 
     const buildConditionPayload = (c) => {
         const custoTotal = aggregateCostSummaries((c.modules || []).map(m => m.toJSON()));
@@ -570,7 +598,7 @@ async function executeGetSheet(args, user) {
             fonte_comissao: c.commission_source,
             premissa_preco: c.price_premise_note,
             observacoes: c.notes ? String(c.notes).slice(0, 500) : undefined,
-            modulos: (c.modules || []).map(m => buildModulePayload(m, ptMap)),
+            modulos: (c.modules || []).map(m => buildModulePayload(m, ptMap, mgrMap)),
             custos_totais: (custoTotal.totalMenin || custoTotal.totalClient) ? {
                 menin: Object.fromEntries(custoTotal.menin.map(i => [i.label, round2(i.value)])),
                 cliente: Object.fromEntries(custoTotal.client.map(i => [i.label, round2(i.value)])),
