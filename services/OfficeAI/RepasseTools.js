@@ -23,6 +23,7 @@ import dayjs from 'dayjs';
 import { QueryTypes } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
+import { resolverPeriodo, PERIODO_PARAM } from './periodo.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
 import {
     RESERVA_IMOB_NOME,
@@ -52,7 +53,8 @@ registerTool({
     parameters: {
         type: 'object',
         properties: {
-            data_inicio: { type: 'string', description: 'Data inicial YYYY-MM-DD. Padrão: início do mês atual.' },
+            periodo: PERIODO_PARAM,
+            data_inicio: { type: 'string', description: 'Data inicial YYYY-MM-DD. Sem periodo/datas: padrão da pessoa.' },
             data_fim: { type: 'string', description: 'Data final YYYY-MM-DD. Padrão: hoje.' },
             data_base: {
                 type: 'string',
@@ -100,8 +102,7 @@ registerTool({
         }
 
         const hasIdFilter = !!(args.idreservas || args.documento);
-        const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
-        const end = args.data_fim || dayjs().format('YYYY-MM-DD');
+        const { start, end } = resolverPeriodo(args, { padrao: user?.emeDefaultPeriod });
         const dateCol = DATE_COLUMN[args.data_base] || DATE_COLUMN.status;
 
         const whereClauses = [];

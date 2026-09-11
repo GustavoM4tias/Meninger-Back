@@ -9,6 +9,7 @@ import {
 } from '../services/OfficeAI/OfficeChatService.js';
 import { synthesizeSpeech, ALLOWED_VOICES } from '../services/OfficeAI/EmeTTSService.js';
 import { validarMemoria, userEmeSettings, MEMORY_CATEGORIES } from '../services/OfficeAI/MemoryTools.js';
+import { PERIODO_KEYS } from '../services/OfficeAI/periodo.js';
 
 const router = express.Router();
 
@@ -357,6 +358,11 @@ router.put('/me/settings', authenticate, async (req, res) => {
     if (req.body?.model_mode !== undefined) {
       if (!['auto', 'fast', 'smart'].includes(req.body.model_mode)) return res.status(400).json({ error: 'Modo inválido.' });
       patch.model_mode = req.body.model_mode;
+    }
+    if (req.body?.default_period !== undefined) {
+      const v = req.body.default_period;
+      if (v !== null && v !== '' && !PERIODO_KEYS.includes(v)) return res.status(400).json({ error: 'Período inválido.' });
+      patch.default_period = v || null;
     }
     const [row] = await db.EmeUserSetting.findOrCreate({ where: { user_id: req.user.id }, defaults: { user_id: req.user.id, ...patch } });
     if (!row.isNewRecord) await row.update(patch);

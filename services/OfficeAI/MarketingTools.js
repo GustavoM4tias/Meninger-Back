@@ -3,6 +3,7 @@ import db from '../../models/sequelize/index.js';
 import { QueryTypes } from 'sequelize';
 import { visibleCvIds, visibleCities } from '../permissions/accessScopeService.js';
 import { describeScreenCatalog, resolveScreenRoute } from '../../lib/screenCatalog.js';
+import { resolverPeriodo, PERIODO_PARAM_GEMINI } from './periodo.js';
 
 /**
  * Monta uma linha resumo (subtitle) com período + cidade + filtros principais.
@@ -61,7 +62,8 @@ export const TOOL_DECLARATIONS = [
     parameters: {
       type: 'OBJECT',
       properties: {
-        data_inicio:     { type: 'STRING',  description: 'Data inicial YYYY-MM-DD. Padrão: início do mês atual.' },
+        periodo:         PERIODO_PARAM_GEMINI,
+        data_inicio:     { type: 'STRING',  description: 'Data inicial YYYY-MM-DD. Sem periodo/datas: padrão da pessoa.' },
         data_fim:        { type: 'STRING',  description: 'Data final YYYY-MM-DD. Padrão: hoje.' },
         empreendimento:  { type: 'STRING',  description: 'Nome do empreendimento (deve constar na lista de empreendimentos disponíveis).' },
         imobiliaria:     { type: 'STRING',  description: 'Imobiliária parceira: nome (acento é ignorado) ou id do CV.' },
@@ -90,8 +92,9 @@ export const TOOL_DECLARATIONS = [
     parameters: {
       type: 'OBJECT',
       properties: {
-        data_inicio:    { type: 'STRING', description: 'Data inicial YYYY-MM-DD. Padrão: início do mês atual.' },
-        data_fim:       { type: 'STRING', description: 'Data final YYYY-MM-DD. Padrão: fim do mês atual.' },
+        periodo:        PERIODO_PARAM_GEMINI,
+        data_inicio:    { type: 'STRING', description: 'Data inicial YYYY-MM-DD. Sem periodo/datas: padrão da pessoa.' },
+        data_fim:       { type: 'STRING', description: 'Data final YYYY-MM-DD. Padrão: fim do mês (agenda).' },
         titulo:         { type: 'STRING', description: 'Filtro por título do evento.' },
         tag:            { type: 'STRING', description: 'Filtro por tag. Ex: Lançamento, Meeting.' },
         empreendimento: { type: 'STRING', description: 'Filtro por empreendimento vinculado ao evento (busca acento-insensível; também encontra eventos antigos que citam o empreendimento apenas no título). Use o nome como o usuário falou (ex: "Residencial Ingá").' },
@@ -149,8 +152,7 @@ async function executeQueryLeads(args, user) {
   // Quando há filtro por ID/CPF, a janela de data é dispensada — IDs são exatos
   // e o lead pode ter sido cadastrado antes do período do contexto anterior.
   const hasIdFilter = !!(args.idleads || args.documento || args.idprecadastros || args.idreservas);
-  const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
-  const end   = args.data_fim   || dayjs().format('YYYY-MM-DD');
+  const { start, end } = resolverPeriodo(args, { padrao: user?.emeDefaultPeriod });
 
   const whereClauses = [];
   const replacements = {};
@@ -522,8 +524,8 @@ async function executeLeadsGrouped(groupBy, where, replacements, context, painel
 }
 
 async function executeQueryEvents(args, user) {
-  const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
-  const end   = args.data_fim   || dayjs().endOf('month').format('YYYY-MM-DD');
+  // Agenda olha para a frente: sem período, o mês INTEIRO (fimDoMes).
+  const { start, end } = resolverPeriodo(args, { padrao: user?.emeDefaultPeriod, fimDoMes: true });
 
   // ── Escopo de acesso: eventos filtram por endereço → visibleCities ─────────
   // null = admin (sem filtro); [] = nenhuma cidade visível (fail-closed).

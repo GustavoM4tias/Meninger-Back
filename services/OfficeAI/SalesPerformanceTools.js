@@ -26,6 +26,7 @@ import db from '../../models/sequelize/index.js';
 import { registerTool, userHasPermissions } from './ToolRegistry.js';
 import { queryContractSales } from '../../controllers/sienge/contractSalesController.js';
 import { loadSerieAdjustments, serieValueDelta } from '../comercial/contractAdjustmentsService.js';
+import { resolverPeriodo, PERIODO_PARAM } from './periodo.js';
 
 const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 const fmtMoney = (v) => BRL.format(Number(v || 0));
@@ -153,16 +154,10 @@ export function agruparVendas(vendas, dimensao, valorDe) {
     return { linhas, totalVendas: vendas.length, totalValor };
 }
 
-// Período: 'YYYY-MM' vira o mês inteiro; padrão = mês atual.
-function resolvePeriodo(args) {
-    let ini = String(args?.data_inicio || '').trim();
-    let fim = String(args?.data_fim || '').trim();
-    if (/^\d{4}-\d{2}$/.test(ini)) ini = `${ini}-01`;
-    if (/^\d{4}-\d{2}$/.test(fim)) fim = dayjs(`${fim}-01`).endOf('month').format('YYYY-MM-DD');
-    if (!dayjs(ini).isValid()) ini = dayjs().startOf('month').format('YYYY-MM-DD');
-    if (!dayjs(fim).isValid()) fim = dayjs(ini).endOf('month').format('YYYY-MM-DD');
-    if (fim < ini) [ini, fim] = [fim, ini];
-    return { ini, fim };
+// Período único da Eme (periodo.js): nome, datas ou o padrão da pessoa.
+function resolvePeriodo(args, user) {
+    const { start, end } = resolverPeriodo(args, { padrao: user?.emeDefaultPeriod, fimDoMes: true });
+    return { ini: start, fim: end };
 }
 
 registerTool({
@@ -172,7 +167,8 @@ registerTool({
         type: 'object',
         properties: {
             dimensao: { type: 'string', enum: Object.keys(DIMENSOES), description: 'Por quem/por onde agrupar: "corretor" (quem vendeu), "imobiliaria", "midia" / "origem" / "campanha" (lead de captação), "empreendimento". Padrão: corretor.' },
-            data_inicio: { type: 'string', description: 'Início do período (YYYY-MM-DD ou YYYY-MM). Padrão: início do mês atual.' },
+            periodo: PERIODO_PARAM,
+            data_inicio: { type: 'string', description: 'Início do período (YYYY-MM-DD ou YYYY-MM). Sem periodo/datas: padrão da pessoa.' },
             data_fim: { type: 'string', description: 'Fim do período (YYYY-MM-DD ou YYYY-MM). Padrão: fim do mês de início.' },
             empreendimento: { type: 'string', description: 'Filtra por nome (ou parte) do empreendimento.' },
             empresa: { type: 'string', description: 'Filtra por nome (ou parte) da empresa/SPE.' },
@@ -191,7 +187,7 @@ registerTool({
             return { result: { error: `Sem alçada: o usuário não tem a guia ${tela} do Relatório Comercial.` }, resultCount: 0 };
         }
 
-        const { ini, fim } = resolvePeriodo(args);
+        const { ini, fim } = resolvePeriodo(args, user);
         const query = { startDate: ini, endDate: fim, situation: 'Emitido', view: 'ranking' };
         if (args?.cidade) query.cities = String(args.cidade).trim();
 

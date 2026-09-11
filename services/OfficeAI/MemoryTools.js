@@ -41,6 +41,8 @@ export async function userEmeSettings(userId) {
     return {
         memory_enabled: row ? row.memory_enabled !== false : true,
         model_mode: ['auto', 'fast', 'smart'].includes(row?.model_mode) ? row.model_mode : 'auto',
+        // null = segue o padrão do Cérebro (Recuperação > Período).
+        default_period: row?.default_period || null,
     };
 }
 

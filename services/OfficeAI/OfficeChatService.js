@@ -42,6 +42,7 @@ import './MemoryTools.js';
 import { userEmeSettings, memoriasAtivas, blocoDeMemoria } from './MemoryTools.js';
 import { retrievalSettings, selecionarParaPrompt } from './promptRetrieval.js';
 import { ensureEmbeddings, embedQuery, rank } from './embeddingIndex.js';
+import { periodoPadraoDe, blocoDePeriodo } from './periodo.js';
 import { escolherTools, tosRecentes } from './ToolPreselect.js';
 import { getToolsFor, toGeminiDeclarations, findTool, userHasPermissions } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
@@ -758,7 +759,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // pessoa escolheu para a própria Eme (memória ligada? modo do modelo?).
   // Os dois degradam para os padrões se o banco falhar - nunca derrubam o turno.
   const cfgRet = await retrievalSettings().catch(() => null) || { tools: { enabled: false }, blocks: { enabled: false }, glossary: { enabled: false }, memory: { enabled: false } };
-  const userCfg = await userEmeSettings(userId).catch(() => ({ memory_enabled: false, model_mode: 'auto' }));
+  const userCfg = await userEmeSettings(userId).catch(() => ({ memory_enabled: false, model_mode: 'auto', default_period: null }));
+  // O período padrão viaja no próprio user: é ele que chega a toda tool
+  // (registry e legada) sem mudar assinatura nenhuma. Ver periodo.js.
+  fullUser.emeDefaultPeriod = periodoPadraoDe({ emeDefaultPeriod: userCfg.default_period }, cfgRet);
 
   // ── Resolução de prompt + tools por contexto ──────────────────────────────
   let systemPrompt;
@@ -797,6 +801,8 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       try { systemPrompt += blocoDeMemoria(await memoriasAtivas(userId)); }
       catch (err) { console.warn('[OfficeChatService] memória indisponível:', err?.message); }
     }
+    // Período: qual é o padrão desta pessoa e como traduzir "no todo".
+    systemPrompt += blocoDePeriodo(fullUser.emeDefaultPeriod);
     // Anexa contexto de bridge (IDs/filtros da última consulta) ao SYSTEM
     // instruction — não ao histórico — para evitar que o modelo replique o bloco.
     lastBridge = await getLastBridgeContext(session.id);

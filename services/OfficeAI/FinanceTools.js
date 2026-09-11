@@ -19,6 +19,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
 import { allowedEnterpriseNames, applyEnterpriseScope } from '../boleto/boletoScope.js';
+import { resolverPeriodo, PERIODO_PARAM } from './periodo.js';
 
 // A tela chamava /financeiro/boleto-caixa até 23/08/2026; virou Ato e Parcelas
 // e as alçadas migraram junto (ensurePermissionRouteRenames). A tool ficou
@@ -33,26 +34,23 @@ const fmtMoney = (v) => BRL.format(Number(v || 0));
 const fmtDate = (d) => { try { return d ? dayjs(d).format('DD/MM/YYYY') : null; } catch { return null; } };
 
 // Janela padrão: mês corrente. Aceita 'YYYY-MM-DD'; 'YYYY-MM' vira o mês inteiro.
-function resolvePeriod(args) {
-    let start = String(args?.data_inicio || '').trim();
-    let end = String(args?.data_fim || '').trim();
-    if (/^\d{4}-\d{2}$/.test(start)) { end = end || dayjs(`${start}-01`).endOf('month').format('YYYY-MM-DD'); start = `${start}-01`; }
-    if (/^\d{4}-\d{2}$/.test(end)) end = dayjs(`${end}-01`).endOf('month').format('YYYY-MM-DD');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) start = dayjs().startOf('month').format('YYYY-MM-DD');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) end = dayjs().endOf('month').format('YYYY-MM-DD');
-    if (end < start) [start, end] = [end, start];
-    return { start, end };
+// Período único da Eme (periodo.js): nome de período, datas, ou o padrão da
+// pessoa. Custos e boletos olham o mês inteiro (fimDoMes) - o que vence hoje
+// e o que ainda vence este mês são a mesma pergunta.
+function resolvePeriod(args, user) {
+    return resolverPeriodo(args, { padrao: user?.emeDefaultPeriod, fimDoMes: true });
 }
 
 // ─── query_custos ────────────────────────────────────────────────────────────
 registerTool({
     name: 'query_custos',
-    description: 'Consulta os CUSTOS FINANCEIROS pagos (parcelas efetivamente pagas, ao vivo do Sienge — mesma fonte da tela /financeiro/custos): total do período, quebra por empreendimento (centro de custo) ou por departamento, e detalhe das parcelas de um empreendimento. Use quando o usuário perguntar "quanto gastamos", "quanto foi pago", "maiores custos/despesas do mês", "custos por departamento". NÃO use para "Custos Menin × Cliente" / custos de VENDA de um produto (comissão, ITBI, cartório, CCA, documentação repassada ao cliente) — isso é da Ficha Comercial (get_condition_sheet). Regra prática: pergunta sobre DESPESA PAGA/orçamento → aqui; pergunta sobre o que compõe a condição comercial de um empreendimento → ficha. O usuário só enxerga os departamentos que a alçada dele permite (regra aplicada automaticamente). Período padrão: mês atual.',
+    description: 'Consulta os CUSTOS FINANCEIROS pagos (parcelas efetivamente pagas, ao vivo do Sienge — mesma fonte da tela /financeiro/custos): total do período, quebra por empreendimento (centro de custo) ou por departamento, e detalhe das parcelas de um empreendimento. Use quando o usuário perguntar "quanto gastamos", "quanto foi pago", "maiores custos/despesas do mês", "custos por departamento". NÃO use para "Custos Menin × Cliente" / custos de VENDA de um produto (comissão, ITBI, cartório, CCA, documentação repassada ao cliente) — isso é da Ficha Comercial (get_condition_sheet). Regra prática: pergunta sobre DESPESA PAGA/orçamento → aqui; pergunta sobre o que compõe a condição comercial de um empreendimento → ficha. O usuário só enxerga os departamentos que a alçada dele permite (regra aplicada automaticamente). Sem período na pergunta vale o padrão da pessoa; "no todo" = periodo:"tudo".',
     parameters: {
         type: 'object',
         properties: {
-            data_inicio: { type: 'string', description: 'Início do período (YYYY-MM-DD ou YYYY-MM). Padrão: início do mês atual.' },
-            data_fim: { type: 'string', description: 'Fim do período (YYYY-MM-DD ou YYYY-MM). Padrão: fim do mês atual.' },
+            periodo: PERIODO_PARAM,
+            data_inicio: { type: 'string', description: 'Início do período (YYYY-MM-DD ou YYYY-MM). Sem periodo/datas: padrão da pessoa.' },
+            data_fim: { type: 'string', description: 'Fim do período (YYYY-MM-DD ou YYYY-MM). Padrão: fim do mês.' },
             empreendimento: { type: 'string', description: 'Nome (ou parte do nome) do empreendimento/centro de custo para focar a consulta.' },
             agrupar: { type: 'string', enum: ['empreendimento', 'departamento'], description: 'Gera gráfico com a quebra pedida. Sem agrupar + com empreendimento → tabela com as parcelas.' },
         },
@@ -60,7 +58,7 @@ registerTool({
     requiredPermissions: ['/financeiro/custos'],
     contexts: ['OFFICE'],
     async handler(user, args) {
-        const { start, end } = resolvePeriod(args);
+        const { start, end } = resolvePeriod(args, user);
         // Visibilidade de departamentos (cascata global→cargo→usuário) é aplicada
         // DENTRO do summarizeAllMonth com base no user — mesma regra da tela.
         const summary = await expenseService.summarizeAllMonth({ startDate: start, endDate: end, user });
@@ -264,7 +262,8 @@ registerTool({
     parameters: {
         type: 'object',
         properties: {
-            data_inicio: { type: 'string', description: 'Início do período de emissão (YYYY-MM-DD ou YYYY-MM). Padrão: mês atual.' },
+            periodo: PERIODO_PARAM,
+            data_inicio: { type: 'string', description: 'Início do período de emissão (YYYY-MM-DD ou YYYY-MM). Sem periodo/datas: padrão da pessoa.' },
             data_fim: { type: 'string', description: 'Fim do período (YYYY-MM-DD ou YYYY-MM).' },
             status: { type: 'string', enum: ['success', 'error', 'processing', 'skipped', 'todos'], description: 'Status da EMISSÃO. Padrão: todos.' },
             situacao_pagamento: { type: 'string', enum: ['paid', 'pending', 'cancelled', 'error', 'todos'], description: 'Situação do PAGAMENTO. Padrão: todas.' },
@@ -278,7 +277,7 @@ registerTool({
     requiredPermissions: [BOLETO_SCREEN],
     contexts: ['OFFICE'],
     async handler(user, args) {
-        const { start, end } = resolvePeriod(args);
+        const { start, end } = resolvePeriod(args, user);
         const where = {
             created_at: { [Op.between]: [`${start} 00:00:00`, `${end} 23:59:59`] },
             ignorado: { [Op.or]: [false, null] },

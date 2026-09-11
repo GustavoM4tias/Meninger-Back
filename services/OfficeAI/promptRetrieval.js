@@ -27,6 +27,8 @@ export const RETRIEVAL_DEFAULTS = {
     // Memória (preferências confirmadas) - chave geral; cada pessoa ainda
     // liga/desliga a sua.
     memory:   { enabled: true },
+    // Janela quando a pergunta não diz período e a pessoa não escolheu a sua.
+    periodo:  { padrao: 'mes_atual' },
 };
 
 let _cfg = null;
@@ -76,6 +78,7 @@ export function sanitizeRetrievalSettings(input = {}) {
             min_sim: num(input.glossary?.min_sim, D.glossary.min_sim, 0, 1),
         },
         memory: { enabled: b(input.memory?.enabled, D.memory.enabled) },
+        periodo: { padrao: ['mes_atual', 'mes_anterior', 'ultimos_30', 'ultimos_90', 'ano_atual', 'ano_anterior', 'tudo'].includes(input.periodo?.padrao) ? input.periodo.padrao : D.periodo.padrao },
     };
 }
 

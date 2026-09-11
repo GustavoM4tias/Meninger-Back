@@ -4,6 +4,7 @@ import { QueryTypes, Op, where, fn, col } from 'sequelize';
 import fetch from 'node-fetch';
 import { buildSubtitle, LIST_HARD_CAP } from './MarketingTools.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
+import { resolverPeriodo, PERIODO_PARAM_GEMINI } from './periodo.js';
 
 const MCMV_FAIXA3 = 400000;
 const MCMV_FAIXA4 = 600000;
@@ -94,7 +95,8 @@ export const TOOL_DECLARATIONS = [
     parameters: {
       type: 'OBJECT',
       properties: {
-        data_inicio: { type: 'STRING', description: 'Data inicial YYYY-MM-DD (filtra por data_cad). Padrão: início do mês atual.' },
+        periodo:     PERIODO_PARAM_GEMINI,
+        data_inicio: { type: 'STRING', description: 'Data inicial YYYY-MM-DD (filtra por data_cad). Sem periodo/datas: padrão da pessoa.' },
         data_fim:    { type: 'STRING', description: 'Data final YYYY-MM-DD. Padrão: hoje.' },
         empreendimento: { type: 'STRING', description: 'Nome (ou parte) do empreendimento. Aceita CSV para múltiplos.' },
         empresa_correspondente: { type: 'STRING', description: 'Nome da empresa correspondente (CCA/banco). Ex: "Caixa", "Itaú", "Santander". Aceita CSV.' },
@@ -143,7 +145,8 @@ export const TOOL_DECLARATIONS = [
     parameters: {
       type: 'OBJECT',
       properties: {
-        data_inicio:    { type: 'STRING', description: 'Data inicial YYYY-MM-DD (filtra por data_reserva). Padrão: início do mês atual.' },
+        periodo:        PERIODO_PARAM_GEMINI,
+        data_inicio:    { type: 'STRING', description: 'Data inicial YYYY-MM-DD (filtra por data_reserva). Sem periodo/datas: padrão da pessoa.' },
         data_fim:       { type: 'STRING', description: 'Data final YYYY-MM-DD. Padrão: hoje.' },
         empreendimento: { type: 'STRING', description: 'Nome (ou parte) do empreendimento. CSV aceito.' },
         etapa:          { type: 'STRING', description: 'Etapa da unidade (ex: "Fase 1", "Etapa A"). CSV aceito.' },
@@ -620,8 +623,7 @@ async function executeQueryPrecadastros(args, user) {
 
   // Filtros por ID/CPF dispensam janela de data — o registro pode estar fora do período padrão
   const hasIdFilter = !!(args.idleads || args.idprecadastros || args.idreservas || args.documento);
-  const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
-  const end   = args.data_fim   || dayjs().format('YYYY-MM-DD');
+  const { start, end } = resolverPeriodo(args, { padrao: user?.emeDefaultPeriod });
 
   const whereClauses = [];
   const replacements = {};
@@ -1138,8 +1140,7 @@ async function executeQueryReservas(args, user) {
 
   // Filtros por ID/CPF dispensam janela de data — registro pode estar fora do período padrão
   const hasIdFilter = !!(args.idreservas || args.idprecadastros || args.idleads || args.documento);
-  const start = args.data_inicio || dayjs().startOf('month').format('YYYY-MM-DD');
-  const end   = args.data_fim   || dayjs().format('YYYY-MM-DD');
+  const { start, end } = resolverPeriodo(args, { padrao: user?.emeDefaultPeriod });
 
   const whereClauses = [];
   const replacements = {};
