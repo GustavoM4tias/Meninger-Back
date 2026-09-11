@@ -14,6 +14,9 @@ import requireAdmin from '../middlewares/requireAdmin.js';
 import db from '../models/sequelize/index.js';
 import { buildBrainFromTables, invalidateBrainCache } from '../services/OfficeAI/ConfigService.js';
 import { assembleSystemPrompt } from '../services/OfficeAI/promptAssembler.js';
+import { retrievalSettings, sanitizeRetrievalSettings, invalidateRetrievalCache } from '../services/OfficeAI/promptRetrieval.js';
+import { indexStatus, resetIndex } from '../services/OfficeAI/embeddingIndex.js';
+import { iniciarRodada } from '../services/OfficeAI/EmeEvalService.js';
 import { loadAccessibleEnterprises } from '../services/OfficeAI/OfficeChatService.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
@@ -99,8 +102,9 @@ router.put('/blocks/:id', async (req, res) => {
     if (!block) return res.status(404).json({ error: 'Bloco não encontrado.' });
 
     const patch = {};
-    const { title, category, content, context, module, enabled, orderIndex, requiredPermission } = req.body || {};
+    const { title, category, content, context, module, enabled, orderIndex, requiredPermission, alwaysInPrompt } = req.body || {};
     if (title !== undefined) patch.title = String(title).trim();
+    if (alwaysInPrompt !== undefined) patch.alwaysInPrompt = !!alwaysInPrompt;
     if (content !== undefined) patch.content = String(content);
     if (enabled !== undefined) patch.enabled = !!enabled;
     if (module !== undefined) patch.module = module || null;
@@ -414,6 +418,138 @@ router.post('/sandbox/chat', async (req, res) => {
   } catch (err) {
     console.error('[officeBrain] sandbox/chat', err?.message || err);
     res.status(502).json({ error: 'Falha ao gerar resposta de teste.' });
+  }
+});
+
+// ── Recuperação (roteamento semântico, blocos e glossário por similaridade) ──
+// Lido ao vivo pelo runtime (cache de 30 s): vale na hora, sem publicar.
+router.get('/retrieval', async (req, res) => {
+  try {
+    res.json({ settings: await retrievalSettings(), index: await indexStatus() });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao carregar a recuperação.' });
+  }
+});
+
+router.put('/retrieval', async (req, res) => {
+  try {
+    const value = sanitizeRetrievalSettings(req.body?.settings || req.body || {});
+    const [row] = await db.EmeSetting.findOrCreate({ where: { key: 'retrieval' }, defaults: { key: 'retrieval', value, updatedBy: actor(req) } });
+    if (!row.isNewRecord) await row.update({ value, updatedBy: actor(req) });
+    invalidateRetrievalCache();
+    invalidateBrainCache();
+    res.json({ settings: value });
+  } catch (err) {
+    console.error('[officeBrain] PUT /retrieval', err);
+    res.status(500).json({ error: 'Erro ao salvar a recuperação.' });
+  }
+});
+
+// Apaga o índice de embeddings; o próximo turno reindexa (aos poucos).
+router.post('/retrieval/reindex', async (req, res) => {
+  try {
+    const kind = ['tool', 'block', 'glossary'].includes(req.body?.kind) ? req.body.kind : null;
+    await resetIndex(kind);
+    res.json({ ok: true, index: await indexStatus() });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao reindexar.' });
+  }
+});
+
+// ── Avaliação (conjunto de casos + rodadas) ──────────────────────────────────
+const CASE_FIELDS = ['title', 'message', 'expected_tool', 'expected_args', 'expected_no_tool', 'expected_text', 'forbidden_text', 'tags', 'enabled', 'note'];
+function casePatch(body = {}) {
+  const p = {};
+  for (const k of CASE_FIELDS) if (body[k] !== undefined) p[k] = body[k];
+  if (p.title !== undefined) p.title = String(p.title).trim().slice(0, 160);
+  if (p.message !== undefined) p.message = String(p.message).trim();
+  if (p.expected_tool !== undefined) p.expected_tool = String(p.expected_tool || '').trim() || null;
+  if (p.expected_args !== undefined && (typeof p.expected_args !== 'object' || Array.isArray(p.expected_args) || !p.expected_args)) p.expected_args = {};
+  for (const k of ['expected_text', 'forbidden_text', 'tags']) {
+    if (p[k] !== undefined) p[k] = (Array.isArray(p[k]) ? p[k] : String(p[k] || '').split('\n')).map(x => String(x).trim()).filter(Boolean);
+  }
+  if (p.expected_no_tool !== undefined) p.expected_no_tool = !!p.expected_no_tool;
+  if (p.enabled !== undefined) p.enabled = !!p.enabled;
+  return p;
+}
+
+router.get('/eval/cases', async (req, res) => {
+  try {
+    const cases = await db.EmeEvalCase.findAll({ order: [['created_at', 'ASC']] });
+    res.json({ cases });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao listar os casos.' });
+  }
+});
+
+router.post('/eval/cases', async (req, res) => {
+  try {
+    const p = casePatch(req.body);
+    if (!p.title || !p.message) return res.status(400).json({ error: 'Título e pergunta são obrigatórios.' });
+    if (!p.expected_tool && !p.expected_no_tool && !(p.expected_text || []).length && !(p.forbidden_text || []).length) {
+      return res.status(400).json({ error: 'Diga o que se espera: uma tool, nenhuma tool, ou um trecho do texto.' });
+    }
+    const c = await db.EmeEvalCase.create({ ...p, created_by: actor(req), updated_by: actor(req) });
+    res.status(201).json({ case: c });
+  } catch (err) {
+    console.error('[officeBrain] POST /eval/cases', err);
+    res.status(500).json({ error: 'Erro ao criar o caso.' });
+  }
+});
+
+router.put('/eval/cases/:id', async (req, res) => {
+  try {
+    const c = await db.EmeEvalCase.findByPk(req.params.id);
+    if (!c) return res.status(404).json({ error: 'Caso não encontrado.' });
+    await c.update({ ...casePatch(req.body), updated_by: actor(req) });
+    res.json({ case: c });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao atualizar o caso.' });
+  }
+});
+
+router.delete('/eval/cases/:id', async (req, res) => {
+  try {
+    const n = await db.EmeEvalCase.destroy({ where: { id: req.params.id } });
+    if (!n) return res.status(404).json({ error: 'Caso não encontrado.' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao apagar o caso.' });
+  }
+});
+
+router.get('/eval/runs', async (req, res) => {
+  try {
+    const runs = await db.EmeEvalRun.findAll({
+      order: [['created_at', 'DESC']], limit: 20,
+      attributes: ['id', 'label', 'status', 'total', 'passed', 'failed', 'brain_label', 'duration_ms', 'error', 'created_at'],
+    });
+    res.json({ runs });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao listar as rodadas.' });
+  }
+});
+
+router.get('/eval/runs/:id', async (req, res) => {
+  try {
+    const run = await db.EmeEvalRun.findByPk(req.params.id);
+    if (!run) return res.status(404).json({ error: 'Rodada não encontrada.' });
+    res.json({ run });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao carregar a rodada.' });
+  }
+});
+
+// Roda em segundo plano com a alçada de QUEM clicou (admin): cada caso é um
+// turno real do chat. A resposta volta na hora com status running.
+router.post('/eval/run', async (req, res) => {
+  try {
+    const emAndamento = await db.EmeEvalRun.count({ where: { status: 'running' } });
+    if (emAndamento) return res.status(409).json({ error: 'Já há uma rodada em andamento. Espere ela terminar.' });
+    const run = await iniciarRodada({ userId: req.user.id, caseIds: req.body?.case_ids || null, label: req.body?.label || null });
+    res.status(202).json({ run });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Erro ao iniciar a rodada.' });
   }
 });
 

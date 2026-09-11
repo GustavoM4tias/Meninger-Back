@@ -8,6 +8,7 @@ import {
   getOrCreateSession,
 } from '../services/OfficeAI/OfficeChatService.js';
 import { synthesizeSpeech, ALLOWED_VOICES } from '../services/OfficeAI/EmeTTSService.js';
+import { validarMemoria, userEmeSettings, MEMORY_CATEGORIES } from '../services/OfficeAI/MemoryTools.js';
 
 const router = express.Router();
 
@@ -168,7 +169,9 @@ router.post('/tts', authenticate, requireAdmin, rateLimitTTS, async (req, res) =
 router.get('/sessions', authenticate, async (req, res) => {
   try {
     const sessions = await db.ChatSession.findAll({
-      where: { user_id: req.user.id, deleted_at: null },
+      // As sessões da avaliação (context EVAL) são turnos de teste do admin,
+      // não conversas dele.
+      where: { user_id: req.user.id, deleted_at: null, context: { [db.Sequelize.Op.ne]: 'EVAL' } },
       order: [['updated_at', 'DESC']],
       limit: 50,
       attributes: ['id', 'title', 'is_favorited', 'total_bytes', 'created_at', 'updated_at'],
@@ -288,11 +291,78 @@ router.get('/memories', authenticate, async (req, res) => {
     const memories = await db.UserAIMemory.findAll({
       where: { user_id: req.user.id },
       order: [['updated_at', 'DESC']],
-      attributes: ['id', 'key', 'value', 'category', 'updated_at'],
+      attributes: ['id', 'key', 'value', 'category', 'source', 'enabled', 'updated_at'],
     });
     res.json({ memories });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao carregar memórias.' });
+  }
+});
+
+// ── POST /api/office-chat/memories ────────────────────────────────────────────
+// A ÚNICA porta de entrada de uma memória: o clique da pessoa (card da Eme ou
+// modal). A tool lembrar_preferencia só propõe - nunca chega aqui sozinha.
+router.post('/memories', authenticate, async (req, res) => {
+  try {
+    const v = validarMemoria(req.body || {});
+    if (!v.ok) return res.status(400).json({ error: v.erro });
+    const source = req.body?.source === 'manual' ? 'manual' : 'chat';
+    const [row, created] = await db.UserAIMemory.findOrCreate({
+      where: { user_id: req.user.id, key: v.memoria.key },
+      defaults: { ...v.memoria, user_id: req.user.id, source, enabled: true },
+    });
+    if (!created) await row.update({ value: v.memoria.value, category: v.memoria.category, source, enabled: true });
+    res.status(created ? 201 : 200).json({ memory: row });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao guardar a preferência.' });
+  }
+});
+
+// ── PUT /api/office-chat/memories/:id ─────────────────────────────────────────
+router.put('/memories/:id', authenticate, async (req, res) => {
+  try {
+    const row = await db.UserAIMemory.findOne({ where: { id: req.params.id, user_id: req.user.id } });
+    if (!row) return res.status(404).json({ error: 'Preferência não encontrada.' });
+    const patch = {};
+    if (req.body?.value !== undefined) {
+      const v = validarMemoria({ key: row.key, value: req.body.value, category: req.body.category || row.category });
+      if (!v.ok) return res.status(400).json({ error: v.erro });
+      patch.value = v.memoria.value;
+      patch.category = v.memoria.category;
+    } else if (req.body?.category !== undefined && MEMORY_CATEGORIES.includes(req.body.category)) {
+      patch.category = req.body.category;
+    }
+    if (req.body?.enabled !== undefined) patch.enabled = !!req.body.enabled;
+    await row.update(patch);
+    res.json({ memory: row });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao atualizar a preferência.' });
+  }
+});
+
+// ── GET/PUT /api/office-chat/me/settings ─────────────────────────────────────
+// O que a pessoa configura da própria Eme (modal Configurações do chat).
+router.get('/me/settings', authenticate, async (req, res) => {
+  try {
+    res.json({ settings: await userEmeSettings(req.user.id) });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao carregar as configurações.' });
+  }
+});
+
+router.put('/me/settings', authenticate, async (req, res) => {
+  try {
+    const patch = {};
+    if (req.body?.memory_enabled !== undefined) patch.memory_enabled = !!req.body.memory_enabled;
+    if (req.body?.model_mode !== undefined) {
+      if (!['auto', 'fast', 'smart'].includes(req.body.model_mode)) return res.status(400).json({ error: 'Modo inválido.' });
+      patch.model_mode = req.body.model_mode;
+    }
+    const [row] = await db.EmeUserSetting.findOrCreate({ where: { user_id: req.user.id }, defaults: { user_id: req.user.id, ...patch } });
+    if (!row.isNewRecord) await row.update(patch);
+    res.json({ settings: await userEmeSettings(req.user.id) });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao salvar as configurações.' });
   }
 });
 

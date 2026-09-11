@@ -193,6 +193,10 @@ import EmeGlossaryTermDefine  from './eme/glossaryTerm.js';
 import EmeReportDefine        from './eme/report.js';
 import EmeSettingDefine       from './eme/setting.js';
 import EmeConfigVersionDefine from './eme/configVersion.js';
+import EmeEmbeddingDefine     from './eme/embedding.js';
+import EmeEvalCaseDefine      from './eme/evalCase.js';
+import EmeEvalRunDefine       from './eme/evalRun.js';
+import EmeUserSettingDefine   from './eme/userSetting.js';
 
 // Relatórios da Eme — relatórios customizados gerados por IA (eme_generated_*)
 import EmeGeneratedReportDefine            from './emeReports/generatedReport.js';
@@ -511,6 +515,10 @@ db.EmeGlossaryTerm  = EmeGlossaryTermDefine(sequelize, DataTypes);
 db.EmeReport        = EmeReportDefine(sequelize, DataTypes);
 db.EmeSetting       = EmeSettingDefine(sequelize, DataTypes);
 db.EmeConfigVersion = EmeConfigVersionDefine(sequelize, DataTypes);
+db.EmeEmbedding     = EmeEmbeddingDefine(sequelize, DataTypes);
+db.EmeEvalCase      = EmeEvalCaseDefine(sequelize, DataTypes);
+db.EmeEvalRun       = EmeEvalRunDefine(sequelize, DataTypes);
+db.EmeUserSetting   = EmeUserSettingDefine(sequelize, DataTypes);
 
 // Relatórios da Eme (relatórios customizados gerados por IA)
 db.EmeGeneratedReport            = EmeGeneratedReportDefine(sequelize, DataTypes);

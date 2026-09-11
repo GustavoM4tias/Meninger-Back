@@ -70,6 +70,7 @@ export async function buildBrainFromTables() {
       isDynamic: b.isDynamic,
       enabled: b.enabled,
       requiredPermission: b.requiredPermission,
+      alwaysInPrompt: b.alwaysInPrompt !== false,
     })),
     glossary: glossary.map(g => ({
       id: g.id, key: g.key, term: g.term, canonical: g.canonical,

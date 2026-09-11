@@ -33,6 +33,13 @@
 //                     tool. A fonte é a própria declaração - não existe tabela
 //                     de palavras-chave para manter em dia, então ela não pode
 //                     divergir do que a tool faz.
+//   4. SIMILARIDADE   (11/09/2026) cosseno entre o embedding da pergunta e o da
+//                     declaração de cada tool (embeddingIndex). É o que acha
+//                     "quem analisa o crédito do Ingá" → correspondentes sem
+//                     que a palavra "correspondente" apareça. Chega pronto em
+//                     `opts.similaridade` (Map nome → 0..1); quem não tem vetor
+//                     ainda só pontua pelos critérios acima. Peso, limiar e
+//                     teto vêm da tela (eme_settings.retrieval).
 //
 // E o principal: ERRAR AQUI NÃO QUEBRA NADA. Se a tool certa ficou de fora, o
 // modelo escreve o nome dela em vez de chamar (ou diz que não consegue), o
@@ -138,9 +145,14 @@ export function tosRecentes(mensagens = []) {
  * @param {Set}    recentes     nomes de tools usadas nas últimas mensagens
  * @returns {{ declaracoes: Array, cortou: number, motivo: string }}
  */
-export function escolherTools(declaracoes = [], mensagem = '', recentes = new Set()) {
+export function escolherTools(declaracoes = [], mensagem = '', recentes = new Set(), opts = {}) {
+    const teto = Number(opts.teto) > 0 ? Number(opts.teto) : TETO;
+    const similaridade = opts.similaridade instanceof Map && opts.similaridade.size ? opts.similaridade : null;
+    const pesoSemantico = Number.isFinite(Number(opts.pesoSemantico)) ? Number(opts.pesoSemantico) : 300;
+    const limiar = Number.isFinite(Number(opts.limiar)) ? Number(opts.limiar) : 0.35;
+
     // Poucas tools: não há o que cortar, e cortar só criaria risco sem ganho.
-    if (declaracoes.length <= TETO) {
+    if (declaracoes.length <= teto) {
         return { declaracoes, cortou: 0, motivo: 'cabe inteiro' };
     }
 
@@ -175,13 +187,17 @@ export function escolherTools(declaracoes = [], mensagem = '', recentes = new Se
             else if (desc.includes(t)) pontos += 3;
         }
 
+        // 4. Similaridade semântica: só acima do limiar, proporcional.
+        const sim = similaridade?.get(d.name);
+        if (typeof sim === 'number' && sim >= limiar) pontos += Math.round(pesoSemantico * sim);
+
         if (pontos > 0) somar(d, pontos);
     }
 
     const porNome = new Map(declaracoes.map(d => [d.name, d]));
     const ordenadas = [...escolhidas.entries()]
         .sort((a, b) => b[1] - a[1])
-        .slice(0, TETO)
+        .slice(0, teto)
         .map(([nome]) => porNome.get(nome))
         .filter(Boolean);
 
@@ -196,7 +212,7 @@ export function escolherTools(declaracoes = [], mensagem = '', recentes = new Se
     return {
         declaracoes: ordenadas,
         cortou: declaracoes.length - ordenadas.length,
-        motivo: `${ordenadas.length} de ${declaracoes.length}`,
+        motivo: `${ordenadas.length} de ${declaracoes.length}${similaridade ? ' (semântica)' : ''}`,
     };
 }
 

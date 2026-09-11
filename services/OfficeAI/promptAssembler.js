@@ -17,6 +17,7 @@ import {
   buildDynamicContext,
   buildSystemPrompt,
 } from './systemPrompt.js';
+import { blocoGlossario } from './promptRetrieval.js';
 
 // Key da âncora dinâmica (data/hora + usuário + acesso + empreendimentos).
 export const DYNAMIC_ANCHOR_KEY = 'office_runtime_context';
@@ -105,6 +106,7 @@ export function buildOfficeBlocks() {
       orderIndex: order++,
       isDynamic: false,
       locked: true, // blocos-núcleo: editáveis, não deletáveis
+      alwaysInPrompt: true,
     });
   };
 
@@ -175,14 +177,23 @@ function blocoDeAgora() {
     + `Ao passar horário para uma tool, mande ISO local SEM "Z" e sem fuso.\n`;
 }
 
-export function assembleSystemPrompt(brain, user, enterprises = [], ctx = 'OFFICE') {
+/**
+ * @param {object|null} selecao  recorte do turno (promptRetrieval.selecionarParaPrompt):
+ *   blockKeys  Set das keys que ENTRAM entre os blocos marcados "por
+ *              similaridade" (alwaysInPrompt=false). null = não recorta.
+ *   glossario  termos escolhidos para este turno; vira o bloco GLOSSÁRIO.
+ * Bloco "sempre no prompt" (padrão) nunca é cortado.
+ */
+export function assembleSystemPrompt(brain, user, enterprises = [], ctx = 'OFFICE', selecao = null) {
   if (!brain || !Array.isArray(brain.blocks) || !brain.blocks.length) {
     return buildSystemPrompt(user, enterprises) + blocoDeAgora();
   }
   const context = String(ctx || 'OFFICE').toUpperCase();
+  const keys = selecao?.blockKeys instanceof Set ? selecao.blockKeys : null;
   const ordered = brain.blocks
     .filter(b => b && b.enabled !== false)
     .filter(b => !b.context || b.context === 'BOTH' || String(b.context).toUpperCase() === context)
+    .filter(b => !keys || b.alwaysInPrompt !== false || keys.has(b.key))
     .slice()
     .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
 
@@ -190,5 +201,6 @@ export function assembleSystemPrompt(brain, user, enterprises = [], ctx = 'OFFIC
   for (const b of ordered) {
     out += b.isDynamic ? buildDynamicContext(user, enterprises) : (b.content || '');
   }
+  out += blocoGlossario(selecao?.glossario);
   return out;
 }

@@ -38,6 +38,10 @@ import './ChecklistTools.js';
 import './MicrosoftTools.js';
 import './OutlookAiTools.js';
 import './AssistantTools.js';
+import './MemoryTools.js';
+import { userEmeSettings, memoriasAtivas, blocoDeMemoria } from './MemoryTools.js';
+import { retrievalSettings, selecionarParaPrompt } from './promptRetrieval.js';
+import { ensureEmbeddings, embedQuery, rank } from './embeddingIndex.js';
 import { escolherTools, tosRecentes } from './ToolPreselect.js';
 import { getToolsFor, toGeminiDeclarations, findTool, userHasPermissions } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
@@ -750,6 +754,12 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   const session = await getOrCreateSession(userId, sessionId, ctx);
   await saveMessage(session.id, 'user', userMessage);
 
+  // Como a recuperação está configurada (Cérebro > Recuperação) e o que a
+  // pessoa escolheu para a própria Eme (memória ligada? modo do modelo?).
+  // Os dois degradam para os padrões se o banco falhar - nunca derrubam o turno.
+  const cfgRet = await retrievalSettings().catch(() => null) || { tools: { enabled: false }, blocks: { enabled: false }, glossary: { enabled: false }, memory: { enabled: false } };
+  const userCfg = await userEmeSettings(userId).catch(() => ({ memory_enabled: false, model_mode: 'auto' }));
+
   // ── Resolução de prompt + tools por contexto ──────────────────────────────
   let systemPrompt;
   let activeDeclarations;
@@ -773,8 +783,20 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     // Cérebro da Eme (DB-driven). Sem versão publicada → assembleSystemPrompt cai
     // em buildSystemPrompt (comportamento histórico intacto / zero regressão).
     const brain = await getActiveBrain();
-    systemPrompt = assembleSystemPrompt(brain, fullUser, enterprises, 'OFFICE');
+    // Recorte do turno: blocos marcados "por similaridade" e termos do
+    // glossário que têm a ver com a pergunta (promptRetrieval). Falhou? Sem
+    // recorte - o prompt inteiro, como sempre foi.
+    let selecao = null;
+    try { selecao = await selecionarParaPrompt({ brain, userMessage, cfg: cfgRet }); }
+    catch (err) { console.warn('[OfficeChatService] recuperação do prompt falhou:', err?.message); }
+    systemPrompt = assembleSystemPrompt(brain, fullUser, enterprises, 'OFFICE', selecao);
     activeSettings = brain?.settings || {};
+    // Memória: preferências que a PESSOA confirmou (MemoryTools). Fora do
+    // Cérebro, como as regras de plural, para valer também sem versão publicada.
+    if (cfgRet.memory?.enabled && userCfg.memory_enabled) {
+      try { systemPrompt += blocoDeMemoria(await memoriasAtivas(userId)); }
+      catch (err) { console.warn('[OfficeChatService] memória indisponível:', err?.message); }
+    }
     // Anexa contexto de bridge (IDs/filtros da última consulta) ao SYSTEM
     // instruction — não ao histórico — para evitar que o modelo replique o bloco.
     lastBridge = await getLastBridgeContext(session.id);
@@ -841,10 +863,28 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       order: [['id', 'DESC']],
       limit: 8,
     });
+    // Similaridade semântica (embedding da pergunta x declaração de cada
+    // tool). Vetor de tool que ainda não foi indexado é embedado aqui, com
+    // teto por turno - o índice completa em poucos turnos e fica no banco.
+    let similaridade = null;
+    if (!isAcademy && cfgRet.tools?.enabled) {
+      try {
+        const q = await embedQuery(userMessage);
+        if (q) {
+          const vecs = await ensureEmbeddings('tool',
+            todasDeclaracoes.map(d => ({ key: d.name, text: `${d.name}: ${d.description || ''}` })),
+            { maxNew: 25 });
+          similaridade = new Map(rank(q, vecs).map(r => [r.key, r.sim]));
+        }
+      } catch (err) {
+        console.warn('[OfficeChatService] similaridade das tools falhou:', err?.message);
+      }
+    }
     const escolha = escolherTools(
       todasDeclaracoes,
       userMessage,
       tosRecentes(ultimas.map(m => m.get({ plain: true })).reverse()),
+      { similaridade, teto: cfgRet.tools?.top_k, pesoSemantico: cfgRet.tools?.peso, limiar: cfgRet.tools?.min_sim },
     );
     activeDeclarations = escolha.declaracoes;
     if (escolha.cortou > 0) {
@@ -926,10 +966,13 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     && activeDeclarations.length > 0
     && activeDeclarations.every(d => /^(meu_dia|criar_tarefa|minhas_tarefas|concluir_tarefa|atualizar_tarefa|marcar_subtarefa|adicionar_parceiro|meus_convites|responder_convite|configurar_assistente)$/.test(d?.name || ''));
 
-  const pool = isAcademy
+  const poolAuto = isAcademy
     ? 'smart'
     : ((viaVoice || soAssistente) ? 'fast'
       : selectModelPool(userMessage, activeSettings.escalation_keywords || []));
+  // Modo escolhido pela pessoa nas Configurações do chat: "rápido" e
+  // "avançado" valem sobre a heurística; "auto" deixa a heurística decidir.
+  const pool = userCfg.model_mode === 'fast' ? 'fast' : userCfg.model_mode === 'smart' ? 'smart' : poolAuto;
   const modelList = pool === 'smart' ? getSmartModels(activeSettings) : getFastModels(activeSettings);
   let geminiModel = modelList[0];
 

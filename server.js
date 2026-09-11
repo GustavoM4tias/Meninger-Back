@@ -107,6 +107,7 @@ import { ensureSiengeBackupLogSchema } from './lib/ensureSiengeBackupLogSchema.j
 import { ensureSiengeBackupSettingsSchema } from './lib/ensureSiengeBackupSettingsSchema.js';
 import { ensureSiengeConnectionSchema } from './lib/ensureSiengeConnectionSchema.js';
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
+import { ensureEmeRetrievalSchema } from './lib/ensureEmeRetrievalSchema.js';
 import { ensureEmeReportsSchema } from './lib/ensureEmeReportsSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
 import { ensureWhatsappMessagesSchema } from './lib/ensureWhatsappMessagesSchema.js';
@@ -596,6 +597,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['AcademyPostSync', ensureAcademyPostSync],
     ['MarketingCapture', ensureMarketingCaptureSchema],
     ['EmeBrain', ensureEmeBrainSchema],
+    ['EmeRetrieval', ensureEmeRetrievalSchema],
     ['EmeReports', ensureEmeReportsSchema],
     ['WhatsappAutomation', ensureWhatsappAutomationSchema],
     ['WhatsappMessages', ensureWhatsappMessagesSchema],

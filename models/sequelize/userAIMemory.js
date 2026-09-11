@@ -7,6 +7,11 @@ export default (sequelize, DataTypes) => {
     value: { type: DataTypes.TEXT, allowNull: false },
     // 'preference' | 'context' | 'fact'
     category: { type: DataTypes.STRING(30), defaultValue: 'preference' },
+    // 'chat' (confirmada num card da Eme) | 'manual' (digitada no modal) |
+    // 'legado' (gravada pelo fluxo antigo, que gravava sozinho - nasce desligada)
+    source: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'chat' },
+    // Desligada não entra no prompt, mas fica visível para a pessoa decidir.
+    enabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
   }, {
     tableName: 'user_ai_memories',
     underscored: true,

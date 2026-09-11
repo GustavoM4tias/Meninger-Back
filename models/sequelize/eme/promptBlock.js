@@ -48,6 +48,10 @@ export default (sequelize, DataTypes) => {
     // true = bloco-núcleo: admin pode editar/desabilitar, mas não deletar.
     locked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
 
+    // true (padrão) = vai em todo turno. false = só entra quando a pergunta
+    // tem a ver com o bloco (similaridade de embedding - promptRetrieval).
+    alwaysInPrompt: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+
     // Quem editou por último (username/email) — rastreio leve.
     updatedBy: { type: DataTypes.STRING(120), allowNull: true },
   }, {
