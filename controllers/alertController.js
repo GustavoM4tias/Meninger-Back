@@ -122,11 +122,19 @@ export const create = async (req, res) => {
 
         // Owner: user comum só pra si; admin pode setar outro
         let ownerId = req.user.id;
+        let ownerUser = req.user;
         if (isAdmin(req) && body.owner_user_id) {
-            const target = await User.findByPk(Number(body.owner_user_id), { attributes: ['id'] });
+            const target = await User.findByPk(Number(body.owner_user_id), { attributes: ['id', 'role', 'permission_profile_id'] });
             if (!target) return res.status(400).json({ error: 'owner_user_id inexistente.' });
             ownerId = target.id;
+            ownerUser = target;
         }
+
+        // A receita precisa existir E o DONO precisa poder rodá-la: um alerta
+        // gravado com tool inexistente (ou de tela que o dono não tem) só
+        // descobriria isso no primeiro disparo, de madrugada, num log.
+        const ok = await AlertReportService.checkToolForUser(body.tool_call.tool, ownerUser);
+        if (!ok.ok) return res.status(400).json({ error: ok.reason });
 
         const rule = await AlertRule.create({
             name:        String(body.name).slice(0, 180),

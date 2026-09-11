@@ -4,8 +4,9 @@
 //   - query_custos:  custos da tela /financeiro/custos (ao vivo do backup Sienge),
 //                    com a MESMA alçada da tela (requiredPermissions) e a MESMA
 //                    cascata de Visibilidade de Departamentos (dentro do service).
-//   - query_boletos: histórico/estatísticas dos boletos Caixa (tela admin-only,
-//                    tool admin-only).
+//   - query_boletos: histórico/estatísticas dos boletos Caixa do ATO, com a
+//                    mesma alçada e o mesmo recorte de empreendimento da tela
+//                    Ato e Parcelas (/financeiro/cobranca/ato).
 //
 // Princípios (iguais ao resto do registry):
 //   - Segurança DENTRO do handler com base em `user` (nunca em args).
@@ -19,7 +20,10 @@ import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
 import { allowedEnterpriseNames, applyEnterpriseScope } from '../boleto/boletoScope.js';
 
-const BOLETO_SCREEN = '/financeiro/boleto-caixa';
+// A tela chamava /financeiro/boleto-caixa até 23/08/2026; virou Ato e Parcelas
+// e as alçadas migraram junto (ensurePermissionRouteRenames). A tool ficou
+// apontando para o caminho velho e sumiu para todo não-admin.
+const BOLETO_SCREEN = '/financeiro/cobranca/ato';
 import ExpenseService from '../expenseService.js';
 
 const expenseService = new ExpenseService();
@@ -256,7 +260,7 @@ function analisarMomentoPagamento(rows) {
 
 registerTool({
     name: 'query_boletos',
-    description: 'Consulta o histórico de BOLETOS CAIXA (ato) emitidos automaticamente a partir das reservas do CV — mesma fonte da tela /financeiro/boleto-caixa: quantos foram emitidos, com erro, pagos, aguardando pagamento ou cancelados; valores; boletos de uma reserva/titular/empreendimento. Use quando o usuário perguntar sobre boletos ("quantos boletos", "boletos pagos", "boleto da reserva X", "boletos com erro"). Com analise_momento_pagamento=true, devolve também QUANDO os clientes pagam em relação ao vencimento (antecipado, véspera, no dia, após), com distribuição por dia, por mês e por empreendimento — use pra perguntas de pontualidade ("quantos anteciparam", "pagam em dia?", "quantos dias antes"). Só enxerga os empreendimentos liberados ao usuário.',
+    description: 'Consulta o histórico de BOLETOS CAIXA (ato) emitidos automaticamente a partir das reservas do CV — mesma fonte da guia Ato da tela Ato e Parcelas (/financeiro/cobranca/ato): quantos foram emitidos, com erro, pagos, aguardando pagamento ou cancelados; valores; boletos de uma reserva/titular/empreendimento. Use quando o usuário perguntar sobre boletos ("quantos boletos", "boletos pagos", "boleto da reserva X", "boletos com erro"). Com analise_momento_pagamento=true, devolve também QUANDO os clientes pagam em relação ao vencimento (antecipado, véspera, no dia, após), com distribuição por dia, por mês e por empreendimento — use pra perguntas de pontualidade ("quantos anteciparam", "pagam em dia?", "quantos dias antes"). Só enxerga os empreendimentos liberados ao usuário.',
     parameters: {
         type: 'object',
         properties: {
@@ -296,7 +300,7 @@ registerTool({
         const periodoTxt = `${fmtDate(start)} a ${fmtDate(end)}`;
         if (!rows.length) {
             return {
-                result: { total: 0, message: `Nenhum boleto no filtro (emissão ${periodoTxt}). Diga isso com clareza — não invente. Tela completa: /financeiro/boleto-caixa.` },
+                result: { total: 0, message: `Nenhum boleto no filtro (emissão ${periodoTxt}). Diga isso com clareza — não invente. Tela completa: /financeiro/cobranca/ato.` },
                 resultCount: 0,
             };
         }
@@ -359,7 +363,7 @@ registerTool({
                     pagamento: PAYMENT_LABEL[r.payment_status] || r.payment_status || '-',
                 })),
                 total: rows.length,
-                message: `${rows.length} boleto(s) no filtro (emissão ${periodoTxt}). Números agregados no campo "resumo", últimos boletos no campo "recentes" (a tabela JÁ está na UI). Responda CURTO usando SOMENTE estes dados — nunca invente valor, reserva ou status. Ações (2ª via, reprocessar, marcar cancelado) são feitas na tela /financeiro/boleto-caixa.`,
+                message: `${rows.length} boleto(s) no filtro (emissão ${periodoTxt}). Números agregados no campo "resumo", últimos boletos no campo "recentes" (a tabela JÁ está na UI). Responda CURTO usando SOMENTE estes dados — nunca invente valor, reserva ou status. Ações (2ª via, reprocessar, marcar cancelado) são feitas na tela /financeiro/cobranca/ato.`,
             },
             resultCount: rows.length,
         };

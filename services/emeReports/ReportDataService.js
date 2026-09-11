@@ -34,9 +34,9 @@ export const DATA_TOOL_NAMES = [
   'query_leads', 'query_events', 'query_enterprises', 'get_enterprise_detail',
   'query_precadastros', 'query_reservas', 'query_mcmv',
   'query_condition_sheets', 'get_condition_sheet',
-  'imobiliarias_search',
+  'imobiliarias_search', 'correspondentes_search',
   // Vendas / metas
-  'get_consolidated_sales', 'query_projections',
+  'get_consolidated_sales', 'query_projections', 'query_desempenho_vendas', 'query_vendas_vs_projecao',
   // Financeiro
   'query_custos', 'query_boletos', 'query_repasses_contratos', 'query_repasses',
   // Operação / pessoas
@@ -53,8 +53,11 @@ export const DATA_TOOL_LABELS = {
   query_condition_sheets: 'Fichas comerciais',
   get_condition_sheet: 'Ficha comercial',
   imobiliarias_search: 'Imobiliárias parceiras',
+  correspondentes_search: 'Correspondentes (CCAs)',
   get_consolidated_sales: 'Vendas (Faturamento)',
   query_projections: 'Projeção de vendas',
+  query_desempenho_vendas: 'Desempenho de vendas (corretor, imobiliária, lead)',
+  query_vendas_vs_projecao: 'Vendas x Projeção',
   query_custos: 'Custos financeiros',
   query_boletos: 'Boletos Caixa (ato)',
   query_repasses_contratos: 'Fila do validador de contratos',

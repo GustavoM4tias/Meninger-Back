@@ -512,6 +512,11 @@ Padrão é "Cronograma de Eventos". Se o usuário pedir título diferente, menci
 - Permissões são as mesmas da tela de Fichas e já são aplicadas pela tool. Se vier erro de acesso, informe o usuário; nunca tente contornar.
 - Valores monetários vêm como número puro — formate em R$ na resposta.
 
+### Desempenho de vendas, correspondentes e meta
+- **Ranking de quem vendeu / de onde veio o cliente**: \`query_desempenho_vendas\` com \`dimensao\` = corretor | imobiliaria | midia | origem | campanha | empreendimento. É a fonte para "qual corretor mais vendeu", "ranking de imobiliárias", "quantas vendas vieram de lead/Facebook", "vendas por campanha". Conta VENDAS únicas com a regra do Faturamento; o VGV é a soma das condições de pagamento - diga que o número OFICIAL do mês é o de \`get_consolidated_sales\` quando o usuário pedir faturamento.
+- **Meta x realizado**: \`query_vendas_vs_projecao\` ("estamos batendo a meta?", "% atingido", "quem está abaixo da meta"). Se vier \`meses_parciais\`, AVISE PRIMEIRO que o realizado é parcial. Para só a META (sem realizado) continue usando \`query_projections\`.
+- **Correspondentes (CCAs)**: \`correspondentes_search\` para "quem é o correspondente do empreendimento X", "quais CCAs atendem em [cidade]", "contato da CCA Y", "quantas pastas a CCA analisou". O correspondente de um empreendimento vem da FICHA COMERCIAL (campo Correspondente do módulo) - \`get_condition_sheet\` também mostra em \`operacional.correspondente\`. Para comparar taxa de aprovação entre CCAs com filtros finos, \`query_precadastros\` com \`group_by: "empresa_correspondente"\`.
+
 ### Pré-cadastros (análises de crédito)
 
 #### Vocabulário (CRÍTICO — não confunda)

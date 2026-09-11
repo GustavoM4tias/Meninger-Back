@@ -73,7 +73,24 @@ const PISTAS = [
     { quando: /pessoa|usu[áa]rio|colaborador|equipe|organograma|cargo|gestor|gerente|diretor|coordenador|supervisor/i, tools: /(people|user|pessoa)/i },
     // Convidar e sempre duas coisas: QUEM (people) e PARA ONDE (meeting).
     { quando: /convid|convoc/i, tools: /(meeting|agenda|people|pessoa)/i },
-    { quando: /imobili[áa]ria|corretor|correspondente/i, tools: /(realestate|imobili|corretor)/i },
+    { quando: /imobili[áa]ria/i, tools: /imobili/i },
+    // CCA, correspondente e "quem analisa o crédito" moram na tool de
+    // correspondentes E nas fichas (a ficha diz qual CCA atende o produto).
+    { quando: /correspondente|cca|caixa aqui|cr[ée]dito/i, tools: /(correspondente|condition)/i },
+    // Ranking de quem vendeu: corretor, imobiliária, mídia, campanha.
+    { quando: /corretor|ranking|desempenho|quem (mais )?vend|melhor(es)? (corretor|imobili)|m[ií]dia/i, tools: /(desempenho|imobili|leads)/i },
+    { quando: /meta|projec|projeç|atingi|realizado/i, tools: /(projec|vendas)/i },
+    // Tools que nenhuma pista alcançava (medido em 11/09/2026): a pessoa
+    // perguntava por "empreendimento", "pré-cadastro" ou "teto" e a tool só
+    // entrava se a afinidade crua com a descrição pontuasse.
+    { quando: /empreendimento|unidade|dispon[ií]ve|lan[çc]amento|obra|entrega/i, tools: /enterprise/ },
+    { quando: /pr[ée].?cadastro|pasta|an[áa]lise de cr[ée]dito|aprova/i, tools: /precadastro/ },
+    { quando: /mcmv|minha casa|teto|faixa|renda|subs[ií]dio/i, tools: /mcmv/ },
+    { quando: /sharepoint|arquivo|documento|planilha|pasta do/i, tools: /sharepoint/ },
+    { quando: /disponib|hor[áa]rio livre|agenda d[eo]|encaixar/i, tools: /(availability|agenda)/ },
+    { quando: /caixa de entrada|resumo d[oa]s? e-?mail|n[ãa]o lid|e-?mail(s)? de/i, tools: /(inbox|search_email|outlook)/ },
+    { quando: /notifica|sino|aviso/i, tools: /notification/ },
+    { quando: /abr[ae]|ir para|me leva|navega|mostra a tela|tela d[eo]/i, tools: /navigate/ },
     { quando: /processo|procedimento|pop|como fa[çz]|academy|treinamento|trilha/i, tools: /^academy/ },
     { quando: /alerta|aviso autom|monitor/i, tools: /alert/ },
     { quando: /ficha|condi[çc][ãa]o comercial|tabela de preço|tabela de preco/i, tools: /condition/ },

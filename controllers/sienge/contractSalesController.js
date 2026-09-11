@@ -16,7 +16,11 @@ let _enterprisesCacheTs = 0
 // TTL de 24 horas
 const CACHE_TTL = 1000 * 60 * 60 * 24 // 24h
 
-export async function getContracts(req, res) {
+// A consulta de vendas é UMA só (regra de ouro: realizado tem uma fonte). A
+// tela chama pela rota; a Eme (query_desempenho_vendas) chama direto aqui com
+// o mesmo usuário e os mesmos parâmetros - mesmo escopo, mesmo cache, mesma
+// máscara de ajuste contábil. `query` tem o formato de req.query.
+export async function queryContractSales(user, query = {}) {
   try {
     const {
       startDate,
@@ -29,7 +33,7 @@ export async function getContracts(req, res) {
       companyId,
       companyIds,
       cities
-    } = req.query
+    } = query
 
     const isDetail = String(view).toLowerCase() === 'detail'
 
@@ -129,11 +133,11 @@ export async function getContracts(req, res) {
     const whereCompanyIdsClause = hasCompanyIds ? ` AND sc.company_id IN (:companyIds)` : ''
 
     // Escopo de acesso: null = admin (sem filtro), [] = nada visível
-    const scopeErpIds = await visibleErpIds(req.user)
+    const scopeErpIds = await visibleErpIds(user)
     const isAdmin = scopeErpIds === null
     if (scopeErpIds && !scopeErpIds.length) {
       // fail-closed: escopo vazio → resultado vazio
-      return res.json({ count: 0, results: [] })
+      return { count: 0, results: [] }
     }
     const whereScopeClause = isAdmin ? '' : ` AND sc.enterprise_id IN (:scopeErpIds)`
 
@@ -181,7 +185,7 @@ export async function getContracts(req, res) {
     })
 
     const emCache = contractsCache.get(cacheKey)
-    if (emCache) return res.json(emCache)
+    if (emCache) return emCache
 
     // ── Co-titulares (associates) ─────────────────────────────────────────────
     // Bloco caro: normaliza nome (unaccent + regex) de cada cliente do contrato
@@ -687,9 +691,17 @@ ORDER BY p.financial_institution_date, p.contract_id;
     const payload = { count: results.length, results }
     contractsCache.set(cacheKey, payload)
 
-    return res.json(payload)
+    return payload
   } catch (err) {
     console.error(err)
+    throw err
+  }
+}
+
+export async function getContracts(req, res) {
+  try {
+    return res.json(await queryContractSales(req.user, req.query))
+  } catch {
     return res.status(500).json({ error: 'Erro ao buscar contratos.' })
   }
 }

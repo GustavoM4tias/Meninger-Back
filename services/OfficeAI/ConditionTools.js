@@ -331,7 +331,26 @@ function gestorLabel(g) {
 }
 
 // ── Payload compacto de um módulo (dado que o modelo lê para responder) ───────
-function buildModulePayload(mod, ptMap, mgrMap) {
+// Correspondente (CCA) de cada módulo: `correspondent_id` aponta para o usuário
+// no CV (cv_correspondents.idusuario); a empresa vem por idempresa. Sem isso a
+// ficha só dizia o nome digitado em cca_company_name.
+async function loadCorrespondentMap(modules = []) {
+    const ids = [...new Set(modules.map(m => Number(m?.correspondent_id)).filter(n => Number.isFinite(n) && n > 0))];
+    if (!ids.length) return new Map();
+    const users = await db.CvCorrespondent.findAll({ where: { idusuario: ids }, attributes: ['idusuario', 'idempresa', 'nome', 'email', 'celular', 'telefone'], raw: true });
+    const empresaIds = [...new Set(users.map(u => Number(u.idempresa)).filter(Boolean))];
+    const empresas = empresaIds.length
+        ? await db.CorrespondentCompany.findAll({ where: { cv_idempresa: empresaIds }, attributes: ['cv_idempresa', 'nome'], raw: true })
+        : [];
+    const nomeEmpresa = new Map(empresas.map(e => [Number(e.cv_idempresa), e.nome]));
+    return new Map(users.map(u => [Number(u.idusuario), {
+        nome: u.nome,
+        empresa: nomeEmpresa.get(Number(u.idempresa)) || null,
+        contato: [u.email, u.celular || u.telefone].filter(Boolean).join(' · ') || undefined,
+    }]));
+}
+
+function buildModulePayload(mod, ptMap, mgrMap, corrMap) {
     const custo = computeModuleCostSummary(mod.toJSON ? mod.toJSON() : mod);
     const faixas = Array.isArray(mod.appraisal_faixas)
         ? mod.appraisal_faixas.filter(f => f?.enabled).map(f => ({
@@ -416,6 +435,7 @@ function buildModulePayload(mod, ptMap, mgrMap) {
             // toda ficha usa manager_user_id, então ler o campo cru fazia a Eme
             // responder "sem gestor" para empreendimento que tem um.
             gestor: gestorLabel(managerOf(mod, mgrMap)),
+            correspondente: corrMap?.get(Number(mod.correspondent_id)) || undefined,
         },
         campanhas: (mod.campaigns || []).map(c => clean({
             titulo: c.title,
@@ -588,6 +608,7 @@ async function executeGetSheet(args, user) {
     const fichas = [cond, condAutorizada].filter(Boolean);
     const ptMap = await loadPriceTableMap(fichas);
     const mgrMap = await loadManagerMap(fichas.flatMap(c => c.modules || []));
+    const corrMap = await loadCorrespondentMap(fichas.flatMap(c => c.modules || []));
 
     const buildConditionPayload = (c) => {
         const custoTotal = aggregateCostSummaries((c.modules || []).map(m => m.toJSON()));
@@ -598,7 +619,7 @@ async function executeGetSheet(args, user) {
             fonte_comissao: c.commission_source,
             premissa_preco: c.price_premise_note,
             observacoes: c.notes ? String(c.notes).slice(0, 500) : undefined,
-            modulos: (c.modules || []).map(m => buildModulePayload(m, ptMap, mgrMap)),
+            modulos: (c.modules || []).map(m => buildModulePayload(m, ptMap, mgrMap, corrMap)),
             custos_totais: (custoTotal.totalMenin || custoTotal.totalClient) ? {
                 menin: Object.fromEntries(custoTotal.menin.map(i => [i.label, round2(i.value)])),
                 cliente: Object.fromEntries(custoTotal.client.map(i => [i.label, round2(i.value)])),

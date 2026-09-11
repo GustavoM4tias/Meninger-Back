@@ -13,7 +13,9 @@ import utc from 'dayjs/plugin/utc.js';
 import tz from 'dayjs/plugin/timezone.js';
 import isoWeek from 'dayjs/plugin/isoWeek.js';
 import db from '../../models/sequelize/index.js';
-import { executeTool, TOOLS } from '../OfficeAI/OfficeChatService.js';
+import { executeTool, TOOLS, legacyToolAllowed } from '../OfficeAI/OfficeChatService.js';
+import { findTool, userHasPermissions } from '../OfficeAI/ToolRegistry.js';
+import { runTool as runSecureTool } from '../OfficeAI/SecureRunner.js';
 
 dayjs.extend(utc); dayjs.extend(tz); dayjs.extend(isoWeek);
 
@@ -283,21 +285,71 @@ function buildReport(result, ruleName) {
  * @param {object} rule   - AlertRule com tool_call, name, timezone
  * @param {object} user   - User dono da regra (pra contexto/permissão das tools)
  */
+// ─── Qual tool, de qual família ──────────────────────────────────────────────
+// A Eme tem duas famílias: o ToolRegistry (SecureRunner: permissão + audit) e
+// o mapa legado do OfficeChatService (Marketing/Comercial/Fichas/Alertas).
+// Até 11/09/2026 o alerta só enxergava o mapa legado: das 81 tools, 63 não
+// podiam virar alerta - boletos, custos, faturamento, projeção, checklists...
+// existiam no chat e "não existiam" aqui.
+function resolveTool(name) {
+    const reg = findTool(name);
+    if (reg) return { kind: 'registry', tool: reg };
+    if (TOOLS.has(name)) return { kind: 'legacy', declaration: TOOLS.get(name).declaration };
+    return null;
+}
+
+/**
+ * A receita existe e o DONO do alerta pode rodá-la?
+ *
+ * Mesma régua do chat: tool do registry passa por requiredPermissions/adminOnly
+ * e precisa valer no contexto OFFICE; legada passa por LEGACY_TOOL_ROUTES.
+ * Serve para recusar na criação (Eme, API e editor) e para o disparo - um
+ * alerta compartilhado nasce como cópia do destinatário, e ele pode não ter a
+ * tela que o dado exige.
+ */
+async function checkToolForUser(name, user) {
+    const r = resolveTool(name);
+    if (!r) {
+        return { ok: false, kind: null, reason: `A ferramenta "${name}" não existe na Eme. Use uma tool de dados registrada (ex.: query_leads, query_boletos, get_consolidated_sales).` };
+    }
+    if (r.kind === 'registry') {
+        if (!r.tool.contexts.includes('OFFICE')) {
+            return { ok: false, kind: r.kind, reason: `A ferramenta "${name}" não está disponível no Office.` };
+        }
+        const ok = await userHasPermissions(user, r.tool.requiredPermissions, r.tool.adminOnly);
+        if (!ok) {
+            const tela = (r.tool.requiredPermissions || []).join(', ') || (r.tool.adminOnly ? 'somente admin' : '');
+            return { ok: false, kind: r.kind, reason: `O dono do alerta não tem acesso à tela que esta consulta usa (${tela}).` };
+        }
+        return { ok: true, kind: r.kind };
+    }
+    const ok = await legacyToolAllowed(user, name);
+    return ok
+        ? { ok: true, kind: r.kind }
+        : { ok: false, kind: r.kind, reason: `O dono do alerta não tem alçada para consultar "${name}".` };
+}
+
 async function execute(rule, user) {
     const toolCall = rule.tool_call || {};
     const name = toolCall.tool;
-    if (!name || !TOOLS.has(name)) {
+    const check = await checkToolForUser(name, user);
+    if (!check.ok) {
         return {
-            preview: 'Tool não encontrada',
-            report:  `❌ A ferramenta "${name}" não existe ou foi removida. Edite o alerta.`,
-            raw:     { error: `Tool "${name}" não registrada` },
+            preview: check.kind ? 'Sem acesso à consulta' : 'Tool não encontrada',
+            report:  `❌ ${check.reason} Edite o alerta.`,
+            raw:     { error: check.reason },
         };
     }
 
     const resolvedArgs = resolveArgs(toolCall.args || {}, rule.timezone || DEFAULT_TZ);
 
     try {
-        const raw = await executeTool(name, resolvedArgs, user);
+        // Registry: SecureRunner devolve o `result` da tool (mesmo objeto que o
+        // chat renderiza) e grava o audit com sessionId nulo - o disparo do
+        // alerta fica rastreável como qualquer consulta.
+        const raw = check.kind === 'registry'
+            ? await runSecureTool({ user, toolName: name, args: resolvedArgs, context: 'OFFICE' })
+            : await executeTool(name, resolvedArgs, user);
         return {
             preview: buildPreview(raw, rule.name),
             report:  buildReport(raw, rule.name),
@@ -329,4 +381,6 @@ export default {
     preview,
     resolveDynamic,
     resolveArgs,
+    resolveTool,
+    checkToolForUser,
 };

@@ -25,6 +25,8 @@ import './PeopleTools.js';
 import './ContractTools.js';
 import './RepasseTools.js';
 import './SalesClosingTools.js';
+import './SalesPerformanceTools.js';
+import './CorrespondentTools.js';
 import './ProfileTools.js';
 // Projeção de vendas (só ativa), Relatórios da Eme e Checklist (leitura + escrita
 // com trava de propriedade/gestão e confirmação).
@@ -144,6 +146,68 @@ const TOOL_LABELS = {
   update_checklist_task: 'Atualização de tarefa',
   manage_notifications: 'Preferências de notificação',
   navigate_to_page: 'Navegação',
+  // Sem rótulo aqui o fallback deriva do nome ("Kb search", "Meu dia") -
+  // funciona, mas a linha do tempo fica com cara de código. Um por tool.
+  imobiliarias_search: 'Imobiliárias parceiras',
+  imobiliarias_cadastros: 'Cadastros de imobiliária',
+  correspondentes_search: 'Correspondentes (CCAs)',
+  query_desempenho_vendas: 'Desempenho de vendas',
+  query_vendas_vs_projecao: 'Vendas x Projeção',
+  get_consolidated_sales: 'Vendas consolidadas',
+  query_event_plans: 'Planos de eventos',
+  get_event_plan: 'Plano de eventos',
+  get_event_plan_agenda: 'Agenda do plano de eventos',
+  academy_kb_search: 'Base de conhecimento',
+  academy_get_process: 'Processo do Academy',
+  academy_process_requirements: 'Pré-requisitos do processo',
+  academy_list_my_tracks: 'Minhas trilhas',
+  academy_next_recommended: 'Próximo conteúdo',
+  academy_my_xp_stats: 'Meu progresso no Academy',
+  academy_overview: 'Visão do Academy',
+  academy_my_certificates: 'Meus certificados',
+  academy_community_search: 'Comunidade do Academy',
+  preview_alert: 'Prévia do alerta',
+  create_alert: 'Criação de alerta',
+  list_alerts: 'Meus alertas',
+  get_alert_limit: 'Limite de alertas',
+  delete_alert: 'Remoção de alerta',
+  open_alert_editor: 'Editor de alerta',
+  share_alert: 'Compartilhar alerta',
+  alert_shares: 'Alertas compartilhados',
+  meu_dia: 'Meu dia',
+  criar_tarefa: 'Nova tarefa',
+  minhas_tarefas: 'Minhas tarefas',
+  concluir_tarefa: 'Concluir tarefa',
+  atualizar_tarefa: 'Atualizar tarefa',
+  marcar_subtarefa: 'Marcar parte da tarefa',
+  configurar_assistente: 'Configuração do assistente',
+  adicionar_parceiro: 'Parceiro de tarefas',
+  meus_convites: 'Convites de parceria',
+  responder_convite: 'Resposta a convite',
+  my_agenda: 'Minha agenda',
+  check_availability: 'Disponibilidade',
+  schedule_meeting: 'Agendar reunião',
+  update_meeting: 'Alterar reunião',
+  cancel_meeting: 'Cancelar reunião',
+  reschedule_meetings: 'Remarcar reuniões',
+  my_meetings: 'Minhas reuniões',
+  meeting_report: 'Relatório da reunião',
+  search_meetings: 'Busca de reuniões',
+  my_teams_chats: 'Chats do Teams',
+  read_teams_chat: 'Leitura de chat',
+  send_teams_message: 'Mensagem no Teams',
+  find_in_sharepoint: 'Busca no SharePoint',
+  search_email: 'Busca de e-mails',
+  inbox_summary: 'Resumo da caixa',
+  outlook_triagem: 'Triagem da caixa',
+  outlook_fila_aprovacao: 'Fila de aprovação',
+  outlook_configuracao_ia: 'Configuração da IA da caixa',
+  outlook_redigir_resposta: 'Rascunho de resposta',
+  outlook_aprovar_envio: 'Aprovação de envio',
+  outlook_tirar_da_lista: 'Tirar da lista',
+  outlook_organizar: 'Organizar caixa',
+  outlook_criar_regra: 'Regra da caixa',
+  outlook_ensinar_ia: 'Ensinar a IA da caixa',
 };
 function toolLabel(name) {
   if (TOOL_LABELS[name]) return TOOL_LABELS[name];

@@ -30,7 +30,7 @@ function defaultPeriod() {
 // Agregado parcial ao vivo (mês NÃO consolidado): mesmo recorte da visão
 // padrão do dashboard, VGV pela soma das condições de pagamento (sem DC no
 // líquido). Aproximado: não aplica regras finas de composição/comissão.
-async function livePartialAggregate(period, scopeErpIds) {
+export async function livePartialAggregate(period, scopeErpIds) {
     const { start, end } = periodBounds(period);
     const whereScope = scopeErpIds === null ? '' : ' AND sc.enterprise_id IN (:scopeErpIds)';
     // Mesma máscara de ajuste contábil do dashboard: a Eme não pode responder um
@@ -82,7 +82,7 @@ async function livePartialAggregate(period, scopeErpIds) {
     const sales = new Map();
     for (const r of rows) {
         const key = `${r.customer_id}|${r.unit_name}|${r.enterprise_id}|${r.company_id}`;
-        const s = sales.get(key) || { net: 0, gross: 0, enterprise_name: r.enterprise_name, distratada: true };
+        const s = sales.get(key) || { net: 0, gross: 0, enterprise_name: r.enterprise_name, enterprise_id: r.enterprise_id, distratada: true };
         const delta = serieValueDelta(serieAdj.get(String(r.id)) || []);
         s.net += (Number(r.net_sum) || 0) + delta.exceptDc;
         s.gross += (Number(r.gross_sum) || 0) + delta.all;
@@ -95,8 +95,8 @@ async function livePartialAggregate(period, scopeErpIds) {
     for (const s of sales.values()) {
         net += s.net; gross += s.gross;
         if (s.distratada) distratadas += 1;
-        const e = byEnterprise.get(s.enterprise_name) || { count: 0, net: 0 };
-        e.count += 1; e.net += s.net;
+        const e = byEnterprise.get(s.enterprise_name) || { count: 0, net: 0, gross: 0, enterprise_id: s.enterprise_id };
+        e.count += 1; e.net += s.net; e.gross += s.gross;
         byEnterprise.set(s.enterprise_name, e);
     }
 
@@ -105,8 +105,10 @@ async function livePartialAggregate(period, scopeErpIds) {
         vgv_net: net,
         vgv_gross: gross,
         distratadas,
+        // enterprise_id vai junto para quem cruza com outra fonte pelo id do
+        // centro de custo (Vendas x Projeção), não pelo nome.
         by_enterprise: [...byEnterprise.entries()]
-            .map(([name, v]) => ({ name, count: v.count, vgv_net: v.net }))
+            .map(([name, v]) => ({ name, enterprise_id: v.enterprise_id, count: v.count, vgv_net: v.net, vgv_gross: v.gross }))
             .sort((a, b) => b.vgv_net - a.vgv_net)
     };
 }

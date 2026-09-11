@@ -30,7 +30,7 @@ const TOOL_DECLARATIONS = [
                     type: 'OBJECT',
                     description: 'Snapshot da chamada da tool de dados. { tool: "query_leads", args: { ... } }. Use placeholders dinâmicos quando aplicável: { dynamic: "today" | "yesterday" | "start_of_week" | "end_of_week" | "start_of_month" | "end_of_month" | "last_7_days" | "last_30_days" }.',
                     properties: {
-                        tool: { type: 'STRING', description: 'Nome de uma tool registrada (ex: query_leads, query_reservas, query_precadastros, query_events, query_enterprises).' },
+                        tool: { type: 'STRING', description: 'Nome de QUALQUER tool de dados da Eme - a mesma que você usaria para responder no chat (ex: query_leads, query_reservas, query_precadastros, query_boletos, query_custos, get_consolidated_sales, query_desempenho_vendas, query_vendas_vs_projecao, query_repasses, query_checklists, query_condition_sheets, correspondentes_search, query_event_plans). Tools que agem (criar tarefa, enviar mensagem, agendar) não servem para alerta.' },
                         args: { type: 'OBJECT', description: 'Argumentos passados pra tool. Datas devem usar placeholders dinâmicos.' },
                     },
                     required: ['tool'],
@@ -178,11 +178,18 @@ async function executeCreate(args, user) {
 
     // Define owner
     let ownerId = user.id;
+    let ownerUser = user;
     if (isAdmin(user) && args.owner_user_id) {
-        const target = await User.findByPk(Number(args.owner_user_id), { attributes: ['id'] });
+        const target = await User.findByPk(Number(args.owner_user_id), { attributes: ['id', 'role', 'permission_profile_id'] });
         if (!target) return { error: 'owner_user_id inexistente.' };
         ownerId = target.id;
+        ownerUser = target;
     }
+
+    // A receita precisa existir e o DONO precisa poder rodá-la - senão o erro
+    // só apareceria no primeiro disparo, num log que ninguém lê.
+    const chk = await AlertReportService.checkToolForUser(args.tool_call.tool, ownerUser);
+    if (!chk.ok) return { error: chk.reason };
 
     // Validação de cron mínimo (espelha alertController.validateCronMinInterval)
     const minutesField = String(args.cron).trim().split(/\s+/)[0] || '';
@@ -321,6 +328,8 @@ async function executeOpenEditor(args, user) {
     if (!args?.tool_call?.tool) {
         return { error: 'tool_call.tool é obrigatório quando mode="create" — passe a mesma receita que você usou no preview_alert.' };
     }
+    const chk = await AlertReportService.checkToolForUser(args.tool_call.tool, user);
+    if (!chk.ok) return { error: chk.reason };
 
     return {
         type: 'open_alert_editor',

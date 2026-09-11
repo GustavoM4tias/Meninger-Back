@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import { QueryTypes } from 'sequelize';
 import { visibleCvIds, visibleCities } from '../permissions/accessScopeService.js';
+import { describeScreenCatalog, resolveScreenRoute } from '../../lib/screenCatalog.js';
 
 /**
  * Monta uma linha resumo (subtitle) com período + cidade + filtros principais.
@@ -46,14 +47,7 @@ export const TOOL_DECLARATIONS = [
       properties: {
         route: {
           type: 'STRING',
-          description: 'Rota Vue do sistema. Rotas disponíveis — ' +
-            'Marketing: /marketing/leads (Leads), /marketing/events (Eventos), /marketing/viabilidade (Viabilidade), /marketing/captacao (Captação de Leads), /marketing/formularios (Formulários), /marketing/vinculos (Vínculos CV), /marketing/campanhas (Campanhas Meta). ' +
-            'Comercial: /comercial/relatorios/precadastros (Pré-Cadastros), /comercial/relatorios/reservas (Reservas), /comercial/relatorios/faturamento (Relatório de Faturamento), /comercial/relatorios/projecao (Vendas x Projeção), /comercial/relatorios/leads (Desempenho por Lead), /comercial/relatorios/imobiliarias (Desempenho por Imobiliária), /comercial/relatorios/corretores (Desempenho por Corretor), /comercial/projections (Projeção), /crm/buildings (Empreendimentos), /comercial/conditions (Fichas Comerciais), /crm/imobiliarias (Imobiliárias), /comercial/mcmv (MCMV). ' +
-            'Financeiro: /financeiro/titulos (Títulos), /financeiro/custos (Custos), /financeiro/consulta-cef (Consulta de nº CEF), /financeiro/paymentflow (Fluxo de Pagamento), /financeiro/boleto-caixa (Boleto Caixa). ' +
-            'Ferramentas: /checklists (Checklists), /relatorios (Relatórios). ' +
-            'Academy: /academy/panel (Painel do Academy), /academy/kb (Base de Conhecimento), /academy/tracks (Trilhas). ' +
-            'Microsoft: /microsoft/teams (Central Microsoft: agenda Teams na aba padrão, transcrições de reuniões em ?tab=reunioes), /microsoft/sharepoint (SharePoint), /microsoft/planner (Planner). ' +
-            'Outros: /mural (Mural de Avisos), /notifications (Notificações), /settings/alerts (Alertas), /settings/organograma (Organograma), /settings/account (Minha Conta), /validator (Validador de Contratos), /report (Reportar Problema).',
+          description: 'Rota Vue do sistema. Rotas disponíveis — ' + describeScreenCatalog(),
         },
         filters: { type: 'OBJECT', description: 'Filtros como query params. Ex: { data_inicio: "2025-01-01", empreendimento: "Nome" }' },
         message: { type: 'STRING', description: 'Mensagem curta para exibir enquanto navega.' },
@@ -123,7 +117,15 @@ export async function executeTool(name, args, user) {
 }
 
 function executeNavigate(args) {
-  return { type: 'navigate', route: args.route, filters: args.filters || {}, message: args.message };
+  // A rota passa pelo catálogo: caminho antigo vira o novo (renomes) e rota
+  // inventada é recusada com a lista certa, em vez de virar 404 na tela.
+  const route = resolveScreenRoute(args?.route);
+  if (!route) {
+    return {
+      error: `Rota "${args?.route}" não existe no Office. Use uma destas: ${describeScreenCatalog()}`,
+    };
+  }
+  return { type: 'navigate', route, filters: args.filters || {}, message: args.message };
 }
 
 // Teto de linhas de uma listagem. O padrão (50) continua o de sempre para o

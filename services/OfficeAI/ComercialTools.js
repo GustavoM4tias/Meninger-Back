@@ -11,7 +11,7 @@ const MCMV_FAIXA4 = 600000;
 // Buckets de funil — alinhados com Meninger-Front/.../Precadastros/stages.js.
 // A ordem dos WHEN importa: documentação tem que vir antes de em_analise
 // porque "Pasta Incompleta" casa "pasta" mas é documentação, não análise.
-const PRECAD_BUCKET_CASE = `
+export const PRECAD_BUCKET_CASE = `
   CASE
     WHEN p.situacao_nome ~* 'documenta|pasta\\s*incompleta'                                                         THEN 'documentacao'
     WHEN p.situacao_nome ~* 'aprovad'                                                                               THEN 'aprovado'
