@@ -132,16 +132,21 @@ export async function criarPlanoTeste({ idreserva, titular, unidade, cnpj, serie
 
 /** Reserva da tabela local (sync horario) - barata, serve para adesao em massa. */
 /**
- * Ultimo repasse da reserva na tabela local `repasses` (sincronizada do CV).
- * 112 reservas tem mais de um repasse (reentrada): vale o mais novo. A etapa
- * do workflow e `idsituacao_repasse`/`status_repasse` - `etapa` e a FASE do
+ * Repasse vigente da reserva na tabela local `repasses` (sincronizada do CV).
+ * 112 reservas tem mais de um repasse (reentrada): vale o que andou por ultimo
+ * (`data_status_repasse` mais recente), nao o de id maior. Em 10/09/2026 o id
+ * maior da reserva 7879 era um repasse "Em espera" apagado no CV, e o real
+ * (id menor) ja estava depois de "Contrato Emitido CAIXA": o plano seguiu vivo
+ * e emitiu boleto. O sync agora apaga o que sumiu do CV; a ordem por data e o
+ * cinto de seguranca para a janela entre uma varredura e outra. A etapa do
+ * workflow e `idsituacao_repasse`/`status_repasse` - `etapa` e a FASE do
  * empreendimento (MODULO 02), nao confundir.
  */
 export async function repasseAtual(idreserva) {
     const [row] = await db.sequelize.query(
         `SELECT idrepasse, idsituacao_repasse, status_repasse, data_status_repasse
            FROM repasses WHERE idreserva = :id
-          ORDER BY idrepasse DESC LIMIT 1`,
+          ORDER BY data_status_repasse DESC NULLS LAST, idrepasse DESC LIMIT 1`,
         { replacements: { id: Number(idreserva) }, type: db.Sequelize.QueryTypes.SELECT },
     );
     return row || null;

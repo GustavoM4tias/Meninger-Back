@@ -15,8 +15,8 @@ export default class CvRepassesSyncController {
         try {
             const stats = await this.service.loadAll();
             state.lastRunAt = new Date();
-            console.log(`[Repasses][FULL] total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged}`);
-            res.send(`Carga inicial de repasses concluída — total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged}`);
+            console.log(`[Repasses][FULL] total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | removidos=${stats.removed ?? 0}`);
+            res.send(`Carga inicial de repasses concluída — total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | removidos=${stats.removed ?? 0}`);
         } catch (e) {
             console.error(e);
             res.status(500).send('Erro na carga inicial de repasses');
@@ -31,8 +31,8 @@ export default class CvRepassesSyncController {
         try {
             const stats = await this.service.loadDelta();
             state.lastRunAt = new Date();
-            console.log(`[Repasses][DELTA] total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged}`);
-            res.send(`Sincronização incremental de repasses concluída — total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged}`);
+            console.log(`[Repasses][DELTA] total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | removidos=${stats.removed ?? 0}`);
+            res.send(`Sincronização incremental de repasses concluída — total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | removidos=${stats.removed ?? 0}`);
         } catch (e) {
             console.error(e);
             res.status(500).send('Erro na sincronização incremental de repasses');

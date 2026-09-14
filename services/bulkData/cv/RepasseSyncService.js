@@ -2,6 +2,8 @@
 import db from '../../../models/sequelize/index.js';
 import apiCv from '../../../lib/apiCv.js';
 import { parseCvDate, formatCvDate } from '../../../lib/cvDate.js';
+import { registrar } from '../../cv/cvIntegrationLog.js';
+import { planejarRemocao } from '../../../lib/cvRepasseEspelho.js';
 const { Repasse } = db;
 
 const LIMIT = 5000; // máximo da API
@@ -127,7 +129,8 @@ export default class RepasseSyncService {
         console.log('🚀 [Repasses] Carga inicial');
         const all = await fetchAll('/v1/financeiro/repasses?');
         const stats = await this.upsertBatch(all);
-        console.log(`🎉 [Repasses] Bulk concluído: total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged}`);
+        stats.removed = await this.removerAusentes(all, { origem: 'manual' });
+        console.log(`🎉 [Repasses] Bulk concluído: total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | removidos=${stats.removed}`);
         return stats;
     }
 
@@ -135,8 +138,42 @@ export default class RepasseSyncService {
         console.log('🚀 [Repasses] Delta (full scan controlado)');
         const all = await fetchAll('/v1/financeiro/repasses?');
         const stats = await this.upsertBatch(all);
-        console.log(`🎉 [Repasses] Delta concluído: total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged}`);
+        stats.removed = await this.removerAusentes(all, { origem: 'cron' });
+        console.log(`🎉 [Repasses] Delta concluído: total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | removidos=${stats.removed}`);
         return stats;
+    }
+
+    /**
+     * Apaga do espelho os repasses que a varredura completa nao devolveu (foram
+     * excluidos no CV). Devolve quantos sairam. Nunca lanca: falha aqui nao
+     * pode derrubar o sync que acabou de gravar tudo.
+     */
+    async removerAusentes(all, { origem = 'cron' } = {}) {
+        try {
+            const locais = await Repasse.findAll({ attributes: ['idrepasse'], raw: true });
+            const plano = planejarRemocao(locais.map(r => r.idrepasse), (all || []).map(r => r?.ID));
+            if (!plano.ausentes.length) return 0;
+            if (!plano.seguro) {
+                console.warn(`⚠️ [Repasses] ${plano.ausentes.length} repasse(s) ausentes na varredura, NAO removidos: ${plano.motivo}`);
+                await registrar({
+                    origem, funcionalidade: 'repasses', status: 'ignorado',
+                    mensagem: `Remocao de repasses ausentes no CV suspensa: ${plano.motivo}.`,
+                    stats: { ausentes: plano.ausentes.length, amostra: plano.ausentes.slice(0, 50) },
+                });
+                return 0;
+            }
+            const n = await Repasse.destroy({ where: { idrepasse: plano.ausentes } });
+            console.log(`🧹 [Repasses] ${n} repasse(s) apagados no CV removidos do espelho: ${plano.ausentes.join(', ')}`);
+            await registrar({
+                origem, funcionalidade: 'repasses', status: 'ok',
+                mensagem: `${n} repasse(s) excluidos no CV removidos do espelho local: ${plano.ausentes.join(', ')}.`,
+                stats: { removidos: n, ids: plano.ausentes },
+            });
+            return n;
+        } catch (err) {
+            console.warn('⚠️ [Repasses] remocao de ausentes falhou:', err?.message || err);
+            return 0;
+        }
     }
 
     /**
