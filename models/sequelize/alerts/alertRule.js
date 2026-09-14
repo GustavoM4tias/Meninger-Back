@@ -54,6 +54,11 @@ export default (sequelize, DataTypes) => {
       defaultValue: { inapp: true, email: false, whatsapp: true },
     },
 
+    // Entrega no WhatsApp: { format: 'pdf'|'text'|'xlsx', ask_first: bool }.
+    // null = herda o padrão global da automação alert_generic (portal WhatsApp).
+    // Ver services/alerts/alertDelivery.js.
+    delivery: { type: DataTypes.JSON, allowNull: true },
+
     enabled:          { type: DataTypes.BOOLEAN,  allowNull: false, defaultValue: true },
     cooldown_minutes: { type: DataTypes.INTEGER,  allowNull: false, defaultValue: 0 },
 

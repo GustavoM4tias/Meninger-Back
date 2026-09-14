@@ -137,6 +137,7 @@ async function execute(rule, user) {
             preview: check.kind ? 'Sem acesso à consulta' : 'Tool não encontrada',
             report:  `❌ ${check.reason} Edite o alerta.`,
             raw:     { error: check.reason },
+            blocks:  [], route: null, link: null,
         };
     }
 
@@ -168,6 +169,7 @@ async function execute(rule, user) {
             preview: 'Erro ao gerar relatório',
             report:  `❌ Erro ao executar "${name}": ${err.message}`,
             raw:     { error: err.message },
+            blocks:  [], route: null, link: null,
             resolvedToolCall: { tool: name, args: resolvedArgs },
         };
     }

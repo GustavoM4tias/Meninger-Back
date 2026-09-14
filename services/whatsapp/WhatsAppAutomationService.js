@@ -24,6 +24,8 @@ const FALLBACK = {
     replyActions: { yes: { type: 'send_report' }, no: { type: 'cancel' } },
     recipients: { mode: 'owner' },
     category: 'UTILITY',
+    // Entrega padrão dos alertas (ver services/alerts/alertDelivery.js).
+    settings: { delivery: { format: 'pdf', ask_first: false } },
     isSystem: true,
   },
   alert_share: {
@@ -49,7 +51,7 @@ function rowToObj(r) {
     templateName: r.templateName, templateLanguage: r.templateLanguage,
     variableMapping: r.variableMapping, buttons: r.buttons,
     replyActions: r.replyActions, recipients: r.recipients,
-    category: r.category, isSystem: r.isSystem,
+    category: r.category, settings: r.settings || null, isSystem: r.isSystem,
   };
 }
 

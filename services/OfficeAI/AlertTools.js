@@ -16,6 +16,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import AlertEngine from '../alerts/AlertEngine.js';
 import AlertReportService from '../alerts/AlertReportService.js';
+import { normalizarDelivery } from '../alerts/alertDelivery.js';
 
 const { AlertRule, AlertTriggerLog, User } = db;
 
@@ -72,6 +73,14 @@ const TOOL_DECLARATIONS = [
                         inapp:    { type: 'BOOLEAN' },
                         email:    { type: 'BOOLEAN' },
                         whatsapp: { type: 'BOOLEAN' },
+                    },
+                },
+                delivery: {
+                    type: 'OBJECT',
+                    description: 'Como entregar no WhatsApp. format: "pdf" (padrão: relatório em PDF na própria mensagem), "text" (só o resumo) ou "xlsx" (planilha). ask_first: true = a Eme pergunta SIM/NÃO antes de mandar. Omitido = padrão da empresa.',
+                    properties: {
+                        format:    { type: 'STRING', enum: ['pdf', 'text', 'xlsx'] },
+                        ask_first: { type: 'BOOLEAN' },
                     },
                 },
 
@@ -132,6 +141,14 @@ const TOOL_DECLARATIONS = [
                         inapp:    { type: 'BOOLEAN' },
                         email:    { type: 'BOOLEAN' },
                         whatsapp: { type: 'BOOLEAN' },
+                    },
+                },
+                delivery: {
+                    type: 'OBJECT',
+                    description: 'Como entregar no WhatsApp. format: "pdf" (padrão: relatório em PDF na própria mensagem), "text" (só o resumo) ou "xlsx" (planilha). ask_first: true = a Eme pergunta SIM/NÃO antes de mandar. Omitido = padrão da empresa.',
+                    properties: {
+                        format:    { type: 'STRING', enum: ['pdf', 'text', 'xlsx'] },
+                        ask_first: { type: 'BOOLEAN' },
                     },
                 },
             },
@@ -215,6 +232,7 @@ async function executeCreate(args, user) {
                 email:    !!args.channels?.email,
                 whatsapp: !!args.channels?.whatsapp,
             },
+            delivery: normalizarDelivery(args.delivery),
             cooldown_minutes: Math.max(0, Number(args.cooldown_minutes) || 0),
             enabled: true,
         });
@@ -252,7 +270,7 @@ async function executeList(args, user) {
     const rules = await AlertRule.findAll({
         where, limit: 50, order: [['enabled', 'DESC'], ['updated_at', 'DESC']],
         attributes: [
-            'id', 'name', 'cron', 'enabled', 'channels',
+            'id', 'name', 'cron', 'enabled', 'channels', 'delivery',
             'owner_user_id', 'last_triggered_at', 'trigger_count',
         ],
     });
@@ -344,6 +362,7 @@ async function executeOpenEditor(args, user) {
             email:    !!args.channels?.email,
             whatsapp: !!args.channels?.whatsapp,
         },
+        delivery: normalizarDelivery(args.delivery),
         message: 'Editor visual aberto — ajuste o que quiser e clique em "Criar alerta".',
     };
 }

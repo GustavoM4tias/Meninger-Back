@@ -251,6 +251,7 @@ async function cloneRuleForUser(rule, toUserId, fromUserId) {
         title_template:   rule.title_template,
         preview_template: rule.preview_template,
         channels:         rule.channels,
+        delivery:         rule.delivery || null,
         cooldown_minutes: rule.cooldown_minutes,
         enabled: true,
     });

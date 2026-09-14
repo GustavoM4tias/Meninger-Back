@@ -48,6 +48,11 @@ export default (sequelize, DataTypes) => {
     // Categoria Meta (UTILITY | MARKETING | AUTHENTICATION).
     category: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'UTILITY' },
 
+    // Configurações extras da automação, específicas de cada uma. Ex. alert_generic:
+    //   { delivery: { format: 'pdf'|'text'|'xlsx', ask_first: false } }
+    // (padrão global de entrega dos alertas; a regra pode sobrescrever).
+    settings: { type: DataTypes.JSONB, allowNull: true },
+
     // Automação de sistema (alerta/boleto/lembrete) — editável, não deletável.
     isSystem: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
 

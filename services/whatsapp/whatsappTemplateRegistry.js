@@ -55,10 +55,23 @@ export const FEATURES = {
 export const TEMPLATE_REGISTRY = [
     // ── Alertas da Eme ───────────────────────────────────────────────────────
     {
+        name: 'alert_report_v1', language: 'pt_BR',
+        feature: 'alertas', audience: 'interno',
+        purpose: 'Entrega o relatório do alerta em PDF na própria mensagem, com botão para abrir a tela no Office.',
+        trigger: 'AlertEngine, no horário do cron, quando o alerta está configurado para mandar o PDF direto (padrão).',
+        variables: ['Nome do usuário', 'Título do alerta', 'Prévia do relatório'],
+        buttons: [
+            { text: 'Abrir no Office', does: 'Abre a tela do dado já filtrada (link curto /s/<slug>).' },
+        ],
+        source: 'services/alerts/AlertEngine.js',
+        managedBy: 'automacao', automationKey: 'alert_generic',
+        autoProvisioned: true, critical: false,
+    },
+    {
         name: 'alert_generic_v2', language: 'pt_BR',
         feature: 'alertas', audience: 'interno',
         purpose: 'Avisa o dono do alerta que o relatório está pronto e pergunta se quer receber.',
-        trigger: 'AlertEngine, no horário do cron da regra.',
+        trigger: 'AlertEngine, no horário do cron, quando o alerta pede confirmação antes ("Perguntar antes de mandar") ou o alert_report_v1 não está aprovado.',
         variables: ['Nome do usuário', 'Título do alerta'],
         buttons: [
             { text: 'SIM', does: 'Envia o relatório completo em texto livre (grátis na janela de 24h).' },

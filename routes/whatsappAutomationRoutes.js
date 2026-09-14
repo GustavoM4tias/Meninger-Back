@@ -30,7 +30,7 @@ function slug(s) {
 }
 
 const EDITABLE = ['name', 'description', 'templateName', 'templateLanguage', 'triggerConfig',
-  'variableMapping', 'buttons', 'replyActions', 'recipients', 'category'];
+  'variableMapping', 'buttons', 'replyActions', 'recipients', 'category', 'settings'];
 
 router.get('/', async (req, res) => {
   try {

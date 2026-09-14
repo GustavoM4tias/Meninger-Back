@@ -17,6 +17,7 @@ import db from '../models/sequelize/index.js';
 import AlertEngine from '../services/alerts/AlertEngine.js';
 import AlertReportService from '../services/alerts/AlertReportService.js';
 import AlertShareService from '../services/alerts/AlertShareService.js';
+import { normalizarDelivery } from '../services/alerts/alertDelivery.js';
 
 const { AlertRule, AlertTriggerLog, User } = db;
 
@@ -57,7 +58,7 @@ const PUBLIC_FIELDS = [
     'owner_user_id', 'created_by_user_id', 'created_via_chat_session_id',
     'trigger_type', 'cron', 'timezone',
     'tool_call', 'title_template', 'preview_template',
-    'channels', 'cooldown_minutes',
+    'channels', 'delivery', 'cooldown_minutes',
     'last_triggered_at', 'trigger_count', 'created_at', 'updated_at',
 ];
 
@@ -156,6 +157,7 @@ export const create = async (req, res) => {
                 email:    !!body.channels?.email,
                 whatsapp: !!body.channels?.whatsapp,
             },
+            delivery: normalizarDelivery(body.delivery),
             cooldown_minutes: Math.max(0, Number(body.cooldown_minutes) || 0),
             enabled: body.enabled !== false,
         });
@@ -201,6 +203,9 @@ export const update = async (req, res) => {
                 whatsapp: !!body.channels.whatsapp,
             };
         }
+
+        // Entrega no WhatsApp: objeto válido grava; null explícito volta ao padrão global.
+        if (body.delivery !== undefined) patch.delivery = normalizarDelivery(body.delivery);
 
         await rule.update(patch);
         AlertEngine.reschedule(rule.id);

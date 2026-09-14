@@ -306,3 +306,37 @@ Front (`Meninger-Front`):
   `codigo`, `cpf`...) é texto, nunca número - senão "6948" vira "6.948".
 - Fora: nada. Critério "preview_alert das 13 tools legível" fica para
   conferir em produção pelo `preview_alert` (não há banco local no teste).
+
+**14/09/2026 - Fase 2 entregue (aguarda aprovação do template na Meta).**
+
+- `AlertReportRenderer`: `renderHtml` (papel: KPIs em cartões, barras em SVG
+  quando há rótulo + 1 numérica e ≤ 20 linhas, tabela completa até 1.000
+  linhas, rodapé com o link) e `xlsxSheets` (aba Indicadores + uma por
+  dataset; cards viram aba). `textoCortado` decide se a planilha vai junto
+  na resposta. `formatarValor` troca o espaço duro do Intl por espaço comum.
+- `AlertAttachmentService`: `gerarPdf` (Playwright, A4, ~1,4 s medido com 3
+  blocos) e `gerarXlsx` (célula numérica com formato R$/%, largura pelo
+  conteúdo). Nome `Alerta - <regra> - dd-mm-aaaa.ext`.
+- Template `alert_report_v1` (`alertReportTemplate.js`): header DOCUMENT,
+  3 variáveis, botão URL `${PUBLIC_API_URL}/s/{{1}}` com slug de link curto
+  (`ShortLinkService`, purpose `alerta`). Provisionado no boot por
+  `lib/ensureAlertReportTemplate.js` com PDF de exemplo gerado pelo próprio
+  renderer. Registrado no `whatsappTemplateRegistry` (autoProvisioned).
+- `AlertEngine.fire`: resolve `delivery`, gera o anexo UMA vez (vai no
+  e-mail via `emailAttachments` do NotificationService e no WhatsApp),
+  `sendInitialAlert` tenta o `alert_report_v1` (upload de mídia + header +
+  botão) e cai para `alert_generic_v2` se não aprovado, se o upload falhar
+  ou se `ask_first`. Avisos (PDF_FAILED, template não aprovado) ficam no
+  `tool_result_summary` do `alert_trigger_logs`.
+- `AlertReplyHandler`: RESUMO/TEXTO (= SIM), PLANILHA/EXCEL/TABELA, PDF/
+  RELATÓRIO; documento livre por `sendDocument`; pending com `state='sent'`
+  continua aceitando pedidos quando a resposta cita a mensagem do alerta.
+- Preferência: `alert_rules.delivery` (JSON) + `whatsapp_automations.settings`
+  (JSONB, `{ delivery }`), cascata em `alertDelivery.js`; aceita em
+  `create_alert`/`open_alert_editor` (Eme), POST/PUT `/api/alerts` e clonada
+  no compartilhamento. Colunas também por `ALTER ... IF NOT EXISTS` nos
+  ensure* (SKIP_DB_SYNC em prod pula o alter do model).
+- **Pendente de produção**: a Meta precisa APROVAR o `alert_report_v1`
+  (criado no primeiro boot com WhatsApp ativo). Até lá tudo sai como
+  SIM/NÃO com o texto novo. Conferir em Configurações > WhatsApp > Templates.
+- Fora: tela do campo "Como entregar" (fase 3).

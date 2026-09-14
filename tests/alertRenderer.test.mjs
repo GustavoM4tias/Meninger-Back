@@ -187,8 +187,8 @@ test('inferirTipo/humanizar', () => {
 // ─── formatarValor ───────────────────────────────────────────────────────────
 
 test('formatarValor: moeda, percentual, data, mês e compacto', () => {
-    assert.equal(formatarValor(1500, 'currency'), 'R$ 1.500');
-    assert.equal(formatarValor(2350.5, 'currency'), 'R$ 2.350,50');
+    assert.equal(formatarValor(1500, 'currency'), 'R$ 1.500');
+    assert.equal(formatarValor(2350.5, 'currency'), 'R$ 2.350,50');
     assert.equal(formatarValor(7812000, 'currency', { compacto: true }), 'R$ 7,8 mi');
     assert.equal(formatarValor(45300, 'currency', { compacto: true }), 'R$ 45,3 mil');
     assert.equal(formatarValor('R$ 7.812.000', 'currency', { compacto: true }), 'R$ 7,8 mi');
@@ -283,6 +283,69 @@ test('lerPayload: JSON novo e texto antigo', () => {
     assert.equal(novo.text, 'oi');
     assert.equal(novo.blocks.length, 1);
     assert.equal(novo.route, '/x');
-    assert.deepEqual(lerPayload('📊 *Antigo*\ntexto'), { text: '📊 *Antigo*\ntexto', blocks: [], route: null });
+    const antigo = lerPayload('📊 *Antigo*\ntexto');
+    assert.equal(antigo.text, '📊 *Antigo*\ntexto');
+    assert.deepEqual(antigo.blocks, []);
+    assert.equal(antigo.route, null);
+    assert.equal(antigo.xlsxNaResposta, false);
     assert.equal(lerPayload('{ não é json').text, '{ não é json');
+});
+
+// ─── Fase 2: HTML do PDF, abas da planilha, entrega ──────────────────────────
+
+import { renderHtml, xlsxSheets, textoCortado } from '../services/alerts/AlertReportRenderer.js';
+import { normalizarDelivery, resolverDelivery, DELIVERY_PADRAO } from '../services/alerts/alertDelivery.js';
+import { gerarXlsx, nomeArquivo } from '../services/alerts/AlertAttachmentService.js';
+
+test('renderHtml: KPIs, tabela completa e gráfico só quando cabe; sem JSON; escapa HTML', () => {
+    const html = renderHtml(comBlocks, { ruleName: 'Corretores <x>', geradoEm: '14/09/2026 08:00', link: 'https://office.menin.com.br/y' });
+    assert.ok(html.includes('<h1>Corretores &lt;x&gt;</h1>'));
+    assert.ok(html.includes('R$ 7.812.000'));
+    assert.ok(html.includes('<td class="num">R$ 2.100.000</td>'));
+    assert.ok(html.includes('26,9%'));
+    assert.ok(!html.includes('<svg'), 'dataset com 3 numéricas não vira gráfico de barras');
+    assert.ok(html.includes('Abra no Office para ver tudo'), 'total maior que as linhas avisa');
+
+    const grafico = renderHtml(graficoVendas, { ruleName: 'Vendas' });
+    assert.ok(grafico.includes('<svg'), 'label + 1 numérica vira barras');
+    assert.ok(grafico.includes('(54%)'));
+
+    const desconhecido = renderHtml(formaDesconhecida, { ruleName: 'X' });
+    assert.ok(desconhecido.includes('ainda não está disponível neste formato'));
+    assert.ok(!desconhecido.includes('candidatos'));
+});
+
+test('xlsxSheets: Indicadores + uma aba por dataset, valor numérico cru', () => {
+    const abas = xlsxSheets(comBlocks);
+    assert.deepEqual(abas.map(a => a.name), ['Indicadores', 'Vendas por corretor']);
+    assert.equal(abas[0].rows[1].valor, 7812000);
+    assert.equal(abas[1].rows[0].valor, 2100000);
+    assert.equal(xlsxSheets(formaDesconhecida).length, 0);
+    const cards = xlsxSheets(cardsChecklist);
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].rows[0]['f:Concluídas'], '13/20');
+});
+
+test('textoCortado: true quando há mais linhas do que o texto mostra ou total maior', () => {
+    assert.equal(textoCortado(comBlocks), true);      // total 14 > 2 linhas
+    assert.equal(textoCortado(tabelaBoletos), false); // 3 linhas, total 3
+    assert.equal(textoCortado(reservasSummary), false);
+});
+
+test('alertDelivery: cascata regra → global → padrão, e normalização rejeita lixo', () => {
+    assert.deepEqual(resolverDelivery(null, null), DELIVERY_PADRAO);
+    assert.deepEqual(resolverDelivery(null, { format: 'text' }), { format: 'text', ask_first: false });
+    assert.deepEqual(resolverDelivery({ ask_first: true }, { format: 'text' }), { format: 'text', ask_first: true });
+    assert.deepEqual(resolverDelivery({ format: 'xlsx' }, { format: 'text', ask_first: true }), { format: 'xlsx', ask_first: true });
+    assert.equal(normalizarDelivery({ format: 'docx' }), null);
+    assert.equal(normalizarDelivery('pdf'), null);
+    assert.deepEqual(normalizarDelivery({ format: 'pdf', ask_first: 'sim' }), { format: 'pdf', ask_first: true });
+});
+
+test('gerarXlsx: gera um arquivo real com as abas; nomeArquivo sem acento/símbolo', async () => {
+    const x = await gerarXlsx({ entrada: comBlocks, ruleName: 'Vendas: corretores/ação' });
+    assert.ok(x.buffer.length > 2000);
+    assert.ok(/^Alerta - Vendas corretores acao - \d{2}-\d{2}-\d{4}\.xlsx$/.test(x.filename), x.filename);
+    assert.equal(await gerarXlsx({ entrada: formaDesconhecida, ruleName: 'x' }), null);
+    assert.ok(nomeArquivo('', 'pdf').startsWith('Alerta - Alerta - '));
 });

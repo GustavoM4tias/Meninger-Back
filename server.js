@@ -130,6 +130,7 @@ import { ensureParceriaSchema } from './lib/ensureParceriaSchema.js';
 import { ensureRepasseIndexes } from './lib/ensureRepasseIndexes.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
+import { ensureAlertReportTemplate } from './lib/ensureAlertReportTemplate.js';
 import { ensureEmeAtendeOpenerTemplates } from './lib/ensureEmeAtendeOpenerTemplates.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
@@ -676,6 +677,10 @@ async function startBackgroundServices() {
       console.warn('⚠️  ensureBoletoWhatsappTemplate falhou:', err.message));
   ensureChecklistWhatsappTemplates().catch(err =>
       console.warn('⚠️  ensureChecklistWhatsappTemplates falhou:', err.message));
+  // Relatório do alerta em PDF no header (alert_report_v1); até aprovar, o
+  // AlertEngine segue no alert_generic_v2.
+  ensureAlertReportTemplate().catch(err =>
+      console.warn('⚠️  ensureAlertReportTemplate falhou:', err.message));
   // Abertura da Eme Atende: precisa estar APPROVED antes de ligar o atendimento.
   ensureEmeAtendeOpenerTemplates().catch(err =>
       console.warn('⚠️  ensureEmeAtendeOpenerTemplates falhou:', err.message));

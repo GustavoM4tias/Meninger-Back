@@ -14,6 +14,7 @@
 //     link:  `/marketing/Events?search=${encodeURIComponent(event.title)}`,
 //     importance: 7,
 //     emailData:    { ... payload pro template Handlebars ... },   // opcional
+//     emailAttachments: [{ filename, content, contentType }],       // opcional (Nodemailer)
 //     whatsappData: { userName, title, eventDateFormatted, ... },  // opcional (default = data + emailData)
 //   });
 
@@ -229,6 +230,7 @@ async function notify({
     importance = 5,
     channels = { inapp: true, email: true, whatsapp: true },
     emailData = null,
+    emailAttachments = [],  // anexos do e-mail (formato do Nodemailer: { filename, content, contentType })
     whatsappData = null,
     expiresAt = null,
     bypassPrefs = false,    // se true, ignora preferências/defaults do user — usa channels diretamente
@@ -364,7 +366,7 @@ async function notify({
         const list = Array.from(emailRecipients);
         const payload = emailData || { title, body, ...data };
         try {
-            await sendEmail(emailType, list, payload);
+            await sendEmail(emailType, list, payload, Array.isArray(emailAttachments) && emailAttachments.length ? { attachments: emailAttachments } : {});
             emailsSent = list.length;
         } catch (err) {
             console.error(`[notify] falha ao enviar e-mail (${type}):`, err?.message || err);

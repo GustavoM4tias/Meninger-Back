@@ -13,9 +13,14 @@
 // número do sistema sem disparar o envio de relatórios.
 //
 // Palavras aceitas (case-insensitive, sem acentos):
-//   SIM   → manda relatório completo (texto livre, grátis na janela 24h)
-//   NÃO   → cancela o pending (state='cancelled')
-//   *     → manda nudge pedindo SIM ou NÃO
+//   SIM / RESUMO   → manda o texto do relatório (grátis na janela 24h); se o
+//                    texto cortou uma tabela, a planilha vai junto
+//   PLANILHA       → manda o Excel gerado dos blocos do disparo
+//   PDF            → manda o PDF gerado dos blocos do disparo
+//   NÃO            → cancela o pending (state='cancelled')
+//   *              → manda nudge com as opções
+// Quem respondeu à mensagem do alerta (context.id) pode pedir mais de uma
+// coisa na janela: PLANILHA depois de RESUMO funciona mesmo com state='sent'.
 
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
@@ -24,11 +29,14 @@ import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
 import AlertShareService from './AlertShareService.js';
 import { lerPayload } from './AlertReportRenderer.js';
+import AlertAttachmentService from './AlertAttachmentService.js';
 
 const { AlertPendingReply, AlertShare, AlertRule, WhatsappMessage } = db;
 
-const YES_WORDS = new Set(['sim', 's', 'si', 'yes', 'y', 'ok', 'enviar', 'mostrar', 'detalhes', 'quero', 'confirmo', 'confirmar']);
-const NO_WORDS  = new Set(['nao', 'n', 'no', 'cancelar', 'cancela', 'descartar', 'ignorar', 'pular']);
+const YES_WORDS  = new Set(['sim', 's', 'si', 'yes', 'y', 'ok', 'enviar', 'mostrar', 'detalhes', 'quero', 'confirmo', 'confirmar', 'resumo', 'texto']);
+const NO_WORDS   = new Set(['nao', 'n', 'no', 'cancelar', 'cancela', 'descartar', 'ignorar', 'pular']);
+const XLSX_WORDS = new Set(['planilha', 'excel', 'xlsx', 'tabela', 'dados']);
+const PDF_WORDS  = new Set(['pdf', 'relatorio', 'arquivo', 'documento']);
 
 // Normaliza pra comparar (lowercase + sem acento + sem pontuação).
 function normalize(text) {
@@ -55,26 +63,33 @@ function tokenize(text) {
 function classify(text) {
     if (!text) return 'other';
 
+    const exato = (n) => {
+        if (XLSX_WORDS.has(n)) return 'xlsx';
+        if (PDF_WORDS.has(n))  return 'pdf';
+        if (YES_WORDS.has(n))  return 'yes';
+        if (NO_WORDS.has(n))   return 'no';
+        return null;
+    };
+
     // 1) mensagem inteira
-    const whole = normalize(text);
-    if (YES_WORDS.has(whole)) return 'yes';
-    if (NO_WORDS.has(whole))  return 'no';
+    const whole = exato(normalize(text));
+    if (whole) return whole;
 
     // 2) última linha não vazia (típico após "Reply" do WhatsApp)
     const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const last = lines[lines.length - 1];
     if (last && last !== text) {
-        const n = normalize(last);
-        if (YES_WORDS.has(n)) return 'yes';
-        if (NO_WORDS.has(n))  return 'no';
+        const v = exato(normalize(last));
+        if (v) return v;
     }
 
-    // 3) qualquer token — NÃO ganha de SIM se ambos aparecerem
+    // 3) qualquer token — NÃO ganha de SIM se ambos aparecerem; pedido de
+    //    anexo ganha de SIM ("sim, manda a planilha")
     const tokens = tokenize(text);
-    const hasNo  = tokens.some(t => NO_WORDS.has(t));
-    const hasYes = tokens.some(t => YES_WORDS.has(t));
-    if (hasNo)  return 'no';
-    if (hasYes) return 'yes';
+    if (tokens.some(t => NO_WORDS.has(t)))   return 'no';
+    if (tokens.some(t => XLSX_WORDS.has(t))) return 'xlsx';
+    if (tokens.some(t => PDF_WORDS.has(t)))  return 'pdf';
+    if (tokens.some(t => YES_WORDS.has(t)))  return 'yes';
 
     return 'other';
 }
@@ -103,6 +118,41 @@ async function sendFreeText({ to, body, userId }) {
             failed_at: new Date(),
         });
     }
+}
+
+// ─── Envio de documento livre (PDF/planilha, dentro da janela 24h = grátis) ──
+
+async function sendFreeDocument({ to, userId, anexo, caption = null }) {
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: false });
+    const base = {
+        direction: 'out', user_id: userId, to_phone: to, type: 'document',
+        body: caption || anexo.filename,
+        raw_payload: { attachment: { filename: anexo.filename, bytes: anexo.buffer.length, formato: anexo.formato || null } },
+    };
+    if (!cfg?.active || cfg?.dry_run) return WhatsappMessage.create({ ...base, status: 'dry_run' });
+    try {
+        const { id: mediaId } = await WhatsAppService.uploadMessageMedia({ buffer: anexo.buffer, filename: anexo.filename, mimeType: anexo.mimeType });
+        const { id } = await WhatsAppService.sendDocument({ to, mediaId, filename: anexo.filename, caption });
+        return WhatsappMessage.create({ ...base, status: 'sent', meta_message_id: id, sent_at: new Date() });
+    } catch (err) {
+        return WhatsappMessage.create({
+            ...base, status: 'failed',
+            error_code: err.code || 'SEND_ERROR', error_message: err.message, failed_at: new Date(),
+        });
+    }
+}
+
+// Gera o anexo pedido a partir dos blocos guardados no pending.
+async function anexoDoPending(pending, formato) {
+    const { blocks, link } = lerPayload(pending.report_payload);
+    if (!blocks.length) return null;
+    const base = { entrada: { blocks }, ruleName: pending.rule_name };
+    if (formato === 'xlsx') {
+        const x = await AlertAttachmentService.gerarXlsx(base);
+        return x ? { ...x, formato: 'xlsx' } : null;
+    }
+    const pdf = await AlertAttachmentService.gerarPdf({ ...base, link });
+    return { ...pdf, formato: 'pdf' };
 }
 
 // ─── Handler principal ───────────────────────────────────────────────────────
@@ -160,10 +210,12 @@ async function handleInbound({ fromPhone, body, contextId }) {
     // 1) Caminho ideal: user usou "Responder" no WhatsApp (ou tocou botão Quick Reply)
     //    → context.id casa exato com o wamid do alerta. Sem ambiguidade.
     if (contextId) {
+        // 'sent' também entra: quem já recebeu o resumo pode pedir a planilha
+        // ou o PDF respondendo à mesma mensagem, enquanto a janela durar.
         pending = await AlertPendingReply.findOne({
             where: {
                 meta_message_id: contextId,
-                state: 'awaiting_reply',
+                state: { [Op.in]: ['awaiting_reply', 'sent'] },
                 expires_at: { [Op.gt]: new Date() },
             },
         });
@@ -244,7 +296,8 @@ async function handleInbound({ fromPhone, body, contextId }) {
         }
         // send_text → texto fixo configurado; send_report (default) → relatório já
         // renderizado no disparo (report_payload).
-        const outBody = act.type === 'send_text' ? (act.text || '') : lerPayload(pending.report_payload).text;
+        const payload = lerPayload(pending.report_payload);
+        const outBody = act.type === 'send_text' ? (act.text || '') : payload.text;
         const sent = await sendFreeText({ to: fromPhone, body: outBody, userId: pending.user_id });
         // Só marca como enviado se o envio REALMENTE saiu (senão mantém pra retry).
         if (sent?.status === 'failed') {
@@ -256,13 +309,41 @@ async function handleInbound({ fromPhone, body, contextId }) {
             confirmed_at: new Date(),
             report_sent_at: new Date(),
         });
+        // O texto avisou "planilha completa em anexo": manda o Excel junto.
+        if (act.type !== 'send_text' && payload.xlsxNaResposta) {
+            const anexo = await anexoDoPending(pending, 'xlsx').catch(err => { console.warn('[AlertReply] xlsx falhou:', err?.message); return null; });
+            if (anexo) await sendFreeDocument({ to: fromPhone, userId: pending.user_id, anexo, caption: `Dados completos de *${pending.rule_name}*` });
+        }
+        return true;
+    }
+
+    if (verdict === 'xlsx' || verdict === 'pdf') {
+        let anexo = null;
+        try { anexo = await anexoDoPending(pending, verdict); }
+        catch (err) { console.error(`[AlertReply] ${verdict} falhou (pending#${pending.id}):`, err?.message); }
+        if (!anexo) {
+            await sendFreeText({
+                to: fromPhone,
+                body: verdict === 'xlsx'
+                    ? `O alerta *${pending.rule_name}* não tem dado em tabela para virar planilha. Responda *RESUMO* para ver o texto ou *PDF* para o relatório.`
+                    : `Não consegui gerar o PDF de *${pending.rule_name}* agora. Responda *RESUMO* para ver o texto aqui mesmo.`,
+                userId: pending.user_id,
+            });
+            return true;
+        }
+        const sent = await sendFreeDocument({ to: fromPhone, userId: pending.user_id, anexo, caption: `*${pending.rule_name}*` });
+        if (sent?.status === 'failed') {
+            console.warn(`[AlertReply] envio de ${verdict} FALHOU (pending#${pending.id})`);
+            return true;
+        }
+        await pending.update({ confirmed_at: pending.confirmed_at || new Date(), report_sent_at: new Date() });
         return true;
     }
 
     // 'other' — manda nudge sem mudar o estado
     await sendFreeText({
         to: fromPhone,
-        body: `Recebi sua resposta sobre *${pending.rule_name}*, mas não entendi. Responda *SIM* para receber o relatório ou *NÃO* para descartar.`,
+        body: `Recebi sua resposta sobre *${pending.rule_name}*, mas não entendi. Responda *RESUMO* para ler aqui, *PLANILHA* para o Excel, *PDF* para o relatório ou *NÃO* para descartar.`,
         userId: pending.user_id,
     });
     return true;

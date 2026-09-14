@@ -13,9 +13,11 @@
 //   1. Re-executa o tool_call via AlertReportService.execute(rule, user)
 //   2. Renderiza title/preview com Handlebars
 //   3. Chama NotificationService.notify (in-app + e-mail conforme channels)
-//   4. Pra WhatsApp: cria alert_pending_reply com state='awaiting_initial_reply'
-//      e manda template alert_generic_v1; o relatório completo só vai depois
-//      do user responder + confirmar (ver AlertReplyHandler)
+//   4. Pra WhatsApp: gera o anexo (PDF/planilha, conforme `delivery`) e manda
+//      o template alert_report_v1 com o relatório no header; se a entrega pede
+//      confirmação ou o template não está aprovado, manda alert_generic_v2
+//      (SIM/NÃO). Nos dois casos cria alert_pending_reply com texto + blocos
+//      para RESUMO / PLANILHA / PDF na janela de 24h (ver AlertReplyHandler)
 //   5. Loga em alert_trigger_logs
 
 import cron from 'node-cron';
@@ -37,7 +39,13 @@ import WhatsAppTemplateService from '../whatsapp/WhatsAppTemplateService.js';
 import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
 import { resolveUserPhone, USER_PHONE_ATTRS } from '../whatsapp/whatsappPhone.js';
 import AlertReportService from './AlertReportService.js';
+import AlertAttachmentService from './AlertAttachmentService.js';
+import { renderWhatsAppText, textoCortado } from './AlertReportRenderer.js';
+import { resolverDelivery } from './alertDelivery.js';
+import { ALERT_REPORT_TEMPLATE_NAME } from './alertReportTemplate.js';
 import { toolToRoute } from './toolToRoute.js';
+import ShortLinkService from '../shortLink/ShortLinkService.js';
+import { urlDeEnv } from '../../utils/envUrl.js';
 
 const { AlertRule, AlertTriggerLog, AlertPendingReply, User, WhatsappMessage } = db;
 
@@ -193,6 +201,33 @@ async function fire(ruleId, { force = false } = {}) {
     // Link: tenta gerar uma rota com filtros baseado na tool. Click no sino
     // abre direto o relatório no contexto da consulta.
     const link = route || toolToRoute(resolvedToolCall) || `/settings/alerts`;
+    const linkAbsoluto = /^https?:\/\//i.test(link) ? link : `${urlDeEnv('FRONTEND_URL', 'https://office.menin.com.br')}${link}`;
+
+    // 2b) Entrega: formato (pdf/text/xlsx) e "perguntar antes". A regra manda,
+    //     senão o padrão global da automação alert_generic, senão o código.
+    const automation = await WhatsAppAutomationService.getByKey('alert_generic').catch(() => null);
+    const delivery = resolverDelivery(rule.delivery, automation?.settings?.delivery);
+
+    // 2c) Anexo gerado UMA vez (vai no e-mail e no WhatsApp). Falha aqui não
+    //     derruba o alerta: segue sem anexo e o aviso fica no log do disparo.
+    const avisos = [];
+    let anexo = null;
+    if (delivery.format !== 'text' && !raw?.error && blocks.length) {
+        try {
+            anexo = await gerarAnexo({ formato: delivery.format, blocks, rule, link: linkAbsoluto });
+            if (!anexo) avisos.push(`sem dado tabular para ${delivery.format}`);
+        } catch (err) {
+            console.error(`[AlertEngine] anexo (${delivery.format}) falhou na regra ${rule.id}:`, err?.message || err);
+            avisos.push(`${delivery.format.toUpperCase()}_FAILED: ${String(err?.message || err).slice(0, 160)}`);
+        }
+    }
+
+    // Texto do WhatsApp: se algum dataset ficou cortado e a pessoa aceita
+    // anexo, a planilha vai junto na resposta - o texto avisa.
+    const xlsxNaResposta = delivery.format !== 'text' && textoCortado({ blocks });
+    const reportText = xlsxNaResposta
+        ? renderWhatsAppText({ blocks }, { ruleName: rule.name, link: linkAbsoluto, anexoDisponivel: true })
+        : report;
 
     // 3) In-app + e-mail via NotificationService (recipients = só o owner)
     // bypassPrefs=true: respeita os channels que o user escolheu na CRIAÇÃO do alerta,
@@ -208,7 +243,7 @@ async function fire(ruleId, { force = false } = {}) {
         channels: {
             inapp: !!channels.inapp,
             email: !!channels.email,
-            whatsapp: false,                // WhatsApp tratado separado abaixo (fluxo 2 msgs)
+            whatsapp: false,                // WhatsApp tratado separado abaixo
         },
         bypassPrefs: true,
         emailData: {
@@ -217,6 +252,7 @@ async function fire(ruleId, { force = false } = {}) {
             body: report,                       // texto plano (fallback)
             bodyHtml: whatsappToHtml(report),   // formatado pro email
         },
+        emailAttachments: anexo ? [{ filename: anexo.filename, content: anexo.buffer, contentType: anexo.mimeType }] : [],
     }).catch(err => {
         console.error('[AlertEngine] notify falhou:', err?.message || err);
         return { inappCreated: 0, emailsSent: 0 };
@@ -224,94 +260,187 @@ async function fire(ruleId, { force = false } = {}) {
 
     let whatsappMsgId = null;
 
-    // 4) WhatsApp: fluxo de 2 mensagens
+    // 4) WhatsApp: PDF na primeira mensagem (alert_report_v1) ou pergunta
+    //    SIM/NÃO (alert_generic_v2), conforme delivery e o que a Meta aprovou.
     if (channels.whatsapp) {
-        whatsappMsgId = await sendInitialAlert({ rule, owner, title, preview: previewText, report, blocks, route })
-            .catch(err => { console.error('[AlertEngine] whatsapp falhou:', err?.message); return null; });
+        const r = await sendInitialAlert({
+            rule, owner, title, preview: previewText,
+            report: reportText, blocks, route, link: linkAbsoluto,
+            delivery, anexo, xlsxNaResposta,
+        }).catch(err => { console.error('[AlertEngine] whatsapp falhou:', err?.message); return null; });
+        whatsappMsgId = r?.messageId || null;
+        if (r?.aviso) avisos.push(r.aviso);
     }
 
     // 5) Loga o disparo (contador e last_triggered_at já foram atualizados no lock atômico no topo)
     await AlertTriggerLog.create({
         alert_rule_id: rule.id,
         status: 'success',
-        tool_result_summary: previewText,
+        tool_result_summary: avisos.length ? `${previewText} [${avisos.join(' | ')}]` : previewText,
         whatsapp_message_id: whatsappMsgId,
     });
 }
 
+// ─── Anexo (PDF / planilha) ──────────────────────────────────────────────────
+
+/**
+ * Gera o anexo pedido pela preferência de entrega. `xlsx` sem dado tabular cai
+ * para PDF (sempre existe). Devolve { buffer, filename, mimeType, formato }.
+ */
+async function gerarAnexo({ formato, blocks, rule, link }) {
+    const base = { entrada: { blocks }, ruleName: rule.name, timezone: rule.timezone || DEFAULT_TZ };
+    if (formato === 'xlsx') {
+        const x = await AlertAttachmentService.gerarXlsx(base);
+        if (x) return { ...x, formato: 'xlsx' };
+    }
+    const inicio = Date.now();
+    const pdf = await AlertAttachmentService.gerarPdf({ ...base, link });
+    console.log(`[AlertEngine] PDF da regra ${rule.id} gerado em ${Date.now() - inicio} ms (${pdf.buffer.length} bytes)`);
+    return { ...pdf, formato: 'pdf' };
+}
+
 // ─── Envio do template inicial (alerta) + criação do pending reply ───────────
 
-// Templates de alerta em ordem de preferência. O engine tenta o 1º; se não estiver
-// APPROVED na Meta, cai pro 2º, e assim por diante. Permite migrar entre versões
-// (v2, v3...) sem janela de queda enquanto a Meta aprova a nova.
+// Templates de alerta em ordem de preferência. O engine tenta o 1º que serve
+// para a entrega pedida; se não estiver APPROVED na Meta, cai pro próximo.
+// Permite migrar entre versões sem janela de queda enquanto a Meta aprova.
 //
-// CADA entrada precisa declarar quantas variáveis o template usa, pra a engine
-// montar o array de variables certo.
+// CADA entrada declara quantas variáveis o template usa e se leva o relatório
+// no header (DOCUMENT) - esse só entra quando há anexo para mandar.
 const ALERT_TEMPLATES = [
+    { name: ALERT_REPORT_TEMPLATE_NAME, vars: 3, headerDocument: true, urlButton: true }, // {{1}} user, {{2}} title, {{3}} preview + PDF
     { name: 'alert_generic_v2', vars: 2 }, // {{1}} user, {{2}} title
     { name: 'alert_generic_v1', vars: 3 }, // {{1}} user, {{2}} title, {{3}} preview
 ];
 const ALERT_TEMPLATE_LANG = 'pt_BR';
 const REPLY_WINDOW_HOURS  = 23; // 1h de margem da janela 24h
 
-// Escolhe o template aprovado de mais alta prioridade. Retorna { name, vars } ou null.
-async function pickApprovedTemplate() {
-    // 1) Preferência configurada no portal (automação 'alert_generic'), se aprovada.
-    //    Casa o nome com a lista conhecida pra herdar o nº de variáveis; se for um
-    //    template custom (futuro builder), assume 2 vars. Falha → cai no fallback.
+/**
+ * Escolhe o template aprovado de mais alta prioridade que sirva para a
+ * entrega: `comAnexo` = só os que levam documento no header; sem anexo = só
+ * os de texto. Retorna { name, vars, headerDocument?, urlButton? } ou null.
+ */
+async function pickApprovedTemplate({ comAnexo = false } = {}) {
+    const serve = (t) => (comAnexo ? !!t.headerDocument : !t.headerDocument);
+
+    // 1) Preferência configurada no portal (automação 'alert_generic'), se aprovada
+    //    e compatível com a entrega. Template custom (futuro builder) = 2 vars, texto.
     try {
         const auto = await WhatsAppAutomationService.getByKey('alert_generic');
         if (auto?.enabled && auto.templateName) {
             const lang = auto.templateLanguage || ALERT_TEMPLATE_LANG;
-            const tpl = await WhatsAppTemplateService.findApproved(auto.templateName, lang);
-            if (tpl) {
-                const known = ALERT_TEMPLATES.find(t => t.name === auto.templateName);
-                return known || { name: auto.templateName, vars: 2 };
+            const known = ALERT_TEMPLATES.find(t => t.name === auto.templateName) || { name: auto.templateName, vars: 2 };
+            if (serve(known)) {
+                const tpl = await WhatsAppTemplateService.findApproved(auto.templateName, lang);
+                if (tpl) return known;
             }
         }
     } catch (e) {
         console.warn('[AlertEngine] automação alert_generic indisponível — fallback:', e?.message);
     }
 
-    // 2) Fallback: chain hardcoded (v2 → v1).
-    for (const t of ALERT_TEMPLATES) {
+    // 2) Fallback: cadeia do código.
+    for (const t of ALERT_TEMPLATES.filter(serve)) {
         const tpl = await WhatsAppTemplateService.findApproved(t.name, ALERT_TEMPLATE_LANG);
         if (tpl) return t;
     }
     return null;
 }
 
-async function sendInitialAlert({ rule, owner, title, preview, report, blocks = [], route = null }) {
+/**
+ * Manda a primeira mensagem do alerta e cria o pending reply.
+ *
+ * Com anexo e sem "perguntar antes": template alert_report_v1 (PDF/planilha no
+ * header + botão "Abrir no Office" via link curto). Se ele não está aprovado,
+ * se o upload falha ou se a entrega pede confirmação: alert_generic_v2
+ * (SIM/NÃO), como sempre foi. Nos dois casos o pending guarda texto + blocos
+ * para RESUMO / PLANILHA / PDF na janela de 24h.
+ *
+ * @returns {Promise<{ messageId: number|null, aviso: string|null }>}
+ */
+async function sendInitialAlert({ rule, owner, title, preview, report, blocks = [], route = null, link = null, delivery, anexo = null, xlsxNaResposta = false }) {
     // Número do perfil — sem opt-in desde 2026-08-17. Sem telefone, sem alerta.
     const phone = resolveUserPhone(owner);
     if (!phone) {
         console.warn(`[AlertEngine] owner ${owner.id} (${owner.username}) sem telefone no perfil — alerta não enviado.`);
-        return null;
+        return { messageId: null, aviso: null };
     }
 
     const cfg = await WhatsAppConfigService.getConfig({ withSecrets: false });
     if (!cfg?.has_access_token || !cfg?.phone_number_id) {
         console.warn('[AlertEngine] WhatsApp config incompleto — alerta não enviado.');
-        return null;
+        return { messageId: null, aviso: null };
     }
 
-    // Escolhe o template aprovado (v2 prioritário, fallback v1)
-    const chosen = await pickApprovedTemplate();
+    const dryRun = !cfg.active || cfg.dry_run;
+    const pendingBase = { rule, owner, phone, log_id: null, report, blocks, route, link, delivery, xlsxNaResposta };
+    let aviso = null;
+
+    // ── Caminho 1: relatório na própria mensagem ─────────────────────────────
+    if (anexo && !delivery.ask_first) {
+        const chosen = await pickApprovedTemplate({ comAnexo: true });
+        if (!chosen) {
+            aviso = `${ALERT_REPORT_TEMPLATE_NAME} não aprovado - enviado como SIM/NÃO`;
+            console.log(`[AlertEngine] regra ${rule.id}: ${aviso}`);
+        } else {
+            const variables = [owner.username || 'usuário', title, (preview || 'Relatório disponível').slice(0, 200)];
+            const baseMsg = {
+                direction: 'out', user_id: owner.id, to_phone: phone,
+                type: 'template', template_name: chosen.name, template_language: ALERT_TEMPLATE_LANG,
+                variables, body: `${title} — ${preview}`,
+                raw_payload: { attachment: { filename: anexo.filename, bytes: anexo.buffer.length, formato: anexo.formato } },
+            };
+            if (dryRun) {
+                const m = await WhatsappMessage.create({ ...baseMsg, status: 'dry_run' });
+                await createPendingReply({ ...pendingBase, wamid: null, anexoEnviado: anexo.formato });
+                return { messageId: m.id, aviso: null };
+            }
+            try {
+                const { id: mediaId } = await WhatsAppService.uploadMessageMedia({
+                    buffer: anexo.buffer, filename: anexo.filename, mimeType: anexo.mimeType,
+                });
+                // Botão "Abrir no Office": slug de link curto (sufixo seguro na URL do template).
+                let urlButtonParam = null;
+                if (chosen.urlButton && link) {
+                    const short = await ShortLinkService.shorten(link, { purpose: 'alerta', createdBy: owner.id }).catch(() => null);
+                    urlButtonParam = short?.slug || null;
+                }
+                const { id: wamid } = await WhatsAppService.sendTemplate({
+                    to: phone,
+                    templateName: chosen.name,
+                    language: ALERT_TEMPLATE_LANG,
+                    variables,
+                    headerDocument: { id: mediaId, filename: anexo.filename },
+                    urlButtonParam,
+                });
+                const m = await WhatsappMessage.create({ ...baseMsg, status: 'sent', meta_message_id: wamid, sent_at: new Date() });
+                await createPendingReply({ ...pendingBase, wamid, anexoEnviado: anexo.formato });
+                return { messageId: m.id, aviso: null };
+            } catch (err) {
+                // Registra a falha e cai para o caminho de texto (SIM/NÃO).
+                await WhatsappMessage.create({
+                    ...baseMsg, status: 'failed',
+                    error_code: err.code || 'SEND_ERROR', error_message: err.message, failed_at: new Date(),
+                });
+                aviso = `envio com anexo falhou (${err.code || 'SEND_ERROR'}: ${String(err.message).slice(0, 120)}) - enviado como SIM/NÃO`;
+                console.warn(`[AlertEngine] regra ${rule.id}: ${aviso}`);
+            }
+        }
+    }
+
+    // ── Caminho 2: pergunta SIM/NÃO (texto na resposta) ─────────────────────
+    const chosen = await pickApprovedTemplate({ comAnexo: false });
     console.log(`[AlertEngine] template escolhido pra rule ${rule.id}: ${chosen ? chosen.name + ' (' + chosen.vars + ' vars)' : 'NENHUM APROVADO'}`);
     if (!chosen) {
+        const nomes = ALERT_TEMPLATES.map(t => t.name).join(', ');
         const m = await WhatsappMessage.create({
-            direction: 'out',
-            user_id: owner.id,
-            to_phone: phone,
-            type: 'template',
-            template_name: ALERT_TEMPLATES[0].name,
-            template_language: ALERT_TEMPLATE_LANG,
-            status: 'failed',
-            error_code: 'TEMPLATE_NOT_APPROVED',
-            error_message: `Nenhum dos templates (${ALERT_TEMPLATES.map(t => t.name).join(', ')}) está APPROVED. Crie e sincronize.`,
+            direction: 'out', user_id: owner.id, to_phone: phone,
+            type: 'template', template_name: 'alert_generic_v2', template_language: ALERT_TEMPLATE_LANG,
+            status: 'failed', error_code: 'TEMPLATE_NOT_APPROVED',
+            error_message: `Nenhum dos templates (${nomes}) está APPROVED. Crie e sincronize.`,
             failed_at: new Date(),
         });
-        return m.id;
+        return { messageId: m.id, aviso: aviso || 'nenhum template aprovado' };
     }
 
     // Monta variáveis conforme o template escolhido
@@ -321,60 +450,40 @@ async function sendInitialAlert({ rule, owner, title, preview, report, blocks = 
         ? [owner.username || 'usuário', title, (preview || 'Relatório disponível').slice(0, 200)]
         : [owner.username || 'usuário', title];
 
-    // Loga a mensagem como "queued" antes do send
     const baseMsg = {
-        direction: 'out',
-        user_id: owner.id,
-        to_phone: phone,
-        type: 'template',
-        template_name: chosen.name,
-        template_language: ALERT_TEMPLATE_LANG,
-        variables,
-        body: `${title} — ${preview}`,
+        direction: 'out', user_id: owner.id, to_phone: phone,
+        type: 'template', template_name: chosen.name, template_language: ALERT_TEMPLATE_LANG,
+        variables, body: `${title} — ${preview}`,
     };
 
-    // Dry-run
-    if (!cfg.active || cfg.dry_run) {
+    if (dryRun) {
         const m = await WhatsappMessage.create({ ...baseMsg, status: 'dry_run' });
-        await createPendingReply({ rule, owner, phone, log_id: null, report, blocks, route, wamid: null });
-        return m.id;
+        await createPendingReply({ ...pendingBase, wamid: null });
+        return { messageId: m.id, aviso };
     }
-
-    // (template aprovado já foi validado em pickApprovedTemplate logo acima)
 
     try {
         const { id: wamid } = await WhatsAppService.sendTemplate({
-            to: phone,
-            templateName: chosen.name,
-            language: ALERT_TEMPLATE_LANG,
-            variables,
+            to: phone, templateName: chosen.name, language: ALERT_TEMPLATE_LANG, variables,
         });
-        const m = await WhatsappMessage.create({
-            ...baseMsg,
-            status: 'sent',
-            meta_message_id: wamid,
-            sent_at: new Date(),
-        });
-        await createPendingReply({ rule, owner, phone, log_id: null, report, blocks, route, wamid });
-        return m.id;
+        const m = await WhatsappMessage.create({ ...baseMsg, status: 'sent', meta_message_id: wamid, sent_at: new Date() });
+        await createPendingReply({ ...pendingBase, wamid });
+        return { messageId: m.id, aviso };
     } catch (err) {
         const m = await WhatsappMessage.create({
-            ...baseMsg,
-            status: 'failed',
-            error_code: err.code || 'SEND_ERROR',
-            error_message: err.message,
-            failed_at: new Date(),
+            ...baseMsg, status: 'failed',
+            error_code: err.code || 'SEND_ERROR', error_message: err.message, failed_at: new Date(),
         });
-        return m.id;
+        return { messageId: m.id, aviso };
     }
 }
 
-async function createPendingReply({ rule, owner, phone, log_id, report, blocks = [], route = null, wamid }) {
+async function createPendingReply({ rule, owner, phone, log_id, report, blocks = [], route = null, link = null, delivery = null, xlsxNaResposta = false, anexoEnviado = null, wamid }) {
     const expiresAt = new Date(Date.now() + REPLY_WINDOW_HOURS * 60 * 60 * 1000);
-    // report_payload guarda texto + blocos: o texto vai no SIM, os blocos
-    // geram planilha/PDF sob demanda (fase 2). Leitura tolerante ao formato
-    // antigo (string pura) em AlertReplyHandler.lerPayload.
-    const report_payload = JSON.stringify({ text: report, blocks, route });
+    // report_payload guarda texto + blocos + entrega: o texto vai no SIM/RESUMO,
+    // os blocos geram planilha/PDF sob demanda na janela de 24h. Leitura
+    // tolerante ao formato antigo (string pura) em AlertReportRenderer.lerPayload.
+    const report_payload = JSON.stringify({ text: report, blocks, route, link, delivery, xlsxNaResposta, anexoEnviado });
     return AlertPendingReply.create({
         alert_rule_id: rule.id,
         log_id,

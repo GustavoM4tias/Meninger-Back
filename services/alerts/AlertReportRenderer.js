@@ -4,9 +4,11 @@
 // entrega em cada canal:
 //   - renderPreview       linha curta (≤ 120 chars): sino, e-mail, {{3}} do template
 //   - renderWhatsAppText  texto formatado do WhatsApp (≤ 3.800 chars)
+//   - renderHtml          página de papel (entrada do PDF, AlertAttachmentService)
+//   - xlsxSheets          abas da planilha (mesmo serviço)
 //
-// Fase 2 do plano (_design/ALERTAS-WHATSAPP-PLANO.md) acrescenta aqui o HTML
-// do PDF e as abas da planilha, lendo os MESMOS blocos.
+// Tudo lê os MESMOS blocos; este módulo é puro (sem banco, sem navegador) e
+// por isso é testável em tests/alertRenderer.test.mjs.
 //
 // Regras:
 //   - Número tem tipo: moeda, percentual, data e mês saem no formato que a
@@ -92,6 +94,9 @@ export function formatarValor(v, tipo = 'text', { compacto = false, unit = null 
         default:
             out = typeof v === 'boolean' ? (v ? 'Sim' : 'Não') : String(v);
     }
+    // O Intl põe espaço "duro" (U+00A0) entre R$ e o número; vira espaço comum
+    // para o texto do WhatsApp, o HTML e os testes lerem a mesma coisa.
+    out = String(out).replace(/[  ]/g, ' ');
     return unit ? `${out} ${unit}` : out;
 }
 
@@ -319,23 +324,325 @@ export function renderWhatsAppText(raw, { ruleName, link = null, anexoDisponivel
     return [head, ...partes, rodape].filter(Boolean).join('\n\n').slice(0, limite);
 }
 
+// ─── HTML do PDF (papel) ─────────────────────────────────────────────────────
+//
+// HTML próprio, sem tokens do design system: é PAPEL, como o `buildPrintHtml`
+// das fichas. Mesma leitura do texto, com o dado inteiro: KPIs em cartões,
+// gráfico de barras em SVG quando o dataset tem um valor numérico por linha
+// e poucas categorias, e a tabela completa.
+
+const LINHAS_POR_TABELA_PDF = 1000;
+const BARRAS_MAX = 20;
+
+const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const blocksDeEntrada = (entrada) => (Array.isArray(entrada) ? entrada : blocksDe(entrada));
+
+function htmlKpis(b) {
+    const itens = (b.kpis || []).filter(k => k && k.value != null && k.value !== '');
+    if (!itens.length) return '';
+    return `
+<section class="bloco">
+  ${b.title ? `<h2>${esc(b.title)}</h2>` : ''}
+  <div class="kpis">
+    ${itens.map(k => `
+    <div class="kpi">
+      <div class="kpi-label">${esc(k.label)}</div>
+      <div class="kpi-valor">${esc(formatarValor(k.value, k.type || 'number', { unit: k.unit }))}</div>
+      ${k.hint ? `<div class="kpi-hint">${esc(k.hint)}</div>` : ''}
+    </div>`).join('')}
+  </div>
+</section>`;
+}
+
+function svgBarras(rows, rotulo, valor) {
+    const dados = rows.slice(0, BARRAS_MAX).map(r => ({
+        label: formatarValor(r[rotulo.key], rotulo.type),
+        n: numeroDe(r[valor.key]) || 0,
+    }));
+    const max = Math.max(...dados.map(d => Math.abs(d.n)), 1);
+    const soma = dados.reduce((s, d) => s + d.n, 0);
+    const alturaLinha = 22, largura = 720, colRotulo = 220, colValor = 120;
+    const larguraBarra = largura - colRotulo - colValor - 16;
+    const altura = dados.length * alturaLinha + 8;
+    const linhas = dados.map((d, i) => {
+        const y = i * alturaLinha + 4;
+        const w = Math.max(2, Math.round((Math.abs(d.n) / max) * larguraBarra));
+        const pct = soma > 0 && valor.type !== 'percent' ? ` (${Math.round((d.n / soma) * 100)}%)` : '';
+        const rot = d.label.length > 34 ? d.label.slice(0, 33) + '…' : d.label;
+        return `
+    <text x="${colRotulo - 8}" y="${y + 15}" text-anchor="end" class="rot">${esc(rot)}</text>
+    <rect x="${colRotulo}" y="${y + 3}" width="${w}" height="${alturaLinha - 8}" rx="3" class="barra"/>
+    <text x="${colRotulo + w + 6}" y="${y + 15}" class="val">${esc(formatarValor(d.n, valor.type, { compacto: true }))}${esc(pct)}</text>`;
+    }).join('');
+    return `<svg viewBox="0 0 ${largura} ${altura}" width="100%" class="grafico" role="img" aria-label="${esc(valor.label)} por ${esc(rotulo.label)}">${linhas}</svg>`;
+}
+
+function htmlDataset(b) {
+    const ds = b.dataset || {};
+    const rows = Array.isArray(ds.rows) ? ds.rows : [];
+    const cols = (ds.columns || []).map(c => ({ type: 'text', ...c }));
+    const total = ds.total ?? rows.length;
+    const contexto = [b.subtitle, b.source].filter(Boolean).join(' · ');
+    const { rotulo, valores } = perfil(ds);
+    const numericas = cols.filter(c => TIPOS_NUMERICOS.has(c.type));
+    const grafico = rows.length >= 2 && rows.length <= BARRAS_MAX && rotulo && numericas.length === 1 && valores[0]?.key === numericas[0].key
+        ? svgBarras(rows, rotulo, numericas[0]) : '';
+    const mostradas = rows.slice(0, LINHAS_POR_TABELA_PDF);
+    const cabecalho = cols.map(c => `<th class="${TIPOS_NUMERICOS.has(c.type) ? 'num' : ''}">${esc(c.label)}</th>`).join('');
+    const corpo = mostradas.map(r => `<tr>${cols.map(c => `<td class="${TIPOS_NUMERICOS.has(c.type) ? 'num' : ''}">${esc(formatarValor(r[c.key], c.type))}</td>`).join('')}</tr>`).join('\n      ');
+    const tabela = rows.length ? `
+  <table>
+    <thead><tr>${cabecalho}</tr></thead>
+    <tbody>
+      ${corpo}
+    </tbody>
+  </table>
+  ${rows.length > mostradas.length ? `<p class="nota">Mostrando ${mostradas.length} de ${formatarValor(rows.length, 'number')} linhas.</p>` : ''}
+  ${Number(total) > rows.length ? `<p class="nota">A consulta tem ${formatarValor(total, 'number')} registros; aqui estão ${formatarValor(rows.length, 'number')}. Abra no Office para ver tudo.</p>` : ''}`
+        : '<p class="nota">Nenhum registro no período.</p>';
+    return `
+<section class="bloco">
+  ${b.title ? `<h2>${esc(b.title)}</h2>` : ''}
+  ${contexto ? `<p class="contexto">${esc(contexto)}</p>` : ''}
+  <p class="total">Total: <strong>${esc(formatarValor(total, 'number'))}</strong></p>
+  ${grafico}
+  ${tabela}
+</section>`;
+}
+
+function htmlCards(b) {
+    const cards = Array.isArray(b.cards) ? b.cards : [];
+    if (!cards.length) return '';
+    const card = (c) => `
+    <div class="card">
+      <div class="card-titulo">${esc(c.title || '?')}</div>
+      ${c.subtitle ? `<div class="card-sub">${esc(c.subtitle)}</div>` : ''}
+      ${(c.fields || []).length ? `<dl>${c.fields.map(f => `<dt>${esc(f.label)}</dt><dd>${esc(formatarValor(f.value, f.type || 'text'))}</dd>`).join('')}</dl>` : ''}
+    </div>`;
+    return `
+<section class="bloco">
+  ${b.title ? `<h2>${esc(b.title)}</h2>` : ''}
+  ${b.subtitle ? `<p class="contexto">${esc(b.subtitle)}</p>` : ''}
+  <div class="cards">${cards.map(card).join('')}
+  </div>
+</section>`;
+}
+
+function htmlDetail(b) {
+    const d = b.detail || {};
+    const vivo = (f) => f && f.value != null && f.value !== '';
+    const campo = (f) => `<dt>${esc(f.label)}</dt><dd>${esc(formatarValor(f.value, f.type || 'text'))}</dd>`;
+    const fields = (d.fields || []).filter(vivo);
+    const sections = (d.sections || []).filter(s => (s.fields || []).some(vivo));
+    if (!fields.length && !sections.length) return '';
+    return `
+<section class="bloco">
+  ${b.title ? `<h2>${esc(b.title)}</h2>` : ''}
+  ${b.subtitle ? `<p class="contexto">${esc(b.subtitle)}</p>` : ''}
+  ${fields.length ? `<dl class="detalhe">${fields.map(campo).join('')}</dl>` : ''}
+  ${sections.map(s => `<h3>${esc(s.title || '')}</h3><dl class="detalhe">${s.fields.filter(vivo).map(campo).join('')}</dl>`).join('')}
+</section>`;
+}
+
+function htmlDoBloco(b) {
+    switch (b?.kind) {
+        case 'kpis':    return htmlKpis(b);
+        case 'dataset': return htmlDataset(b);
+        case 'cards':   return htmlCards(b);
+        case 'detail':  return htmlDetail(b);
+        case 'text':    return b.text ? `<section class="bloco"><p>${esc(b.text)}</p></section>` : '';
+        default:        return '';
+    }
+}
+
+const CSS_PAPEL = `
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", Inter, Arial, sans-serif; color: #1c2430; font-size: 11px; line-height: 1.4; }
+  header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #1c2430; padding-bottom: 8px; margin-bottom: 14px; }
+  header .marca { display: flex; align-items: center; gap: 10px; }
+  header img { height: 26px; }
+  header .eme { font-size: 10px; color: #5b6572; letter-spacing: .08em; text-transform: uppercase; }
+  header .meta { text-align: right; font-size: 10px; color: #5b6572; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: #5b6572; margin: 0 0 12px; font-size: 11px; }
+  h2 { font-size: 13px; margin: 0 0 4px; color: #1c2430; }
+  h3 { font-size: 11px; margin: 10px 0 2px; color: #5b6572; text-transform: uppercase; letter-spacing: .06em; }
+  .bloco { margin-bottom: 16px; page-break-inside: avoid; }
+  .contexto { margin: 0 0 6px; color: #5b6572; }
+  .total { margin: 0 0 6px; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .kpi { border: 1px solid #d9dee5; border-radius: 6px; padding: 8px 10px; }
+  .kpi-label { font-size: 9.5px; color: #5b6572; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi-valor { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .kpi-hint { font-size: 9.5px; color: #5b6572; }
+  .grafico { margin: 6px 0 10px; }
+  .grafico .rot { font-size: 10px; fill: #1c2430; }
+  .grafico .val { font-size: 10px; fill: #1c2430; }
+  .grafico .barra { fill: #2b5da8; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 4px 6px; border-bottom: 1px solid #e3e7ec; text-align: left; vertical-align: top; }
+  th { background: #f2f4f7; font-weight: 600; font-size: 10px; }
+  tbody tr:nth-child(even) td { background: #fafbfc; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .nota { color: #5b6572; font-style: italic; margin: 6px 0 0; }
+  .erro { color: #a12121; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .card { border: 1px solid #d9dee5; border-radius: 6px; padding: 8px 10px; }
+  .card-titulo { font-weight: 600; }
+  .card-sub { color: #5b6572; }
+  dl { margin: 4px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 1px 8px; }
+  dl.detalhe { grid-template-columns: 180px 1fr; }
+  dt { color: #5b6572; }
+  dd { margin: 0; }
+  footer { margin-top: 18px; padding-top: 6px; border-top: 1px solid #d9dee5; font-size: 9.5px; color: #5b6572; display: flex; justify-content: space-between; }
+  a { color: #2b5da8; text-decoration: none; }
+`;
+
+/**
+ * Página HTML do relatório (entrada do PDF).
+ *
+ * @param {object|EmeBlock[]} entrada  retorno da tool ou blocos
+ * @param {object} opts
+ * @param {string} opts.ruleName
+ * @param {string} [opts.geradoEm]     texto "14/09/2026 08:00"
+ * @param {string} [opts.link]         URL da tela no Office (rodapé)
+ * @param {string} [opts.logoDataUrl]  data: URL do logo (opcional)
+ */
+export function renderHtml(entrada, { ruleName, geradoEm = null, link = null, logoDataUrl = null } = {}) {
+    const blocks = blocksDeEntrada(entrada);
+    const erro = !Array.isArray(entrada) && entrada?.error ? String(entrada.error) : null;
+    const corpo = erro
+        ? `<section class="bloco"><p class="erro">${esc(erro)}</p></section>`
+        : blocks.map(htmlDoBloco).filter(Boolean).join('\n')
+            || '<section class="bloco"><p class="nota">O resumo deste dado ainda não está disponível neste formato. Abra no Office para ver o relatório.</p></section>';
+    const subtitulo = blocks.find(b => b.subtitle)?.subtitle || '';
+    const marca = logoDataUrl ? `<img src="${logoDataUrl}" alt="Menin">` : '<strong>Menin</strong>';
+
+    return `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>${esc(ruleName || 'Alerta')}</title>
+<style>${CSS_PAPEL}</style>
+</head>
+<body>
+<header>
+  <div class="marca">${marca}<span class="eme">Eme · Alertas</span></div>
+  <div class="meta">${geradoEm ? `Gerado em ${esc(geradoEm)}` : ''}</div>
+</header>
+<h1>${esc(ruleName || 'Alerta')}</h1>
+${subtitulo ? `<p class="sub">${esc(subtitulo)}</p>` : ''}
+${corpo}
+<footer>
+  <span>Menin Office · relatório gerado automaticamente pela Eme</span>
+  ${link ? `<a href="${esc(link)}">${esc(link)}</a>` : ''}
+</footer>
+</body>
+</html>`;
+}
+
+// ─── Abas da planilha ────────────────────────────────────────────────────────
+//
+// Uma aba por dataset (todas as linhas, valor numérico como número) e uma aba
+// "Indicadores" com os KPIs. Cards viram uma aba com uma linha por card.
+
+const nomeAba = (s, i) => {
+    const base = String(s || `Dados ${i + 1}`).replace(/[\\/?*[\]:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 28);
+    return base || `Dados ${i + 1}`;
+};
+
+/**
+ * @returns {Array<{ name, columns:[{key,label,type}], rows:object[] }>}
+ */
+export function xlsxSheets(entrada) {
+    const blocks = blocksDeEntrada(entrada);
+    const abas = [];
+    const usados = new Set();
+    const unico = (nome) => {
+        let n = nome, i = 2;
+        while (usados.has(n)) n = `${nome.slice(0, 25)} ${i++}`;
+        usados.add(n);
+        return n;
+    };
+
+    const kpis = blocks.filter(b => b.kind === 'kpis').flatMap(b => (b.kpis || []).filter(k => k && k.value != null && k.value !== ''));
+    if (kpis.length) {
+        abas.push({
+            name: unico('Indicadores'),
+            columns: [
+                { key: 'indicador', label: 'Indicador', type: 'text' },
+                { key: 'valor', label: 'Valor', type: 'number' },
+                { key: 'unidade', label: 'Unidade', type: 'text' },
+            ],
+            rows: kpis.map(k => ({
+                indicador: k.label,
+                valor: numeroDe(k.value) ?? k.value,
+                unidade: k.unit || (k.type === 'currency' ? 'R$' : k.type === 'percent' ? '%' : ''),
+            })),
+        });
+    }
+    blocks.forEach((b, i) => {
+        if (b.kind === 'dataset') {
+            const ds = b.dataset || {};
+            const cols = (ds.columns || []).map(c => ({ type: 'text', ...c }));
+            if (!cols.length) return;
+            abas.push({ name: unico(nomeAba(b.title, i)), columns: cols, rows: Array.isArray(ds.rows) ? ds.rows : [] });
+        } else if (b.kind === 'cards' && (b.cards || []).length) {
+            const labels = [];
+            for (const c of b.cards) for (const f of c.fields || []) if (!labels.includes(f.label)) labels.push(f.label);
+            const columns = [
+                { key: 'title', label: 'Título', type: 'text' },
+                { key: 'subtitle', label: 'Detalhe', type: 'text' },
+                ...labels.map(l => ({ key: `f:${l}`, label: l, type: 'text' })),
+            ];
+            const rows = b.cards.map(c => {
+                const r = { title: c.title, subtitle: c.subtitle || '' };
+                for (const f of c.fields || []) r[`f:${f.label}`] = f.value;
+                return r;
+            });
+            abas.push({ name: unico(nomeAba(b.title, i)), columns, rows });
+        }
+    });
+    return abas;
+}
+
+/** O texto corta algum dataset? (mais linhas do que o texto mostra, ou total maior que as linhas) */
+export function textoCortado(entrada) {
+    return blocksDeEntrada(entrada).some(b => b.kind === 'dataset'
+        && ((b.dataset?.rows || []).length > LINHAS_POR_DATASET || Number(b.dataset?.total ?? 0) > (b.dataset?.rows || []).length));
+}
+
 // ─── Payload do relatório guardado em alert_pending_replies ──────────────────
 //
-// Desde 14/09/2026 `report_payload` é JSON `{ text, blocks, route }`; antes era
+// Desde 14/09/2026 `report_payload` é JSON `{ text, blocks, route, link,
+// delivery, xlsxNaResposta, anexoEnviado }`; antes era
 // o texto puro. Lê os dois (mora aqui, e não no handler, para o teste não
 // precisar subir o banco).
 export function lerPayload(raw) {
-    if (raw == null) return { text: '', blocks: [], route: null };
+    const vazio = { text: '', blocks: [], route: null, link: null, delivery: null, xlsxNaResposta: false, anexoEnviado: null };
+    if (raw == null) return vazio;
     const s = String(raw);
     if (s.trim().startsWith('{')) {
         try {
             const p = JSON.parse(s);
             if (p && typeof p === 'object' && typeof p.text === 'string') {
-                return { text: p.text, blocks: Array.isArray(p.blocks) ? p.blocks : [], route: p.route || null };
+                return {
+                    ...vazio,
+                    text: p.text,
+                    blocks: Array.isArray(p.blocks) ? p.blocks : [],
+                    route: p.route || null,
+                    link: p.link || null,
+                    delivery: p.delivery || null,
+                    xlsxNaResposta: !!p.xlsxNaResposta,
+                    anexoEnviado: p.anexoEnviado || null,
+                };
             }
         } catch { /* texto que por acaso começa com "{" */ }
     }
-    return { text: s, blocks: [], route: null };
+    return { ...vazio, text: s };
 }
 
-export default { renderPreview, renderWhatsAppText, formatarValor, numeroDe, lerPayload, LIMITE_TEXTO };
+export default { renderPreview, renderWhatsAppText, renderHtml, xlsxSheets, textoCortado, formatarValor, numeroDe, lerPayload, LIMITE_TEXTO };
