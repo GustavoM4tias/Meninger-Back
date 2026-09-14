@@ -18,7 +18,8 @@
 //   PLANILHA       → manda o Excel gerado dos blocos do disparo
 //   PDF            → manda o PDF gerado dos blocos do disparo
 //   NÃO            → cancela o pending (state='cancelled')
-//   *              → manda nudge com as opções
+//   *              → manda uma LISTA interativa com as opções (na janela 24h);
+//                    a opção tocada volta com `interactiveId` (alerta:resumo…)
 // Quem respondeu à mensagem do alerta (context.id) pode pedir mais de uma
 // coisa na janela: PLANILHA depois de RESUMO funciona mesmo com state='sent'.
 
@@ -142,6 +143,43 @@ async function sendFreeDocument({ to, userId, anexo, caption = null }) {
     }
 }
 
+// Lista interativa com o que a pessoa pode pedir. O wamid da lista fica em
+// whatsapp_messages.raw_payload.pending_id: a resposta chega com context.id =
+// wamid DA LISTA (não do alerta), e é por aí que o pending é reencontrado.
+const OPCOES = [
+    { id: 'alerta:resumo',   title: 'Ver o resumo',        description: 'O relatório em texto, aqui mesmo', verdict: 'yes' },
+    { id: 'alerta:pdf',      title: 'Receber o PDF',       description: 'Relatório completo em PDF',        verdict: 'pdf' },
+    { id: 'alerta:planilha', title: 'Receber a planilha',  description: 'Dados completos em Excel',         verdict: 'xlsx' },
+    { id: 'alerta:nao',      title: 'Descartar',           description: 'Não quero este disparo',           verdict: 'no' },
+];
+const verdictDaOpcao = (id) => OPCOES.find(o => o.id === id)?.verdict || null;
+
+async function sendOptionsList({ to, pending }) {
+    const cfg = await WhatsAppConfigService.getConfig({ withSecrets: false });
+    const body = `Sobre o alerta *${pending.rule_name}*: o que você quer receber?`;
+    const base = {
+        direction: 'out', user_id: pending.user_id, to_phone: to, type: 'interactive',
+        body, raw_payload: { pending_id: pending.id, options: OPCOES.map(o => o.id) },
+    };
+    if (!cfg?.active || cfg?.dry_run) return WhatsappMessage.create({ ...base, status: 'dry_run' });
+    try {
+        const { id } = await WhatsAppService.sendInteractive({
+            to, body,
+            footer: 'Eme · Menin Office',
+            buttonText: 'Escolher',
+            sections: [{ title: 'Relatório', rows: OPCOES.map(({ id, title, description }) => ({ id, title, description })) }],
+        });
+        return WhatsappMessage.create({ ...base, status: 'sent', meta_message_id: id, sent_at: new Date() });
+    } catch (err) {
+        // Sem interativo (fora da janela, erro da API): cai no texto de sempre.
+        console.warn('[AlertReply] lista interativa falhou, mandando texto:', err?.message);
+        return sendFreeText({
+            to, userId: pending.user_id,
+            body: `Recebi sua resposta sobre *${pending.rule_name}*, mas não entendi. Responda *RESUMO* para ler aqui, *PLANILHA* para o Excel, *PDF* para o relatório ou *NÃO* para descartar.`,
+        });
+    }
+}
+
 // Gera o anexo pedido a partir dos blocos guardados no pending.
 async function anexoDoPending(pending, formato) {
     const { blocks, link } = lerPayload(pending.report_payload);
@@ -165,11 +203,12 @@ async function anexoDoPending(pending, formato) {
  * @param {string} args.body          - texto da mensagem
  * @param {string|null} args.contextId - wamid da mensagem que está sendo respondida
  *                                        (vem do payload Meta em messages[].context.id)
+ * @param {string|null} [args.interactiveId] - id da opção tocada numa lista/botão interativo
  *
  * @returns {Promise<boolean>} true se a mensagem foi consumida pelo fluxo de alerta
  */
-async function handleInbound({ fromPhone, body, contextId }) {
-    console.log(`[AlertReply] inbound from=${fromPhone} body="${body}" contextId=${contextId || 'NONE'}`);
+async function handleInbound({ fromPhone, body, contextId, interactiveId = null }) {
+    console.log(`[AlertReply] inbound from=${fromPhone} body="${body}" contextId=${contextId || 'NONE'} interactiveId=${interactiveId || 'NONE'}`);
 
     // 0) Resposta a um CONVITE de compartilhamento (responder o template alert_share).
     //    Casa pelo wamid do convite (context.id) — sem ambiguidade. SIM aceita
@@ -220,6 +259,22 @@ async function handleInbound({ fromPhone, body, contextId }) {
             },
         });
         console.log(`[AlertReply] lookup by contextId=${contextId} → ${pending ? 'pending#' + pending.id : 'NOT FOUND'}`);
+
+        // 1b) Resposta à LISTA de opções (context.id = wamid da lista): o pending
+        //     está guardado no raw_payload da mensagem interativa que enviamos.
+        if (!pending) {
+            const lista = await WhatsappMessage.findOne({
+                where: { meta_message_id: contextId, direction: 'out', type: 'interactive' },
+                attributes: ['id', 'raw_payload'],
+            });
+            const pendingId = Number(lista?.raw_payload?.pending_id);
+            if (pendingId) {
+                pending = await AlertPendingReply.findOne({
+                    where: { id: pendingId, state: { [Op.in]: ['awaiting_reply', 'sent'] }, expires_at: { [Op.gt]: new Date() } },
+                });
+                console.log(`[AlertReply] lookup pela lista → ${pending ? 'pending#' + pending.id : 'NOT FOUND/expirado'}`);
+            }
+        }
     }
 
     // 2) Fallback: user mandou "SIM" direto sem usar Reply.
@@ -267,7 +322,7 @@ async function handleInbound({ fromPhone, body, contextId }) {
 
     if (!pending) return false;
 
-    const verdict = classify(body);
+    const verdict = verdictDaOpcao(interactiveId) || classify(body);
     console.log(`[AlertReply] pending#${pending.id} rule="${pending.rule_name}" verdict=${verdict}`);
 
     // Ações de resposta CONFIGURÁVEIS (automação 'alert_generic' no portal).
@@ -340,12 +395,8 @@ async function handleInbound({ fromPhone, body, contextId }) {
         return true;
     }
 
-    // 'other' — manda nudge sem mudar o estado
-    await sendFreeText({
-        to: fromPhone,
-        body: `Recebi sua resposta sobre *${pending.rule_name}*, mas não entendi. Responda *RESUMO* para ler aqui, *PLANILHA* para o Excel, *PDF* para o relatório ou *NÃO* para descartar.`,
-        userId: pending.user_id,
-    });
+    // 'other' — lista interativa com as opções, sem mudar o estado
+    await sendOptionsList({ to: fromPhone, pending });
     return true;
 }
 

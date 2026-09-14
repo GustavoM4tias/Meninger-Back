@@ -153,7 +153,10 @@ async function handleIncomingMessage(m, fromPhone) {
     // (recurso "Responder" do WhatsApp → context.id presente no payload).
     // Mensagens soltas no número do sistema não disparam relatório.
     const contextId = m?.context?.id || null;
-    console.log(`[whatsapp/webhook] inbound type=${type} from=${fromPhone} body="${body}" contextId=${contextId || 'NONE'}`);
+    // Opção tocada numa lista/botão interativo (id declarado no envio) - mais
+    // preciso que o título, que é texto para a pessoa.
+    const interactiveId = m?.interactive?.list_reply?.id || m?.interactive?.button_reply?.id || null;
+    console.log(`[whatsapp/webhook] inbound type=${type} from=${fromPhone} body="${body}" contextId=${contextId || 'NONE'}${interactiveId ? ` interactiveId=${interactiveId}` : ''}`);
     // Payload completo pra debug — útil pra ver estrutura real do button/reply
     console.log(`[whatsapp/webhook] inbound full payload:`, JSON.stringify({
         id: m.id, type: m.type, button: m.button, text: m.text, interactive: m.interactive, context: m.context,
@@ -180,7 +183,7 @@ async function handleIncomingMessage(m, fromPhone) {
         // wamid do template) antes de repassar aos alertas. Removido em 2026-08-19
         // junto do módulo — hoje toda resposta de botão vai direto para os alertas.
         try {
-            await AlertReplyHandler.handleInbound({ fromPhone, body, contextId });
+            await AlertReplyHandler.handleInbound({ fromPhone, body, contextId, interactiveId });
         } catch (err) {
             console.error('[whatsapp/webhook] AlertReplyHandler erro:', err?.message || err);
         }

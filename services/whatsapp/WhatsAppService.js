@@ -398,6 +398,78 @@ async function sendDocument({ to, mediaId = null, link = null, filename = null, 
 }
 
 /**
+ * Mensagem INTERATIVA livre (só na janela de 24h): botões de resposta (até 3)
+ * ou lista (até 10 linhas em seções). A resposta chega no webhook como
+ * `interactive.button_reply|list_reply { id, title }` com `context.id` = wamid
+ * desta mensagem - por isso quem envia guarda o wamid para amarrar a resposta.
+ *
+ * @param {object} p
+ * @param {string} p.to
+ * @param {string} p.body                     texto principal (até 1024 chars)
+ * @param {string} [p.header]                 texto do cabeçalho (até 60)
+ * @param {string} [p.footer]                 rodapé (até 60)
+ * @param {Array<{id,title}>} [p.buttons]     até 3 botões (title até 20 chars)
+ * @param {Array<{title,rows:[{id,title,description?}]}>} [p.sections]  lista
+ * @param {string} [p.buttonText='Opções']   rótulo do botão que abre a lista
+ */
+async function sendInteractive({ to, body, header = null, footer = null, buttons = null, sections = null, buttonText = 'Opções' }) {
+    const phone = normalizePhone(to);
+    if (!phone) throw new CloudApiError('Telefone inválido', { code: 'BAD_PHONE' });
+    if (!body) throw new CloudApiError('body obrigatório', { code: 'NO_BODY' });
+
+    let interactive;
+    if (Array.isArray(buttons) && buttons.length) {
+        interactive = {
+            type: 'button',
+            action: {
+                buttons: buttons.slice(0, 3).map(b => ({
+                    type: 'reply',
+                    reply: { id: String(b.id).slice(0, 256), title: String(b.title).slice(0, 20) },
+                })),
+            },
+        };
+    } else if (Array.isArray(sections) && sections.length) {
+        interactive = {
+            type: 'list',
+            action: {
+                button: String(buttonText).slice(0, 20),
+                sections: sections.map(s => ({
+                    ...(s.title ? { title: String(s.title).slice(0, 24) } : {}),
+                    rows: (s.rows || []).slice(0, 10).map(r => ({
+                        id: String(r.id).slice(0, 200),
+                        title: String(r.title).slice(0, 24),
+                        ...(r.description ? { description: String(r.description).slice(0, 72) } : {}),
+                    })),
+                })),
+            },
+        };
+    } else {
+        throw new CloudApiError('buttons ou sections obrigatório', { code: 'NO_ACTIONS' });
+    }
+    if (header) interactive.header = { type: 'text', text: String(header).slice(0, 60) };
+    interactive.body = { text: String(body).slice(0, 1024) };
+    if (footer) interactive.footer = { text: String(footer).slice(0, 60) };
+
+    const { client, cfg } = await getAxiosClient();
+    try {
+        const { data } = await client.post(`/${cfg.phone_number_id}/messages`, {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: phone,
+            type: 'interactive',
+            interactive,
+        });
+        return { id: data?.messages?.[0]?.id || null, raw: data };
+    } catch (err) {
+        const apiErr = err.response?.data?.error;
+        throw new CloudApiError(
+            apiErr?.message || err.message || 'Falha no envio interativo',
+            { status: err.response?.status, code: apiErr?.code, details: err.response?.data }
+        );
+    }
+}
+
+/**
  * Lista templates da conta WABA na Meta (paginado retornando até 200).
  * @returns {Promise<Array>}
  */
@@ -764,6 +836,7 @@ export default {
     sendTypingIndicator,
     sendImage,
     sendDocument,
+    sendInteractive,
     fetchTemplates,
     createTemplate,
     deleteTemplate,

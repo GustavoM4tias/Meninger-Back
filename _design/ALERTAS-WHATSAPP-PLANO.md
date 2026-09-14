@@ -340,3 +340,28 @@ Front (`Meninger-Front`):
   (criado no primeiro boot com WhatsApp ativo). Até lá tudo sai como
   SIM/NÃO com o texto novo. Conferir em Configurações > WhatsApp > Templates.
 - Fora: tela do campo "Como entregar" (fase 3).
+
+**14/09/2026 - Fase 3 entregue.**
+
+- Front (`4f08b17`): `src/config/alertDelivery.js` (espelho do contrato;
+  `''` = padrão da empresa), bloco "como entregar" em `AlertEditModal.vue` e
+  `ChatAlertEditor.vue` (SegmentedControl Padrão/PDF/Texto/Planilha + Switch
+  "Perguntar antes de mandar", só com o WhatsApp ligado), entrega padrão em
+  `AutomationsPanel.vue` (automação `alert_generic`, `settings.delivery`),
+  tooltip do WhatsApp na lista mostra o formato, "Como usar" dos avisos
+  explica PLANILHA/RESUMO. `vite build` OK.
+- Back: `WhatsAppService.sendInteractive` (botões até 3 ou lista até 10);
+  webhook passa `interactiveId` (id da opção tocada); `AlertReplyHandler`
+  troca o "não entendi" por lista interativa (Ver o resumo / Receber o PDF /
+  Receber a planilha / Descartar), guarda `pending_id` no `raw_payload` da
+  mensagem interativa e reencontra o pending quando a resposta cita a lista
+  (context.id = wamid da lista, não do alerta). Fora da janela ou com erro,
+  cai no texto de sempre.
+- Fora: `VizForm` (o `ChatAlertEditor` continua o editor da Eme; plano da
+  galeria, fase 3). Fase 4 (gráfico como imagem) fica para depois de 01/10,
+  se a diretoria pedir depois de ver o PDF.
+
+**Para 01/10**: conferir em produção (1) `alert_report_v1` APPROVED em
+Configurações > WhatsApp > Templates, (2) um disparo real chegando em PDF,
+(3) PLANILHA e a lista interativa respondendo; então preencher a `date` da
+`v3.17.0` no changelog do front.
