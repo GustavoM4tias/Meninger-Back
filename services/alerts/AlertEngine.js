@@ -173,7 +173,7 @@ async function fire(ruleId, { force = false } = {}) {
     }
 
     // 1) Executa a tool
-    const { preview, report, raw, resolvedToolCall } = await AlertReportService.execute(rule, owner);
+    const { preview, report, raw, resolvedToolCall, route, blocks } = await AlertReportService.execute(rule, owner);
 
     // 2) Renderiza title/preview
     // IMPORTANTE: usa o TZ DA REGRA explicitamente — se o OS da instância está em
@@ -192,7 +192,7 @@ async function fire(ruleId, { force = false } = {}) {
 
     // Link: tenta gerar uma rota com filtros baseado na tool. Click no sino
     // abre direto o relatório no contexto da consulta.
-    const link = toolToRoute(resolvedToolCall) || `/settings/alerts`;
+    const link = route || toolToRoute(resolvedToolCall) || `/settings/alerts`;
 
     // 3) In-app + e-mail via NotificationService (recipients = só o owner)
     // bypassPrefs=true: respeita os channels que o user escolheu na CRIAÇÃO do alerta,
@@ -226,7 +226,7 @@ async function fire(ruleId, { force = false } = {}) {
 
     // 4) WhatsApp: fluxo de 2 mensagens
     if (channels.whatsapp) {
-        whatsappMsgId = await sendInitialAlert({ rule, owner, title, preview: previewText, report })
+        whatsappMsgId = await sendInitialAlert({ rule, owner, title, preview: previewText, report, blocks, route })
             .catch(err => { console.error('[AlertEngine] whatsapp falhou:', err?.message); return null; });
     }
 
@@ -281,7 +281,7 @@ async function pickApprovedTemplate() {
     return null;
 }
 
-async function sendInitialAlert({ rule, owner, title, preview, report }) {
+async function sendInitialAlert({ rule, owner, title, preview, report, blocks = [], route = null }) {
     // Número do perfil — sem opt-in desde 2026-08-17. Sem telefone, sem alerta.
     const phone = resolveUserPhone(owner);
     if (!phone) {
@@ -336,7 +336,7 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
     // Dry-run
     if (!cfg.active || cfg.dry_run) {
         const m = await WhatsappMessage.create({ ...baseMsg, status: 'dry_run' });
-        await createPendingReply({ rule, owner, phone, log_id: null, report, wamid: null });
+        await createPendingReply({ rule, owner, phone, log_id: null, report, blocks, route, wamid: null });
         return m.id;
     }
 
@@ -355,7 +355,7 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
             meta_message_id: wamid,
             sent_at: new Date(),
         });
-        await createPendingReply({ rule, owner, phone, log_id: null, report, wamid });
+        await createPendingReply({ rule, owner, phone, log_id: null, report, blocks, route, wamid });
         return m.id;
     } catch (err) {
         const m = await WhatsappMessage.create({
@@ -369,8 +369,12 @@ async function sendInitialAlert({ rule, owner, title, preview, report }) {
     }
 }
 
-async function createPendingReply({ rule, owner, phone, log_id, report, wamid }) {
+async function createPendingReply({ rule, owner, phone, log_id, report, blocks = [], route = null, wamid }) {
     const expiresAt = new Date(Date.now() + REPLY_WINDOW_HOURS * 60 * 60 * 1000);
+    // report_payload guarda texto + blocos: o texto vai no SIM, os blocos
+    // geram planilha/PDF sob demanda (fase 2). Leitura tolerante ao formato
+    // antigo (string pura) em AlertReplyHandler.lerPayload.
+    const report_payload = JSON.stringify({ text: report, blocks, route });
     return AlertPendingReply.create({
         alert_rule_id: rule.id,
         log_id,
@@ -379,7 +383,7 @@ async function createPendingReply({ rule, owner, phone, log_id, report, wamid })
         rule_name: rule.name,
         meta_message_id: wamid || null,
         state: 'awaiting_reply',
-        report_payload: report,
+        report_payload,
         expires_at: expiresAt,
     });
 }

@@ -286,4 +286,23 @@ Front (`Meninger-Front`):
 
 ## 8. Execução (registro)
 
-(preencher a cada fase: data, commit, o que ficou de fora e por quê)
+**14/09/2026 - Fase 1 entregue.**
+
+- `services/OfficeAI/legacyBlocks.js`: `legacyToBlocks` (table, chart,
+  detail, `reservas_summary`/`precadastros_summary`/`repasses_summary` com
+  mapa explícito de rótulo+tipo, `*_cards`/`*_tasks`, objeto solto com
+  totals/kpis + primeira lista) e `blocksDe`. `message` nunca vira bloco.
+- `services/alerts/AlertReportRenderer.js`: `formatarValor` (espelho do
+  `viz/formatos.js`), `renderPreview`, `renderWhatsAppText` (corte por bloco
+  e por linha, rodapé com link absoluto via `FRONTEND_URL`), `lerPayload`.
+- `AlertReportService.execute` devolve também `blocks`, `route`, `link`;
+  `AlertEngine` grava `report_payload` como JSON `{ text, blocks, route }`;
+  `AlertReplyHandler` lê os dois formatos.
+- `tests/alertRenderer.test.mjs` (17 testes): nenhuma forma sai com `{`,
+  moeda/percentual/data formatados, limite respeitado. **Armadilha**: teste
+  que importa `AlertReplyHandler` pendura (sobe o banco) - por isso
+  `lerPayload` mora no renderer.
+- Decisão: coluna com nome de identificador (`reserva`, `contrato`,
+  `codigo`, `cpf`...) é texto, nunca número - senão "6948" vira "6.948".
+- Fora: nada. Critério "preview_alert das 13 tools legível" fica para
+  conferir em produção pelo `preview_alert` (não há banco local no teste).

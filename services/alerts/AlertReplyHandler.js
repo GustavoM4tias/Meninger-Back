@@ -23,6 +23,7 @@ import WhatsAppService from '../whatsapp/WhatsAppService.js';
 import WhatsAppConfigService from '../whatsapp/WhatsAppConfigService.js';
 import WhatsAppAutomationService from '../whatsapp/WhatsAppAutomationService.js';
 import AlertShareService from './AlertShareService.js';
+import { lerPayload } from './AlertReportRenderer.js';
 
 const { AlertPendingReply, AlertShare, AlertRule, WhatsappMessage } = db;
 
@@ -243,7 +244,7 @@ async function handleInbound({ fromPhone, body, contextId }) {
         }
         // send_text → texto fixo configurado; send_report (default) → relatório já
         // renderizado no disparo (report_payload).
-        const outBody = act.type === 'send_text' ? (act.text || '') : pending.report_payload;
+        const outBody = act.type === 'send_text' ? (act.text || '') : lerPayload(pending.report_payload).text;
         const sent = await sendFreeText({ to: fromPhone, body: outBody, userId: pending.user_id });
         // Só marca como enviado se o envio REALMENTE saiu (senão mantém pra retry).
         if (sent?.status === 'failed') {
