@@ -99,7 +99,7 @@ router.get('/empreendimento/:id', authenticate, requireRoutePermission(ENTERPRIS
 router.get('/empreendimento/:id/unidades', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingUnitsSummaryFromDb);
 // Histórico de tabelas de preço do empreendimento (espelho do CV, nunca apagado)
 router.get('/empreendimento/:id/tabelas', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), listPriceTablesByEnterprise);
-router.get('/price-tables/:idtabela(\d+)', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getPriceTableById);
+router.get('/price-tables/:idtabela', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getPriceTableById);
 
 router.get('/workflow-grupos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchWorkflowGroups);
 // ?tipo=repasses
