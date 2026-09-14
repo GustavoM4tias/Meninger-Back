@@ -19,6 +19,7 @@ import { listPrecadastros, getPrecadastro } from '../controllers/cv/precadastros
 import { listReservasReport, getReservaReport } from '../controllers/cv/reservasReport.js';
 
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb, fetchBuildingUnitsSummaryFromDb } from '../controllers/cv/empreendimentosDb.js';
+import { listPriceTablesByEnterprise, getPriceTableById } from '../controllers/cv/priceTablesDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
 import { fetchWorkflowGroups, createOrUpdateWorkflowGroup, removeWorkflowGroup, fetchListSegments  } from '../controllers/cv/workflowGroups.js';
@@ -96,6 +97,9 @@ router.get('/reservas/report/:id', authenticate, requireRoutePermission(['/comer
 router.get('/empreendimentos', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingsFromDb);
 router.get('/empreendimento/:id', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingByIdFromDb);
 router.get('/empreendimento/:id/unidades', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingUnitsSummaryFromDb);
+// Histórico de tabelas de preço do empreendimento (espelho do CV, nunca apagado)
+router.get('/empreendimento/:id/tabelas', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), listPriceTablesByEnterprise);
+router.get('/price-tables/:idtabela(\d+)', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getPriceTableById);
 
 router.get('/workflow-grupos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchWorkflowGroups);
 // ?tipo=repasses

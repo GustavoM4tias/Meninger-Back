@@ -39,6 +39,18 @@ function parseBrNumber(s) {
     return isNaN(n) ? null : n;
 }
 
+// Área vem do CV como "67.930000" (ponto decimal, seis casas), não no
+// formato brasileiro: parseBrNumber tirava o ponto e virava 67930000.
+// Só cai no parseBrNumber quando tem vírgula ("1.234,56").
+function parseArea(s) {
+    if (s == null) return null;
+    if (typeof s === 'number') return s;
+    const str = String(s).trim();
+    if (str.includes(',')) return parseBrNumber(str);
+    const n = parseFloat(str);
+    return isNaN(n) ? null : n;
+}
+
 // "2019-01-23" ou "23/01/2019" → Date ou null
 function parseDate(s) {
     if (!s) return null;
@@ -120,7 +132,7 @@ async function fetchDetailedTables(idempreendimento) {
                 bloco:          u.bloco ?? null,
                 unidade:        u.unidade ?? null,
                 idunidade:      u.idunidade ?? null,
-                area_privativa: parseBrNumber(u.area_privativa),
+                area_privativa: parseArea(u.area_privativa),
                 situacao:       u.situacao ?? null,
                 valor_total:    parseBrNumber(u.valor_total),
                 series: (u.series ?? []).map(s => ({
