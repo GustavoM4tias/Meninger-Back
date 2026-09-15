@@ -4,6 +4,13 @@
 // preço, área, dormitórios e lado do sol em cada célula. É a leitura de
 // "quadra e corte" que a diretoria pede para saber o que sobrou e onde.
 //
+// Empreendimento HORIZONTAL (casas, loteamento) não tem torre nem andar: o
+// espelho vira QUADRAS x LOTES. O modo sai do tipo do empreendimento no CV
+// (`modo: auto`) ou da configuração da aba; quadra é o bloco do CV quando há
+// mais de um, senão o "QD 3"/"Quadra 3" do nome; lote é o "LT 12"/"Lote 12"
+// ou o número da unidade. Ler "CASA 278" como torre 2, 7º andar, final 8 era
+// o que fazia o Parque Alameda (Votuporanga) aparecer com andares.
+//
 //   GET /cv/empreendimento/:id/espelho          → torres montadas + configuração
 //   PUT /cv/empreendimento/:id/espelho/config   → grava a configuração (admin)
 //
@@ -34,6 +41,8 @@ const {
 // Fallback quando nada foi configurado pela tela. Regra de negócio de verdade
 // mora no banco (enterprise_mirror_settings), editada na aba Espelho.
 export const DEFAULTS = Object.freeze({
+  modo: 'auto',         // auto (pelo tipo do CV) | vertical | horizontal
+  valor_m2_padrao: null, // R$/m² de estimativa quando não há andar (horizontal) nem final configurado
   digitos_final: 1,
   digitos_andar: 1,
   andar_zero_nome: 'Térreo',
@@ -71,7 +80,10 @@ export function normalizeSettings(input = {}) {
     const n = parseInt(v, 10);
     return Number.isFinite(n) && n >= min && n <= max ? n : fb;
   };
+  const m2Padrao = Number(String(s.valor_m2_padrao ?? '').replace(',', '.'));
   const out = {
+    modo: ['auto', 'vertical', 'horizontal'].includes(s.modo) ? s.modo : DEFAULTS.modo,
+    valor_m2_padrao: Number.isFinite(m2Padrao) && m2Padrao > 0 ? Math.round(m2Padrao * 100) / 100 : null,
     digitos_final: clampInt(s.digitos_final, 1, 3, DEFAULTS.digitos_final),
     digitos_andar: clampInt(s.digitos_andar, 1, 2, DEFAULTS.digitos_andar),
     andar_zero_nome: String(s.andar_zero_nome || DEFAULTS.andar_zero_nome).slice(0, 40),
@@ -154,6 +166,19 @@ function decompor(numero, { digitos_final, digitos_andar }) {
   };
 }
 
+// Horizontal: "QD 03 - LT 12", "Quadra A Lote 7", "CASA 45", "Q3L12".
+const QUADRA_RE = /\bQ(?:D|DA|UADRA)?\.?\s*[:-]?\s*([A-Z]{1,2}|\d{1,3})\b/i;
+const LOTE_RE = /\bL(?:T|OTE)?\.?\s*[:-]?\s*(\d{1,4})\b/i;
+function decomporHorizontal(nome) {
+  const s = String(nome || '');
+  const q = s.match(QUADRA_RE);
+  const l = s.match(LOTE_RE);
+  const quadra = q ? String(q[1]).toUpperCase().replace(/^0+(\d)/, '$1') : null;
+  const lote = l ? String(parseInt(l[1], 10)) : (numeroDe(s) != null ? String(parseInt(numeroDe(s), 10)) : null);
+  return { quadra, lote };
+}
+const ehHorizontal = (tipoNome) => /horizontal|loteamento|\bcasas?\b|\blotes?\b/i.test(String(tipoNome || ''));
+
 // Tabela de preço que serve de referência: vigente mais recente com unidades;
 // sem vigente, a mais recente que tenha unidades.
 async function tabelaReferencia(idempreendimento) {
@@ -191,8 +216,9 @@ async function loadSettings(idempreendimento) {
 
 // ── Montagem ─────────────────────────────────────────────────────────────────
 export async function montarEspelho(idempreendimento) {
-  const [{ settings, row }, etapas, tabela, adimplencia] = await Promise.all([
+  const [{ settings, row }, ent, etapas, tabela, adimplencia] = await Promise.all([
     loadSettings(idempreendimento),
+    CvEnterprise.findByPk(idempreendimento, { attributes: ['idempreendimento', 'tipo_empreendimento_nome'] }),
     CvEnterpriseStage.findAll({ where: { idempreendimento }, order: [['idetapa', 'ASC']] }),
     tabelaReferencia(idempreendimento),
     mapaVigente(idempreendimento).catch(() => new Map()),
@@ -217,6 +243,8 @@ export async function montarEspelho(idempreendimento) {
   // as unidades, e isso é "não sei", não "térreo, coluna 0".
   const cvAndarVale = new Set(unidades.map((u) => u.andar).filter((v) => v != null)).size > 1;
   const cvColunaVale = new Set(unidades.map((u) => u.coluna).filter((v) => v != null)).size > 1;
+  const modo = settings.modo === 'auto' ? (ehHorizontal(ent?.tipo_empreendimento_nome) ? 'horizontal' : 'vertical') : settings.modo;
+  const horizontal = modo === 'horizontal';
 
   // 1) cada unidade vira uma célula com torre/andar/final resolvidos
   const cells = [];
@@ -225,14 +253,23 @@ export async function montarEspelho(idempreendimento) {
     const bloco = blocoPorId.get(u.idbloco);
     const etapa = bloco ? etapaPorId.get(bloco.idetapa) : null;
     const numero = numeroDe(u.nome);
-    const d = decompor(numero, settings);
-
-    // Torre: bloco do CV quando há mais de um; senão o prefixo do número.
-    const torreKey = multiBloco ? `b${u.idbloco}` : (d.torre != null ? `n${d.torre}` : `b${u.idbloco}`);
-    const torreNome = multiBloco ? (bloco?.nome || `Bloco ${u.idbloco}`) : (d.torre != null ? `Torre ${d.torre}` : (bloco?.nome || 'Torre única'));
-
-    const andar = cvAndarVale && u.andar != null ? Number(u.andar) : d.andar;
-    const final = cvColunaVale && u.coluna != null ? String(u.coluna) : d.final;
+    let torreKey, torreNome, andar, final;
+    if (horizontal) {
+      // Quadra x lote: sem andar. Quadra = bloco do CV quando há mais de um,
+      // senão a que está escrita no nome; lote = o do nome ou o número.
+      const h = decomporHorizontal(u.nome);
+      torreKey = multiBloco ? `b${u.idbloco}` : (h.quadra != null ? `q${h.quadra}` : `b${u.idbloco}`);
+      torreNome = multiBloco ? (bloco?.nome || `Quadra ${u.idbloco}`) : (h.quadra != null ? `Quadra ${h.quadra}` : (bloco?.nome || 'Quadra única'));
+      andar = null;
+      final = h.lote;
+    } else {
+      const d = decompor(numero, settings);
+      // Torre: bloco do CV quando há mais de um; senão o prefixo do número.
+      torreKey = multiBloco ? `b${u.idbloco}` : (d.torre != null ? `n${d.torre}` : `b${u.idbloco}`);
+      torreNome = multiBloco ? (bloco?.nome || `Bloco ${u.idbloco}`) : (d.torre != null ? `Torre ${d.torre}` : (bloco?.nome || 'Torre única'));
+      andar = cvAndarVale && u.andar != null ? Number(u.andar) : d.andar;
+      final = cvColunaVale && u.coluna != null ? String(u.coluna) : d.final;
+    }
 
     const area = num(u.area_privativa);
     const valorCv = num(u.valor);
@@ -246,8 +283,8 @@ export async function montarEspelho(idempreendimento) {
     const cfg = settings.finais?.[torreKey]?.[final] || settings.finais?.['*']?.[final] || {};
     const face = cfg.face ? FACES[cfg.face] : null;
 
-    // Preço, em cascata: CV → tabela → R$/m² do andar → R$/m² do final
-    const m2Final = cfg.valor_m2 || null;
+    // Preço, em cascata: CV → tabela → R$/m² do andar → R$/m² do final → R$/m² padrão
+    const m2Final = cfg.valor_m2 || settings.valor_m2_padrao || null;
     if (valor == null && m2Final && area) { valor = Math.round(m2Final * area * 100) / 100; fonte = 'estimado'; fonteEstimado++; semPreco--; }
 
     // Adimplência premiada: sai do preço, seja ele de onde for
@@ -357,6 +394,8 @@ export async function montarEspelho(idempreendimento) {
   return {
     idempreendimento,
     settings,
+    modo,
+    tipo_empreendimento: ent?.tipo_empreendimento_nome || null,
     configurado: Boolean(row),
     multi_bloco: multiBloco,
     fonte_preco: {
