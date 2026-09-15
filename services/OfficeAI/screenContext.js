@@ -47,6 +47,9 @@ export function buildScreenContextBlock(screen) {
     const rota  = texto(screen.rota);
     const tela  = texto(screen.tela);
     const secao = texto(screen.secao);
+    // O que está aberto DENTRO da tela (ex.: o empreendimento e a aba do
+    // modal). Vem da tela, com teto, e entra como dado.
+    const detalhe = texto(screen.detalhe, 200);
     if (!rota) return '';
 
     const refs = (Array.isArray(screen.referencias) ? screen.referencias : [])
@@ -63,6 +66,7 @@ export function buildScreenContextBlock(screen) {
 
     let bloco = `\n\n## ONDE O USUÁRIO ESTÁ AGORA\n`
         + `Ele está com ${onde} aberta neste momento.\n`
+        + (detalhe ? `Dentro dela está aberto: ${detalhe}. Quando ele perguntar sobre "esse empreendimento", "isso", "aqui", é disto que ele fala: passe esse nome para a tool.\n` : '')
         + `- Quando ele disser "esta tela", "aqui", "isso", "esse número" ou perguntar sem dizer de onde, é DESTA tela que ele fala.\n`
         + `- Não use \`navigate_to_page\` para levá-lo à tela em que ele já está; se a resposta for sobre ela, responda direto.\n`
         + `- Isto é contexto, não é a pergunta: se ele perguntar sobre outro assunto, ignore a tela e responda o que ele pediu.\n`;

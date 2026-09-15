@@ -72,7 +72,7 @@ const summarizeUnits = (unidades, originais) => {
   };
 };
 
-const toRow = (t, { withUnits = false } = {}) => {
+export const toRow = (t, { withUnits = false } = {}) => {
   const raw = t.raw || {};
   const unidades = unitsOf(raw);
   const meta = raw.metadados ? { ...raw.metadados } : null;

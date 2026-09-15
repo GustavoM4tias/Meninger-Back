@@ -18,6 +18,7 @@ import './EventPlanTools.js';
 import './AcademyTools.js';
 // Idem: tools de Imobiliárias (Comercial > Imobiliárias) — contexto OFFICE.
 import './RealEstateTools.js';
+import './EnterpriseMirrorTools.js';
 // Idem: Financeiro (Custos c/ alçada da tela + Boletos admin), Pessoas/Organograma,
 // Validador de Contratos e Perfil (notificações + share de alertas).
 import './FinanceTools.js';
