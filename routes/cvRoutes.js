@@ -20,6 +20,7 @@ import { listReservasReport, getReservaReport } from '../controllers/cv/reservas
 
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb, fetchBuildingUnitsSummaryFromDb } from '../controllers/cv/empreendimentosDb.js';
 import { listPriceTablesByEnterprise, getPriceTableById } from '../controllers/cv/priceTablesDb.js';
+import { getMirror, saveMirrorSettings } from '../controllers/cv/mirrorDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
 import { fetchWorkflowGroups, createOrUpdateWorkflowGroup, removeWorkflowGroup, fetchListSegments  } from '../controllers/cv/workflowGroups.js';
@@ -45,6 +46,8 @@ const cvPrecadastros = new PrecadastrosSyncController();
 // roda em processo pelos schedulers).
 // Ação `sync` da tela de Empreendimentos (lib/screenCapabilities.js).
 const sincronizarTabelas = requireCapability('/crm/buildings', 'sync');
+// Ação `configure`: espelho de vendas (faces, dormitórios, dígitos do número).
+const configurarEspelho = requireCapability('/crm/buildings', 'configure');
 
 const WORKFLOW_SCREENS = ['/crm/workflow/groups', ...RELATORIO_SCREENS, '/validator'];
 const ENTERPRISE_SCREENS = ['/crm/buildings', '/comercial/conditions', '/comercial/projections', ...RELATORIO_SCREENS, '/marketing/plano-eventos'];
@@ -100,6 +103,9 @@ router.get('/empreendimento/:id/unidades', authenticate, requireRoutePermission(
 // Histórico de tabelas de preço do empreendimento (espelho do CV, nunca apagado)
 router.get('/empreendimento/:id/tabelas', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), listPriceTablesByEnterprise);
 router.get('/price-tables/:idtabela', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getPriceTableById);
+// Espelho de vendas: torres x andares x finais com preço, sol e dormitórios
+router.get('/empreendimento/:id/espelho', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getMirror);
+router.put('/empreendimento/:id/espelho/config', authenticate, configurarEspelho, saveMirrorSettings);
 
 router.get('/workflow-grupos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchWorkflowGroups);
 // ?tipo=repasses

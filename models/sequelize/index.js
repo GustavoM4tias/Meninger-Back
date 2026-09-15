@@ -119,6 +119,7 @@ import RoutePolicyDefine from './routePolicy.js';
 
 // CV extras
 import CvEnterprisePriceTableDefine from './cv/enterprisePriceTable.js';
+import EnterpriseMirrorSettingsDefine from './cv/enterpriseMirrorSettings.js';
 import CvCorrespondentDefine from './cv/cvCorrespondent.js';
 import CvPrecadastroDefine from './cv/cvPrecadastro.js';
 import CvSyncStateDefine from './cv/cvSyncState.js';
@@ -446,6 +447,7 @@ db.RoutePolicy = RoutePolicyDefine(sequelize, DataTypes);
 
 // CV extras
 db.CvEnterprisePriceTable = CvEnterprisePriceTableDefine(sequelize, DataTypes);
+db.EnterpriseMirrorSettings = EnterpriseMirrorSettingsDefine(sequelize, DataTypes);
 db.CvCorrespondent        = CvCorrespondentDefine(sequelize, DataTypes);
 db.CvPrecadastro          = CvPrecadastroDefine(sequelize, DataTypes);
 db.CvSyncState            = CvSyncStateDefine(sequelize, DataTypes);
