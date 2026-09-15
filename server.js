@@ -131,6 +131,7 @@ import { ensureRepasseIndexes } from './lib/ensureRepasseIndexes.js';
 import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate.js';
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
 import { ensureAlertReportTemplate } from './lib/ensureAlertReportTemplate.js';
+import { ensureAlertDeliveryColumns } from './lib/ensureAlertDeliveryColumns.js';
 import { ensureEmeAtendeOpenerTemplates } from './lib/ensureEmeAtendeOpenerTemplates.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
@@ -413,6 +414,12 @@ function withTimeout(promise, ms, label) {
 })();
 
 async function initBackground() {
+  // Colunas novas de alert_rules/whatsapp_automations ANTES de tudo e FORA do
+  // gate: o model já as declara e o AlertEngine lê as regras logo abaixo.
+  // Com o gate pulando a fase (fingerprint igual ou SKIP_DB_SYNC) a coluna
+  // nunca nasceria e os alertas inteiros ficariam em "column does not exist".
+  await ensureAlertDeliveryColumns().catch(err =>
+      console.warn('⚠️  ensureAlertDeliveryColumns falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {
@@ -509,6 +516,7 @@ async function syncModelsAndPatches(fingerprint) {
   // novo, onde as tabelas só existem depois do sync.
   await runPatch('Boleto', ensureBoletoSchema);
   await runPatch('Userede', ensureUseredeSchema);
+  await runPatch('AlertDelivery', ensureAlertDeliveryColumns); // alert_rules.delivery + whatsapp_automations.settings (banco novo: depois do sync criar as tabelas)
 
   // Sync alter só pros models que estão em evolução ativa.
   // Os demais (User, Academy, Alerts, Eme, etc.) já estabilizaram — pode rodar
