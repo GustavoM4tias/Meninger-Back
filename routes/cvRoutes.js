@@ -21,6 +21,7 @@ import { listReservasReport, getReservaReport } from '../controllers/cv/reservas
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb, fetchBuildingUnitsSummaryFromDb } from '../controllers/cv/empreendimentosDb.js';
 import { listPriceTablesByEnterprise, getPriceTableById } from '../controllers/cv/priceTablesDb.js';
 import { getMirror, saveMirrorSettings } from '../controllers/cv/mirrorDb.js';
+import { getAdimplencia, saveAdimplencia } from '../controllers/cv/adimplenciaDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
 import { fetchWorkflowGroups, createOrUpdateWorkflowGroup, removeWorkflowGroup, fetchListSegments  } from '../controllers/cv/workflowGroups.js';
@@ -46,7 +47,8 @@ const cvPrecadastros = new PrecadastrosSyncController();
 // roda em processo pelos schedulers).
 // Ação `sync` da tela de Empreendimentos (lib/screenCapabilities.js).
 const sincronizarTabelas = requireCapability('/crm/buildings', 'sync');
-// Ação `configure`: espelho de vendas (faces, dormitórios, dígitos do número).
+// Ação `configure`: espelho de vendas (faces, dormitórios, dígitos do número)
+// e adimplência premiada por unidade.
 const configurarEspelho = requireCapability('/crm/buildings', 'configure');
 
 const WORKFLOW_SCREENS = ['/crm/workflow/groups', ...RELATORIO_SCREENS, '/validator'];
@@ -106,6 +108,10 @@ router.get('/price-tables/:idtabela', authenticate, requireRoutePermission(ENTER
 // Espelho de vendas: torres x andares x finais com preço, sol e dormitórios
 router.get('/empreendimento/:id/espelho', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getMirror);
 router.put('/empreendimento/:id/espelho/config', authenticate, configurarEspelho, saveMirrorSettings);
+// Adimplência premiada (Desconto Construtora) por unidade: cadastro do Office
+// com vigência; o CV não expõe o campo por API.
+router.get('/empreendimento/:id/adimplencia', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getAdimplencia);
+router.put('/empreendimento/:id/adimplencia', authenticate, configurarEspelho, saveAdimplencia);
 
 router.get('/workflow-grupos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchWorkflowGroups);
 // ?tipo=repasses

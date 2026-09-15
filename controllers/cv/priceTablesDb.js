@@ -7,8 +7,18 @@
 //
 //   GET /cv/empreendimento/:id/tabelas   → lista leve (sem unidades)
 //   GET /cv/price-tables/:idtabela       → uma tabela com as unidades e séries
+//
+// ADIMPLÊNCIA PREMIADA (Desconto Construtora): por padrão o preço devolvido
+// já vem com ela descontada (`?descontar=0` devolve o preço cheio). De onde
+// vem o valor de cada unidade:
+//   - tabela encerrada → a cópia congelada quando a tabela foi gravada
+//     (coluna `adimplencia`), para o passado não mudar se o cadastro mudar;
+//   - tabela vigente/futura → o cadastro vigente hoje (enterprise_unit_adimplencia);
+//   - sem cópia congelada numa encerrada → o cadastro vigente na data em que a
+//     tabela encerrou.
 import db from '../../models/sequelize/index.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
+import { carregarRegistro, mapaEm, mapaDoSnapshot, descontoDe } from './adimplenciaDb.js';
 
 const { CvEnterprisePriceTable } = db;
 
@@ -48,13 +58,41 @@ const areaOf = (u, original) => {
   return n >= 100000 ? n / 1e6 : n;
 };
 
+// Adimplência premiada que vale para ESTA tabela (ver cabeçalho do arquivo).
+// `registro` = linhas de carregarRegistro(idempreendimento); sem ele, só a
+// cópia congelada conta.
+const adimplenciaDaTabela = (t, registro) => {
+  const situacao = situacaoOf(t.data_vigencia_de, t.data_vigencia_ate);
+  const congelada = t.adimplencia?.unidades ? mapaDoSnapshot(t.adimplencia) : null;
+  if (situacao === 'encerrada') {
+    if (congelada?.size) return { mapa: congelada, fonte: 'congelada', referencia: t.adimplencia.referencia || null };
+    const mapa = registro ? mapaEm(registro, ymd(t.data_vigencia_ate)) : new Map();
+    return { mapa, fonte: mapa.size ? 'cadastro' : 'nenhuma', referencia: ymd(t.data_vigencia_ate) };
+  }
+  const hoje = new Date().toISOString().slice(0, 10);
+  const mapa = registro ? mapaEm(registro, hoje) : new Map();
+  if (mapa.size) return { mapa, fonte: 'cadastro', referencia: hoje };
+  if (congelada?.size) return { mapa: congelada, fonte: 'congelada', referencia: t.adimplencia.referencia || null };
+  return { mapa, fonte: 'nenhuma', referencia: hoje };
+};
+
+// Preço de cada unidade: cheio (CV), desconto e o que vale (líquido quando
+// `descontar`). Tudo que resume ou lista parte daqui.
+const precoDe = (u, adimpl, descontar) => {
+  const cheio = num(u.valor_total);
+  const desconto = descontoDe(cheio, adimpl.mapa.get(Number(u.idunidade)));
+  const valor = cheio == null ? null : (descontar && desconto ? Math.round((cheio - desconto) * 100) / 100 : cheio);
+  return { cheio, desconto, valor };
+};
+
 // Resumo das unidades: quantas, faixa de valor, VGV e R$/m² médio ponderado.
-const summarizeUnits = (unidades, originais) => {
-  let n = 0, vgv = 0, area = 0, min = null, max = null, disponiveis = 0;
+const summarizeUnits = (unidades, originais, adimpl, descontar) => {
+  let n = 0, vgv = 0, area = 0, min = null, max = null, disponiveis = 0, comAdimpl = 0, totalAdimpl = 0;
   for (const u of unidades) {
-    const v = num(u.valor_total);
+    const { desconto, valor: v } = precoDe(u, adimpl, descontar);
     if (v == null) continue;
     n++; vgv += v;
+    if (desconto) { comAdimpl++; totalAdimpl += desconto; }
     const a = areaOf(u, originais.get(u.idunidade));
     if (a) area += a;
     if (min == null || v < min) min = v;
@@ -69,16 +107,20 @@ const summarizeUnits = (unidades, originais) => {
     valor_max: max,
     vgv,
     valor_m2_medio: area > 0 ? vgv / area : null,
+    unidades_com_adimplencia: comAdimpl,
+    adimplencia_total: Math.round(totalAdimpl * 100) / 100,
   };
 };
 
-export const toRow = (t, { withUnits = false } = {}) => {
+export const toRow = (t, { withUnits = false, descontar = true, registro = null } = {}) => {
   const raw = t.raw || {};
   const unidades = unitsOf(raw);
   const meta = raw.metadados ? { ...raw.metadados } : null;
   // texto original de cada unidade, por idunidade (ver areaOf)
   const originais = new Map((meta?.unidades || []).map((u) => [u.idunidade, u]));
   if (meta) delete meta.unidades;
+  const adimpl = adimplenciaDaTabela(t, registro);
+  const resumo = summarizeUnits(unidades, originais, adimpl, descontar);
   const row = {
     idtabela: t.idtabela,
     idempreendimento: t.idempreendimento,
@@ -97,12 +139,20 @@ export const toRow = (t, { withUnits = false } = {}) => {
     referencia: meta?.referencia || null,
     primeira_sincronizacao: t.createdAt ?? t.created_at ?? null,
     ultima_sincronizacao: t.updatedAt ?? t.updated_at ?? null,
-    resumo: summarizeUnits(unidades, originais),
+    resumo,
+    // como a adimplência premiada entrou nesta leitura
+    adimplencia: {
+      descontada: Boolean(descontar),
+      fonte: adimpl.fonte,           // congelada | cadastro | nenhuma
+      referencia: adimpl.referencia, // data a que o valor se refere
+      unidades: resumo.unidades_com_adimplencia,
+      total: resumo.adimplencia_total,
+    },
   };
   if (withUnits) {
     row.metadados = meta;
     row.unidades = unidades.map((u) => {
-      const valor = num(u.valor_total);
+      const { cheio, desconto, valor } = precoDe(u, adimpl, descontar);
       const area = areaOf(u, originais.get(u.idunidade));
       return {
         idunidade: u.idunidade ?? null,
@@ -111,7 +161,9 @@ export const toRow = (t, { withUnits = false } = {}) => {
         unidade: u.unidade ?? null,
         area_privativa: area,
         situacao: u.situacao ?? null,
-        valor_total: valor,
+        valor_tabela: cheio,               // preço cheio, como está no CV
+        adimplencia_premiada: desconto,    // R$ que sai quando descontada
+        valor_total: valor,                // o que vale nesta leitura
         valor_m2: valor != null && area ? valor / area : null,
         series: (u.series || []).map((s) => ({
           nome: s.nome ?? null,
@@ -124,6 +176,18 @@ export const toRow = (t, { withUnits = false } = {}) => {
   }
   return row;
 };
+
+// `?descontar=0|false|nao` = preço cheio; qualquer outra coisa = descontado.
+const descontarDe = (req) => !/^(0|false|n|nao|não)$/i.test(String(req.query?.descontar ?? '').trim());
+
+/** Todas as tabelas do empreendimento já lidas (para a tool da Eme). */
+export async function lerTabelas(idempreendimento, { withUnits = true, descontar = true } = {}) {
+  const [rows, registro] = await Promise.all([
+    CvEnterprisePriceTable.findAll({ where: { idempreendimento }, order: [['data_vigencia_de', 'DESC NULLS LAST'], ['idtabela', 'DESC']] }),
+    carregarRegistro(idempreendimento),
+  ]);
+  return rows.map((t) => toRow(t, { withUnits, descontar, registro }));
+}
 
 // Não-admin só enxerga tabela de empreendimento do seu escopo (mesma regra
 // de /cv/empreendimento/:id). Devolve true quando pode.
@@ -140,11 +204,7 @@ export const listPriceTablesByEnterprise = async (req, res) => {
     if (!(await podeVer(req.user, id))) {
       return res.status(403).json({ error: 'Empreendimento fora do seu escopo.' });
     }
-    const rows = await CvEnterprisePriceTable.findAll({
-      where: { idempreendimento: id },
-      order: [['data_vigencia_de', 'DESC NULLS LAST'], ['idtabela', 'DESC']],
-    });
-    return res.json(rows.map((t) => toRow(t)));
+    return res.json(await lerTabelas(id, { withUnits: false, descontar: descontarDe(req) }));
   } catch (err) {
     console.error('Erro ao listar tabelas de preço (DB):', err);
     return res.status(500).json({ error: 'Erro ao listar tabelas de preço.' });
@@ -161,7 +221,8 @@ export const getPriceTableById = async (req, res) => {
     if (!(await podeVer(req.user, t.idempreendimento))) {
       return res.status(403).json({ error: 'Empreendimento fora do seu escopo.' });
     }
-    return res.json(toRow(t, { withUnits: true }));
+    const registro = await carregarRegistro(t.idempreendimento);
+    return res.json(toRow(t, { withUnits: true, descontar: descontarDe(req), registro }));
   } catch (err) {
     console.error('Erro ao buscar tabela de preço (DB):', err);
     return res.status(500).json({ error: 'Erro ao buscar tabela de preço.' });

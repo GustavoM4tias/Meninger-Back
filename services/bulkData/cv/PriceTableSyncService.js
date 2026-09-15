@@ -13,6 +13,7 @@
 import apiCv from '../../../lib/apiCv.js';
 import db from '../../../models/sequelize/index.js';
 import crypto from 'crypto';
+import { snapshotPara } from '../../../controllers/cv/adimplenciaDb.js';
 
 const { CvEnterprise, CvEnterprisePriceTable } = db;
 
@@ -221,6 +222,16 @@ async function upsertTable(idempreendimento, idtabela, tableData, meta, unidades
         return;
     }
 
+    // Adimplência premiada (Desconto Construtora) de cada unidade NESTE
+    // momento: fica congelada na tabela, para a tabela encerrada não mudar de
+    // preço líquido se o cadastro mudar depois (ver controllers/cv/adimplenciaDb.js).
+    let adimplencia = null;
+    try {
+        adimplencia = await snapshotPara(idempreendimento, unidades.map((u) => u.idunidade).filter((x) => x != null));
+    } catch (err) {
+        warn(eid, `  adimplência premiada não lida (${err?.message ?? err}); tabela segue sem a cópia`);
+    }
+
     const data = {
         idtabela,
         idempreendimento,
@@ -239,6 +250,7 @@ async function upsertTable(idempreendimento, idtabela, tableData, meta, unidades
         referencia_comissao:     null,
         raw,
         content_hash:            h,
+        adimplencia,
     };
 
     if (!existing) {

@@ -19,8 +19,12 @@
 //                                      senão R$/m² do andar configurado x área
 //                                      (estimativa, marcada como tal)
 //   - face / sol / dormitórios / tipologia → enterprise_mirror_settings
+//   - adimplência premiada (Desconto Construtora) → enterprise_unit_adimplencia,
+//     vigente hoje; o preço da célula já vem com ela descontada e `valor_cheio`
+//     guarda o cheio
 import db from '../../models/sequelize/index.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
+import { mapaVigente, descontoDe } from './adimplenciaDb.js';
 
 const {
   CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
@@ -187,10 +191,11 @@ async function loadSettings(idempreendimento) {
 
 // ── Montagem ─────────────────────────────────────────────────────────────────
 export async function montarEspelho(idempreendimento) {
-  const [{ settings, row }, etapas, tabela] = await Promise.all([
+  const [{ settings, row }, etapas, tabela, adimplencia] = await Promise.all([
     loadSettings(idempreendimento),
     CvEnterpriseStage.findAll({ where: { idempreendimento }, order: [['idetapa', 'ASC']] }),
     tabelaReferencia(idempreendimento),
+    mapaVigente(idempreendimento).catch(() => new Map()),
   ]);
   const etapaIds = etapas.map((e) => e.idetapa);
   const blocos = etapaIds.length
@@ -215,7 +220,7 @@ export async function montarEspelho(idempreendimento) {
 
   // 1) cada unidade vira uma célula com torre/andar/final resolvidos
   const cells = [];
-  let fonteCv = 0, fonteTabela = 0, fonteEstimado = 0, semPreco = 0;
+  let fonteCv = 0, fonteTabela = 0, fonteEstimado = 0, semPreco = 0, comAdimplencia = 0;
   for (const u of unidades) {
     const bloco = blocoPorId.get(u.idbloco);
     const etapa = bloco ? etapaPorId.get(bloco.idetapa) : null;
@@ -244,6 +249,11 @@ export async function montarEspelho(idempreendimento) {
     // Preço, em cascata: CV → tabela → R$/m² do andar → R$/m² do final
     const m2Final = cfg.valor_m2 || null;
     if (valor == null && m2Final && area) { valor = Math.round(m2Final * area * 100) / 100; fonte = 'estimado'; fonteEstimado++; semPreco--; }
+
+    // Adimplência premiada: sai do preço, seja ele de onde for
+    const valorCheio = valor;
+    const adimpl = descontoDe(valor, adimplencia.get(Number(u.idunidade)));
+    if (adimpl) { valor = Math.round((valor - adimpl) * 100) / 100; comAdimplencia++; }
 
     // Tipologia: cadastro → CV → tipo automático pela área
     const letra = area ? tipoAuto.get(area) : null;
@@ -280,6 +290,8 @@ export async function montarEspelho(idempreendimento) {
       sol_label: face?.sol_label || null,
       valor,
       valor_fonte: fonte,
+      valor_cheio: valorCheio,
+      adimplencia_premiada: adimpl,
       valor_m2: valor != null && area ? valor / area : null,
     });
   }
@@ -349,6 +361,7 @@ export async function montarEspelho(idempreendimento) {
     multi_bloco: multiBloco,
     fonte_preco: {
       cv: fonteCv, tabela: fonteTabela, estimado: fonteEstimado, sem_preco: semPreco,
+      com_adimplencia: comAdimplencia,
       tabela_ref: tabela ? { idtabela: tabela.idtabela, nome: tabela.nome, vigente: tabela.vigente, data_vigencia_de: tabela.data_vigencia_de, data_vigencia_ate: tabela.data_vigencia_ate } : null,
     },
     torres: torresOut,

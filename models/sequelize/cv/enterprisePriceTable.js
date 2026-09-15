@@ -24,6 +24,10 @@ export default (sequelize, DataTypes) => {
 
         raw: { type: DataTypes.JSONB },
         content_hash: { type: DataTypes.STRING(64) },
+        // Cópia da adimplência premiada por unidade no momento em que a tabela
+        // foi gravada/atualizada (ver enterprise_unit_adimplencia):
+        // { referencia: 'YYYY-MM-DD', unidades: { '<idunidade>': { tipo, valor } } }
+        adimplencia: { type: DataTypes.JSONB },
     }, {
         tableName: 'cv_enterprise_price_tables',
         indexes: [
