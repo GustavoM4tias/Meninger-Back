@@ -167,13 +167,15 @@ function decompor(numero, { digitos_final, digitos_andar }) {
 }
 
 // Horizontal: "QD 03 - LT 12", "Quadra A Lote 7", "CASA 45", "Q3L12".
-const QUADRA_RE = /\bQ(?:D|DA|UADRA)?\.?\s*[:-]?\s*([A-Z]{1,2}|\d{1,3})\b/i;
+// A quadra é tudo entre o "QD" e o separador ou o "LT": no Parque Alameda
+// ela é "NE 22.05.15" ("QD NE 22.05.15 - LT 01"), não só "NE".
+const QUADRA_RE = /\bQ(?:D|DA|UADRA)?\.?\s*[:-]?\s*(.+?)\s*(?:[-–|,;]|\bL(?:T|OTE)?(?![A-Z])|$)/i;
 const LOTE_RE = /\bL(?:T|OTE)?\.?\s*[:-]?\s*(\d{1,4})\b/i;
 function decomporHorizontal(nome) {
   const s = String(nome || '');
   const q = s.match(QUADRA_RE);
   const l = s.match(LOTE_RE);
-  const quadra = q ? String(q[1]).toUpperCase().replace(/^0+(\d)/, '$1') : null;
+  const quadra = q ? String(q[1]).toUpperCase().replace(/^0+(\d)/, '$1').replace(/\s+/g, ' ') : null;
   const lote = l ? String(parseInt(l[1], 10)) : (numeroDe(s) != null ? String(parseInt(numeroDe(s), 10)) : null);
   return { quadra, lote };
 }
