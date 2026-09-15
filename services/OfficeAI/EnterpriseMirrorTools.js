@@ -57,10 +57,11 @@ function agrupar(cells, chave, rotulo) {
     const g = new Map();
     for (const c of cells) {
         const k = chave(c);
-        if (!g.has(k)) g.set(k, { grupo: rotulo(c, k), unidades: 0, disponiveis: 0, vendidas: 0, bloqueadas: 0, reservadas: 0, m2: [], m2_disp: [], areas: [] });
+        if (!g.has(k)) g.set(k, { grupo: rotulo(c, k), unidades: 0, disponiveis: 0, vendidas: 0, bloqueadas: 0, reservadas: 0, m2: [], m2_disp: [], areas: [], precos: [], precos_disp: [] });
         const r = g.get(k);
         r.unidades++;
-        if (c.status === 'disponivel') { r.disponiveis++; if (c.valor_m2) r.m2_disp.push(c.valor_m2); }
+        if (c.valor) r.precos.push(c.valor);
+        if (c.status === 'disponivel') { r.disponiveis++; if (c.valor_m2) r.m2_disp.push(c.valor_m2); if (c.valor) r.precos_disp.push(c.valor); }
         else if (c.status === 'vendida') r.vendidas++;
         else if (c.status === 'bloqueada') r.bloqueadas++;
         else if (c.status.startsWith('reserva')) r.reservadas++;
@@ -70,6 +71,8 @@ function agrupar(cells, chave, rotulo) {
     return [...g.values()].map((r) => ({
         grupo: r.grupo, unidades: r.unidades, disponiveis: r.disponiveis, vendidas: r.vendidas, bloqueadas: r.bloqueadas, reservadas: r.reservadas,
         pct_vendido: r.unidades ? r.vendidas / r.unidades : null,
+        preco_medio: media(r.precos), preco_min: r.precos.length ? Math.min(...r.precos) : null, preco_max: r.precos.length ? Math.max(...r.precos) : null,
+        preco_medio_disponivel: media(r.precos_disp),
         area_media: media(r.areas), m2_medio: media(r.m2), m2_disponivel: media(r.m2_disp),
     }));
 }
@@ -82,9 +85,12 @@ const COLS_GRUPO = (label) => [
     { key: 'pct_vendido', label: '% vendido', type: 'percent' },
     { key: 'bloqueadas', label: 'Bloqueadas', type: 'number' },
     { key: 'reservadas', label: 'Reservadas', type: 'number' },
+    { key: 'preco_medio', label: 'Preço médio', type: 'currency', priority: 1 },
+    { key: 'preco_min', label: 'Menor preço', type: 'currency' },
+    { key: 'preco_max', label: 'Maior preço', type: 'currency' },
     { key: 'area_media', label: 'Área média (m²)', type: 'number' },
-    { key: 'm2_medio', label: 'R$/m² médio', type: 'currency' },
-    { key: 'm2_disponivel', label: 'R$/m² disponível', type: 'currency' },
+    { key: 'm2_medio', label: 'R$/m² médio', type: 'currency', priority: 3 },
+    { key: 'm2_disponivel', label: 'R$/m² disponível', type: 'currency', priority: 3 },
 ];
 const COLS_UNIDADE = [
     { key: 'unidade', label: 'Unidade', type: 'text', priority: 1 },
@@ -105,7 +111,7 @@ const linhaUnidade = (m, c) => ({
     area: c.area, valor_m2: c.valor_m2 != null ? Math.round(c.valor_m2) : null, dorm: c.dorm, sol: c.sol_label || null, tipologia: c.tipologia,
     fonte: c.valor_fonte === 'cv' ? 'CV' : c.valor_fonte === 'tabela' ? 'tabela' : c.valor_fonte === 'estimado' ? 'estimado' : null,
 });
-const textoGrupos = (rows) => rows.map((r) => `${r.grupo}: ${r.vendidas}/${r.unidades} vendidas (${pct(r.pct_vendido)}), ${r.disponiveis} disp., ${r.bloqueadas} bloq.${r.reservadas ? `, ${r.reservadas} res.` : ''}; área média ${num2(r.area_media)} m²; R$/m² médio ${brl(r.m2_medio)}${r.m2_disponivel ? ` (disponíveis ${brl(r.m2_disponivel)})` : ''}`).join('\n');
+const textoGrupos = (rows) => rows.map((r) => `${r.grupo}: ${r.vendidas}/${r.unidades} vendidas (${pct(r.pct_vendido)}), ${r.disponiveis} disp., ${r.bloqueadas} bloq.${r.reservadas ? `, ${r.reservadas} res.` : ''}; preço médio ${brl(r.preco_medio)} (de ${brl(r.preco_min)} a ${brl(r.preco_max)}${r.preco_medio_disponivel ? `; disponíveis ${brl(r.preco_medio_disponivel)}` : ''}); área média ${num2(r.area_media)} m²; R$/m² ${brl(r.m2_medio)}`).join('\n');
 const textoUnidades = (rows) => rows.map((r) => `${r.unidade} | ${r.situacao} | ${r.torre} ${r.andar} final ${r.final} | ${num2(r.area)} m² | ${r.dorm ?? '?'} dorm | ${r.sol || 'sol ?'} | ${brl(r.valor)}${r.fonte === 'estimado' ? ' (est.)' : ''} | ${brl(r.valor_m2)}/m²`).join('\n');
 
 function filtrar(m, cells, args) {
@@ -183,12 +189,12 @@ function sinaisReajuste(m, tabelas) {
 // ── A tool ───────────────────────────────────────────────────────────────────
 registerTool({
     name: 'empreendimento_espelho',
-    description: 'ESPELHO DE VENDAS de um empreendimento (a aba Espelho de /crm/buildings): estoque por torre, andar e final com situação (disponível, vendida, bloqueada, reservada), metragem (área privativa), dormitórios, tipologia, lado do sol (manhã/tarde), preço e R$/m² de cada unidade, R$/m² médio dos disponíveis e de tudo, histórico de TABELAS DE PREÇO e comparação entre duas tabelas, e SINAIS para reajuste. Use para: "quais unidades estão disponíveis/vendidas/bloqueadas do X", "quais são sol da manhã", "qual andar/torre/fase mais vendeu", "qual tipo mais vende", "R$/m² médio", "metragem das unidades", "tabelas de preço do X", "o que mudou da tabela A para a B", "sugestão de reajuste". Quando a pessoa está com um empreendimento aberto na tela, passe o nome dele em `empreendimento`. Não responda estoque, preço ou sol de memória: chame esta tool.',
+    description: 'ESPELHO DE VENDAS de um empreendimento (a aba Espelho de /crm/buildings): PREÇO em R$ de cada unidade, estoque por torre, andar e final com situação (disponível, vendida, bloqueada, reservada), metragem (área privativa), dormitórios, tipologia, lado do sol (manhã/tarde), R$/m², histórico de TABELAS DE PREÇO (com o preço de cada unidade em cada tabela), comparação entre duas tabelas e SINAIS para reajuste. Use para: "qual o preço da unidade X / das disponíveis", "quanto custa", "preço da tabela", "quais unidades estão disponíveis/vendidas/bloqueadas", "quais são sol da manhã", "qual andar/torre/fase mais vendeu", "qual tipo mais vende", "metragem", "R$/m²", "tabelas de preço", "o que mudou da tabela A para a B", "sugestão de reajuste". Preço é sempre o VALOR da unidade em R$; R$/m² só quando pedirem por metro. Quando a pessoa está com um empreendimento aberto na tela, passe o nome dele em `empreendimento`. Não responda estoque, preço ou sol de memória: chame esta tool.',
     parameters: {
         type: 'object',
         properties: {
             empreendimento: { type: 'string', description: 'Nome (parcial) ou id do CV do empreendimento. Obrigatório.' },
-            analise: { type: 'string', enum: ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'comparar_tabelas', 'reajuste'], description: '"resumo" (padrão: KPIs + andares + tipos + sol), "unidades" (lista filtrada), "andares"/"torres"/"tipos"/"sol" (agrupado), "tabelas" (histórico de tabelas de preço), "comparar_tabelas" (duas tabelas, unidade a unidade), "reajuste" (sinais de reajuste).' },
+            analise: { type: 'string', enum: ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste'], description: '"unidades" = lista de unidades com PREÇO em R$, área, dormitórios e sol (use para "preço", "quais unidades", "quanto custa", "sol da manhã", "2 dormitórios"); "resumo" = KPIs + andares + tipos + sol; "andares"/"torres"/"tipos"/"sol" = agrupado com preço médio; "tabelas" = histórico de tabelas de preço; "unidades_tabela" = preço de cada unidade em UMA tabela (com séries de pagamento); "comparar_tabelas" = duas tabelas unidade a unidade; "reajuste" = sinais de reajuste.' },
             situacao: { type: 'string', enum: ['disponiveis', 'vendidas', 'bloqueadas', 'reservadas', 'todas'], description: 'Filtro de situação para "unidades" e agrupamentos. Padrão: todas.' },
             sol: { type: 'string', description: 'Filtro por sol: "manhã" ou "tarde" (também "leste"/"oeste").' },
             torre: { type: 'string', description: 'Filtro por torre/bloco (ex.: "Torre 2", "B").' },
@@ -209,30 +215,56 @@ registerTool({
         if (!achado.ent) return { result: { message: achado.erro, empreendimentos_visiveis: achado.opcoes } };
         const ent = achado.ent;
         const id = ent.idempreendimento;
-        const analise = ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'comparar_tabelas', 'reajuste'].includes(args.analise) ? args.analise : 'resumo';
+        const analise = ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste'].includes(args.analise) ? args.analise : 'resumo';
         const link = (tab) => abrirTela(SCREEN, `Abrir ${ent.nome} no Office`, { open: id, tab });
         const cab = `${ent.nome} (${ent.cidade || 'cidade ?'}, ${ent.tipo_empreendimento_nome || 'tipo ?'}, CV ${id})`;
 
         // ── tabelas de preço ─────────────────────────────────────────────
-        if (analise === 'tabelas' || analise === 'comparar_tabelas') {
+        if (analise === 'tabelas' || analise === 'comparar_tabelas' || analise === 'unidades_tabela') {
             const tabelas = await tabelasDe(id);
             if (!tabelas.length) return { result: { message: `${cab}: nenhuma tabela de preço lida do CV. O sync roda todo dia às 9h; se o CV tem tabela e ela não aparece, um admin pode sincronizar na aba Tabelas de preço.`, blocks: [] } };
             if (analise === 'tabelas') {
-                const rows = tabelas.map((t) => ({ tabela: t.nome, situacao: t.situacao, vigencia: `${t.data_vigencia_de || '?'} → ${t.data_vigencia_ate || '?'}`, unidades: t.resumo.unidades, disponiveis: t.resumo.disponiveis, valor_min: t.resumo.valor_min, valor_max: t.resumo.valor_max, m2_medio: t.resumo.valor_m2_medio != null ? Math.round(t.resumo.valor_m2_medio) : null, forma: t.forma, aprovada: t.aprovado ? 'sim' : 'não', id: t.idtabela }));
+                const rows = tabelas.map((t) => ({ tabela: t.nome, situacao: t.situacao, vigencia: `${t.data_vigencia_de || '?'} → ${t.data_vigencia_ate || '?'}`, unidades: t.resumo.unidades, disponiveis: t.resumo.disponiveis, valor_min: t.resumo.valor_min, valor_max: t.resumo.valor_max, valor_medio: t.resumo.com_valor ? t.resumo.vgv / t.resumo.com_valor : null, m2_medio: t.resumo.valor_m2_medio != null ? Math.round(t.resumo.valor_m2_medio) : null, forma: t.forma, aprovada: t.aprovado ? 'sim' : 'não', id: t.idtabela }));
                 return {
                     result: {
                         empreendimento: cab,
-                        tabelas: rows.map((r) => `#${r.id} ${r.tabela} | ${r.situacao} | ${r.vigencia} | ${r.unidades} unid. (${r.disponiveis} disp.) | ${brl(r.valor_min)} a ${brl(r.valor_max)} | ${brl(r.m2_medio)}/m² | ${r.forma || ''}`).join('\n'),
-                        message: `${tabelas.length} tabela(s) no histórico (o sync nunca apaga: tabela que saiu do CV continua aqui). Para comparar duas, chame analise=comparar_tabelas com tabela_a e tabela_b (ou sem, para as duas mais recentes).`,
+                        tabelas: rows.map((r) => `#${r.id} ${r.tabela} | ${r.situacao} | ${r.vigencia} | ${r.unidades} unid. (${r.disponiveis} disp.) | preços de ${brl(r.valor_min)} a ${brl(r.valor_max)}, médio ${brl(r.valor_medio)} | ${brl(r.m2_medio)}/m² | ${r.forma || ''}`).join('\n'),
+                        message: `${tabelas.length} tabela(s) no histórico (o sync nunca apaga: tabela que saiu do CV continua aqui). "Preço da tabela" = os VALORES das unidades (menor, maior, médio em R$), não R$/m². Para o preço de cada unidade numa tabela, chame analise=unidades_tabela com a tabela; para comparar duas, analise=comparar_tabelas com tabela_a e tabela_b (ou sem, para as duas mais recentes).`,
                         blocks: [datasetBlock({ title: `Tabelas de preço · ${ent.nome}`, subtitle: `${tabelas.length} tabela(s)`, source: 'CV (espelho no Office)', visual: 'table', columns: [
                             { key: 'tabela', label: 'Tabela', type: 'text', priority: 1 }, { key: 'situacao', label: 'Situação', type: 'badge', priority: 1 }, { key: 'vigencia', label: 'Vigência', type: 'text' },
-                            { key: 'unidades', label: 'Unidades', type: 'number' }, { key: 'disponiveis', label: 'Disp.', type: 'number' }, { key: 'valor_min', label: 'Menor', type: 'currency' }, { key: 'valor_max', label: 'Maior', type: 'currency' }, { key: 'm2_medio', label: 'R$/m² médio', type: 'currency' }, { key: 'forma', label: 'Forma', type: 'text', priority: 3 },
+                            { key: 'valor_medio', label: 'Preço médio', type: 'currency', priority: 1 }, { key: 'valor_min', label: 'Menor preço', type: 'currency' }, { key: 'valor_max', label: 'Maior preço', type: 'currency' },
+                            { key: 'unidades', label: 'Unidades', type: 'number' }, { key: 'disponiveis', label: 'Disp.', type: 'number' }, { key: 'm2_medio', label: 'R$/m² médio', type: 'currency', priority: 3 }, { key: 'forma', label: 'Forma', type: 'text', priority: 3 },
                         ], rows, actions: [link('tabelas')] })],
                     },
                     resultCount: tabelas.length,
                 };
             }
             const comUnid = tabelas.filter((t) => t.unidades.length);
+            if (analise === 'unidades_tabela') {
+                const t = (args.tabela_a && acharTabela(tabelas, args.tabela_a)) || (args.tabela_b && acharTabela(tabelas, args.tabela_b)) || comUnid.find((x) => x.situacao === 'vigente') || comUnid[0];
+                if (!t) return { result: { message: 'Nenhuma tabela com unidades para listar.' } };
+                const sit = norm(args.situacao);
+                const q = norm(args.torre);
+                let us = t.unidades.filter((u) => u.valor_total);
+                if (sit && sit !== 'todas') us = us.filter((u) => norm(u.situacao).startsWith(sit.replace(/s$/, '').replace('disponivei', 'dispon').replace('vendida', 'vendid').replace('bloqueada', 'bloq').replace('reservada', 'reserv')));
+                if (q) us = us.filter((u) => norm(u.bloco).includes(q) || norm(u.unidade).includes(q));
+                if (args.preco_max != null) us = us.filter((u) => u.valor_total <= Number(args.preco_max));
+                us.sort((x, y) => (x.bloco || '').localeCompare(y.bloco || '') || (x.unidade || '').localeCompare(y.unidade || '', 'pt-BR', { numeric: true }));
+                const rows = us.map((u) => ({ unidade: u.unidade, bloco: u.bloco, situacao: u.situacao, valor: u.valor_total, area: u.area_privativa, valor_m2: u.valor_m2 != null ? Math.round(u.valor_m2) : null, series: (u.series || []).map((sr) => `${sr.nome}: ${sr.qtd_parcelas || 1}x ${brl(sr.valor)}`).join(' · ') }));
+                const vals = us.map((u) => u.valor_total);
+                return {
+                    result: {
+                        empreendimento: cab, tabela: `${t.nome} (${t.situacao}, ${t.data_vigencia_de || '?'} → ${t.data_vigencia_ate || '?'})`,
+                        total: rows.length, preco_medio: brl(media(vals)), faixa: vals.length ? `${brl(Math.min(...vals))} a ${brl(Math.max(...vals))}` : '-',
+                        unidades: rows.slice(0, MAX_ROWS_MODELO).map((r) => `${r.unidade} | ${r.bloco || ''} | ${r.situacao || ''} | ${brl(r.valor)} | ${num2(r.area)} m² | ${brl(r.valor_m2)}/m²${r.series ? ` | ${r.series}` : ''}`).join('\n') + (rows.length > MAX_ROWS_MODELO ? `\n... e mais ${rows.length - MAX_ROWS_MODELO} (a tabela na tela tem todas)` : ''),
+                        message: `${rows.length} unidade(s) na tabela ${t.nome}. REGRA DE PREÇO: quando a pessoa pergunta preço/valor, responda o VALOR DA UNIDADE em R$ (e cite as unidades com o preço de cada uma); só fale em R$/m² se ela pedir por metro. Sempre que citar uma unidade, traga número, preço, área, dormitórios e sol juntos. As séries (ato, mensais, chaves) estão em cada linha quando a pessoa perguntar condição de pagamento.`,
+                        blocks: [datasetBlock({ title: `${t.nome} · ${ent.nome}`, subtitle: `${t.situacao} · ${t.data_vigencia_de || '?'} → ${t.data_vigencia_ate || '?'}`, source: 'Tabela de preço do CV', visual: 'table', columns: [
+                            { key: 'unidade', label: 'Unidade', type: 'text', priority: 1 }, { key: 'valor', label: 'Preço', type: 'currency', priority: 1 }, { key: 'situacao', label: 'Situação', type: 'badge' }, { key: 'bloco', label: 'Bloco', type: 'text' }, { key: 'area', label: 'Área (m²)', type: 'number' }, { key: 'valor_m2', label: 'R$/m²', type: 'currency', priority: 3 }, { key: 'series', label: 'Séries', type: 'text', priority: 3 },
+                        ], rows: rows.slice(0, MAX_ROWS_BLOCO), truncated: rows.length > MAX_ROWS_BLOCO, total: rows.length, actions: [abrirTela(SCREEN, `Abrir tabela no Office`, { open: id, tab: 'tabelas', tabela: t.idtabela })] })],
+                    },
+                    resultCount: rows.length,
+                };
+            }
             let a = args.tabela_a ? acharTabela(tabelas, args.tabela_a) : comUnid[1];
             let b = args.tabela_b ? acharTabela(tabelas, args.tabela_b) : comUnid[0];
             if (!a || !b) return { result: { message: `Preciso de duas tabelas com unidades para comparar. Encontradas: ${tabelas.map((t) => `#${t.idtabela} ${t.nome} (${t.unidades.length} unid.)`).join('; ')}.` } };
@@ -268,15 +300,19 @@ registerTool({
         const r = m.resumo;
         const comPreco = todas.filter((c) => c.valor_m2);
         const m2Tudo = media(comPreco.map((c) => c.valor_m2));
+        const precos = todas.map((c) => c.valor).filter(Boolean);
+        const precosDisp = todas.filter((c) => c.status === 'disponivel').map((c) => c.valor).filter(Boolean);
+        const faixa = (a) => (a.length ? `${brl(Math.min(...a))} a ${brl(Math.max(...a))}` : '-');
         const areaMedia = media(todas.map((c) => c.area).filter(Boolean));
         const fonte = m.fonte_preco;
         const notaPreco = `Preço: ${fonte.cv} do CV, ${fonte.tabela} de tabela${fonte.tabela_ref ? ` (${fonte.tabela_ref.nome})` : ''}, ${fonte.estimado} estimadas por R$/m² configurado, ${fonte.sem_preco} sem preço.${m.configurado ? '' : ' Este empreendimento ainda NÃO tem faces/sol configuradas no espelho.'}`;
         const kpis = kpisBlock({ title: `Estoque · ${ent.nome}`, kpis: [
             { label: 'Unidades', value: r.unidades, type: 'number' }, { label: 'Disponíveis', value: r.disponiveis, type: 'number', tone: 'pos' },
             { label: 'Vendidas', value: r.vendidas, type: 'number', tone: 'neg' }, { label: 'Bloqueadas', value: r.bloqueadas, type: 'number' }, { label: 'Reservadas', value: r.reservadas, type: 'number' },
-            { label: 'VGV disponível', value: r.vgv_disponivel, type: 'currency' }, { label: 'R$/m² disponíveis', value: r.valor_m2_disponivel, type: 'currency' }, { label: 'R$/m² geral', value: m2Tudo, type: 'currency' }, { label: 'Área média', value: areaMedia, type: 'number', unit: 'm²' },
+            { label: 'Preço médio (disponíveis)', value: media(precosDisp), type: 'currency' }, { label: 'VGV disponível', value: r.vgv_disponivel, type: 'currency' },
+            { label: 'R$/m² disponíveis', value: r.valor_m2_disponivel, type: 'currency' }, { label: 'Área média', value: areaMedia, type: 'number', unit: 'm²' },
         ] });
-        const textoResumo = `${cab}: ${r.unidades} unidades, ${r.disponiveis} disponíveis, ${r.vendidas} vendidas (${pct(r.unidades ? r.vendidas / r.unidades : null)}), ${r.bloqueadas} bloqueadas, ${r.reservadas} reservadas. VGV disponível ${brl(r.vgv_disponivel)}. R$/m² médio ponderado dos disponíveis ${brl(r.valor_m2_disponivel)}; R$/m² médio de todas com preço ${brl(m2Tudo)}; área média ${num2(areaMedia)} m². ${m.torres.length} torre(s): ${m.torres.map((t) => `${t.nome} ${t.resumo.disponiveis}/${t.resumo.unidades} disp.`).join(', ')}.`;
+        const textoResumo = `${cab}: ${r.unidades} unidades, ${r.disponiveis} disponíveis, ${r.vendidas} vendidas (${pct(r.unidades ? r.vendidas / r.unidades : null)}), ${r.bloqueadas} bloqueadas, ${r.reservadas} reservadas. PREÇO das disponíveis: médio ${brl(media(precosDisp))}, de ${faixa(precosDisp)}; VGV disponível ${brl(r.vgv_disponivel)}. Preço de todas com valor: médio ${brl(media(precos))}, de ${faixa(precos)}. R$/m²: disponíveis ${brl(r.valor_m2_disponivel)} (ponderado), geral ${brl(m2Tudo)}; área média ${num2(areaMedia)} m². ${m.torres.length} torre(s): ${m.torres.map((t) => `${t.nome} ${t.resumo.disponiveis}/${t.resumo.unidades} disp.`).join(', ')}.`;
 
         if (analise === 'unidades') {
             const sel = filtrar(m, todas, args).sort((x, y) => (x.torre_nome.localeCompare(y.torre_nome)) || ((y.andar ?? -1) - (x.andar ?? -1)) || (Number(x.final) - Number(y.final)));
@@ -289,7 +325,7 @@ registerTool({
                     m2_medio: brl(media(sel.map((c) => c.valor_m2).filter(Boolean))),
                     unidades: textoUnidades(rows.slice(0, MAX_ROWS_MODELO)) + (rows.length > MAX_ROWS_MODELO ? `\n... e mais ${rows.length - MAX_ROWS_MODELO} (a tabela na tela tem todas)` : ''),
                     nota: notaPreco,
-                    message: rows.length ? `${rows.length} unidade(s) no filtro. Liste o que foi pedido (números das unidades quando couber) e some/medie só a partir destes dados; preço "est." é estimado, diga isso.` : 'Nenhuma unidade nesse filtro. Diga isso e sugira afrouxar o filtro.',
+                    message: rows.length ? `${rows.length} unidade(s) no filtro. Liste as unidades pedidas com número, PREÇO em R$, área, dormitórios e sol; some/medie só a partir destes dados; preço "est." é estimado, diga isso uma vez. REGRA DE PREÇO: quando a pessoa pergunta preço/valor, responda o VALOR DA UNIDADE em R$ (e cite as unidades com o preço de cada uma); só fale em R$/m² se ela pedir por metro. Sempre que citar uma unidade, traga número, preço, área, dormitórios e sol juntos.` : 'Nenhuma unidade nesse filtro. Diga isso e sugira afrouxar o filtro.',
                     blocks: [datasetBlock({ title: `Unidades · ${ent.nome}`, subtitle: `filtros: ${filtros}`, source: 'Espelho (CV + configuração)', visual: 'table', columns: COLS_UNIDADE, rows: rows.slice(0, MAX_ROWS_BLOCO), truncated: rows.length > MAX_ROWS_BLOCO, total: rows.length, actions: [link('espelho')] })],
                 },
                 resultCount: rows.length,
@@ -326,7 +362,7 @@ registerTool({
             return {
                 result: {
                     empreendimento: cab, agrupado_por: rotulo[analise], grupos: textoGrupos(rows), nota: notaPreco,
-                    message: rows.length ? `Responda com o ranking pedido (mais vendido = maior % vendido ou maior nº de vendidas, diga qual usou).` : (analise === 'sol' ? 'Sem lado do sol configurado para este empreendimento: peça a um admin para configurar as faces na aba Espelho.' : 'Sem dados para esse agrupamento.'),
+                    message: rows.length ? `Responda com o ranking pedido (mais vendido = maior % vendido ou maior nº de vendidas, diga qual usou). REGRA DE PREÇO: quando a pessoa pergunta preço/valor, responda o VALOR DA UNIDADE em R$ (e cite as unidades com o preço de cada uma); só fale em R$/m² se ela pedir por metro. Sempre que citar uma unidade, traga número, preço, área, dormitórios e sol juntos.` : (analise === 'sol' ? 'Sem lado do sol configurado para este empreendimento: peça a um admin para configurar as faces na aba Espelho.' : 'Sem dados para esse agrupamento.'),
                     blocks: [datasetBlock({ title: `Por ${rotulo[analise].toLowerCase()} · ${ent.nome}`, source: 'Espelho', visual: 'table', columns: COLS_GRUPO(rotulo[analise]), rows, actions: [link('espelho')] })],
                 },
                 resultCount: rows.length,
@@ -337,7 +373,7 @@ registerTool({
                 empreendimento: cab, resumo: textoResumo,
                 por_andar: textoGrupos(grupos.andares), por_tipo: textoGrupos(grupos.tipos), por_sol: textoGrupos(grupos.sol) || 'sol não configurado', por_torre: textoGrupos(grupos.torres),
                 nota: notaPreco,
-                message: 'Responda o que foi perguntado com estes números (os blocos já estão na tela). Para listar unidades específicas chame de novo com analise=unidades; para reajuste, analise=reajuste; para tabelas, analise=tabelas.',
+                message: 'Responda o que foi perguntado com estes números (os blocos já estão na tela). REGRA DE PREÇO: quando a pessoa pergunta preço/valor, responda o VALOR DA UNIDADE em R$ (e cite as unidades com o preço de cada uma); só fale em R$/m² se ela pedir por metro. Sempre que citar uma unidade, traga número, preço, área, dormitórios e sol juntos. Para listar unidades específicas com preço chame de novo com analise=unidades; para reajuste, analise=reajuste; para tabelas de preço, analise=tabelas.',
                 blocks: [kpis,
                     datasetBlock({ title: 'Por andar', source: 'Espelho', visual: 'table', columns: COLS_GRUPO('Andar'), rows: grupos.andares }),
                     datasetBlock({ title: 'Por tipologia', source: 'Espelho', visual: 'table', columns: COLS_GRUPO('Tipologia'), rows: grupos.tipos }),
