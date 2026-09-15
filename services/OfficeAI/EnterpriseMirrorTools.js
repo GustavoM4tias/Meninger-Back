@@ -194,7 +194,7 @@ registerTool({
         type: 'object',
         properties: {
             empreendimento: { type: 'string', description: 'Nome (parcial) ou id do CV do empreendimento. Obrigatório.' },
-            analise: { type: 'string', enum: ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste', 'meta_vgv'], description: '"unidades" = lista de unidades com PREÇO em R$, área, dormitórios e sol (use para "preço", "quais unidades", "quanto custa", "sol da manhã", "2 dormitórios"); "resumo" = KPIs + andares + tipos + sol; "andares"/"torres"/"tipos"/"sol" = agrupado com preço médio; "tabelas" = histórico de tabelas de preço; "unidades_tabela" = preço de cada unidade em UMA tabela (com séries de pagamento); "comparar_tabelas" = duas tabelas unidade a unidade; "reajuste" = sinais de reajuste; "meta_vgv" = SIMULAÇÃO de preço para o VGV do estoque bater uma meta (passe meta_vgv em reais; "23MM" = 23000000): a tool calcula o déficit/excedente e o preço proposto unidade a unidade, com a estratégia pedida. Use para "preciso chegar em X", "quanto baixar para fechar em X", "reajuste de Y%".' },
+            analise: { type: 'string', enum: ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste'], description: '"unidades" = lista de unidades com PREÇO em R$, área, dormitórios e sol (use para "preço", "quais unidades", "quanto custa", "sol da manhã", "2 dormitórios"); "resumo" = KPIs + andares + tipos + sol; "andares"/"torres"/"tipos"/"sol" = agrupado com preço médio; "tabelas" = histórico de tabelas de preço; "unidades_tabela" = preço de cada unidade em UMA tabela (com séries de pagamento); "comparar_tabelas" = duas tabelas unidade a unidade; "reajuste" = sinais de reajuste.' },
             situacao: { type: 'string', enum: ['disponiveis', 'vendidas', 'bloqueadas', 'reservadas', 'todas'], description: 'Filtro de situação para "unidades" e agrupamentos. Padrão: todas.' },
             sol: { type: 'string', description: 'Filtro por sol: "manhã" ou "tarde" (também "leste"/"oeste").' },
             torre: { type: 'string', description: 'Filtro por torre/bloco (ex.: "Torre 2", "B").' },
@@ -203,9 +203,6 @@ registerTool({
             tipologia: { type: 'string', description: 'Filtro por tipologia (ex.: "Garden", "Tipo A").' },
             area_min: { type: 'number' }, area_max: { type: 'number' },
             preco_max: { type: 'number', description: 'Preço máximo em reais.' },
-            meta_vgv: { type: 'number', description: 'Para meta_vgv: o VGV alvo do estoque DISPONÍVEL, em reais (23MM = 23000000; 23 mi = 23000000).' },
-            percentual: { type: 'number', description: 'Para meta_vgv sem meta: aplica este percentual a todas as disponíveis (ex.: 5 = +5%, -3 = -3%) e mostra o VGV resultante.' },
-            estrategia: { type: 'string', enum: ['uniforme', 'acima_da_media', 'parados'], description: 'Como distribuir o ajuste em meta_vgv: "uniforme" (mesmo % em todas, padrão), "acima_da_media" (ajusta primeiro as unidades com R$/m² acima da média do estoque), "parados" (ajusta primeiro os andares/tipos com menor % vendido).' },
             tabela_a: { type: 'string', description: 'Para comparar_tabelas: nome ou id da tabela mais antiga. Omitido: as duas mais recentes com unidades.' },
             tabela_b: { type: 'string', description: 'Para comparar_tabelas: nome ou id da tabela mais nova.' },
         },
@@ -218,7 +215,7 @@ registerTool({
         if (!achado.ent) return { result: { message: achado.erro, empreendimentos_visiveis: achado.opcoes } };
         const ent = achado.ent;
         const id = ent.idempreendimento;
-        const analise = ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste', 'meta_vgv'].includes(args.analise) ? args.analise : 'resumo';
+        const analise = ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste'].includes(args.analise) ? args.analise : 'resumo';
         const link = (tab) => abrirTela(SCREEN, `Abrir ${ent.nome} no Office`, { open: id, tab });
         const cab = `${ent.nome} (${ent.cidade || 'cidade ?'}, ${ent.tipo_empreendimento_nome || 'tipo ?'}, CV ${id})`;
 
@@ -332,81 +329,6 @@ registerTool({
                     blocks: [datasetBlock({ title: `Unidades · ${ent.nome}`, subtitle: `filtros: ${filtros}`, source: 'Espelho (CV + configuração)', visual: 'table', columns: COLS_UNIDADE, rows: rows.slice(0, MAX_ROWS_BLOCO), truncated: rows.length > MAX_ROWS_BLOCO, total: rows.length, actions: [link('espelho')] })],
                 },
                 resultCount: rows.length,
-            };
-        }
-
-        // ── Simulação: quanto mexer no preço para o VGV disponível bater a meta ──
-        // Tudo calculado aqui, unidade a unidade, para o modelo comentar
-        // números que EXISTEM no retorno (a validação anti-alucinação barra
-        // conta feita de cabeça, e é bom que barre).
-        if (analise === 'meta_vgv') {
-            const disp = todas.filter((c) => c.status === 'disponivel' && c.valor);
-            const vgvAtual = disp.reduce((a, c) => a + c.valor, 0);
-            if (!disp.length) return { result: { message: `${cab}: nenhuma unidade disponível com preço para simular.` } };
-            const meta = args.meta_vgv != null && args.meta_vgv !== '' ? Number(args.meta_vgv) : null;
-            const pctLivre = args.percentual != null && args.percentual !== '' ? Number(args.percentual) / 100 : null;
-            if ((meta == null || !Number.isFinite(meta) || meta <= 0) && pctLivre == null) return { result: { message: `Para simular preciso da meta de VGV em reais (meta_vgv; "23MM" = 23000000) ou de um percentual (percentual). VGV disponível hoje: ${brl(vgvAtual)} em ${disp.length} unidades.` } };
-            const estrategia = ['uniforme', 'acima_da_media', 'parados'].includes(args.estrategia) ? args.estrategia : 'uniforme';
-            const delta = meta != null ? meta - vgvAtual : vgvAtual * pctLivre; // negativo = precisa baixar
-
-            // Ordem de quem recebe o ajuste primeiro
-            let ordem = [...disp];
-            const m2Medio = media(disp.map((c) => c.valor_m2).filter(Boolean));
-            if (estrategia === 'acima_da_media') ordem.sort((x, y) => (y.valor_m2 || 0) - (x.valor_m2 || 0));
-            if (estrategia === 'parados') {
-                const vend = new Map(agrupar(todas.filter((c) => c.andar != null), (c) => `${c.torre}|${c.andar}`, (c, k) => k).map((g) => [g.grupo, g.pct_vendido ?? 0]));
-                ordem.sort((x, y) => (vend.get(`${x.torre}|${x.andar}`) ?? 0) - (vend.get(`${y.torre}|${y.andar}`) ?? 0));
-            }
-            const fator = (c) => {
-                if (estrategia === 'uniforme') return 1;
-                if (estrategia === 'acima_da_media') return c.valor_m2 && m2Medio ? Math.max(0.25, c.valor_m2 / m2Medio) : 1; // quem está mais caro por m² absorve mais
-                return 1;
-            };
-            // Ajuste proporcional ao preço (ponderado pelo fator da estratégia), fechando exatamente na meta
-            const pesoTotal = ordem.reduce((a, c) => a + c.valor * fator(c), 0);
-            const linhas = ordem.map((c) => {
-                const ajuste = pesoTotal ? delta * (c.valor * fator(c)) / pesoTotal : 0;
-                const novo = Math.round((c.valor + ajuste) / 100) * 100; // arredonda em centenas, como tabela de venda
-                return { unidade: c.nome, torre: c.torre_nome, andar: andarNome(m, c), tipologia: c.tipologia, area: c.area, sol: c.sol_label || null,
-                    preco_atual: c.valor, preco_proposto: novo, ajuste: novo - c.valor, ajuste_pct: c.valor ? (novo - c.valor) / c.valor : null,
-                    m2_atual: c.valor_m2 != null ? Math.round(c.valor_m2) : null, m2_proposto: c.area ? Math.round(novo / c.area) : null };
-            }).sort((x, y) => (x.torre || '').localeCompare(y.torre || '') || (x.unidade || '').localeCompare(y.unidade || '', 'pt-BR', { numeric: true }));
-            const vgvNovo = linhas.reduce((a, l) => a + l.preco_proposto, 0);
-            const ajusteTotal = vgvNovo - vgvAtual;
-            const pctMedio = vgvAtual ? ajusteTotal / vgvAtual : null;
-            const pcts = linhas.map((l) => l.ajuste_pct).filter((v) => v != null);
-            const porAndar = agrupar(disp, (c) => `${c.torre}|${c.andar}`, (c) => `${c.torre_nome} · ${andarNome(m, c)}`).map((g) => {
-                const ls = linhas.filter((l) => `${l.torre} · ${l.andar}` === g.grupo);
-                return { grupo: g.grupo, unidades: ls.length, vgv_atual: ls.reduce((a, l) => a + l.preco_atual, 0), vgv_proposto: ls.reduce((a, l) => a + l.preco_proposto, 0), ajuste_pct: media(ls.map((l) => l.ajuste_pct).filter((v) => v != null)) };
-            });
-            const titulo = meta != null ? `Meta ${brl(meta)} para o estoque` : `${pctLivre >= 0 ? '+' : ''}${(pctLivre * 100).toFixed(1)}% em todas as disponíveis`;
-            return {
-                result: {
-                    empreendimento: cab,
-                    simulacao: `${titulo} (estratégia ${estrategia}). VGV disponível hoje ${brl(vgvAtual)} em ${disp.length} unidades; ${meta != null ? `meta ${brl(meta)}; ${delta < 0 ? 'déficit a cortar' : 'espaço para subir'} ${brl(Math.abs(delta))}` : ''}. VGV proposto ${brl(vgvNovo)} (${pctMedio >= 0 ? '+' : ''}${pct(pctMedio)} no total; por unidade de ${pct(Math.min(...pcts))} a ${pct(Math.max(...pcts))}). Preços arredondados em R$ 100.`,
-                    por_andar: porAndar.map((g) => `${g.grupo}: ${g.unidades} un., ${brl(g.vgv_atual)} → ${brl(g.vgv_proposto)} (${pct(g.ajuste_pct)})`).join('\n'),
-                    unidades: linhas.slice(0, MAX_ROWS_MODELO).map((l) => `${l.unidade} | ${l.torre} ${l.andar} | ${num2(l.area)} m² | ${brl(l.preco_atual)} → ${brl(l.preco_proposto)} (${pct(l.ajuste_pct)}) | ${brl(l.m2_atual)} → ${brl(l.m2_proposto)}/m²`).join('\n') + (linhas.length > MAX_ROWS_MODELO ? `\n... e mais ${linhas.length - MAX_ROWS_MODELO} (a tabela na tela tem todas)` : ''),
-                    nota: notaPreco,
-                    message: 'É uma SIMULAÇÃO aritmética, não decisão: diga isso. Responda com o VGV atual, a meta, o déficit/excedente, o % médio e a faixa por unidade, e destaque 3 a 5 exemplos de unidade com preço atual → proposto. Use só os números deste retorno. Para outra distribuição, chame de novo com estrategia diferente ou percentual.',
-                    blocks: [
-                        kpisBlock({ title: titulo, kpis: [
-                            { label: 'VGV disponível hoje', value: vgvAtual, type: 'currency' },
-                            ...(meta != null ? [{ label: 'Meta', value: meta, type: 'currency' }, { label: delta < 0 ? 'Déficit a cortar' : 'Espaço para subir', value: Math.abs(delta), type: 'currency', tone: delta < 0 ? 'neg' : 'pos' }] : []),
-                            { label: 'VGV proposto', value: vgvNovo, type: 'currency', tone: 'accent' },
-                            { label: 'Ajuste médio', value: pctMedio, type: 'percent' },
-                            { label: 'Unidades', value: linhas.length, type: 'number' },
-                        ] }),
-                        datasetBlock({ title: `Preço proposto por unidade · ${ent.nome}`, subtitle: `${titulo} · ${estrategia}`, source: 'Simulação sobre o espelho', visual: 'table', columns: [
-                            { key: 'unidade', label: 'Unidade', type: 'text', priority: 1 }, { key: 'preco_atual', label: 'Preço atual', type: 'currency', priority: 1 }, { key: 'preco_proposto', label: 'Proposto', type: 'currency', priority: 1 },
-                            { key: 'ajuste', label: 'Ajuste', type: 'currency' }, { key: 'ajuste_pct', label: '%', type: 'percent' }, { key: 'torre', label: 'Torre', type: 'text' }, { key: 'andar', label: 'Andar', type: 'text' },
-                            { key: 'area', label: 'Área (m²)', type: 'number', priority: 3 }, { key: 'm2_atual', label: 'R$/m² atual', type: 'currency', priority: 3 }, { key: 'm2_proposto', label: 'R$/m² proposto', type: 'currency', priority: 3 }, { key: 'tipologia', label: 'Tipologia', type: 'text', priority: 3 }, { key: 'sol', label: 'Sol', type: 'text', priority: 3 },
-                        ], rows: linhas.slice(0, MAX_ROWS_BLOCO), truncated: linhas.length > MAX_ROWS_BLOCO, total: linhas.length, actions: [link('espelho')] }),
-                        datasetBlock({ title: 'Por torre e andar', visual: 'table', source: 'Simulação', columns: [
-                            { key: 'grupo', label: 'Torre · andar', type: 'text', priority: 1 }, { key: 'unidades', label: 'Unid.', type: 'number' }, { key: 'vgv_atual', label: 'VGV atual', type: 'currency' }, { key: 'vgv_proposto', label: 'VGV proposto', type: 'currency', priority: 1 }, { key: 'ajuste_pct', label: '% médio', type: 'percent' },
-                        ], rows: porAndar }),
-                    ],
-                },
-                resultCount: linhas.length,
             };
         }
 
