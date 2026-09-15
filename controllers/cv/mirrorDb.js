@@ -36,6 +36,10 @@ export const DEFAULTS = Object.freeze({
   imagem_url: null,
   finais: {},
   valor_m2_andar: {},   // { '<andar>': 9603.93 } - estimativa quando CV e tabela não têm preço
+  // Dormitórios pela área quando o CV não diz: faixas em ordem, a última sem
+  // `ate` é o "acima disso". Regra de negócio: mora no banco, isto é o fallback.
+  dorm_por_area: [{ ate: 45, dorm: 1 }, { ate: 65, dorm: 2 }, { dorm: 3 }],
+  vagas_padrao: null,   // vagas por unidade quando o CV não informa
   observacao: '',
 });
 
@@ -71,7 +75,18 @@ export function normalizeSettings(input = {}) {
     observacao: String(s.observacao || '').slice(0, 2000),
     finais: {},
     valor_m2_andar: {},
+    dorm_por_area: [],
+    vagas_padrao: clampInt(s.vagas_padrao, 0, 9, null),
   };
+  for (const f of Array.isArray(s.dorm_por_area) ? s.dorm_por_area : []) {
+    const dorm = clampInt(f?.dorm, 0, 9, null);
+    if (dorm == null) continue;
+    const ate = f?.ate === '' || f?.ate == null ? null : Number(String(f.ate).replace(',', '.'));
+    out.dorm_por_area.push(ate != null && Number.isFinite(ate) && ate > 0 ? { ate, dorm } : { dorm });
+  }
+  // faixas em ordem de área; a aberta (sem `ate`) vai para o fim
+  out.dorm_por_area.sort((a, b) => (a.ate ?? Infinity) - (b.ate ?? Infinity));
+  if (!out.dorm_por_area.length) out.dorm_por_area = DEFAULTS.dorm_por_area.map((f) => ({ ...f }));
   for (const [andar, v] of Object.entries(s.valor_m2_andar || {})) {
     const n = Number(String(v).replace(',', '.'));
     if (/^-?\d+$/.test(andar) && Number.isFinite(n) && n > 0) out.valor_m2_andar[andar] = Math.round(n * 100) / 100;
@@ -84,12 +99,34 @@ export function normalizeSettings(input = {}) {
       const face = FACES[cfg.face] ? cfg.face : null;
       const dorm = clampInt(cfg.dorm, 0, 9, null);
       const tipologia = cfg.tipologia ? String(cfg.tipologia).slice(0, 60) : null;
-      if (face || dorm != null || tipologia) t[String(final)] = { face, dorm, tipologia };
+      const m2 = Number(String(cfg.valor_m2 ?? '').replace(',', '.'));
+      const valor_m2 = Number.isFinite(m2) && m2 > 0 ? Math.round(m2 * 100) / 100 : null;
+      if (face || dorm != null || tipologia || valor_m2) t[String(final)] = { face, dorm, tipologia, valor_m2 };
     }
     if (Object.keys(t).length) out.finais[String(torre)] = t;
   }
   return out;
 }
+
+// "2 dorm", "3 quartos", "2D" no texto da tipologia do CV → número
+const dormDoTexto = (txt) => {
+  const m = String(txt || '').match(/(\d)\s*(?:dorm|quarto|dt|d\b|suite)/i);
+  return m ? Number(m[1]) : null;
+};
+const dormPorArea = (area, faixas) => {
+  if (area == null) return null;
+  for (const f of faixas) if (f.ate == null || area <= f.ate) return f.dorm;
+  return null;
+};
+// Tipos automáticos: cada área privativa distinta vira uma letra, da menor
+// para a maior (60,80 = A, 60,92 = B, 78,20 = C...). É o que a planta diz
+// quando ninguém cadastrou tipologia.
+const tiposPorArea = (unidades) => {
+  const areas = [...new Set(unidades.map((u) => num(u.area_privativa)).filter((a) => a))].sort((a, b) => a - b);
+  const letra = (i) => (i < 26 ? String.fromCharCode(65 + i) : `T${i + 1}`);
+  return new Map(areas.map((a, i) => [a, letra(i)]));
+};
+const fmtArea = (a) => `${a.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m²`;
 
 // Primeiro grupo de dígitos do nome: "BL A - AP 101" → 101, "846 - Vaga 183" → 846
 const numeroDe = (nome) => {
@@ -167,6 +204,7 @@ export async function montarEspelho(idempreendimento) {
   const blocoPorId = new Map(blocos.map((b) => [b.idbloco, b]));
   const etapaPorId = new Map(etapas.map((e) => [e.idetapa, e]));
   const multiBloco = blocos.length > 1;
+  const tipoAuto = tiposPorArea(unidades);
 
   // 1) cada unidade vira uma célula com torre/andar/final resolvidos
   const cells = [];
@@ -196,6 +234,17 @@ export async function montarEspelho(idempreendimento) {
     const cfg = settings.finais?.[torreKey]?.[final] || settings.finais?.['*']?.[final] || {};
     const face = cfg.face ? FACES[cfg.face] : null;
 
+    // Preço, em cascata: CV → tabela → R$/m² do andar → R$/m² do final
+    const m2Final = cfg.valor_m2 || null;
+    if (valor == null && m2Final && area) { valor = Math.round(m2Final * area * 100) / 100; fonte = 'estimado'; fonteEstimado++; semPreco--; }
+
+    // Tipologia: cadastro → CV → tipo automático pela área
+    const letra = area ? tipoAuto.get(area) : null;
+    const tipologia = cfg.tipologia || u.tipologia || (letra ? `Tipo ${letra} · ${fmtArea(area)}` : null);
+    // Dormitórios: cadastro → texto da tipologia do CV → faixa de área
+    const dorm = cfg.dorm ?? dormDoTexto(u.tipologia) ?? dormPorArea(area, settings.dorm_por_area);
+    const vagasCv = u.vagas_garagem_qtde ?? (typeof u.vagas_garagem === 'string' && /^\d+$/.test(u.vagas_garagem) ? Number(u.vagas_garagem) : null);
+
     cells.push({
       idunidade: u.idunidade,
       idunidade_int: u.idunidade_int,
@@ -210,10 +259,14 @@ export async function montarEspelho(idempreendimento) {
       status: STATUS[u.situacao_mapa_disponibilidade] || 'sem_status',
       data_bloqueio: u.data_bloqueio || null,
       area,
-      vagas: u.vagas_garagem_qtde ?? (typeof u.vagas_garagem === 'string' && /^\d+$/.test(u.vagas_garagem) ? Number(u.vagas_garagem) : null),
+      vagas: vagasCv ?? settings.vagas_padrao ?? null,
+      vagas_fonte: vagasCv != null ? 'cv' : (settings.vagas_padrao != null ? 'padrao' : null),
       vagas_texto: u.vagas_garagem || null,
-      tipologia: cfg.tipologia || u.tipologia || null,
-      dorm: cfg.dorm ?? null,
+      tipologia,
+      tipo_auto: letra,
+      tipologia_fonte: cfg.tipologia ? 'cadastro' : (u.tipologia ? 'cv' : (letra ? 'area' : null)),
+      dorm,
+      dorm_fonte: cfg.dorm != null ? 'cadastro' : (dormDoTexto(u.tipologia) != null ? 'cv' : (dorm != null ? 'area' : null)),
       face_sigla: cfg.face || null,
       face: face?.face || null,
       sol: face?.sol || null,
@@ -269,9 +322,14 @@ export async function montarEspelho(idempreendimento) {
         const freq = new Map();
         for (const c of arr) if (c.area) freq.set(c.area, (freq.get(c.area) || 0) + 1);
         const areaModa = freq.size ? [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0] : null;
+        const moda = (vals) => { const m = new Map(); for (const v of vals) if (v != null) m.set(v, (m.get(v) || 0) + 1); return m.size ? [...m.entries()].sort((a, b) => b[1] - a[1])[0][0] : null; };
         return {
           final: f, ...cfg, face_nome: face?.face || null, sol: face?.sol || null, sol_label: face?.sol_label || null,
-          area: areaModa, resumo: resumoDe(arr),
+          area: areaModa,
+          tipologia: cfg.tipologia || moda(arr.map((c) => c.tipologia)),
+          dorm: cfg.dorm ?? moda(arr.map((c) => c.dorm)),
+          areas_distintas: freq.size,
+          resumo: resumoDe(arr),
         };
       });
       return { key: t.key, nome: t.nome, finais, colunas, andares, resumo: resumoDe(t.cells) };
