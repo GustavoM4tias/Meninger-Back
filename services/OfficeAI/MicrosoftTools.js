@@ -92,8 +92,16 @@ function momentoDe(texto) {
     const emHoras = t.match(/em\s+(\d+)\s*h(?:ora)?/);
     if (emHoras) return new Date(agora.getTime() + Number(emHoras[1]) * 3600000);
 
-    // "hoje às 15h", "amanhã às 9h30"
-    const hora = t.match(/(\d{1,2})\s*(?::|h)\s*(\d{2})?/);
+    // "hoje às 15h", "amanhã às 9h30", "agora às 10", "às 10".
+    //
+    // Medido (15/09): "Crie uma reunião agora as 10" e "inicia agora as 10 e
+    // dura 1h" voltaram DUAS vezes como "forneça a data e hora de início". O
+    // "10" sem "h" nem ":" não casava com a forma abaixo, o parser devolvia
+    // null e a tool recusava - a pessoa disse a hora e a Eme pediu a hora.
+    // A forma "às N" vem PRIMEIRO: em "agora as 10 e dura 1h" o "1h" da
+    // duração casaria antes e marcaria a reunião para 01:00.
+    const hora = t.match(/(?:^|\s)(?:às|as|a|para|pras?)\s+(\d{1,2})(?:\s*(?::|h)\s*(\d{2})?)?(?!\d)/)
+              || t.match(/(\d{1,2})\s*(?::|h)\s*(\d{2})?/);
     if (hora) {
         const d = new Date(agora);
         if (/amanh/.test(t)) d.setDate(d.getDate() + 1);
@@ -297,6 +305,13 @@ registerTool({
                 inicio = paraIsoLocal(d);
                 fim = paraIsoLocal(new Date(d.getTime() + dur * 60000));
             }
+        }
+        // O modelo também manda a hora solta em `inicio` ("10:00", "hoje às
+        // 10"): não é ISO, mas é o mesmo texto que `quando` resolve.
+        if (inicio && Number.isNaN(new Date(inicio).getTime())) {
+            const d = momentoDe(inicio);
+            inicio = d ? paraIsoLocal(d) : '';
+            if (d && fim && Number.isNaN(new Date(fim).getTime())) fim = '';
         }
         // Só o fim faltando: completa pela duração, em vez de recusar.
         if (inicio && !fim) {
