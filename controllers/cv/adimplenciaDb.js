@@ -5,8 +5,13 @@
 // vigência, e as funções que o resto do sistema usa para descontar do preço
 // de tabela (priceTablesDb, mirrorDb, sync das tabelas, tool da Eme).
 //
-//   GET /cv/empreendimento/:id/adimplencia   → unidades com o valor vigente + histórico
-//   PUT /cv/empreendimento/:id/adimplencia   → grava (encerra a vigente e abre outra)
+//   GET /cv/empreendimento/:id/adimplencia            → unidades com o valor vigente + histórico
+//   PUT /cv/empreendimento/:id/adimplencia            → grava (encerra a vigente e abre outra)
+//   POST /cv/empreendimento/:id/adimplencia/importar  → lê a exportação de unidades do
+//        painel Gestor do CV (CSV com a coluna "Adimplência Premiada") e grava o
+//        que mudou. É o único caminho que o CV dá para esse campo: a API (v1,
+//        CVDW, v2, v3) não o devolve, e o login do Gestor tem token na tela de
+//        entrada, então a exportação precisa de uma pessoa logada.
 //
 // Regras:
 //   - uma linha por unidade por período; `vigencia_ate` nula = vigente;
@@ -172,6 +177,44 @@ export const getAdimplencia = async (req, res) => {
   }
 };
 
+// Aplica uma lista de itens { idunidade, tipo, valor }: encerra a vigente que
+// mudou e abre a nova; valor nulo/0 só encerra. Devolve o que de fato mudou.
+async function aplicarItens(id, itens, { vigenciaDe, observacao, userId }) {
+  const validas = new Set((await unidadesDo(id)).map((u) => u.idunidade));
+  const ids = [...new Set(itens.map((i) => Number(i.idunidade)).filter((n) => validas.has(n)))];
+  if (!ids.length) return null;
+  let alteradas = 0, encerradas = 0;
+  await db.sequelize.transaction(async (transaction) => {
+    const vigentes = await EnterpriseUnitAdimplencia.findAll({ where: { idempreendimento: id, idunidade: ids, vigencia_ate: null }, transaction });
+    const vigentePor = new Map(vigentes.map((l) => [Number(l.idunidade), l]));
+    for (const item of itens) {
+      const idunidade = Number(item.idunidade);
+      if (!validas.has(idunidade)) continue;
+      const tipo = TIPOS.includes(item.tipo) ? item.tipo : 'valor';
+      const valor = num(item.valor);
+      const atual = vigentePor.get(idunidade);
+      const igual = atual && atual.tipo === tipo && Math.abs(num(atual.valor) - (valor ?? 0)) < 0.005;
+      if (igual) continue;
+      if (!atual && !(valor > 0)) continue;
+      if (atual) {
+        // encerra no dia anterior ao início da nova; se a nova começa no
+        // mesmo dia em que a vigente nasceu, a vigente simplesmente some
+        const fim = diaAnterior(vigenciaDe);
+        if (fim < ymd(atual.vigencia_de)) await atual.destroy({ transaction });
+        else await atual.update({ vigencia_ate: fim }, { transaction });
+        encerradas++;
+      }
+      if (valor != null && valor > 0) {
+        await EnterpriseUnitAdimplencia.create({ idempreendimento: id, idunidade, tipo, valor, vigencia_de: vigenciaDe, observacao, created_by: userId ?? null }, { transaction });
+        alteradas++;
+      }
+    }
+  });
+  return { gravadas: alteradas, encerradas };
+}
+
+const vigenciaDoBody = (body) => (/^\d{4}-\d{2}-\d{2}$/.test(String(body?.vigencia_de || '')) ? String(body.vigencia_de) : hojeYmd());
+
 /**
  * Body: { vigencia_de?: 'YYYY-MM-DD', observacao?: string,
  *         unidades: [{ idunidade, tipo: 'valor'|'percentual', valor }] }
@@ -184,45 +227,99 @@ export const saveAdimplencia = async (req, res) => {
   const body = req.body || {};
   const itens = Array.isArray(body.unidades) ? body.unidades : [];
   if (!itens.length) return res.status(400).json({ error: 'Envie ao menos uma unidade.' });
-  const vigenciaDe = /^\d{4}-\d{2}-\d{2}$/.test(String(body.vigencia_de || '')) ? String(body.vigencia_de) : hojeYmd();
-  const observacao = body.observacao ? String(body.observacao).slice(0, 255) : null;
+  try {
+    const ent = await CvEnterprise.findByPk(id, { attributes: ['idempreendimento'] });
+    if (!ent) return res.status(404).json({ error: 'Empreendimento não encontrado.' });
+    const r = await aplicarItens(id, itens, { vigenciaDe: vigenciaDoBody(body), observacao: body.observacao ? String(body.observacao).slice(0, 255) : null, userId: req.user.id });
+    if (!r) return res.status(400).json({ error: 'Nenhuma das unidades enviadas pertence a este empreendimento.' });
+    return res.json({ ...(await montarResposta(id)), ...r });
+  } catch (err) {
+    console.error('Erro ao gravar adimplência premiada:', err);
+    return res.status(500).json({ error: 'Erro ao gravar a adimplência premiada.' });
+  }
+};
+
+// ── Importação da exportação de unidades do Gestor ───────────────────────────
+// Formato do arquivo (Cadastros > Empreendimentos > Unidades > Exportar
+// Unidades): UTF-8 com BOM, 1ª linha é o título, 2ª o cabeçalho, separador
+// ";", campos entre aspas. "Adimplência Premiada" vem "26000" ou "40000.00";
+// "Valor" vem "235,000.00" (vírgula de milhar), por isso o número é lido
+// pela posição do último separador.
+const numeroCsv = (s) => {
+  const t = String(s ?? '').replace(/[R$\s]/g, '');
+  if (!t) return null;
+  const v = t.lastIndexOf(','), d = t.lastIndexOf('.');
+  let limpo;
+  if (v > d) limpo = t.replace(/\./g, '').replace(',', '.');
+  else limpo = t.replace(/,/g, '');
+  const n = Number(limpo);
+  return Number.isFinite(n) ? n : null;
+};
+const linhaCsv = (l) => {
+  const out = []; let cur = '', q = false;
+  for (let i = 0; i < l.length; i++) {
+    const ch = l[i];
+    if (ch === '"') { if (q && l[i + 1] === '"') { cur += '"'; i++; } else q = !q; continue; }
+    if (ch === ';' && !q) { out.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+};
+const semAcento = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/** [{ idunidade, unidade, valor }] a partir do texto do CSV; null quando não é a exportação do CV. */
+export function parseExportacaoCv(texto) {
+  const linhas = String(texto || '').replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim());
+  const iHdr = linhas.findIndex((l) => /id\s*unidade/i.test(l) && /adimpl/i.test(semAcento(l)));
+  if (iHdr < 0) return null;
+  const hdr = linhaCsv(linhas[iHdr]).map(semAcento);
+  const cId = hdr.findIndex((h) => h === 'id unidade');
+  const cNome = hdr.findIndex((h) => h === 'unidade');
+  const cAd = hdr.findIndex((h) => h.includes('adimpl'));
+  if (cId < 0 || cAd < 0) return null;
+  const out = [];
+  for (const l of linhas.slice(iHdr + 1)) {
+    const c = linhaCsv(l);
+    const idunidade = Number(c[cId]);
+    if (!Number.isFinite(idunidade) || idunidade <= 0) continue;
+    out.push({ idunidade, unidade: (c[cNome] || '').trim(), valor: numeroCsv(c[cAd]) });
+  }
+  return out;
+}
+
+/**
+ * Body: { csv: string, vigencia_de?, observacao? }. Unidade com valor > 0 no
+ * arquivo recebe esse valor (tipo 'valor'); unidade do arquivo sem valor que
+ * tinha adimplência vigente é encerrada. Unidade fora do arquivo não muda.
+ */
+export const importAdimplencia = async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "O parâmetro 'id' é obrigatório." });
+  const body = req.body || {};
+  const linhas = parseExportacaoCv(body.csv);
+  if (!linhas) return res.status(400).json({ error: 'Este arquivo não é a exportação de unidades do CV (precisa das colunas "ID Unidade" e "Adimplência Premiada").' });
+  if (!linhas.length) return res.status(400).json({ error: 'A exportação veio sem unidades.' });
   try {
     const ent = await CvEnterprise.findByPk(id, { attributes: ['idempreendimento'] });
     if (!ent) return res.status(404).json({ error: 'Empreendimento não encontrado.' });
     const validas = new Set((await unidadesDo(id)).map((u) => u.idunidade));
-    const ids = [...new Set(itens.map((i) => Number(i.idunidade)).filter((n) => validas.has(n)))];
-    if (!ids.length) return res.status(400).json({ error: 'Nenhuma das unidades enviadas pertence a este empreendimento.' });
-
-    let alteradas = 0, encerradas = 0;
-    await db.sequelize.transaction(async (transaction) => {
-      const vigentes = await EnterpriseUnitAdimplencia.findAll({ where: { idempreendimento: id, idunidade: ids, vigencia_ate: null }, transaction });
-      const vigentePor = new Map(vigentes.map((l) => [Number(l.idunidade), l]));
-      for (const item of itens) {
-        const idunidade = Number(item.idunidade);
-        if (!validas.has(idunidade)) continue;
-        const tipo = TIPOS.includes(item.tipo) ? item.tipo : 'valor';
-        const valor = num(item.valor);
-        const atual = vigentePor.get(idunidade);
-        const igual = atual && atual.tipo === tipo && Math.abs(num(atual.valor) - (valor ?? 0)) < 0.005;
-        if (igual) continue;
-        if (atual) {
-          // encerra no dia anterior ao início da nova; se a nova começa no
-          // mesmo dia em que a vigente nasceu, a vigente simplesmente some
-          const fim = diaAnterior(vigenciaDe);
-          if (fim < ymd(atual.vigencia_de)) await atual.destroy({ transaction });
-          else await atual.update({ vigencia_ate: fim }, { transaction });
-          encerradas++;
-        }
-        if (valor != null && valor > 0) {
-          await EnterpriseUnitAdimplencia.create({ idempreendimento: id, idunidade, tipo, valor, vigencia_de: vigenciaDe, observacao, created_by: req.user.id ?? null }, { transaction });
-          alteradas++;
-        }
-      }
+    const doEmp = linhas.filter((l) => validas.has(l.idunidade));
+    if (!doEmp.length) return res.status(400).json({ error: 'Nenhuma unidade do arquivo pertence a este empreendimento: confira se exportou o empreendimento certo.' });
+    const itens = doEmp.map((l) => ({ idunidade: l.idunidade, tipo: 'valor', valor: l.valor > 0 ? l.valor : 0 }));
+    const r = await aplicarItens(id, itens, {
+      vigenciaDe: vigenciaDoBody(body),
+      observacao: body.observacao ? String(body.observacao).slice(0, 255) : `Importado da exportação do CV em ${hojeYmd()}`,
+      userId: req.user.id,
     });
-    const resposta = await montarResposta(id);
-    return res.json({ ...resposta, gravadas: alteradas, encerradas });
+    return res.json({
+      ...(await montarResposta(id)),
+      ...(r || { gravadas: 0, encerradas: 0 }),
+      importacao: { lidas: linhas.length, do_empreendimento: doEmp.length, com_valor: doEmp.filter((l) => l.valor > 0).length, fora: linhas.length - doEmp.length },
+    });
   } catch (err) {
-    console.error('Erro ao gravar adimplência premiada:', err);
-    return res.status(500).json({ error: 'Erro ao gravar a adimplência premiada.' });
+    console.error('Erro ao importar adimplência premiada:', err);
+    return res.status(500).json({ error: 'Erro ao importar a adimplência premiada.' });
   }
 };

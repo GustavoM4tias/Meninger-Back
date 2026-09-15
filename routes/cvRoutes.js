@@ -21,7 +21,7 @@ import { listReservasReport, getReservaReport } from '../controllers/cv/reservas
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb, fetchBuildingUnitsSummaryFromDb } from '../controllers/cv/empreendimentosDb.js';
 import { listPriceTablesByEnterprise, getPriceTableById } from '../controllers/cv/priceTablesDb.js';
 import { getMirror, saveMirrorSettings } from '../controllers/cv/mirrorDb.js';
-import { getAdimplencia, saveAdimplencia } from '../controllers/cv/adimplenciaDb.js';
+import { getAdimplencia, saveAdimplencia, importAdimplencia } from '../controllers/cv/adimplenciaDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
 import { fetchWorkflowGroups, createOrUpdateWorkflowGroup, removeWorkflowGroup, fetchListSegments  } from '../controllers/cv/workflowGroups.js';
@@ -112,6 +112,8 @@ router.put('/empreendimento/:id/espelho/config', authenticate, configurarEspelho
 // com vigência; o CV não expõe o campo por API.
 router.get('/empreendimento/:id/adimplencia', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getAdimplencia);
 router.put('/empreendimento/:id/adimplencia', authenticate, configurarEspelho, saveAdimplencia);
+// Importa a exportação de unidades do painel Gestor (CSV com "Adimplência Premiada")
+router.post('/empreendimento/:id/adimplencia/importar', authenticate, configurarEspelho, importAdimplencia);
 
 router.get('/workflow-grupos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchWorkflowGroups);
 // ?tipo=repasses
