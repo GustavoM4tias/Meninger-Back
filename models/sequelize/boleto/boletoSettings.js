@@ -102,6 +102,13 @@ export default (sequelize, DataTypes) => {
             comment: 'Por quantos dias após a baixa o boleto continua sendo reconsultado no Ecobrança. O banco já devolveu "BAIXADO POR DEVOLUÇÃO" em título que dias depois constava LIQUIDADO no extrato; nessa janela a consulta é só leitura e o único desfecho é promover para pago. 0 desliga.',
         },
 
+        reconsultar_baixado_antes_emitir: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: true,
+            comment: 'Antes de emitir cobrança nova do ato, reconsulta no Ecobrança o último boleto cancelado por "BAIXADO POR DEVOLUÇÃO": o banco devolve essa situação também para título pago no dia anterior. Se constar pago, o ato vira pago e nada é emitido.',
+        },
+
         max_dias_vencimento: {
             type: DataTypes.INTEGER,
             allowNull: true,

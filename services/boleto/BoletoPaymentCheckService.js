@@ -25,6 +25,9 @@ import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { ATO_STATUS, comStatusAto } from '../../lib/atoStatus.js';
 import { podeConsultarHoje } from '../../lib/businessCalendar.js';
+import { sendEmail } from '../../email/email.service.js';
+import { EmailType } from '../../email/types.js';
+import BoletoNotify from './BoletoNotifyService.js';
 import { Op } from 'sequelize';
 
 const { BoletoHistory, BoletoSettings } = db;
@@ -40,6 +43,36 @@ const RE_SITUACAO_PAGA = /LIQUIDAD|J[AÁ]\s*PAGO/i;
 
 export function isSituacaoPaga(situacao) {
     return RE_SITUACAO_PAGA.test(String(situacao || ''));
+}
+
+// Situacao ambigua: e a que o Ecobranca devolve tanto para uma baixa real
+// quanto para um titulo pago no dia anterior (ver acima). Boleto cancelado por
+// ela NAO e estado final ate alguem reconsultar - ver
+// `revalidarBaixadosPorDevolucao` e `reconsultarBaixadoAntesDeEmitir`.
+const RE_BAIXADO_POR_DEVOLUCAO = /BAIXAD[OA]\s+POR\s+DEVOLU/i;
+
+/** Where dos boletos do ATO cancelados pela situacao ambigua "BAIXADO POR DEVOLUCAO". */
+export function whereBaixadosPorDevolucao(extra = {}) {
+    return {
+        status: 'success',
+        payment_status: 'cancelled',
+        parcela_id: null,
+        ignorado: false,
+        nosso_numero: { [Op.ne]: null },
+        last_check_situation: { [Op.iLike]: 'BAIXADO POR DEVOLU%' },
+        ...extra,
+    };
+}
+
+/**
+ * Data do pagamento quando a situacao e "TITULO JA PAGO NO DIA DD/MM/AAAA".
+ * Sem data no texto devolve null (o chamador usa a data da leitura).
+ */
+export function dataPagamentoDaSituacao(situacao) {
+    const m = /PAGO\s+NO\s+DIA\s+(\d{2})\/(\d{2})\/(\d{4})/i.exec(String(situacao || ''));
+    if (!m) return null;
+    const d = new Date(Date.UTC(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12, 0, 0));
+    return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function formatDateBr(isoOrDate) {
@@ -191,8 +224,41 @@ export async function runDailyCheck({ idreservas = null } = {}) {
         + `(${boletos.length - emRevalidacao} pendente(s) + ${emRevalidacao} em revalidação de baixa, janela ${revalidacaoDias}d).`,
     );
 
-    // 3) Agrupa por CNPJ da empresa (busca via CV). Boletos sem CNPJ vão pro
-    //    bucket "erro" e são registrados como falha de pré-condição.
+    // 3-4) Agrupa por CNPJ e monta o batch (consultar/baixar por boleto).
+    const { empresas, semCnpj } = await agruparPorEmpresa(boletos, b => decidirAcao(b, tolerancia));
+    console.log(`[BOLETO_CHECK] Batch montado: ${empresas.length} empresa(s), ${boletos.length - semCnpj.length} boleto(s).`);
+
+    // 5) Roda o batch no Playwright (uma sessão Ecobrança). Cada resultado é
+    //    aplicado na hora; se o batch cair no meio, o que já foi lido está salvo.
+    const { results, corrigidos } = await rodarBatch(settings, empresas);
+
+    // 6) Boleto que estava "baixado por devolução" e voltou como PAGO pode ter
+    //    ganhado um irmão: a emissão seguinte viu o ato sem pagamento e cobrou
+    //    de novo (reserva 8086, 14/09/2026). Baixa essa duplicata agora.
+    const duplicatas = await baixarDuplicatasDeAtosPagos(corrigidos, settings);
+
+    const stats = {
+        total: boletos.length,
+        em_revalidacao: emRevalidacao,
+        sem_cnpj: semCnpj.length,
+        consultados: results.filter(r => r.ok && r.acao === 'consultar').length,
+        baixas_tentadas: results.filter(r => r.ok && r.acao === 'baixar').length,
+        baixas_efetuadas: results.filter(r => r.ok && r.baixaConfirmada).length,
+        pagos: results.filter(r => r.ok && isSituacaoPaga(r.situacao)).length,
+        pagos_corrigidos: corrigidos.length,
+        duplicatas,
+        falhas: results.filter(r => !r.ok).length,
+    };
+    console.log('[BOLETO_CHECK] Rodada concluída:', stats);
+    return stats;
+}
+
+/**
+ * Agrupa boletos por CNPJ da empresa (histórico primeiro, CV como fallback) e
+ * monta o batch do Playwright. `acaoDe(boleto)` decide 'consultar' | 'baixar'.
+ * Boleto sem CNPJ ganha evento e fica de fora (`semCnpj`).
+ */
+async function agruparPorEmpresa(boletos, acaoDe) {
     const cnpjCache = new Map();
     const semCnpj = [];
     const porEmpresa = new Map(); // cnpj → [boleto, ...]
@@ -216,43 +282,48 @@ export async function runDailyCheck({ idreservas = null } = {}) {
         porEmpresa.get(cnpj).push(b);
     }
 
-    if (semCnpj.length) {
-        for (const b of semCnpj) {
-            await EventLogger.log({
-                historyId: b.id, idreserva: b.idreserva, type: 'payment_check_skipped',
-                severity: 'warning', message: 'CNPJ da empresa não encontrado no CV — boleto pulado nesta rodada.',
-            });
-        }
+    for (const b of semCnpj) {
+        await EventLogger.log({
+            historyId: b.id, idreserva: b.idreserva, type: 'payment_check_skipped',
+            severity: 'warning', message: 'CNPJ da empresa não encontrado no CV — boleto pulado nesta rodada.',
+        });
     }
 
-    // 4) Monta o batch Playwright. Pra cada boleto, decide a ação (consultar/baixar).
     const empresas = [];
     for (const [cnpj, lista] of porEmpresa) {
-        const boletosBatch = lista.map(b => ({
-            historyId: b.id,
-            idreserva: b.idreserva,
-            nossoNumero: b.nosso_numero,
-            acao: decidirAcao(b, tolerancia),
-            vencimento: b.vencimento,
-        }));
-        empresas.push({ cnpj_empresa: cnpj, boletos: boletosBatch });
+        empresas.push({
+            cnpj_empresa: cnpj,
+            boletos: lista.map(b => ({
+                historyId: b.id,
+                idreserva: b.idreserva,
+                nossoNumero: b.nosso_numero,
+                acao: acaoDe(b),
+                vencimento: b.vencimento,
+            })),
+        });
     }
+    return { empresas, semCnpj };
+}
 
-    console.log(`[BOLETO_CHECK] Batch montado: ${empresas.length} empresa(s), ${boletos.length - semCnpj.length} boleto(s).`);
-
-    // 5) Roda o batch no Playwright (uma sessão Ecobrança).
-    //    Envelopado em try/catch — se runEcoBatch crashar no meio (ex.: browser
-    //    morto, exceção fatal no Playwright), os boletos JÁ PROCESSADOS via
-    //    onResult já estão salvos no DB (cada um é aplicado imediato). O resto
-    //    fica pendente pra próxima rodada — não perdemos progresso.
+/**
+ * Roda o batch no Ecobrança aplicando cada resultado na hora. Envelopado em
+ * try/catch: se runEcoBatch crashar no meio (browser morto, exceção fatal), os
+ * boletos JÁ PROCESSADOS via onResult estão salvos; o resto fica pra próxima.
+ * Devolve também `corrigidos`: boletos do ATO que estavam cancelados e a
+ * leitura promoveu a pagos (candidatos a ter uma cobrança duplicada viva).
+ */
+async function rodarBatch(settings, empresas, aplicar = aplicarResultado) {
     let results = [];
+    const corrigidos = [];
+    if (!empresas.length) return { results, corrigidos };
     try {
         const out = await runEcoBatch({
             credentials: { usuario: settings.eco_usuario, senha: settings.eco_senha },
             empresas,
             onResult: async (r) => {
                 try {
-                    await aplicarResultado(r, {});
+                    const res = await aplicar(r, {});
+                    if (res?.outcome === 'pago_corrigido' && res.history) corrigidos.push(res.history);
                 } catch (err) {
                     console.error(`[BOLETO_CHECK] aplicarResultado falhou (hist ${r.historyId}): ${err.message}`);
                 }
@@ -264,19 +335,7 @@ export async function runDailyCheck({ idreservas = null } = {}) {
         // Não relança — preferimos terminar a rodada com stats parciais a perder
         // tudo. Os boletos já processados via onResult permanecem salvos.
     }
-
-    const stats = {
-        total: boletos.length,
-        em_revalidacao: emRevalidacao,
-        sem_cnpj: semCnpj.length,
-        consultados: results.filter(r => r.ok && r.acao === 'consultar').length,
-        baixas_tentadas: results.filter(r => r.ok && r.acao === 'baixar').length,
-        baixas_efetuadas: results.filter(r => r.ok && r.baixaConfirmada).length,
-        pagos: results.filter(r => r.ok && isSituacaoPaga(r.situacao)).length,
-        falhas: results.filter(r => !r.ok).length,
-    };
-    console.log('[BOLETO_CHECK] Rodada concluída:', stats);
-    return stats;
+    return { results, corrigidos };
 }
 
 /**
@@ -345,10 +404,12 @@ async function aplicarResultado(r, _opts = {}) {
             data: { situacao: r.situacao, dados: r.dados || null },
         });
         const eraCancelado = history.payment_status === 'cancelled';
+        // "TITULO JA PAGO NO DIA 10/08/2026" traz a data real; LIQUIDADO nao,
+        // e ai vale a data da leitura.
         await history.update({
             ...baseUpdate,
             payment_status: 'paid',
-            paid_at: new Date(),
+            paid_at: dataPagamentoDaSituacao(r.situacao) || new Date(),
             cancelled_at: null,
         });
         const msg = [
@@ -366,7 +427,7 @@ async function aplicarResultado(r, _opts = {}) {
             'Detecção automática pelo scheduler diário.',
         ].filter(Boolean).join('\n');
         await sendCvMessageSafe(history.idreserva, msg, history.id, 'pago', ATO_STATUS.PAGO);
-        return;
+        return { outcome: eraCancelado ? 'pago_corrigido' : 'pago', history };
     }
 
     // ── BAIXADO/CANCELADO externo (descoberto pela consulta detalhada) ───────
@@ -648,4 +709,314 @@ export async function baixarBoletoPorCancelamento(idreserva, { motivo = 'cancela
     return { ok: false, outcome: 'falha', detalhe };
 }
 
-export default { runDailyCheck, baixarBoletoPorCancelamento };
+// ── Baixa por devolução que era pagamento ─────────────────────────────────────
+//
+// Entre 09 e 13/08/2026 o Ecobrança devolveu "BAIXADO POR DEVOLUÇÃO" para
+// títulos pagos no dia anterior, e o Office marcou o ato como cancelado. O
+// acerto de 21/08 (ensureBoletoSchema) corrigiu 11 títulos do extrato daquele
+// dia, mas outros ficaram cancelados. Em 14/09 a reserva 8086 voltou a "Envio
+// Sienge", o gate de "ato já pago" não viu pagamento nenhum e saiu um SEGUNDO
+// boleto para um ato quitado. As três funções abaixo fecham esse buraco:
+//   - revalidarBaixadosPorDevolucao: reconsulta TODOS os cancelados por essa
+//     situação (sem janela de dias) e promove os pagos; botão na tela.
+//   - baixarDuplicatasDeAtosPagos: baixa o boleto pendente emitido DEPOIS de um
+//     ato que acabou de ser reconhecido como pago.
+//   - reconsultarBaixadoAntesDeEmitir: a emissão pergunta ao Ecobrança antes
+//     de tratar um "baixado por devolução" como ato sem pagamento.
+
+/**
+ * Espera o lock do Ecobrança por até `tentativas` x 5 s. Devolve o owner ou
+ * null se seguiu ocupado.
+ */
+async function esperarLock(prefixo, tentativas = 12, ttlMin = 15) {
+    const owner = `${prefixo}:${new Date().toISOString()}`;
+    for (let i = 0; i < tentativas; i++) {
+        if (await EcoLock.acquire(owner, ttlMin)) return owner;
+        await new Promise(r => setTimeout(r, 5000));
+    }
+    return null;
+}
+
+/**
+ * Reconsulta no Ecobrança os boletos do ATO cancelados por "BAIXADO POR
+ * DEVOLUÇÃO", sem limite de idade. Leitura pura: o único desfecho possível
+ * é promover para pago (aplicarResultado já posta a correção no CV). Em
+ * seguida baixa a cobrança duplicada de quem virou pago.
+ *
+ * O chamador é dono do lock do Ecobrança (controller e runner fazem como o
+ * check manual). Aceita recorte por reserva ou por id do histórico.
+ */
+export async function revalidarBaixadosPorDevolucao({ idreservas = null, historyIds = null } = {}) {
+    const settings = await BoletoSettings.findByPk(1);
+    if (!settings?.eco_usuario || !settings?.eco_senha) {
+        return { skipped: true, reason: 'no_eco_credentials' };
+    }
+    const extra = {};
+    if (Array.isArray(idreservas) && idreservas.length) extra.idreserva = idreservas;
+    if (Array.isArray(historyIds) && historyIds.length) extra.id = historyIds;
+    const boletos = await BoletoHistory.findAll({
+        where: whereBaixadosPorDevolucao(extra),
+        order: [['vencimento', 'ASC'], ['id', 'ASC']],
+    });
+    console.log(`[BOLETO_CHECK] Revalidação de baixas por devolução: ${boletos.length} boleto(s) para reconsultar.`);
+    if (!boletos.length) return { total: 0, consultados: 0, pagos_corrigidos: 0, duplicatas: null, falhas: 0 };
+
+    const { empresas, semCnpj } = await agruparPorEmpresa(boletos, () => 'consultar');
+    const { results, corrigidos } = await rodarBatch(settings, empresas);
+    const duplicatas = await baixarDuplicatasDeAtosPagos(corrigidos, settings);
+
+    const stats = {
+        total: boletos.length,
+        sem_cnpj: semCnpj.length,
+        consultados: results.filter(r => r.ok).length,
+        pagos_corrigidos: corrigidos.length,
+        corrigidos: corrigidos.map(h => ({ id: h.id, idreserva: h.idreserva, nosso_numero: h.nosso_numero, paid_at: h.paid_at })),
+        ainda_baixados: results.filter(r => r.ok && r.found !== false && !isSituacaoPaga(r.situacao)).length,
+        nao_encontrados: results.filter(r => r.ok && r.found === false).length,
+        falhas: results.filter(r => !r.ok).length,
+        duplicatas,
+    };
+    console.log('[BOLETO_CHECK] Revalidação concluída:', JSON.stringify(stats));
+    return stats;
+}
+
+/**
+ * Para cada ato recém-reconhecido como pago, baixa no Ecobrança o boleto do
+ * ato PENDENTE emitido depois dele (a cobrança em duplicidade), marca como
+ * cancelado, avisa a timeline da reserva e o cliente que recebeu o boleto.
+ *
+ * Roda DEPOIS do batch de leitura (sessão própria): o portal amarra uma
+ * sessão por empresa e abrir outra no meio derrubaria a consulta em curso.
+ * Se a duplicata também constar paga, NÃO baixa: registra pagamento em
+ * duplicidade para o Financeiro devolver.
+ */
+export async function baixarDuplicatasDeAtosPagos(pagos, settings = null) {
+    const lista = (pagos || []).filter(h => h && !h.parcela_id);
+    if (!lista.length) return null;
+    settings = settings || await BoletoSettings.findByPk(1);
+    if (!settings?.eco_usuario || !settings?.eco_senha) return { skipped: true, reason: 'no_eco_credentials' };
+
+    const pagoPorDuplicata = new Map(); // duplicata.id → boleto pago
+    const duplicatas = [];
+    for (const pago of lista) {
+        const dups = await BoletoHistory.findAll({
+            where: {
+                idreserva: pago.idreserva,
+                status: 'success',
+                payment_status: 'pending',
+                parcela_id: null,
+                ignorado: false,
+                nosso_numero: { [Op.ne]: null },
+                id: { [Op.gt]: pago.id },
+            },
+            order: [['id', 'ASC']],
+        });
+        for (const d of dups) { pagoPorDuplicata.set(d.id, pago); duplicatas.push(d); }
+    }
+    if (!duplicatas.length) return { total: 0, baixadas: 0 };
+    console.log(`[BOLETO_CHECK] ${duplicatas.length} cobrança(s) duplicada(s) de ato pago para baixar.`);
+
+    const { empresas } = await agruparPorEmpresa(duplicatas, () => 'baixar');
+    const desfechos = [];
+    await rodarBatch(settings, empresas, async (r) => {
+        const d = await aplicarBaixaDuplicata(r, pagoPorDuplicata.get(r.historyId));
+        desfechos.push({ historyId: r.historyId, ...d });
+        return null;
+    });
+    return {
+        total: duplicatas.length,
+        baixadas: desfechos.filter(x => x.outcome === 'baixada').length,
+        ja_baixadas: desfechos.filter(x => x.outcome === 'ja_baixada').length,
+        pagas_em_duplicidade: desfechos.filter(x => x.outcome === 'paga_em_duplicidade').length,
+        falhas: desfechos.filter(x => !['baixada', 'ja_baixada', 'paga_em_duplicidade'].includes(x.outcome)).length,
+        desfechos,
+    };
+}
+
+async function aplicarBaixaDuplicata(r, pago) {
+    const dup = r.historyId ? await BoletoHistory.findByPk(r.historyId) : null;
+    if (!dup || !pago) return { outcome: 'falha', detalhe: 'registro não encontrado' };
+    const idreserva = dup.idreserva;
+    const pagoEm = pago.paid_at ? formatDateBr(pago.paid_at) : null;
+    const refPago = `boleto #${pago.id} (Nosso Nº ${pago.nosso_numero}${pagoEm ? `, pago em ${pagoEm}` : ''})`;
+    const baseUpdate = {
+        last_checked_at: new Date(),
+        last_check_situation: r.situacao || (r.found === false ? 'NAO_ENCONTRADO' : null),
+    };
+
+    if (!r.ok) {
+        await EventLogger.log({
+            historyId: dup.id, idreserva, type: 'payment_check_error', severity: 'error',
+            message: `Baixa da cobrança duplicada falhou: ${r.error || 'erro desconhecido'}. O ato já está pago pelo ${refPago}.`,
+            data: { duplicataDe: pago.id, error: r.error },
+        });
+        await dup.update(baseUpdate);
+        return { outcome: 'falha', detalhe: r.error };
+    }
+    if (r.found === false) {
+        await EventLogger.log({
+            historyId: dup.id, idreserva, type: 'payment_check_not_found', severity: 'error',
+            message: `Baixa da cobrança duplicada: Nosso Nº ${dup.nosso_numero} não encontrado no Ecobrança. O ato já está pago pelo ${refPago}.`,
+            data: { duplicataDe: pago.id },
+        });
+        await dup.update(baseUpdate);
+        return { outcome: 'nao_encontrada' };
+    }
+
+    const sit = String(r.situacao || '').toUpperCase();
+
+    // O cliente pagou os DOIS: não há o que baixar, há o que devolver.
+    if (isSituacaoPaga(sit)) {
+        await dup.update({ ...baseUpdate, payment_status: 'paid', paid_at: dataPagamentoDaSituacao(sit) || dup.paid_at || new Date(), cancelled_at: null });
+        await EventLogger.log({
+            historyId: dup.id, idreserva, type: 'paid', severity: 'error',
+            message: `PAGAMENTO EM DUPLICIDADE: este boleto consta "${sit}" no Ecobrança e o ato já estava pago pelo ${refPago}. O Financeiro precisa devolver um dos valores ao cliente.`,
+            data: { duplicataDe: pago.id, situacao: sit, pagamentoDuplicado: true },
+        });
+        const msg = [
+            '⚠️ Pagamento em duplicidade do ato',
+            '',
+            `O cliente pagou dois boletos do mesmo ato: o ${refPago} e este, Nosso Nº ${dup.nosso_numero} (${sit}).`,
+            `💰 Valor de cada um: R$ ${Number(dup.valor || 0).toFixed(2).replace('.', ',')}`,
+            '',
+            'O segundo boleto saiu porque o primeiro havia sido marcado como baixado por devolução pelo banco. Um dos valores precisa ser devolvido ao cliente pelo Financeiro.',
+        ].join('\n');
+        await sendCvMessageSafe(idreserva, msg, dup.id, 'pagamento em duplicidade', ATO_STATUS.PAGO);
+        return { outcome: 'paga_em_duplicidade' };
+    }
+
+    const cancelar = (situacao) => dup.update({ ...baseUpdate, payment_status: 'cancelled', cancelled_at: new Date(), last_check_situation: situacao, substitui_id: pago.id });
+    const cascadeIgnorados = () => BoletoHistory.update(
+        { payment_status: 'cancelled', cancelled_at: new Date() },
+        { where: { idreserva, ignorado: true, payment_status: 'pending', parcela_id: null } },
+    );
+
+    if (/BAIXAD[OA]|CANCELAD[OA]|DEVOLVID[OA]/i.test(sit)) {
+        await cancelar(`${sit} (duplicidade)`);
+        await cascadeIgnorados();
+        await EventLogger.log({
+            historyId: dup.id, idreserva, type: 'baixa_confirmed', severity: 'warning',
+            message: `Cobrança duplicada já constava "${sit}" no Ecobrança. Marcada como cancelada: o ato está pago pelo ${refPago}.`,
+            data: { duplicataDe: pago.id, situacao: sit },
+        });
+        return { outcome: 'ja_baixada' };
+    }
+
+    if (r.baixaConfirmada) {
+        await cancelar('BAIXADO (duplicidade)');
+        await cascadeIgnorados();
+        await EventLogger.log({
+            historyId: dup.id, idreserva, type: 'baixa_confirmed', severity: 'success',
+            message: `Cobrança em duplicidade baixada no Ecobrança (Nosso Nº ${dup.nosso_numero}). O ato já estava pago pelo ${refPago}; este boleto saiu porque aquele constava como baixado por devolução.`,
+            data: { duplicataDe: pago.id, mensagemBaixa: r.mensagemBaixa || null },
+        });
+        const msg = [
+            '❌ Cobrança em duplicidade baixada',
+            '',
+            `O boleto Nosso Nº ${dup.nosso_numero} (R$ ${Number(dup.valor || 0).toFixed(2).replace('.', ',')}${dup.vencimento ? `, vencimento ${formatDateBr(dup.vencimento)}` : ''}) foi baixado e não pode mais ser pago.`,
+            `O ato desta reserva já estava pago pelo ${refPago}.`,
+            '',
+            'O boleto duplicado saiu porque o banco havia devolvido "baixado por devolução" para o boleto pago, e o Office o tratou como cancelado. Registro corrigido: o ato consta como PAGO.',
+        ].join('\n');
+        await sendCvMessageSafe(idreserva, msg, dup.id, 'duplicidade baixada', ATO_STATUS.PAGO);
+        const aviso = await avisarClienteDuplicataBaixada(dup, pago);
+        return { outcome: 'baixada', clienteAvisado: aviso.ok, clienteEmail: aviso.to || null };
+    }
+
+    await EventLogger.log({
+        historyId: dup.id, idreserva, type: 'baixa_aborted', severity: 'warning',
+        message: `Baixa da cobrança duplicada não confirmada: situação "${sit || '?'}" no Ecobrança${r.abortReason ? ` (${r.abortReason})` : ''}. O ato já está pago pelo ${refPago}.`,
+        data: { duplicataDe: pago.id, situacao: sit, abortReason: r.abortReason || null },
+    });
+    await dup.update(baseUpdate);
+    return { outcome: 'nao_confirmada', detalhe: sit };
+}
+
+/**
+ * E-mail curto ao titular que recebeu o boleto duplicado: o boleto foi
+ * cancelado, o ato já estava pago. Só se o boleto chegou a ir ao cliente.
+ * WhatsApp fica de fora: não existe template aprovado para este aviso e o
+ * título baixado não pode mais ser pago no banco.
+ */
+async function avisarClienteDuplicataBaixada(dup, pago) {
+    if (!dup.cliente_email_enviado) return { ok: false, skipped: true, error: 'boleto não foi enviado ao cliente' };
+    if (BoletoNotify._internal.isLocalEnvironment()) return { ok: false, skipped: true, error: 'ambiente local: envio ao cliente desligado' };
+    let email = null;
+    let nome = dup.titular_nome || '';
+    try {
+        const { data } = await apiCv.get(`/v1/comercial/reservas/${dup.idreserva}`);
+        const titular = data?.[dup.idreserva]?.titular || {};
+        email = BoletoNotify._internal.pickEmail(titular.email);
+        nome = titular.nome || nome;
+    } catch (_) {}
+    if (!email) {
+        await EventLogger.log({ historyId: dup.id, idreserva: dup.idreserva, type: 'client_email', severity: 'warning', message: 'Aviso de boleto duplicado não enviado: titular sem e-mail válido no CV.' });
+        return { ok: false, skipped: true, error: 'sem e-mail' };
+    }
+    const primeiro = BoletoNotify._internal.primeiroNome(nome) || 'cliente';
+    const valor = `R$ ${Number(dup.valor || 0).toFixed(2).replace('.', ',')}`;
+    const pagoEm = pago.paid_at ? formatDateBr(pago.paid_at) : null;
+    const body = [
+        `Olá, ${primeiro}.`,
+        '',
+        `O boleto de ${valor}${dup.vencimento ? ` com vencimento em ${formatDateBr(dup.vencimento)}` : ''} (Nosso Número ${dup.nosso_numero}), enviado para a sua reserva no ${dup.empreendimento || 'empreendimento'}, foi cancelado e não precisa ser pago.`,
+        '',
+        `Ele saiu por engano: a entrada da sua reserva já está paga${pagoEm ? ` desde ${pagoEm}` : ''} (boleto ${pago.nosso_numero}). Pedimos desculpas pelo transtorno.`,
+        '',
+        'Se tiver qualquer dúvida, fale com o seu corretor.',
+    ].join('\n');
+    try {
+        await sendEmail(EmailType.GENERIC_NOTIFICATION, email, {
+            title: 'Boleto cancelado: a entrada da sua reserva já está paga',
+            preview: `O boleto de ${valor} foi cancelado. Sua entrada já está paga.`,
+            body,
+        });
+        await EventLogger.log({ historyId: dup.id, idreserva: dup.idreserva, type: 'client_email', severity: 'success', message: `Aviso de boleto duplicado cancelado enviado para ${email}.` });
+        return { ok: true, to: email };
+    } catch (err) {
+        await EventLogger.log({ historyId: dup.id, idreserva: dup.idreserva, type: 'client_email', severity: 'error', message: `Falha enviando aviso de boleto duplicado para ${email}: ${err?.message || err}` });
+        return { ok: false, to: email, error: err?.message };
+    }
+}
+
+/**
+ * Antes de emitir uma cobrança nova do ato: se o último boleto do ato da
+ * reserva foi cancelado por "BAIXADO POR DEVOLUÇÃO", pergunta ao Ecobrança
+ * como ele está HOJE. Se constar pago, aplicarResultado promove para `paid`
+ * (e posta a correção no CV); o gate de "ato já pago" da emissão então
+ * encontra o pagamento e não cobra de novo.
+ *
+ * Toma e devolve o próprio lock do Ecobrança (a emissão pega o dela depois).
+ * Nunca lança: falha de leitura vira `{ consultado: false, erro }` e a
+ * emissão decide seguir - a rodada diária reconsulta de novo.
+ */
+export async function reconsultarBaixadoAntesDeEmitir(idreserva, { historyId = null } = {}) {
+    const suspeito = await BoletoHistory.findOne({
+        where: whereBaixadosPorDevolucao({ idreserva, ...(historyId ? { id: { [Op.ne]: historyId } } : {}) }),
+        order: [['id', 'DESC']],
+    });
+    if (!suspeito) return { consultado: false, motivo: 'sem boleto baixado por devolução' };
+
+    const settings = await BoletoSettings.findByPk(1);
+    if (!settings?.eco_usuario || !settings?.eco_senha) return { consultado: false, boleto: suspeito, erro: 'credenciais do Ecobrança não configuradas' };
+
+    const owner = await esperarLock(`check:pre-emissao:res=${idreserva}:hist=${suspeito.id}`);
+    if (!owner) return { consultado: false, boleto: suspeito, erro: 'Ecobrança ocupado (lock)' };
+    try {
+        const { empresas } = await agruparPorEmpresa([suspeito], () => 'consultar');
+        const { results, corrigidos } = await rodarBatch(settings, empresas);
+        const r = results[0] || null;
+        await suspeito.reload();
+        return {
+            consultado: !!r?.ok,
+            boleto: suspeito,
+            pago: suspeito.payment_status === 'paid' || corrigidos.length > 0,
+            situacao: r?.situacao || (r?.found === false ? 'NAO_ENCONTRADO' : null),
+            erro: r && !r.ok ? (r.error || 'falha na consulta') : (r ? null : 'sem resultado'),
+        };
+    } finally {
+        await EcoLock.release(owner).catch(() => {});
+    }
+}
+
+export default { runDailyCheck, baixarBoletoPorCancelamento, revalidarBaixadosPorDevolucao, baixarDuplicatasDeAtosPagos, reconsultarBaixadoAntesDeEmitir };

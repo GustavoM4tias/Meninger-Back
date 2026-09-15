@@ -3,7 +3,7 @@ import db from '../../models/sequelize/index.js';
 import { processBoletoWebhook } from '../../services/boleto/BoletoGenerationService.js';
 import BoletoNotify, { sendBoletoToTitular, WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANG } from '../../services/boleto/BoletoNotifyService.js';
 import EventLogger from '../../services/boleto/BoletoEventLogger.js';
-import { runDailyCheck } from '../../services/boleto/BoletoPaymentCheckService.js';
+import { runDailyCheck, revalidarBaixadosPorDevolucao, whereBaixadosPorDevolucao } from '../../services/boleto/BoletoPaymentCheckService.js';
 import EcoLock from '../../services/boleto/BoletoEcoLockService.js';
 import { getBoletoTemplateDefinition, gerarPdfExemplo } from '../../services/boleto/boletoWhatsappTemplate.js';
 import axios from 'axios';
@@ -93,7 +93,7 @@ export async function updateSettings(req, res) {
             'eco_usuario', 'eco_senha',
             'idserie_ra', 'cv_idtipo_documento',
             'tolerancia_dias_uteis',
-            'revalidacao_baixado_dias', 'cv_situacoes_reserva_morta',
+            'revalidacao_baixado_dias', 'reconsultar_baixado_antes_emitir', 'cv_situacoes_reserva_morta',
             'max_dias_vencimento', 'valor_maximo',
             'comissao_modo',
             'janela_ativa', 'janela_inicio_hora', 'janela_fim_hora',
@@ -921,6 +921,40 @@ export async function checkPaymentNow(req, res) {
             .finally(() => EcoLock.release(owner).catch(() => {}));
     } catch (err) {
         console.error('[BOLETO_CHECK] Falha disparando check manual:', err.message);
+        if (!res.headersSent) return res.status(500).json({ error: err.message });
+    }
+}
+
+/**
+ * Reconsulta no Ecobrança TODOS os boletos do ato cancelados por "BAIXADO POR
+ * DEVOLUÇÃO" (sem janela de dias), promove os que constarem pagos e baixa a
+ * cobrança duplicada que tenha saído depois. Botão "Revalidar baixas por
+ * devolução" em Configurações. Mesmo protocolo do check manual: pega o lock
+ * antes de aceitar (409 se ocupado), responde 202 e processa em background;
+ * o desfecho fica na timeline de cada boleto.
+ */
+export async function revalidarBaixados(req, res) {
+    try {
+        const candidatos = await db.BoletoHistory.count({ where: whereBaixadosPorDevolucao() });
+        if (!candidatos) return res.json({ scheduled: false, candidatos: 0 });
+
+        const owner = `check:revalidar-baixados:user=${req.user?.id || '?'}:${new Date().toISOString()}`;
+        const acquired = await EcoLock.acquire(owner, 30);
+        if (!acquired) {
+            const status = await EcoLock.getStatus().catch(() => null);
+            return res.status(409).json({
+                error: 'Outra operação no Ecobrança já está em andamento. Tente novamente em alguns minutos.',
+                lock: status ? { owner: status.owner, expires_at: status.expires_at } : null,
+            });
+        }
+        res.status(202).json({ scheduled: true, candidatos });
+
+        revalidarBaixadosPorDevolucao()
+            .then(stats => console.log('[BOLETO_CHECK] Revalidação manual concluída:', JSON.stringify(stats)))
+            .catch(err => console.error(`[BOLETO_CHECK] Revalidação manual crash: ${err.message}`))
+            .finally(() => EcoLock.release(owner).catch(() => {}));
+    } catch (err) {
+        console.error('[BOLETO_CHECK] Falha disparando revalidação:', err.message);
         if (!res.headersSent) return res.status(500).json({ error: err.message });
     }
 }

@@ -8,6 +8,7 @@ import { sendBoletoToTitular } from './BoletoNotifyService.js';
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { ATO_STATUS, comStatusAto } from '../../lib/atoStatus.js';
+import { reconsultarBaixadoAntesDeEmitir } from './BoletoPaymentCheckService.js';
 import { PARCELAS_DEFAULTS, ehErroDeCep, titularComEnderecoContingencia } from '../../lib/atoParcelas.js';
 import { dentroDaJanela, proximaAbertura, ajustarParaJanela, descreverJanela, formatarAgendamento } from '../../lib/boletoJanela.js';
 import { Op } from 'sequelize';
@@ -399,6 +400,34 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         // cartão. Enquanto este gate via só o boleto, o cartão ficava exposto
         // exatamente ao problema que o commit 36db1e4 corrigiu aqui - um webhook
         // redisparado emitia uma segunda cobrança de um ato já quitado.
+        //
+        // Antes de olhar o banco, pergunta ao Ecobrança pelo último boleto do
+        // ato cancelado por "BAIXADO POR DEVOLUÇÃO": o portal devolve essa
+        // situação também para título pago no dia anterior, e um ato pago que
+        // ficou como cancelado passava por aqui como se nunca tivesse sido
+        // cobrado (reserva 8086, 14/09/2026: segundo boleto de um ato pago em
+        // 10/08). Se constar pago, a reconsulta promove para `paid` e a busca
+        // abaixo encontra. Configurável em boleto_settings
+        // (`reconsultar_baixado_antes_emitir`, ligado por padrão). Falha de
+        // leitura não trava a cobrança: vira aviso e a rodada diária reconsulta.
+        if (settings.reconsultar_baixado_antes_emitir !== false) {
+            const rc = await reconsultarBaixadoAntesDeEmitir(idreserva, { historyId: history.id }).catch(err => ({ consultado: false, erro: err?.message || String(err) }));
+            if (rc.boleto) {
+                const ref = `boleto #${rc.boleto.id} (Nosso Nº ${rc.boleto.nosso_numero})`;
+                const message = rc.pago
+                    ? `Reconsulta antes de emitir: o ${ref}, que constava baixado por devolução, está PAGO no Ecobrança. Nenhuma cobrança nova será emitida.`
+                    : rc.consultado
+                        ? `Reconsulta antes de emitir: o ${ref}, baixado por devolução, segue "${rc.situacao || '?'}" no Ecobrança. A emissão prossegue.`
+                        : `Reconsulta antes de emitir não concluída (${rc.erro || 'sem resultado'}) para o ${ref}. A emissão prossegue; a rodada diária reconsulta.`;
+                await EventLogger.log({
+                    historyId: history.id, idreserva, type: 'payment_check',
+                    severity: rc.pago ? 'warning' : (rc.consultado ? 'info' : 'warning'),
+                    message,
+                    data: { boletoId: rc.boleto.id, nossoNumero: rc.boleto.nosso_numero, consultado: rc.consultado, pago: !!rc.pago, situacao: rc.situacao || null, erro: rc.erro || null },
+                });
+                if (!rc.consultado) warnings.push({ etapa: 'reconsulta_baixado', erro: message });
+            }
+        }
         const [atoPagoBoleto, atoPagoCartao] = await Promise.all([
             db.BoletoHistory.findOne({
                 where: {

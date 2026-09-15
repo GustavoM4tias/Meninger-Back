@@ -15,6 +15,7 @@ import {
     listHistoryEvents,
     listReservaTimeline,
     checkPaymentNow,
+    revalidarBaixados,
     retryHistoryItem,
     regenerateHistoryItem,
     markHistoryCancelled,
@@ -53,6 +54,9 @@ router.post('/simulate', ...configurar, simulateWebhook);
 // ── Configurações da automação ────────────────────────────────────────────────
 router.get('/settings', ...configurar, getSettings);
 router.patch('/settings', ...configurar, updateSettings);
+// Reconsulta no Ecobrança os boletos do ato cancelados por "baixado por
+// devolução" e baixa a cobrança duplicada de quem constar pago (manutenção).
+router.post('/revalidar-baixados', ...configurar, revalidarBaixados);
 
 // ── Regras de comissão por empreendimento ─────────────────────────────────────
 router.get('/comission-rules', ...configurar, listComissionRules);
