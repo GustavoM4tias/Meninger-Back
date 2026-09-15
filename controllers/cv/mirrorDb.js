@@ -203,8 +203,15 @@ export async function montarEspelho(idempreendimento) {
 
   const blocoPorId = new Map(blocos.map((b) => [b.idbloco, b]));
   const etapaPorId = new Map(etapas.map((e) => [e.idetapa, e]));
-  const multiBloco = blocos.length > 1;
+  // Só bloco COM unidade conta como torre: o CV tem bloco vazio de sobra
+  // (MOOV tem um segundo bloco sem nada, e as 8 torres moram no número).
+  const blocosComUnidade = new Set(unidades.map((u) => u.idbloco));
+  const multiBloco = blocosComUnidade.size > 1;
   const tipoAuto = tiposPorArea(unidades);
+  // andar/coluna do CV só valem quando variam: o Adhara manda 0/0 em todas
+  // as unidades, e isso é "não sei", não "térreo, coluna 0".
+  const cvAndarVale = new Set(unidades.map((u) => u.andar).filter((v) => v != null)).size > 1;
+  const cvColunaVale = new Set(unidades.map((u) => u.coluna).filter((v) => v != null)).size > 1;
 
   // 1) cada unidade vira uma célula com torre/andar/final resolvidos
   const cells = [];
@@ -219,8 +226,8 @@ export async function montarEspelho(idempreendimento) {
     const torreKey = multiBloco ? `b${u.idbloco}` : (d.torre != null ? `n${d.torre}` : `b${u.idbloco}`);
     const torreNome = multiBloco ? (bloco?.nome || `Bloco ${u.idbloco}`) : (d.torre != null ? `Torre ${d.torre}` : (bloco?.nome || 'Torre única'));
 
-    const andar = u.andar != null ? Number(u.andar) : d.andar;
-    const final = u.coluna != null ? String(u.coluna) : d.final;
+    const andar = cvAndarVale && u.andar != null ? Number(u.andar) : d.andar;
+    const final = cvColunaVale && u.coluna != null ? String(u.coluna) : d.final;
 
     const area = num(u.area_privativa);
     const valorCv = num(u.valor);
