@@ -21,7 +21,7 @@ import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { _primitivos } from './BoletoGenerationService.js';
 import { sendParcelaToTitular, sendLembrete, sendAvisoAtraso, sendAvisoFinal, sendAvisoEncerramento } from './ParcelaNotifyService.js';
-import { isSituacaoPaga } from './BoletoPaymentCheckService.js';
+import { isSituacaoPaga, avaliarBaixaAmbigua } from './BoletoPaymentCheckService.js';
 import {
     PARCELA_STATUS, PLANO_STATUS, condicaoDeEmissao, descricaoParcela, rotuloParcela, hojeYmd, diffDays, ehErroDeCep, titularComEnderecoContingencia,
 } from '../../lib/atoParcelas.js';
@@ -411,7 +411,7 @@ export async function aplicarResultadoParcela(r, history) {
 
     if (isSituacaoPaga(sit)) {
         if (history.payment_status === 'paid') { await history.update(base); return; }
-        await history.update({ ...base, payment_status: 'paid', paid_at: new Date(), cancelled_at: null });
+        await history.update({ ...base, payment_status: 'paid', paid_at: new Date(), cancelled_at: null, baixa_devolucao_vista_em: null });
         await EventLogger.log({ historyId: history.id, idreserva: history.idreserva, type: 'paid', severity: 'success', message: `Boleto da ${descricaoParcela(p)} pago - situacao "${r.situacao}".`, data: { situacao: r.situacao } });
         if (parcela) await parcela.update({ status: PARCELA_STATUS.PAGA, pago_em: new Date(), boleto_history_id: history.id });
         await sendCvMessage(history.idreserva, comStatusParcela('PAGA', p, [
@@ -427,6 +427,18 @@ export async function aplicarResultadoParcela(r, history) {
     if (isBaixado && history.payment_status === 'paid') { await history.update(base); return; }
     if (isBaixado && history.payment_status === 'cancelled') { await history.update(base); return; }
     if (isBaixado) {
+        // "Baixado por devolucao" que o Office nao pediu pode ser pagamento em
+        // compensacao: segue pendente por alguns dias uteis (sem leitura extra).
+        const amb = await avaliarBaixaAmbigua(history, r);
+        if (amb.aguardar) {
+            await history.update({ ...base, baixa_devolucao_vista_em: amb.primeira });
+            await EventLogger.log({ historyId: history.id, idreserva: history.idreserva, type: 'payment_check', severity: amb.primeiraVez ? 'warning' : 'info',
+                message: amb.primeiraVez
+                    ? `Ecobranca devolveu "${sit}" para o boleto da ${descricaoParcela(p)} sem baixa pedida pelo Office. Pode ser pagamento em compensacao: segue em aberto e e reconsultado ate ${formatDate(amb.limite)} (${amb.diasUteis} dia(s) util(eis)).`
+                    : `Boleto da ${descricaoParcela(p)} segue "${sit}" no Ecobranca (aguardando confirmacao ate ${formatDate(amb.limite)}).`,
+                data: { situacao: sit, baixaAmbigua: true, primeiraVista: amb.primeira, limite: amb.limite } });
+            return;
+        }
         await history.update({ ...base, payment_status: 'cancelled', cancelled_at: new Date(), last_check_situation: r.baixaConfirmada ? 'BAIXADO' : sit });
         await EventLogger.log({ historyId: history.id, idreserva: history.idreserva, type: 'baixa_confirmed', severity: r.baixaConfirmada ? 'success' : 'warning', message: r.baixaConfirmada ? `Boleto da ${descricaoParcela(p)} vencido sem pagamento - baixa por devolucao.` : `Boleto da ${descricaoParcela(p)} consta "${sit}" no Ecobranca (baixa externa).`, data: { situacao: sit } });
         // Plano vivo: a parcela volta para a fila como VENCIDA (a rodada de

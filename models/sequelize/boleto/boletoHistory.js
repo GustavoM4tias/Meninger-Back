@@ -192,6 +192,11 @@ export default (sequelize, DataTypes) => {
             allowNull: true,
             comment: 'Quando o boleto foi baixado por devolução.',
         },
+        baixa_devolucao_vista_em: {
+            type: DataTypes.DATE,
+            allowNull: true,
+            comment: 'Primeira vez que o Ecobrança devolveu "BAIXADO POR DEVOLUÇÃO" sem baixa pedida pelo Office. Pode ser pagamento em compensação: o boleto segue pendente por N dias úteis antes de cancelar.',
+        },
 
         // ── Avisos por etapa (anexo CV, mensagem CV, alteração situação) ──────
         // JSON serializado em TEXT — etapas que falham silenciosamente são

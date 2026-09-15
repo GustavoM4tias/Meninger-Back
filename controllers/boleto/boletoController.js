@@ -93,7 +93,7 @@ export async function updateSettings(req, res) {
             'eco_usuario', 'eco_senha',
             'idserie_ra', 'cv_idtipo_documento',
             'tolerancia_dias_uteis',
-            'revalidacao_baixado_dias', 'reconsultar_baixado_antes_emitir', 'cv_situacoes_reserva_morta',
+            'revalidacao_baixado_dias', 'reconsultar_baixado_antes_emitir', 'baixa_devolucao_confirmar_dias_uteis', 'cv_situacoes_reserva_morta',
             'max_dias_vencimento', 'valor_maximo',
             'comissao_modo',
             'janela_ativa', 'janela_inicio_hora', 'janela_fim_hora',

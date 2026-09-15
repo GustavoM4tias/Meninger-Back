@@ -24,7 +24,7 @@ import { runEcoBatch } from '../../playwright/services/ecoCheckService.js';
 import EventLogger from './BoletoEventLogger.js';
 import EcoLock from './BoletoEcoLockService.js';
 import { ATO_STATUS, comStatusAto } from '../../lib/atoStatus.js';
-import { podeConsultarHoje } from '../../lib/businessCalendar.js';
+import { podeConsultarHoje, addBusinessDays } from '../../lib/businessCalendar.js';
 import { sendEmail } from '../../email/email.service.js';
 import { EmailType } from '../../email/types.js';
 import BoletoNotify from './BoletoNotifyService.js';
@@ -73,6 +73,35 @@ export function dataPagamentoDaSituacao(situacao) {
     if (!m) return null;
     const d = new Date(Date.UTC(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12, 0, 0));
     return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * "BAIXADO POR DEVOLUÇÃO" num boleto PENDENTE que o Office NÃO mandou baixar
+ * é ambíguo: o banco devolve a mesma situação para pagamento em compensação
+ * (a leitura de 11/08/2026 marcou como cancelado um boleto pago no dia
+ * anterior). A baixa real, quando vem do Office, chega com `baixaConfirmada`
+ * e não passa por aqui. Baixa manual no portal é rara.
+ *
+ * Regra: na primeira vez o boleto NÃO é cancelado - só fica anotado quando
+ * a situação foi vista (`baixa_devolucao_vista_em`) e segue no grupo dos
+ * pendentes, que a rodada já lê todo dia (nenhuma leitura extra). Se em até
+ * `baixa_devolucao_confirmar_dias_uteis` dias úteis aparecer LIQUIDADO / JÁ
+ * PAGO, vira pago. Se continuar "baixado por devolução" depois do prazo, aí
+ * é baixa externa e o cancelamento acontece com a mensagem de sempre.
+ *
+ * Devolve `{ aguardar, primeira, limite, diasUteis }`; `aguardar=false`
+ * quando não se aplica ou quando o prazo venceu.
+ */
+export async function avaliarBaixaAmbigua(history, r, settings = null) {
+    const sit = String(r?.situacao || '');
+    if (!r?.ok || r.found === false || r.baixaConfirmada) return { aguardar: false };
+    if (history.payment_status !== 'pending' || !RE_BAIXADO_POR_DEVOLUCAO.test(sit)) return { aguardar: false };
+    settings = settings || await BoletoSettings.findByPk(1);
+    const diasUteis = Math.max(0, Number(settings?.baixa_devolucao_confirmar_dias_uteis ?? 3) || 0);
+    if (!diasUteis) return { aguardar: false, diasUteis };
+    const primeira = history.baixa_devolucao_vista_em ? new Date(history.baixa_devolucao_vista_em) : new Date();
+    const limite = addBusinessDays(primeira, diasUteis);
+    return { aguardar: new Date() < limite, primeira, limite, diasUteis, primeiraVez: !history.baixa_devolucao_vista_em };
 }
 
 function formatDateBr(isoOrDate) {
@@ -322,7 +351,7 @@ async function rodarBatch(settings, empresas, aplicar = aplicarResultado) {
             empresas,
             onResult: async (r) => {
                 try {
-                    const res = await aplicar(r, {});
+                    const res = await aplicar(r, { settings });
                     if (res?.outcome === 'pago_corrigido' && res.history) corrigidos.push(res.history);
                 } catch (err) {
                     console.error(`[BOLETO_CHECK] aplicarResultado falhou (hist ${r.historyId}): ${err.message}`);
@@ -342,7 +371,7 @@ async function rodarBatch(settings, empresas, aplicar = aplicarResultado) {
  * Aplica o resultado de UM boleto: registra evento, atualiza history, dispara
  * mudança de situação + mensagem no CV quando aplicável.
  */
-async function aplicarResultado(r, _opts = {}) {
+async function aplicarResultado(r, opts = {}) {
     if (!r.historyId) return;
     const history = await BoletoHistory.findByPk(r.historyId);
     if (!history) return;
@@ -411,6 +440,7 @@ async function aplicarResultado(r, _opts = {}) {
             payment_status: 'paid',
             paid_at: dataPagamentoDaSituacao(r.situacao) || new Date(),
             cancelled_at: null,
+            baixa_devolucao_vista_em: null,
         });
         const msg = [
             '✅ Boleto pago!',
@@ -460,7 +490,23 @@ async function aplicarResultado(r, _opts = {}) {
         return;
     }
 
+    // "Baixado por devolução" que o Office não pediu pode ser pagamento em
+    // compensação (ver avaliarBaixaAmbigua): fica pendente por alguns dias
+    // úteis antes de virar cancelado. Sem leitura extra - pendente já é lido.
     if (isJaBaixado) {
+        const amb = await avaliarBaixaAmbigua(history, r, opts.settings);
+        if (amb.aguardar) {
+            await history.update({ ...baseUpdate, baixa_devolucao_vista_em: amb.primeira });
+            await EventLogger.log({
+                historyId: history.id, idreserva: history.idreserva,
+                type: 'payment_check', severity: amb.primeiraVez ? 'warning' : 'info',
+                message: amb.primeiraVez
+                    ? `Ecobrança devolveu "${sit}" para um boleto que o Office não mandou baixar. O banco usa a mesma situação para pagamento em compensação, então o boleto segue em aberto e é reconsultado até ${formatDateBr(amb.limite)} (${amb.diasUteis} dia(s) útil(eis)). Se aparecer pago, vira pago; se continuar assim, é baixa externa.`
+                    : `Boleto segue "${sit}" no Ecobrança (aguardando confirmação até ${formatDateBr(amb.limite)}).`,
+                data: { situacao: sit, baixaAmbigua: true, primeiraVista: amb.primeira, limite: amb.limite },
+            });
+            return { outcome: 'baixa_ambigua', history };
+        }
         await EventLogger.log({
             historyId: history.id, idreserva: history.idreserva,
             type: 'baixa_confirmed', severity: 'warning',

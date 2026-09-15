@@ -102,6 +102,13 @@ export default (sequelize, DataTypes) => {
             comment: 'Por quantos dias após a baixa o boleto continua sendo reconsultado no Ecobrança. O banco já devolveu "BAIXADO POR DEVOLUÇÃO" em título que dias depois constava LIQUIDADO no extrato; nessa janela a consulta é só leitura e o único desfecho é promover para pago. 0 desliga.',
         },
 
+        baixa_devolucao_confirmar_dias_uteis: {
+            type: DataTypes.INTEGER,
+            allowNull: true,
+            defaultValue: 3,
+            comment: '"BAIXADO POR DEVOLUÇÃO" sem baixa pedida pelo Office fica pendente por estes dias úteis antes de virar cancelado (pode ser pagamento em compensação). 0 cancela na primeira leitura.',
+        },
+
         reconsultar_baixado_antes_emitir: {
             type: DataTypes.BOOLEAN,
             allowNull: false,
