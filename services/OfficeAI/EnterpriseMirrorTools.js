@@ -368,7 +368,7 @@ registerTool({
             const rows = [...porTipo.values()].sort((x, y) => y.total - x.total);
             const columns = [
                 { key: 'grupo', label: 'Tipologia', type: 'text', priority: 1 },
-                ...torres.map((t) => ({ key: t.key, label: t.nome, type: 'number' })),
+                ...torres.map((t) => ({ key: t.key, label: t.nome, type: 'number', priority: 2 })),
                 { key: 'total', label: 'Total', type: 'number', priority: 1 },
             ];
             const texto = rows.map((r) => `${r.grupo}: ${torres.map((t) => `${t.nome} ${r[t.key] || 0}`).join(', ')} (total ${r.total})`).join('\n');
