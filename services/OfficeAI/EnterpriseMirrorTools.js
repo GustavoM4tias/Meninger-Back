@@ -194,7 +194,7 @@ registerTool({
         type: 'object',
         properties: {
             empreendimento: { type: 'string', description: 'Nome (parcial) ou id do CV do empreendimento. Obrigatório.' },
-            analise: { type: 'string', enum: ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste'], description: '"unidades" = lista de unidades com PREÇO em R$, área, dormitórios e sol (use para "preço", "quais unidades", "quanto custa", "sol da manhã", "2 dormitórios"); "resumo" = KPIs + andares + tipos + sol; "andares"/"torres"/"tipos"/"sol" = agrupado com preço médio; "tabelas" = histórico de tabelas de preço; "unidades_tabela" = preço de cada unidade em UMA tabela (com séries de pagamento); "comparar_tabelas" = duas tabelas unidade a unidade; "reajuste" = sinais de reajuste.' },
+            analise: { type: 'string', enum: ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'tipos_torre', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste'], description: '"unidades" = lista de unidades com PREÇO em R$, área, dormitórios e sol (use para "preço", "quais unidades", "quanto custa", "sol da manhã", "2 dormitórios"); "resumo" = KPIs + andares + tipos + sol; "andares"/"torres"/"tipos"/"sol" = agrupado com preço médio; "tipos_torre" = cruzamento tipologia x torre (quantas unidades de cada tipo em cada torre, com o filtro de situacao; use para "quantas disponíveis por tipo e torre"); "tabelas" = histórico de tabelas de preço; "unidades_tabela" = preço de cada unidade em UMA tabela (com séries de pagamento); "comparar_tabelas" = duas tabelas unidade a unidade; "reajuste" = sinais de reajuste.' },
             situacao: { type: 'string', enum: ['disponiveis', 'vendidas', 'bloqueadas', 'reservadas', 'todas'], description: 'Filtro de situação para "unidades" e agrupamentos. Padrão: todas.' },
             sol: { type: 'string', description: 'Filtro por sol: "manhã" ou "tarde" (também "leste"/"oeste").' },
             torre: { type: 'string', description: 'Filtro por torre/bloco (ex.: "Torre 2", "B").' },
@@ -215,7 +215,7 @@ registerTool({
         if (!achado.ent) return { result: { message: achado.erro, empreendimentos_visiveis: achado.opcoes } };
         const ent = achado.ent;
         const id = ent.idempreendimento;
-        const analise = ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste'].includes(args.analise) ? args.analise : 'resumo';
+        const analise = ['resumo', 'unidades', 'andares', 'torres', 'tipos', 'tipos_torre', 'sol', 'tabelas', 'unidades_tabela', 'comparar_tabelas', 'reajuste'].includes(args.analise) ? args.analise : 'resumo';
         const link = (tab) => abrirTela(SCREEN, `Abrir ${ent.nome} no Office`, { open: id, tab });
         const cab = `${ent.nome} (${ent.cidade || 'cidade ?'}, ${ent.tipo_empreendimento_nome || 'tipo ?'}, CV ${id})`;
 
@@ -350,6 +350,40 @@ registerTool({
         }
 
         const sel = filtrar(m, todas, args);
+
+        // Tipologia x torre: uma linha por tipo, uma coluna por torre. A
+        // situação vem do filtro (padrão: todas), e a resposta diz qual.
+        if (analise === 'tipos_torre') {
+            const sit = norm(args.situacao);
+            const rotuloSit = sit && sit !== 'todas' && SIT_FILTRO[sit] ? sit : 'todas as situações';
+            const torres = m.torres.map((t) => ({ key: `t_${t.key}`, nome: t.nome }));
+            const porTipo = new Map();
+            for (const c of sel) {
+                const tipo = c.tipologia || 'sem tipologia';
+                if (!porTipo.has(tipo)) porTipo.set(tipo, { grupo: tipo, total: 0, ...Object.fromEntries(torres.map((t) => [t.key, 0])) });
+                const row = porTipo.get(tipo);
+                row[`t_${c.torre}`] = (row[`t_${c.torre}`] || 0) + 1;
+                row.total++;
+            }
+            const rows = [...porTipo.values()].sort((x, y) => y.total - x.total);
+            const columns = [
+                { key: 'grupo', label: 'Tipologia', type: 'text', priority: 1 },
+                ...torres.map((t) => ({ key: t.key, label: t.nome, type: 'number' })),
+                { key: 'total', label: 'Total', type: 'number', priority: 1 },
+            ];
+            const texto = rows.map((r) => `${r.grupo}: ${torres.map((t) => `${t.nome} ${r[t.key] || 0}`).join(', ')} (total ${r.total})`).join('\n');
+            return {
+                result: {
+                    empreendimento: cab, situacao: rotuloSit, tipologia_x_torre: texto || 'nenhuma unidade nesse filtro', nota: notaPreco,
+                    message: rows.length
+                        ? `Contagem de unidades (${rotuloSit}) por tipologia em cada torre. Responda com esses números; a tabela já está na tela.`
+                        : 'Nenhuma unidade nesse filtro. Diga isso e sugira afrouxar o filtro.',
+                    blocks: [datasetBlock({ title: `Tipologia x torre · ${ent.nome}`, subtitle: rotuloSit, source: 'Espelho', visual: 'table', columns, rows, actions: [link('espelho')] })],
+                },
+                resultCount: rows.length,
+            };
+        }
+
         const grupos = {
             andares: agrupar(sel.filter((c) => c.andar != null), (c) => c.andar, (c) => andarNome(m, c)).sort((x, y) => (y.pct_vendido ?? 0) - (x.pct_vendido ?? 0)),
             torres: agrupar(sel, (c) => c.torre, (c) => c.torre_nome),
