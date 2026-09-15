@@ -101,18 +101,25 @@ export async function runCiclo({ manual = false, userId = null } = {}) {
                 reserva_cancelada: 'cancelamento da reserva',
             };
             for (const e of enc) {
+                // So o que a Caixa baixou AGORA conta como "baixado" no aviso. Boleto
+                // que ja estava liquidado quando a baixa chegou (reserva 7971,
+                // 14/09/2026: pagou minutos antes) vira parcela paga, e o aviso tem
+                // de dizer "a parcela que voce pagou esta registrada", nao "o boleto
+                // foi baixado e nao precisa ser pago".
+                const baixadas = [];
                 for (const parcelaId of e.parcelasComBoletoVivo) {
                     const r = await Emissao.baixarBoletoDaParcela(parcelaId, {
                         motivo: MOTIVO_BAIXA[e.motivo] || e.motivo,
                         statusFinal: MOTIVOS_TRANSFERENCIA.includes(e.motivo) ? PARCELA_STATUS.TRANSFERIDA : PARCELA_STATUS.CANCELADA,
                         settings,
                     });
-                    if (r.ok) out.encerramentos.baixas++; else out.encerramentos.baixas_falha++;
+                    if (r.ok) { out.encerramentos.baixas++; if (r.outcome === 'baixado') baixadas.push(parcelaId); }
+                    else out.encerramentos.baixas_falha++;
                 }
                 // Aviso ao cliente: so quando o Sienge/Caixa assumiu (nao no cancelamento).
                 if (cfg.avisoEncerramento && MOTIVOS_TRANSFERENCIA.includes(e.motivo)) {
                     try {
-                        const a = await Emissao.avisarEncerramento(e);
+                        const a = await Emissao.avisarEncerramento({ ...e, parcelasComBoletoVivo: baixadas });
                         if (a.ok) out.encerramentos.avisos++; else out.encerramentos.avisos_falha++;
                     } catch (err) {
                         out.encerramentos.avisos_falha++;
