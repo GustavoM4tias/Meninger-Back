@@ -345,9 +345,12 @@ app.use('/api/platform', platformRoutes);   // mural de atualizações da plataf
 app.use('/api/push', pushRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/alerts', alertRoutes);
+// ANTES de /api/marketing: aquele router faz `router.use(authenticate, requireAdmin)`
+// sem caminho, e engoliria (403) toda chamada da Projeção de Investimentos de
+// quem não é admin. A alçada desta tela é por capacidade, não por admin.
+app.use('/api/marketing/projecao-investimentos', mktProjectionRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/sales-stands', salesStandRoutes);
-app.use('/api/marketing/projecao-investimentos', mktProjectionRoutes);
 app.use('/api/sales-closings', salesClosingRoutes);
 app.use('/api/bolao', bolaoRoutes);
 app.use('/api/comunicados', comunicadoRoutes);
