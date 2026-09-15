@@ -262,6 +262,8 @@ import SalesStandExpenseCategoryDefine from './marketing/salesStandExpenseCatego
 import SalesStandExpenseClassDefine    from './marketing/salesStandExpenseClass.js';
 import SalesStandImageDefine           from './marketing/salesStandImage.js';
 import SalesStandSettingDefine         from './marketing/salesStandSetting.js';
+// Projeção de Investimentos de Marketing (planilha do SharePoint)
+import MktProjectionSettingDefine      from './marketing/mktProjectionSetting.js';
 
 // Bolão da Copa
 import BolaoDefine            from './bolao/bolao.js';
@@ -599,6 +601,7 @@ db.SalesStandExpenseCategory = SalesStandExpenseCategoryDefine(sequelize, DataTy
 db.SalesStandExpenseClass    = SalesStandExpenseClassDefine(sequelize, DataTypes);
 db.SalesStandImage           = SalesStandImageDefine(sequelize, DataTypes);
 db.SalesStandSetting         = SalesStandSettingDefine(sequelize, DataTypes);
+db.MktProjectionSetting      = MktProjectionSettingDefine(sequelize, DataTypes);
 
 // Bolão da Copa
 db.Bolao            = BolaoDefine(sequelize, DataTypes);
