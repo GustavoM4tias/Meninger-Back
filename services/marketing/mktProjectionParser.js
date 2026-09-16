@@ -16,14 +16,21 @@
 //   VIABILIDADE MKT            B = %, C = valor em R$ (pega o maior número > 10)
 //   VIABILIDADE INVESTIMENTO T B (total)
 //   cabeçalho com "INVESTIMENTO TOTAL DESDE O LANÇAMENTO": a linha SEGUINTE
-//     traz em B o acumulado de 2024 e 2025
+//     traz o acumulado na coluna cujo cabeçalho é "2024 E 2025" (abas novas
+//     não têm essa coluna: acumulado zero)
 //   cabeçalho com "TOTAL INVESTIDO EM 2026": as colunas com data (serial do
-//     Excel) são os meses do exercício
-//   TOTAL REALIZADO / TOTAL PROJETADO   por mês
-//   linhas seguintes até a primeira sem rótulo = itens do investimento
+//     Excel) são os meses do exercício; TOTAL REALIZADO logo abaixo, e as
+//     linhas seguintes até a primeira sem rótulo são os itens realizados
+//   cabeçalho com "TOTAL PROJETADO EM 2026" (bloco próprio desde 16/09) com
+//     TOTAL PROJETADO e os itens projetados; no layout antigo TOTAL PROJETADO
+//     vinha logo abaixo de TOTAL REALIZADO, e os dois jeitos são aceitos
 //
-// A aba "PLANO DE MÍDIA" (e o que mais estiver em `ignoredSheets`) não é
-// empreendimento e fica de fora.
+// Aba SEM bloco de investimento (nem cabeçalho de meses nem TOTAL REALIZADO,
+// como o SINTÉTICO) não é empreendimento e sai calada. Aba COM bloco mas sem
+// VIABILIDADE MKT (Construtora Menin, Menin Engenharia: institucional) entra
+// só com realizado × projetado, status "sem viabilidade", fora da régua.
+//
+// A aba "PLANO DE MÍDIA" (e o que mais estiver em `ignoredSheets`) fica de fora.
 
 import XLSX from 'xlsx';
 
@@ -108,65 +115,91 @@ export function parseProjectionWorkbook(buffer, { ignoredSheets = [], attentionP
         const unRow = findRow('TOTAL DE UNIDADES');
         const vgvRow = findRow('VGV DO EMPREEND');
 
+        const semViabilidade = !vMkt;
         const viabMkt = vMkt ? Math.max(0, ...vMkt.c.map(num).filter((x) => x > 10)) : 0;
         const viabLoja = vLoja ? num(vLoja.c[1]) : 0;
         const viabTotal = vTot ? num(vTot.c[1]) : 0;
 
-        // Acumulado antes do exercício (coluna "2024 E 2025").
+        const yearHdr = findCell('TOTAL INVESTIDO EM');
+        const totRealRow = findRow('TOTAL REALIZADO');
+        // Sem bloco de investimento não é empreendimento (aba de resumo, capa...).
+        if (!yearHdr && !totRealRow) continue;
+
+        // Colunas com data no cabeçalho de um bloco = meses do exercício.
+        const monthColsOf = (hdr) => {
+            const cols = new Array(12).fill(null);
+            if (!hdr) return cols;
+            for (let k = 0; k < hdr.c.length; k++) {
+                const v = hdr.c[k];
+                if (!isDateSerial(v)) continue;
+                const { year, month } = serialToYm(v);
+                if (exercicio === null) exercicio = year;
+                if (year === exercicio && cols[month] === null) cols[month] = k;
+            }
+            return cols;
+        };
+        const monthCols = monthColsOf(yearHdr);
+
+        // Acumulado antes do exercício: a coluna de cabeçalho com ano ("2024 E
+        // 2025", "2023 A 2025", 2025) que vem ANTES da primeira data de mês.
         const desdeHdr = findCell('INVESTIMENTO TOTAL DESDE O LAN');
         let mktPrior = 0;
         let desdeLancPlanilha = 0;
         if (desdeHdr) {
             const dataRow = rows[desdeHdr.r + 1] || [];
-            mktPrior = num(dataRow[1]);
+            let priorCol = -1;
+            for (let k = 1; k < desdeHdr.c.length; k++) {
+                const v = desdeHdr.c[k];
+                if (isDateSerial(v)) break;
+                if (/20\d\d/.test(U(v))) { priorCol = k; break; }
+            }
+            if (priorCol >= 0) mktPrior = num(dataRow[priorCol]);
             desdeLancPlanilha = num(dataRow[desdeHdr.col]);
         }
 
-        // Meses do exercício: as colunas com data no cabeçalho do bloco anual.
-        const yearHdr = findCell('TOTAL INVESTIDO EM');
-        const monthCols = new Array(12).fill(null);
-        if (yearHdr) {
-            for (let k = 0; k < yearHdr.c.length; k++) {
-                const v = yearHdr.c[k];
-                if (!isDateSerial(v)) continue;
-                const { year, month } = serialToYm(v);
-                if (exercicio === null) exercicio = year;
-                if (year === exercicio && monthCols[month] === null) monthCols[month] = k;
-            }
-        }
-
-        const totRealRow = findRow('TOTAL REALIZADO');
+        // Bloco do projetado: próprio (layout novo) ou a linha logo abaixo do realizado (antigo).
+        const projHdr = findCell('TOTAL PROJETADO EM');
         const totProjRow = findRow('TOTAL PROJETADO');
+        const projCols = projHdr ? monthColsOf(projHdr) : monthCols;
 
-        if (!vMkt || !yearHdr || !totRealRow) {
+        if (!yearHdr || !totRealRow) {
             problemas.push({
                 aba: tab,
-                faltando: [!vMkt && 'VIABILIDADE MKT', !yearHdr && 'TOTAL INVESTIDO EM (cabeçalho dos meses)', !totRealRow && 'TOTAL REALIZADO'].filter(Boolean),
+                faltando: [!yearHdr && 'TOTAL INVESTIDO EM (cabeçalho dos meses)', !totRealRow && 'TOTAL REALIZADO'].filter(Boolean),
             });
         }
 
         const realMonths = monthCols.map((mc) => (mc !== null && totRealRow ? Math.round(num(totRealRow.c[mc])) : 0));
-        const projMonths = monthCols.map((mc) => (mc !== null && totProjRow ? Math.round(num(totProjRow.c[mc])) : 0));
+        const projMonths = projCols.map((mc) => (mc !== null && totProjRow ? Math.round(num(totProjRow.c[mc])) : 0));
 
         // Realizado do exercício = só meses fechados; o mês corrente é mostrado à parte.
         const mktRealizado = realMonths.slice(0, closedMonths).reduce((a, b) => a + b, 0);
         const desde = mktPrior + mktRealizado;
-        const pct = viabMkt > 0 ? desde / viabMkt : 0;
-        const pct100 = pct * 100;
-        const st = pct100 > overrunPct ? 'estouro' : (pct100 >= attentionPct ? 'atencao' : 'ok');
+        let pct = null;
+        let st = 'sem_viab';
+        if (!semViabilidade) {
+            pct = viabMkt > 0 ? desde / viabMkt : 0;
+            const pct100 = pct * 100;
+            st = pct100 > overrunPct ? 'estouro' : (pct100 >= attentionPct ? 'atencao' : 'ok');
+        }
 
-        // Itens do investimento: linhas abaixo de TOTAL PROJETADO até a primeira sem rótulo.
-        const items = [];
-        if (totProjRow && monthCols.some((c) => c !== null)) {
-            let r = totProjRow.r + 1;
-            while (rows[r] && U(rows[r][0]) !== '') {
+        // Itens: as linhas abaixo de um TOTAL até a primeira sem rótulo (um
+        // "TOTAL ..." no caminho é o bloco seguinte do layout antigo, não item).
+        const itemsBelow = (totRow, cols) => {
+            const out = [];
+            if (!totRow || !cols.some((c) => c !== null)) return out;
+            let r = totRow.r + 1;
+            while (rows[r] && U(rows[r][0]) !== '' && !U(rows[r][0]).startsWith('TOTAL')) {
                 const label = String(rows[r][0]).trim();
-                const months = monthCols.map((mc) => (mc !== null ? Math.round(num(rows[r][mc])) : 0));
+                const months = cols.map((mc) => (mc !== null ? Math.round(num(rows[r][mc])) : 0));
                 const total = months.reduce((a, b) => a + b, 0);
-                if (total > 0) items.push({ label, months, total });
+                if (total > 0) out.push({ label, months, total });
                 r++;
             }
-        }
+            return out;
+        };
+        const items = itemsBelow(totRealRow, monthCols);
+        const itemsProj = itemsBelow(totProjRow, projCols);
 
         enr.push({
             tab,
@@ -175,8 +208,9 @@ export function parseProjectionWorkbook(buffer, { ignoredSheets = [], attentionP
             unidades: unRow ? num(unRow.c[1]) : 0,
             vgv: vgvRow ? num(vgvRow.c[1]) : 0,
             viabTotal,
-            viabMkt,
+            viabMkt: semViabilidade ? null : viabMkt,
             viabLoja,
+            semViabilidade,
             mktPrior,
             mktRealizado,
             desde,
@@ -186,6 +220,7 @@ export function parseProjectionWorkbook(buffer, { ignoredSheets = [], attentionP
             pct,
             st,
             items,
+            itemsProj,
         });
     }
 
@@ -194,7 +229,7 @@ export function parseProjectionWorkbook(buffer, { ignoredSheets = [], attentionP
         n: enr.length,
         vgv: sum((e) => e.vgv),
         unidades: sum((e) => e.unidades),
-        viabMkt: sum((e) => e.viabMkt),
+        viabMkt: sum((e) => e.viabMkt || 0),
         viabTotal: sum((e) => e.viabTotal),
         mktPrior: sum((e) => e.mktPrior),
         mktRealizado: sum((e) => e.mktRealizado),
@@ -204,6 +239,7 @@ export function parseProjectionWorkbook(buffer, { ignoredSheets = [], attentionP
         nOk: enr.filter((e) => e.st === 'ok').length,
         nAtencao: enr.filter((e) => e.st === 'atencao').length,
         nEstouro: enr.filter((e) => e.st === 'estouro').length,
+        nSemViab: enr.filter((e) => e.st === 'sem_viab').length,
     };
 
     return { exercicio, cons, enr, problemas };
