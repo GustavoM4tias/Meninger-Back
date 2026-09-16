@@ -42,6 +42,13 @@ export default (sequelize, DataTypes) => {
     //                             campanha de outro manda o lead pro lugar errado.
     meta_form_fallback_scope: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'no_campaign' },
 
+    // Mídia e origem PADRÃO do vínculo (2026-09-16). O vínculo de conta e o de
+    // campanha só precisam do empreendimento; quando não dizem mídia/origem,
+    // o lead sai com estes. "Facebook Ads" é o que 20 das 25 campanhas
+    // vinculadas já usavam; a coluna `midia` do CV deixa de ter 5 grafias.
+    meta_default_midia_slug: { type: DataTypes.STRING(60), allowNull: false, defaultValue: 'Facebook Ads' },
+    meta_default_cv_origem:  { type: DataTypes.STRING(4),  allowNull: false, defaultValue: 'FB' },
+
     // ── Meta Lead Ads ────────────────────────────────────────────────────────
     meta_app_id:             { type: DataTypes.STRING(100) },
     meta_app_secret_enc:     { type: DataTypes.TEXT },

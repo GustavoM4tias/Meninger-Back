@@ -79,10 +79,28 @@ async function ensureFallbackScopeColumn() {
     }
 }
 
+// Mídia/origem padrão do vínculo (2026-09-16) - ver metaAdAccountBinding.js.
+let _defaultBindingColumnsEnsured = false;
+async function ensureDefaultBindingColumns() {
+    if (_defaultBindingColumnsEnsured) return;
+    try {
+        await db.sequelize.query(
+            `ALTER TABLE marketing_configs
+             ADD COLUMN IF NOT EXISTS meta_default_midia_slug VARCHAR(60) NOT NULL DEFAULT 'Facebook Ads'`);
+        await db.sequelize.query(
+            `ALTER TABLE marketing_configs
+             ADD COLUMN IF NOT EXISTS meta_default_cv_origem VARCHAR(4) NOT NULL DEFAULT 'FB'`);
+        _defaultBindingColumnsEnsured = true;
+    } catch (err) {
+        console.warn('[marketing-config] ensure das colunas de mídia/origem padrão falhou:', err.message);
+    }
+}
+
 async function loadRow() {
     await ensureAlertRecipientsColumn();
     await ensureReguaColumn();
     await ensureFallbackScopeColumn();
+    await ensureDefaultBindingColumns();
     let row = await db.MarketingConfig.findByPk(SINGLETON_ID);
     if (!row) row = await db.MarketingConfig.create({ id: SINGLETON_ID });
     return row;
@@ -100,6 +118,8 @@ function rowToConfig(row, { withSecrets = false } = {}) {
         lead_return_auto: row.lead_return_auto,
         alert_recipient_user_ids: row.alert_recipient_user_ids || null,
         meta_form_fallback_scope: row.meta_form_fallback_scope || 'no_campaign',
+        meta_default_midia_slug: row.meta_default_midia_slug || 'Facebook Ads',
+        meta_default_cv_origem: row.meta_default_cv_origem || 'FB',
         meta_app_id: row.meta_app_id,
         meta_graph_api_version: row.meta_graph_api_version,
         meta_last_health_at: row.meta_last_health_at,
@@ -133,6 +153,8 @@ function envFallback({ withSecrets }) {
         lead_return_auto: process.env.MARKETING_LEAD_RETURN_AUTO !== 'false',
         alert_recipient_user_ids: null,
         meta_form_fallback_scope: process.env.META_FORM_FALLBACK_SCOPE === 'always' ? 'always' : 'no_campaign',
+        meta_default_midia_slug: 'Facebook Ads',
+        meta_default_cv_origem: 'FB',
         meta_app_id: process.env.META_APP_ID || '785502081163165',
         meta_graph_api_version: process.env.META_GRAPH_API_VERSION || 'v21.0',
         has_meta_app_secret:     !!process.env.META_APP_SECRET,
@@ -231,6 +253,15 @@ async function updateConfig(patch = {}) {
         if (['no_campaign', 'always'].includes(patch.meta_form_fallback_scope)) {
             row.meta_form_fallback_scope = patch.meta_form_fallback_scope;
         }
+    }
+
+    // Mídia/origem padrão do vínculo: mídia é texto livre (vira `midia` no CV),
+    // origem só aceita os dois códigos do CV.
+    if (typeof patch.meta_default_midia_slug === 'string' && patch.meta_default_midia_slug.trim()) {
+        row.meta_default_midia_slug = patch.meta_default_midia_slug.trim().slice(0, 60);
+    }
+    if (['FB', 'IG'].includes(patch.meta_default_cv_origem)) {
+        row.meta_default_cv_origem = patch.meta_default_cv_origem;
     }
 
     // Destinatários dos alertas: array de IDs de usuário. Aceita [] (= volta

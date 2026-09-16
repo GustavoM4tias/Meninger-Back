@@ -58,6 +58,8 @@ import {
     overview as cvBindingOverview,
     dispatchRecoverable as cvBindingDispatchRecoverable,
     redispatchDelivered as cvBindingRedispatchDelivered,
+    accounts as cvBindingAccounts,
+    setAccount as cvBindingSetAccount,
 } from '../controllers/marketing/cvBindingController.js';
 import {
     inspect as inspectLeadReturn,
@@ -132,6 +134,8 @@ router.post('/lead-return/:idlead/execute', executeLeadReturn);
 router.get('/cv-binding/overview', cvBindingOverview);
 router.post('/cv-binding/dispatch-recoverable', cvBindingDispatchRecoverable);
 router.post('/cv-binding/redispatch-delivered', cvBindingRedispatchDelivered);
+router.get('/cv-binding/accounts', cvBindingAccounts);                    // vínculo padrão por conta de anúncio
+router.put('/cv-binding/accounts/:accountId', cvBindingSetAccount);
 
 // Campanhas Meta (cache local + insights de gasto/leads/CAC)
 // Relatório de desempenho por período (série diária local)

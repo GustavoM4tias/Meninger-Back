@@ -20,15 +20,22 @@ import { Op, fn, col, literal } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { previewBacklogSince, DEFAULT_CUTOFF } from './CvBacklogDispatchService.js';
 import MarketingConfigService from './MarketingConfigService.js';
+import {
+    resolveMany, listAccounts,
+    ACCOUNT_JOIN_SQL, EFFECTIVE_EMPS_SQL, EFFECTIVELY_BOUND_SQL,
+} from './MetaAccountBindingService.js';
 
 const { InboundLead, MetaCampaign, MetaLeadForm } = db;
 
 const META_CHANNEL = 'meta_lead_ads';
 
-/** Uma entidade (campanha/form) tem vínculo se mapping ativo E mídia definida. */
+/** Um FORM tem vínculo se mapping ativo E mídia definida (regra do fallback). */
 function isBound(entity) {
     return !!(entity && entity.mapping_active && entity.midia_slug);
 }
+// Campanha: vínculo EFETIVO (próprio ou herdado da conta) - a mesma regra da
+// captura, em MetaAccountBindingService. Sem isso a Central cobraria vínculo
+// de campanha que a conta já resolve.
 
 /**
  * Escopo do fallback do formulário (meta_form_fallback_scope) — a MESMA regra
@@ -153,9 +160,11 @@ async function heldByCampaign({ cutoff }) {
     // dava lead "em risco" que o disparo recuperaria numa boa.
     const campIds = [...byCampaign.keys()];
     const campsById = new Map();
+    let effectiveById = new Map();
     if (campIds.length) {
         const camps = await MetaCampaign.findAll({ where: { id: { [Op.in]: campIds } } });
         for (const c of camps) campsById.set(String(c.id), c.get({ plain: true }));
+        effectiveById = await resolveMany(camps);
     }
 
     const formsById = new Map();
@@ -169,7 +178,8 @@ async function heldByCampaign({ cutoff }) {
     const campaigns = campIds.map(cid => {
         const agg = byCampaign.get(cid);
         const camp = campsById.get(cid) || null;
-        const bound = isBound(camp);
+        const eff = effectiveById.get(cid) || null;
+        const bound = !!eff;
         // Recuperável hoje = campanha vinculada (tudo) OU form do lead vinculado —
         // este último só quando o escopo permite o form cobrir campanha.
         const resolvable = bound
@@ -184,7 +194,8 @@ async function heldByCampaign({ cutoff }) {
             effective_status: camp?.effective_status || camp?.status || null,
             not_synced: !camp,                       // held aponta pra campanha fora do cache
             is_bound: bound,                         // já tem vínculo? held é só rotear
-            midia_slug: camp?.midia_slug || null,
+            binding_source: eff?.source || null,     // 'campanha' | 'conta'
+            midia_slug: eff?.midia_slug || camp?.midia_slug || null,
             mapping_active: camp?.mapping_active ?? null,
             held_count: agg.count,
             resolvable_count: resolvable,            // sai HOJE se disparar
@@ -230,29 +241,25 @@ async function activeUnboundCampaigns() {
             archived: false,
             effective_status: { [Op.iLike]: 'ACTIVE%' },
             objective: { [Op.in]: LEAD_OBJECTIVES },
-            [Op.or]: [
-                { midia_slug: null },
-                { mapping_active: false },
-            ],
         },
-        attributes: [
-            'id', 'name', 'account_name', 'effective_status', 'objective',
-            'midia_slug', 'mapping_active', 'start_time',
-        ],
         order: [['start_time', 'DESC']],
     });
-    return rows.map(r => {
-        const p = r.get({ plain: true });
-        return {
+    // Sem vínculo = nem próprio nem herdado da conta. Campanha que a conta
+    // resolve não entra aqui: é o objetivo do vínculo por conta.
+    const effective = await resolveMany(rows);
+    return rows
+        .map(r => r.get({ plain: true }))
+        .filter(p => !effective.get(String(p.id)))
+        .map(p => ({
             campaign_id: String(p.id),
             name: p.name,
+            account_id: p.account_id,
             account_name: p.account_name,
             effective_status: p.effective_status,
             objective: p.objective,
-            reason: !p.midia_slug ? 'sem_midia' : 'mapping_desativado',
+            reason: p.mapping_active === false ? 'mapping_desativado' : 'sem_vinculo',
             start_time: p.start_time,
-        };
-    });
+        }));
 }
 
 /**
@@ -277,11 +284,12 @@ async function fallbackDeliveries({ days = 30 } = {}) {
                MAX(il.created_at)        AS last_at
           FROM inbound_leads il
           JOIN meta_campaigns mc   ON mc.id = il.meta_campaign_id
+          ${ACCOUNT_JOIN_SQL}
           JOIN meta_lead_forms mlf ON mlf.id = il.meta_form_id
          WHERE il.channel = :channel
            AND il.status IN ('delivered', 'routed', 'dispatching')
            AND il.created_at >= now() - (:days * interval '1 day')
-           AND (mc.midia_slug IS NULL OR mc.mapping_active = false)
+           AND NOT ${EFFECTIVELY_BOUND_SQL}
            AND mlf.midia_slug IS NOT NULL AND mlf.mapping_active = true
          GROUP BY mc.id, mc.name, mc.account_name, mc.effective_status,
                   mlf.id, mlf.name, mlf.midia_slug, mlf.bound_empreendimentos
@@ -324,24 +332,26 @@ async function empNamesById(ids) {
  */
 async function mismatchedDeliveries({ days = 90 } = {}) {
     const repl = { channel: META_CHANNEL, days };
+    // Destino ATUAL = vínculo efetivo (próprio ou herdado da conta).
     const [byCampaign] = await db.sequelize.query(`
-        SELECT mc.id                     AS campaign_id,
-               mc.name                   AS name,
-               mc.account_name           AS account_name,
-               mc.bound_empreendimentos  AS target_emps,
-               COUNT(il.id)::int         AS lead_count,
-               MAX(il.created_at)        AS last_at
-          FROM inbound_leads il
-          JOIN meta_campaigns mc ON mc.id = il.meta_campaign_id
-         WHERE il.channel = :channel
-           AND il.status = 'delivered'
-           AND il.created_at >= now() - (:days * interval '1 day')
-           AND mc.midia_slug IS NOT NULL AND mc.mapping_active = true
-           AND mc.bound_empreendimentos IS NOT NULL
-           AND COALESCE(il.bound_empreendimentos::text, 'null')
-               IS DISTINCT FROM mc.bound_empreendimentos::text
-         GROUP BY mc.id, mc.name, mc.account_name, mc.bound_empreendimentos
-         ORDER BY MAX(il.created_at) DESC`, { replacements: repl });
+        SELECT campaign_id, name, account_name, target_emps,
+               COUNT(id)::int   AS lead_count,
+               MAX(created_at)  AS last_at
+          FROM (
+            SELECT il.id, il.created_at, il.bound_empreendimentos,
+                   mc.id AS campaign_id, mc.name, mc.account_name,
+                   (${EFFECTIVE_EMPS_SQL}) AS target_emps
+              FROM inbound_leads il
+              JOIN meta_campaigns mc ON mc.id = il.meta_campaign_id
+              ${ACCOUNT_JOIN_SQL}
+             WHERE il.channel = :channel
+               AND il.status = 'delivered'
+               AND il.created_at >= now() - (:days * interval '1 day')
+          ) x
+         WHERE target_emps IS NOT NULL
+           AND COALESCE(bound_empreendimentos::text, 'null') IS DISTINCT FROM target_emps::text
+         GROUP BY campaign_id, name, account_name, target_emps
+         ORDER BY MAX(created_at) DESC`, { replacements: repl });
 
     const [byForm] = await db.sequelize.query(`
         SELECT mlf.id                    AS form_id,
@@ -379,7 +389,7 @@ async function mismatchedDeliveries({ days = 90 } = {}) {
  * cutoff (default do cutover) pra ignorar leads de teste antigos.
  */
 export async function getOverview({ since = null, until = null, cutoff = DEFAULT_CUTOFF } = {}) {
-    const [funnel, held, activeUnbound, backlog, fallbackInUse, fallbackScope, mismatched] = await Promise.all([
+    const [funnel, held, activeUnbound, backlog, fallbackInUse, fallbackScope, mismatched, accountsInfo] = await Promise.all([
         deliveryFunnel({ since, until }),
         heldByCampaign({ cutoff }),
         activeUnboundCampaigns(),
@@ -387,7 +397,11 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
         fallbackDeliveries().catch(() => []),
         getFallbackScope(),
         mismatchedDeliveries().catch(() => []),
+        listAccounts().catch(() => ({ defaults: null, accounts: [] })),
     ]);
+    // Contas de anúncio: o vínculo PADRÃO. Conta com campanha ativa de lead que
+    // nada resolve é o que a tela cobra primeiro (uma decisão cobre a conta toda).
+    const unboundAccounts = accountsInfo.accounts.filter(a => a.lead_campaigns_unbound > 0).length;
 
     // Represados recuperáveis = o que o disparo resolveria HOJE (vínculo da
     // campanha OU fallback do form). Um lead só é "em risco" se nem um nem outro.
@@ -406,6 +420,8 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
         fallback_in_use: fallbackInUse,   // campanhas sem vínculo entregando pelo form (30d)
         form_fallback_scope: fallbackScope,
         mismatched_delivered: mismatched, // entregues com destino ≠ vínculo atual (90d)
+        accounts: accountsInfo.accounts,  // vínculo padrão por conta de anúncio
+        binding_defaults: accountsInfo.defaults,
         backlog,                          // { routed_pending, historical_total, ... }
         summary: {
             fallback_campaigns: fallbackInUse.length,
@@ -415,6 +431,7 @@ export async function getOverview({ since = null, until = null, cutoff = DEFAULT
             unbound_campaigns_with_leads: held.campaigns.filter(c => c.blocked_count > 0).length,
             recoverable_campaigns_with_leads: held.campaigns.filter(c => c.resolvable_count > 0).length,
             active_unbound_campaigns: activeUnbound.length,
+            unbound_accounts: unboundAccounts,
             coverage_pct: funnel.coverage_pct,
         },
     };

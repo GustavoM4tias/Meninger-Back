@@ -5,6 +5,7 @@
 
 import CvBindingHealthService from '../../services/marketing/CvBindingHealthService.js';
 import CvBacklogDispatchService from '../../services/marketing/CvBacklogDispatchService.js';
+import MetaAccountBindingService from '../../services/marketing/MetaAccountBindingService.js';
 
 /**
  * GET /marketing/cv-binding/overview
@@ -89,4 +90,35 @@ export async function redispatchDelivered(req, res) {
     }
 }
 
-export default { overview, dispatchRecoverable, redispatchDelivered };
+// ── Vínculo padrão por conta de anúncio (2026-09-16) ────────────────────────
+// A conta carrega o destino; a campanha herda. Ver MetaAccountBindingService.
+
+/** GET /marketing/cv-binding/accounts */
+export async function accounts(req, res) {
+    try {
+        const result = await MetaAccountBindingService.listAccounts();
+        return res.json({ ok: true, ...result });
+    } catch (err) {
+        console.error(`❌ [cv-binding] accounts: ${err.message}`);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+}
+
+/**
+ * PUT /marketing/cv-binding/accounts/:accountId
+ * body: { bound_empreendimentos: [int], midia_slug?, cv_origem?, tags?, mapping_active?, notes? }
+ * Empreendimento vazio = conta fica sem vínculo padrão (as campanhas voltam a
+ * depender do vínculo próprio).
+ */
+export async function setAccount(req, res) {
+    try {
+        const binding = await MetaAccountBindingService.setAccountBinding(
+            req.params.accountId, req.body || {}, { userId: req.user?.id || null });
+        return res.json({ ok: true, binding });
+    } catch (err) {
+        console.error(`❌ [cv-binding] setAccount: ${err.message}`);
+        return res.status(400).json({ ok: false, error: err.message });
+    }
+}
+
+export default { overview, dispatchRecoverable, redispatchDelivered, accounts, setAccount };

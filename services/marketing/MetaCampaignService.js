@@ -11,6 +11,7 @@ import MarketingConfigService from './MarketingConfigService.js';
 import MetaCampaignsTokenService from '../meta/MetaCampaignsTokenService.js';
 import { extractLeadBreakdown } from './metaLeadExtract.js';
 import { LEAD_DAY_SQL, LEAD_DAY_TEXT_SQL } from './leadDaySql.js';
+import { resolveMany, resolveForCampaign } from './MetaAccountBindingService.js';
 
 const { MetaCampaign, InboundLead } = db;
 
@@ -253,8 +254,14 @@ async function attachLeadStats(rows) {
         });
     }
 
+    // Vínculo EFETIVO (próprio ou herdado da conta de anúncio, 2026-09-16):
+    // é o que a tela mostra como destino e o que o modal usa para dizer
+    // "herdado da conta X" quando a campanha não tem vínculo próprio.
+    const effective = await resolveMany(rows);
+
     return rows.map(r => {
         const plain = r.get ? r.get({ plain: true }) : r;
+        const effective_binding = effective.get(String(plain.id)) || null;
         const lead_stats = byId.get(String(plain.id)) || {
             total: 0, valid: 0, last_30d: 0, delivered: 0, held: 0, spam: 0, last_lead_at: null,
         };
@@ -265,7 +272,7 @@ async function attachLeadStats(rows) {
         // sem identificação e sem como cruzar com o CV.
         const cac = lead_stats.valid > 0 ? +(spend / lead_stats.valid).toFixed(2) : null;
 
-        return { ...plain, lead_stats, office_leads: lead_stats.valid, cac, cac_source: 'office' };
+        return { ...plain, effective_binding, lead_stats, office_leads: lead_stats.valid, cac, cac_source: 'office' };
     });
 }
 
@@ -467,6 +474,16 @@ export async function getDailyBreakdown(campaignId, { days = 30, since = null, u
 export async function updateInternal(campaignId, patch = {}) {
     const row = await MetaCampaign.findByPk(String(campaignId));
     if (!row) throw new Error('Campanha não encontrada.');
+    // Vínculo próprio da campanha é a EXCEÇÃO ao padrão da conta: só existe com
+    // empreendimento. Mídia/origem vazios caem no padrão (conta → Configurações).
+    if (patch.bound_empreendimentos !== undefined) {
+        const emps = Array.isArray(patch.bound_empreendimentos)
+            ? [...new Set(patch.bound_empreendimentos.map(Number).filter(n => Number.isInteger(n) && n > 0))]
+            : [];
+        patch.bound_empreendimentos = emps.length ? emps : null;
+    }
+    if (patch.midia_slug !== undefined) patch.midia_slug = String(patch.midia_slug || '').trim() || null;
+    if (patch.cv_origem !== undefined) patch.cv_origem = ['FB', 'IG'].includes(patch.cv_origem) ? patch.cv_origem : null;
     const allowed = [
         // Gestão
         'notes', 'priority', 'archived',
@@ -480,7 +497,8 @@ export async function updateInternal(campaignId, patch = {}) {
     ];
     for (const k of allowed) if (patch[k] !== undefined) row[k] = patch[k];
     await row.save();
-    return row.get({ plain: true });
+    const plain = row.get({ plain: true });
+    return { ...plain, effective_binding: await resolveForCampaign(plain) };
 }
 
 /**

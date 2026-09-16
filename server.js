@@ -133,6 +133,7 @@ import { ensureBoletoWhatsappTemplate } from './lib/ensureBoletoWhatsappTemplate
 import { ensureChecklistWhatsappTemplates } from './lib/ensureChecklistWhatsappTemplates.js';
 import { ensureAlertReportTemplate } from './lib/ensureAlertReportTemplate.js';
 import { ensureAlertDeliveryColumns } from './lib/ensureAlertDeliveryColumns.js';
+import { ensureMetaAccountBindingSchema } from './lib/ensureMetaAccountBindingSchema.js';
 import { ensureEmeAtendeOpenerTemplates } from './lib/ensureEmeAtendeOpenerTemplates.js';
 import { ensureAcademyPreSync, ensureAcademyPostSync } from './lib/ensureAcademySchema.js';
 import { ensureComercialConditionsSchema } from './lib/ensureComercialConditionsSchema.js';
@@ -425,6 +426,10 @@ async function initBackground() {
   // nunca nasceria e os alertas inteiros ficariam em "column does not exist".
   await ensureAlertDeliveryColumns().catch(err =>
       console.warn('⚠️  ensureAlertDeliveryColumns falhou:', err.message));
+  // Mesmo motivo: cv_lead_queues.rodizio_pos (model desde 28/08) nunca nasceu
+  // em prod e o despacho de lead reentrada ficou em loop (15/09/2026).
+  await ensureMetaAccountBindingSchema().catch(err =>
+      console.warn('⚠️  ensureMetaAccountBindingSchema falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {
@@ -610,6 +615,7 @@ async function syncModelsAndPatches(fingerprint) {
     ['RepasseIndexes', ensureRepasseIndexes],
     ['AcademyPostSync', ensureAcademyPostSync],
     ['MarketingCapture', ensureMarketingCaptureSchema],
+    ['MetaAccountBinding', ensureMetaAccountBindingSchema],  // vínculo por conta + cv_lead_queues.rodizio_pos (banco novo)
     ['EmeBrain', ensureEmeBrainSchema],
     ['EmeRetrieval', ensureEmeRetrievalSchema],
     ['EmeReports', ensureEmeReportsSchema],

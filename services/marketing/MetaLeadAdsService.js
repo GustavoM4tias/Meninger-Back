@@ -17,6 +17,7 @@ import db from '../../models/sequelize/index.js';
 import { captureLead } from './LeadCaptureService.js';
 import { recordLeadEvent } from './leadEventLog.js';
 import MarketingConfigService from './MarketingConfigService.js';
+import { resolveForCampaign } from './MetaAccountBindingService.js';
 import MetaLeadFormService from './MetaLeadFormService.js';
 import NotificationService from '../notification/NotificationService.js';
 import { NotificationType } from '../notification/notificationTypes.js';
@@ -274,16 +275,21 @@ export async function resolveLeadBinding({ campaignId = null, adId = null, formI
         }
     }
 
-    // 1) Tenta mapping da campanha
+    // 1) Vínculo efetivo da campanha: o dela ou, se ela não tem, o PADRÃO DA
+    //    CONTA de anúncio (2026-09-16). Mídia/origem caem no padrão de
+    //    Configurações. Regra em MetaAccountBindingService.resolveForCampaign.
     if (resolvedCampaignId) {
         try {
             const camp = await db.MetaCampaign.findByPk(resolvedCampaignId);
-            if (camp?.mapping_active && camp.midia_slug) {
-                binding.bound_empreendimentos = camp.bound_empreendimentos || null;
-                binding.midia_slug = camp.midia_slug;
-                binding.tags = camp.tags || null;
-                if (camp.cv_origem) binding.cv_origem = camp.cv_origem;
-                mappingSource = `campanha ${resolvedCampaignId}`;
+            const eff = await resolveForCampaign(camp);
+            if (eff) {
+                binding.bound_empreendimentos = eff.bound_empreendimentos || null;
+                binding.midia_slug = eff.midia_slug;
+                binding.tags = eff.tags || null;
+                if (eff.cv_origem) binding.cv_origem = eff.cv_origem;
+                mappingSource = eff.source === 'conta'
+                    ? `conta ${eff.account_id} (padrão herdado pela campanha ${resolvedCampaignId})`
+                    : `campanha ${resolvedCampaignId}`;
             }
             if (camp) {
                 if (camp.default_utm_source)   attribution.utm_source   = camp.default_utm_source;
