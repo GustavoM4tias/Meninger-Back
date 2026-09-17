@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { cosine, rank } from '../services/OfficeAI/embeddingIndex.js';
-import { escolherTools, NUCLEO } from '../services/OfficeAI/ToolPreselect.js';
+import { escolherTools, toolsDoTurnoAnterior, NUCLEO } from '../services/OfficeAI/ToolPreselect.js';
 import { avaliarCaso } from '../services/OfficeAI/EmeEvalService.js';
 import { validarMemoria, blocoDeMemoria } from '../services/OfficeAI/MemoryTools.js';
 import { sanitizeRetrievalSettings, RETRIEVAL_DEFAULTS, blocoGlossario } from '../services/OfficeAI/promptRetrieval.js';
@@ -41,6 +41,49 @@ test('escolherTools: similaridade acima do limiar puxa a tool mesmo sem palavra-
 test('escolherTools: teto vindo da configuração é respeitado', () => {
     const r = escolherTools(muitas, 'boleto boleto', new Set(), { teto: 6 });
     assert.ok(r.declaracoes.length <= 6);
+});
+
+const comAlertas = [
+    ...muitas,
+    decl('preview_alert', 'executa uma vez a tool de dados do alerta'),
+    decl('create_alert', 'cria uma regra de alerta recorrente'),
+    decl('check_availability', 'horarios livres'),
+    decl('schedule_meeting', 'agenda uma reuniao'),
+];
+
+test('escolherTools: "sim, pode criar" depois da prévia leva create_alert (irmã da preview_alert)', () => {
+    const r = escolherTools(comAlertas, 'sim, pode criar', new Set(['preview_alert']), { teto: 8 });
+    const nomes = r.declaracoes.map(d => d.name);
+    assert.ok(nomes.includes('preview_alert'));
+    assert.ok(nomes.includes('create_alert'));
+    // E "sim" depois de olhar a agenda leva schedule_meeting.
+    const s = escolherTools(comAlertas, 'sim', new Set(['check_availability']), { teto: 8 });
+    assert.ok(s.declaracoes.some(d => d.name === 'schedule_meeting'));
+});
+
+test('escolherTools: mensagem sem pista herda as tools do turno anterior em vez de cair só no núcleo', () => {
+    const anteriores = new Set(['query_leads', 'schedule_meeting']);
+    const semHeranca = escolherTools(comAlertas, 'isso mesmo', new Set(), { teto: 8 });
+    const comHeranca = escolherTools(comAlertas, 'isso mesmo', new Set(), { teto: 8, anteriores });
+    // Sem herança sobra só o núcleo: "isso mesmo" não tem pista nenhuma.
+    assert.ok(semHeranca.declaracoes.every(d => NUCLEO.includes(d.name)));
+    assert.ok(comHeranca.declaracoes.some(d => d.name === 'schedule_meeting'));
+    assert.ok(comHeranca.declaracoes.some(d => d.name === 'query_leads'));
+    // A herança fica ABAIXO da pista: quem casa com a pergunta entra antes.
+    const troca = escolherTools(comAlertas, 'quantos boletos vencidos?', new Set(), { teto: 7, anteriores: new Set(Array.from({ length: 30 }, (_, i) => `tool_${i}`)) });
+    assert.ok(troca.declaracoes.some(d => d.name === 'query_boletos'));
+});
+
+test('toolsDoTurnoAnterior: lê tools_turno da última resposta da Eme', () => {
+    const msgs = [
+        { role: 'assistant', metadata: { tools_turno: ['query_leads'] } },
+        { role: 'user', metadata: {} },
+        { role: 'assistant', metadata: { tools_turno: ['preview_alert', 'query_precadastros'] } },
+        { role: 'user' },
+    ];
+    assert.deepEqual([...toolsDoTurnoAnterior(msgs)], ['preview_alert', 'query_precadastros']);
+    assert.equal(toolsDoTurnoAnterior([]).size, 0);
+    assert.equal(toolsDoTurnoAnterior([{ role: 'assistant', metadata: {} }]).size, 0);
 });
 
 test('avaliarCaso: tool esperada, args por "contém", texto obrigatório e proibido', () => {

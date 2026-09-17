@@ -44,11 +44,12 @@ import { userEmeSettings, memoriasAtivas, blocoDeMemoria } from './MemoryTools.j
 import { retrievalSettings, selecionarParaPrompt } from './promptRetrieval.js';
 import { ensureEmbeddings, embedQuery, rank } from './embeddingIndex.js';
 import { periodoPadraoDe, blocoDePeriodo } from './periodo.js';
-import { escolherTools, tosRecentes } from './ToolPreselect.js';
+import { escolherTools, tosRecentes, toolsDoTurnoAnterior } from './ToolPreselect.js';
 import { getToolsFor, toGeminiDeclarations, findTool, userHasPermissions } from './ToolRegistry.js';
 import { runTool as runSecureTool } from './SecureRunner.js';
 import { repararLinks } from './linkGuard.js';
 import { buildScreenContextBlock } from './screenContext.js';
+import { stripPseudoToolCalls, findLeakedToolName, limparParaHistorico } from './toolLeak.js';
 
 // Registry: nome → { declaration, executor }
 const TOOLS = new Map();
@@ -570,6 +571,10 @@ async function buildHistory(sessionId) {
           }
         } catch { /* mantém content original */ }
       }
+      // Resposta antiga que vazou uma chamada em texto ("GNOME_TOOL_CALLSquery_x(...)")
+      // NÃO volta assim para o modelo: ele veria o próprio vazamento como
+      // exemplo de resposta e repetiria o formato pelo resto da conversa.
+      text = limparParaHistorico(text);
     }
     // Marca respostas text-only do assistente (sem tool) que tenham dados específicos
     // como NÃO VERIFICADAS — modelo NÃO deve usar essas como fonte.
@@ -761,6 +766,12 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // Os dois degradam para os padrões se o banco falhar - nunca derrubam o turno.
   const cfgRet = await retrievalSettings().catch(() => null) || { tools: { enabled: false }, blocks: { enabled: false }, glossary: { enabled: false }, memory: { enabled: false } };
   const userCfg = await userEmeSettings(userId).catch(() => ({ memory_enabled: false, model_mode: 'auto', default_period: null }));
+  // Vetor da pergunta (roteamento semântico das tools) começa AGORA, em
+  // paralelo com cérebro, alçadas e histórico: é uma ida ao Gemini que ficava
+  // em série no meio do preparo, e o turno inteiro esperava por ela.
+  const vetorPergunta = (!isAcademy && cfgRet.tools?.enabled)
+    ? embedQuery(userMessage).catch(() => null)
+    : Promise.resolve(null);
   // O período padrão viaja no próprio user: é ele que chega a toda tool
   // (registry e legada) sem mudar assinatura nenhuma. Ver periodo.js.
   fullUser.emeDefaultPeriod = periodoPadraoDe({ emeDefaultPeriod: userCfg.default_period }, cfgRet);
@@ -871,27 +882,36 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       limit: 8,
     });
     // Similaridade semântica (embedding da pergunta x declaração de cada
-    // tool). Vetor de tool que ainda não foi indexado é embedado aqui, com
-    // teto por turno - o índice completa em poucos turnos e fica no banco.
+    // tool). Tool que ainda não tem vetor é indexada em SEGUNDO PLANO: este
+    // turno não espera (ela só não pontua por similaridade), e no próximo o
+    // vetor já está no banco. Esperar custava até 25 idas ao Gemini em série
+    // no primeiro turno depois de cada deploy.
     let similaridade = null;
     if (!isAcademy && cfgRet.tools?.enabled) {
       try {
-        const q = await embedQuery(userMessage);
+        const q = await vetorPergunta;
         if (q) {
           const vecs = await ensureEmbeddings('tool',
             todasDeclaracoes.map(d => ({ key: d.name, text: `${d.name}: ${d.description || ''}` })),
-            { maxNew: 25 });
+            { maxNew: 25, aguardar: false });
           similaridade = new Map(rank(q, vecs).map(r => [r.key, r.sim]));
         }
       } catch (err) {
         console.warn('[OfficeChatService] similaridade das tools falhou:', err?.message);
       }
     }
+    const mensagensRecentes = ultimas.map(m => m.get({ plain: true })).reverse();
     const escolha = escolherTools(
       todasDeclaracoes,
       userMessage,
-      tosRecentes(ultimas.map(m => m.get({ plain: true })).reverse()),
-      { similaridade, teto: cfgRet.tools?.top_k, pesoSemantico: cfgRet.tools?.peso, limiar: cfgRet.tools?.min_sim },
+      tosRecentes(mensagensRecentes),
+      {
+        similaridade,
+        // As tools que o turno ANTERIOR tinha à mão: é o que faz "sim, pode
+        // criar" ainda encontrar create_alert depois da prévia.
+        anteriores: toolsDoTurnoAnterior(mensagensRecentes),
+        teto: cfgRet.tools?.top_k, pesoSemantico: cfgRet.tools?.peso, limiar: cfgRet.tools?.min_sim,
+      },
     );
     activeDeclarations = escolha.declaracoes;
     if (escolha.cortou > 0) {
@@ -1249,7 +1269,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   //
   // Resposta vazia é um sinal limpo: não existe pergunta cuja resposta certa
   // seja o silêncio. Então ela vira o gatilho do mesmo retry do vazamento.
-  const leaked = !toolCalls.length ? findLeakedToolName(fullAssistantText, declaredToolNames) : null;
+  // Com tool já executada, só a FORMA DE CHAMADA conta como vazamento
+  // ("query_x(...)" como resposta, o marcador cru do tokenizador): citar o
+  // nome numa frase é deselegante, não erro. Sem tool, qualquer nome cru vale.
+  const leaked = findLeakedToolName(fullAssistantText, declaredToolNames, { strict: toolCalls.length > 0 });
   const mudo = !toolCalls.length && !fullAssistantText.trim();
 
   if (leaked || mudo) {
@@ -1445,12 +1468,19 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // Blindagem final: sobrou nome de tool cru no texto e nenhuma tool rodou no
   // turno → é vazamento, não resposta. Entrega uma mensagem honesta em vez de
   // deixar o usuário achar que a consulta foi feita.
-  if (!toolCalls.length) {
-    const stillLeaked = findLeakedToolName(fullAssistantText, declaredToolNames);
-    if (stillLeaked) {
+  {
+    const stillLeaked = findLeakedToolName(fullAssistantText, declaredToolNames, { strict: toolCalls.length > 0 });
+    if (stillLeaked && !toolCalls.length) {
       console.warn(`[OfficeChatService] Pseudo-tool-call persistente ("${stillLeaked}") — substituindo por mensagem de falha.`);
       fullAssistantText = 'Tentei consultar os dados para te responder, mas a consulta não chegou a rodar. Pode repetir a pergunta, de preferência com mais detalhe (o que exatamente você quer saber)?';
       sendSSE(res, { type: 'replace', text: fullAssistantText });
+    } else if (stillLeaked) {
+      // A consulta rodou e o dado está na tela; o texto é só a chamada crua.
+      // Esvazia para cair no fallback de resposta vazia logo abaixo, que
+      // aponta para o resultado em vez de entregar "query_x(...)" como frase.
+      console.warn(`[OfficeChatService] Pseudo-tool-call em texto depois da tool ("${stillLeaked}") — descartando o texto.`);
+      fullAssistantText = '';
+      sendSSE(res, { type: 'clear' });
     }
   }
 
@@ -1688,6 +1718,9 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     // sem precisar que o problema aconteça de novo com o log aberto.
     prompt_tokens_aprox: tokensEntrada,
     tools_declaradas: (activeDeclarations || []).length,
+    // Nomes das tools deste turno: o próximo turno curto ("sim", "pode
+    // criar") herda o conjunto em vez de cair só no núcleo (ToolPreselect).
+    tools_turno: (activeDeclarations || []).map(d => d?.name).filter(Boolean),
   });
 
   // Persiste o incidente de validação (nunca derruba o chat se falhar).
@@ -2098,50 +2131,7 @@ function detectHallucinations(text, actionResult, bridgeStr, userMessage = '') {
   return { suspicious, allowed_count: allowed.size, labels_count: labelsList.length };
 }
 
-/**
- * Remove pseudo-tool-call syntax que o modelo às vezes escreve em texto:
- *   - "call:query_xxx{...}" / "call: query_xxx(...)"
- *   - "query_xxx({...})" / "query_xxx(...)" em linha solta
- *   - "tool_code\n...\n"
- * Tool calls reais são feitas via function calling API; texto com essa syntax
- * é vazamento — confunde o usuário e pode conter IDs.
- */
-function stripPseudoToolCalls(text) {
-  if (!text) return text;
-  let out = text;
-  // call:func{...} ou call: func(...) — qualquer linha contendo isso
-  out = out.replace(/\bcall\s*:\s*\w+\s*[{(][^}\n)]*[)}]/gi, '');
-  // query_xxx({ ... }) ou query_xxx(...) ou similar como linha-comando standalone
-  out = out.replace(/(^|\n)\s*(query_|navigate_|get_)\w+\s*\(\s*\{[^}]*\}\s*\)\s*(?=\n|$)/g, '$1');
-  out = out.replace(/(^|\n)\s*(query_|navigate_|get_)\w+\s*\(\s*[^)\n]*\)\s*(?=\n|$)/g, '$1');
-  // "tool_code:" ou "function_call:" prefixos suspeitos
-  out = out.replace(/\b(tool_code|function_call|tool_invocation)\s*[:=].*$/gmi, '');
-  // Limpa múltiplas linhas em branco consecutivas
-  out = out.replace(/\n{3,}/g, '\n\n').trim();
-  return out;
-}
-
-/**
- * Detecta "pseudo-tool-call" em prosa: o modelo escreveu o NOME CRU de uma
- * ferramenta declarada no meio do texto (ex.: "chamando a função
- * academy_kb_search com query: ..."), em vez de emitir a function call.
- *
- * Só nomes com underscore e >= 6 chars entram na varredura — evita casar com
- * eventual tool de nome genérico que também seria palavra comum em português.
- * O chamador exige, além disso, que NENHUMA tool tenha rodado no turno: quando
- * a consulta aconteceu de fato, citar o nome é no máximo deselegante, não erro.
- *
- * @returns {string|null} nome da tool vazada, ou null.
- */
-function findLeakedToolName(text, toolNames) {
-  if (!text || !toolNames || !toolNames.size) return null;
-  for (const name of toolNames) {
-    if (typeof name !== 'string' || name.length < 6 || !name.includes('_')) continue;
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`(^|[^\\w])${escaped}([^\\w]|$)`).test(text)) return name;
-  }
-  return null;
-}
+// stripPseudoToolCalls e findLeakedToolName moram em toolLeak.js (puro, testado).
 
 /**
  * Filtro de stream defensivo. Remove do output:

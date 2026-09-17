@@ -138,6 +138,35 @@ export function tosRecentes(mensagens = []) {
 }
 
 /**
+ * Tool que costuma vir DEPOIS de outra, no mesmo pedido. A prévia do alerta
+ * roda no turno 1; o "sim, pode criar" do turno 2 não tem a palavra "alerta"
+ * e `create_alert` nunca tinha sido chamada - então ficava de fora, e a Eme
+ * confirmava "criado!" sem criar nada. Quem rodou a primeira leva a segunda.
+ */
+const IRMAS = {
+    preview_alert:      ['create_alert'],
+    get_alert_limit:    ['preview_alert', 'create_alert'],
+    check_availability: ['schedule_meeting'],
+    search_meetings:    ['update_meeting', 'cancel_meeting'],
+};
+
+/**
+ * As tools que o turno ANTERIOR tinha declaradas (metadata.tools_turno da
+ * última resposta da Eme). Entram com peso baixo: só preenchem o que sobrou
+ * do teto - mas numa mensagem curta e sem pista ("sim", "pode agendar",
+ * "isso mesmo") são elas que evitam cair no núcleo sozinho.
+ */
+export function toolsDoTurnoAnterior(mensagens = []) {
+    for (let i = mensagens.length - 1; i >= 0; i--) {
+        const m = mensagens[i];
+        if (m?.role !== 'assistant') continue;
+        const nomes = m?.metadata?.tools_turno;
+        return new Set(Array.isArray(nomes) ? nomes.filter(n => typeof n === 'string') : []);
+    }
+    return new Set();
+}
+
+/**
  * Escolhe as declarações do turno.
  *
  * @param {Array}  declaracoes  todas as declarações elegíveis para o usuário
@@ -150,6 +179,7 @@ export function escolherTools(declaracoes = [], mensagem = '', recentes = new Se
     const similaridade = opts.similaridade instanceof Map && opts.similaridade.size ? opts.similaridade : null;
     const pesoSemantico = Number.isFinite(Number(opts.pesoSemantico)) ? Number(opts.pesoSemantico) : 300;
     const limiar = Number.isFinite(Number(opts.limiar)) ? Number(opts.limiar) : 0.35;
+    const anteriores = opts.anteriores instanceof Set ? opts.anteriores : new Set();
 
     // Poucas tools: não há o que cortar, e cortar só criaria risco sem ganho.
     if (declaracoes.length <= teto) {
@@ -164,14 +194,22 @@ export function escolherTools(declaracoes = [], mensagem = '', recentes = new Se
         escolhidas.set(d.name, Math.max(escolhidas.get(d.name) || 0, peso));
     };
 
+    // Quem rodou a prévia leva a tool que fecha o pedido (ver IRMAS).
+    const continuidade = new Set(recentes);
+    for (const nome of recentes) for (const irma of (IRMAS[nome] || [])) continuidade.add(irma);
+
     for (const d of declaracoes) {
         if (!d?.name) continue;
 
         // 1. Núcleo e continuidade entram com peso alto - não competem.
         if (NUCLEO.includes(d.name)) { somar(d, 1000); continue; }
-        if (recentes.has(d.name)) { somar(d, 900); continue; }
+        if (continuidade.has(d.name)) { somar(d, 900); continue; }
 
         let pontos = 0;
+
+        // 1b. Estava à mão no turno anterior: preenche o que sobrar do teto,
+        //     abaixo de qualquer pista ou afinidade desta mensagem.
+        if (anteriores.has(d.name)) pontos += 50;
 
         // 2. Assunto: a pista casou com a pergunta E com esta tool.
         for (const p of PISTAS) {

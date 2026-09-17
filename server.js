@@ -430,6 +430,11 @@ async function initBackground() {
   // em prod e o despacho de lead reentrada ficou em loop (15/09/2026).
   await ensureMetaAccountBindingSchema().catch(err =>
       console.warn('⚠️  ensureMetaAccountBindingSchema falhou:', err.message));
+  // Mesmo motivo: eme_embeddings / eme_user_settings (11/09) só nasciam dentro
+  // do gate. Sem elas, cada boot reindexava as tools do zero a cada turno
+  // (upsert falhando calado) e a configuração por pessoa nunca gravava.
+  await ensureEmeRetrievalSchema().catch(err =>
+      console.warn('⚠️  ensureEmeRetrievalSchema falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {

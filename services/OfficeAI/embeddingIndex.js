@@ -24,6 +24,7 @@ import { embedText, EMBEDDING_MODEL } from './geminiClient.js';
 const mem = new Map();          // `${kind}` → Map(key → { hash, vec })
 const loaded = new Set();       // kinds já carregados do banco
 const queryCache = new Map();   // texto normalizado → { vec, exp }
+const queryEmVoo = new Map();   // texto normalizado → Promise (duas chamadas no mesmo turno = uma ida)
 const QUERY_TTL = 30 * 60 * 1000;
 const QUERY_CAP = 500;
 let pendente = null;            // Promise da indexação em andamento (evita duas ao mesmo tempo)
@@ -65,10 +66,14 @@ async function loadKind(kind) {
 /**
  * @param {string} kind  tool | block | glossary
  * @param {Array<{key:string, text:string}>} items
- * @param {{maxNew?:number}} opts  teto de embeddings novos nesta chamada
+ * @param {{maxNew?:number, aguardar?:boolean}} opts
+ *   maxNew    teto de embeddings novos nesta chamada
+ *   aguardar  false = dispara a indexação em segundo plano e devolve só o que
+ *             já existe (o turno não espera até 25 idas ao Gemini em série;
+ *             quem não tem vetor ainda só não pontua por similaridade)
  * @returns {Promise<Map<string, number[]>>} key → vetor (só quem já tem)
  */
-export async function ensureEmbeddings(kind, items = [], { maxNew = 20 } = {}) {
+export async function ensureEmbeddings(kind, items = [], { maxNew = 20, aguardar = true } = {}) {
     const map = await loadKind(kind);
     const out = new Map();
     const faltam = [];
@@ -83,8 +88,11 @@ export async function ensureEmbeddings(kind, items = [], { maxNew = 20 } = {}) {
         // Uma indexação por vez: dois turnos simultâneos não devem embedar o
         // mesmo item duas vezes.
         if (!pendente) {
-            pendente = indexar(kind, map, faltam.slice(0, maxNew)).finally(() => { pendente = null; });
+            pendente = indexar(kind, map, faltam.slice(0, maxNew))
+                .catch(err => console.warn('[embeddingIndex] indexação falhou', kind, err?.message))
+                .finally(() => { pendente = null; });
         }
+        if (!aguardar) return out;
         await pendente;
         for (const it of faltam) {
             const v = map.get(it.key);
@@ -115,12 +123,20 @@ export async function embedQuery(text) {
     if (!key) return null;
     const hit = queryCache.get(key);
     if (hit && hit.exp > Date.now()) return hit.vec;
-    const vec = await embedText(text, { taskType: 'RETRIEVAL_QUERY' });
-    if (vec) {
-        if (queryCache.size >= QUERY_CAP) queryCache.clear();
-        queryCache.set(key, { vec, exp: Date.now() + QUERY_TTL });
-    }
-    return vec;
+    // O mesmo texto pedido duas vezes enquanto a primeira ida ainda não voltou
+    // (roteamento de tools + recorte do prompt no mesmo turno) vira UMA ida.
+    if (queryEmVoo.has(key)) return queryEmVoo.get(key);
+    const p = embedText(text, { taskType: 'RETRIEVAL_QUERY' })
+        .then(vec => {
+            if (vec) {
+                if (queryCache.size >= QUERY_CAP) queryCache.clear();
+                queryCache.set(key, { vec, exp: Date.now() + QUERY_TTL });
+            }
+            return vec;
+        })
+        .finally(() => { queryEmVoo.delete(key); });
+    queryEmVoo.set(key, p);
+    return p;
 }
 
 /** [{ key, sim }] do mais parecido ao menos. */
