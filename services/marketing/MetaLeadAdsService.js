@@ -282,7 +282,11 @@ export async function resolveLeadBinding({ campaignId = null, adId = null, formI
         try {
             const camp = await db.MetaCampaign.findByPk(resolvedCampaignId);
             const eff = await resolveForCampaign(camp);
-            if (eff) {
+            if (eff?.skip) {
+                // Conta/campanha externa: o lead fica no Office como "Fora do CV".
+                binding.skip = true;
+                mappingSource = `fora do CV (${eff.source} ${eff.source === 'conta' ? eff.account_id : resolvedCampaignId})`;
+            } else if (eff) {
                 binding.bound_empreendimentos = eff.bound_empreendimentos || null;
                 binding.midia_slug = eff.midia_slug;
                 binding.tags = eff.tags || null;
@@ -314,8 +318,8 @@ export async function resolveLeadBinding({ campaignId = null, adId = null, formI
     // (incidente ago/2026). Em 'no_campaign' (default), lead COM campanha
     // identificada e sem vínculo represa (held) até alguém vincular a campanha;
     // o form só decide quando o lead não tem campanha nenhuma.
-    let formFallbackAllowed = true;
-    if (!binding.midia_slug && formId && resolvedCampaignId) {
+    let formFallbackAllowed = !binding.skip;
+    if (!binding.skip && !binding.midia_slug && formId && resolvedCampaignId) {
         try {
             const cfg = await MarketingConfigService.getConfig();
             formFallbackAllowed = (cfg?.meta_form_fallback_scope || 'no_campaign') === 'always';

@@ -82,6 +82,7 @@ async function deliveryFunnel({ since, until }) {
     const dispatching = byStatus.dispatching || 0;
     const failed     = (byStatus.failed || 0) + (byStatus.rejected || 0);
     const spam       = byStatus.spam       || 0;
+    const ignored    = byStatus.ignored    || 0;   // fora do CV: decisão, não pendência
     const received   = byStatus.received   || 0;
     const validated  = byStatus.validated  || 0;
 
@@ -96,7 +97,7 @@ async function deliveryFunnel({ since, until }) {
     const coverage = liveTotal > 0 ? +((delivered / liveTotal) * 100).toFixed(1) : null;
 
     return {
-        delivered, held, historical, routed, dispatching, failed, spam,
+        delivered, held, historical, routed, dispatching, failed, spam, ignored,
         pending: livePending,      // fluxo ao vivo aguardando roteamento/disparo
         live_total: liveTotal,
         coverage_pct: coverage,    // % do fluxo AO VIVO que chegou ao CV (exclui espelho histórico)

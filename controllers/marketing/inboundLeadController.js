@@ -14,7 +14,7 @@ import MarketingConfigService from '../../services/marketing/MarketingConfigServ
 const { InboundLead, InboundLeadEvent } = db;
 
 const LEAD_STATUSES = [
-    'received', 'validated', 'spam', 'held', 'routed',
+    'received', 'validated', 'spam', 'held', 'ignored', 'routed',
     'dispatching', 'delivered', 'rejected', 'failed', 'historical',
 ];
 

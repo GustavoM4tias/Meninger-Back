@@ -67,6 +67,7 @@ export default (sequelize, DataTypes) => {
     cv_origem:             { type: DataTypes.STRING(4) },                   // FB | IG (override de platform)
     tags:                  { type: DataTypes.JSONB },                       // [string]
     mapping_active:        { type: DataTypes.BOOLEAN, defaultValue: true }, // false = lead vira held
+    cv_skip:               { type: DataTypes.BOOLEAN, defaultValue: false }, // true = fora do CV (lead vira ignored)
 
     // UTMs default aplicados ao lead quando o payload não traz.
     default_utm_source:   { type: DataTypes.STRING(120) },

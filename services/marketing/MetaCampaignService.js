@@ -11,7 +11,7 @@ import MarketingConfigService from './MarketingConfigService.js';
 import MetaCampaignsTokenService from '../meta/MetaCampaignsTokenService.js';
 import { extractLeadBreakdown } from './metaLeadExtract.js';
 import { LEAD_DAY_SQL, LEAD_DAY_TEXT_SQL } from './leadDaySql.js';
-import { resolveMany, resolveForCampaign } from './MetaAccountBindingService.js';
+import { resolveMany, resolveForCampaign, applySkipToHeldLeads } from './MetaAccountBindingService.js';
 
 const { MetaCampaign, InboundLead } = db;
 
@@ -488,16 +488,21 @@ export async function updateInternal(campaignId, patch = {}) {
         // Gestão
         'notes', 'priority', 'archived',
         // Vínculo CV
-        'bound_empreendimentos', 'midia_slug', 'cv_origem', 'tags', 'mapping_active',
+        'bound_empreendimentos', 'midia_slug', 'cv_origem', 'tags', 'mapping_active', 'cv_skip',
         // UTMs default
         'default_utm_source', 'default_utm_medium', 'default_utm_campaign',
         'default_utm_content', 'default_utm_term',
         // Extras
         'cv_extra_fields',
     ];
+    if (patch.cv_skip !== undefined) patch.cv_skip = patch.cv_skip === true;
     for (const k of allowed) if (patch[k] !== undefined) row[k] = patch[k];
     await row.save();
     const plain = row.get({ plain: true });
+    // Marcou/desmarcou "fora do CV": os represados desta campanha acompanham.
+    if (patch.cv_skip !== undefined) {
+        await applySkipToHeldLeads({ campaignIds: [plain.id], skip: plain.cv_skip === true && plain.mapping_active !== false });
+    }
     return { ...plain, effective_binding: await resolveForCampaign(plain) };
 }
 

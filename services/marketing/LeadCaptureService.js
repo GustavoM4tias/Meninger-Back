@@ -4,7 +4,8 @@
 // Meta...), registra a trilha de eventos, valida, resolve o vínculo e dispara
 // o despacho ao CV.
 //
-//   received → validated → (routed | held) → [dispatch assíncrono]
+//   received → validated → (routed | held | ignored) → [dispatch assíncrono]
+//   ignored = "Fora do CV": conta/campanha externa, o lead fica só no Office.
 //
 // "held" = sem vínculo resolvido → aguarda roteamento manual (nunca vai ao CV
 // no chute). Formulários sempre têm vínculo configurado, então caem em "routed".
@@ -141,6 +142,18 @@ export async function captureLead({
     });
 
     // ── Roteamento ──────────────────────────────────────────────────────────
+    // Conta/campanha "fora do CV": lead fica aqui, não é represado nem cobrado.
+    if (binding.skip) {
+        lead.status = 'ignored';
+        await lead.save();
+        await recordLeadEvent({
+            leadId: lead.id, type: 'ignored',
+            statusFrom: 'validated', statusTo: 'ignored',
+            message: 'Conta/campanha marcada como fora do CV - o lead fica no Office e não vai ao CRM.',
+        });
+        return { lead, status: 'ignored' };
+    }
+
     const hasBinding = !!lead.midia_slug && !!lead.cv_origem;
     if (!hasBinding) {
         lead.status = 'held';

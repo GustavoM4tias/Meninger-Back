@@ -7,10 +7,12 @@
 // campanha nova nascia sem vínculo. Agora a âncora é o EMPREENDIMENTO:
 //
 //   1. campanha com `mapping_active = false`  → sem vínculo (lead vira held)
-//   2. campanha com empreendimento próprio     → vínculo da campanha
-//   3. conta com empreendimento (e ativa)      → vínculo da conta (herdado)
-//   4. campanha só com mídia (legado)          → vínculo da campanha, sem emp.
-//   5. nada disso                              → sem vínculo (held)
+//   2. campanha marcada "fora do CV"          → { skip } (lead vira ignored)
+//   3. campanha com empreendimento próprio     → vínculo da campanha
+//   4. conta com empreendimento (e ativa)      → vínculo da conta (herdado)
+//   5. conta marcada "fora do CV"             → { skip } (lead vira ignored)
+//   6. campanha só com mídia (legado)          → vínculo da campanha, sem emp.
+//   7. nada disso                              → sem vínculo (held)
 //
 // Mídia e origem: campanha → conta → padrão de Configurações. Assim vincular
 // a conta uma vez basta, e a campanha só precisa de vínculo próprio quando é
@@ -45,11 +47,14 @@ export async function ensureSchema() {
                 cv_origem             VARCHAR(4),
                 tags                  JSONB,
                 mapping_active        BOOLEAN NOT NULL DEFAULT true,
+                cv_skip               BOOLEAN NOT NULL DEFAULT false,
                 notes                 TEXT,
                 definido_por          INTEGER,
                 created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )`);
+        await db.sequelize.query(`ALTER TABLE meta_ad_account_bindings ADD COLUMN IF NOT EXISTS cv_skip BOOLEAN NOT NULL DEFAULT false`);
+        await db.sequelize.query(`ALTER TABLE meta_campaigns ADD COLUMN IF NOT EXISTS cv_skip BOOLEAN DEFAULT false`);
         _schemaEnsured = true;
     } catch (err) {
         console.warn('[meta-account-binding] ensure da tabela falhou:', err.message);
@@ -90,15 +95,18 @@ export async function getAccountBinding(accountId) {
  * meta_campaigns (instância ou plain). `account` pode vir pré-carregado para
  * não reler a conta a cada campanha numa listagem.
  *
- * @returns {null | { source:'campanha'|'conta', bound_empreendimentos, midia_slug, cv_origem, tags, account_id }}
+ * @returns {null | { source:'campanha'|'conta', skip?:true, bound_empreendimentos, midia_slug, cv_origem, tags, account_id }}
+ *   `skip: true` = fora do CV: o lead não é despachado nem cobrado como represado.
  */
 export async function resolveForCampaign(camp, { account = undefined, defaults = undefined } = {}) {
     if (!camp) return null;
     const c = camp.get ? camp.get({ plain: true }) : camp;
     if (c.mapping_active === false) return null;
+    if (c.cv_skip === true) return { source: 'campanha', skip: true, account_id: c.account_id, bound_empreendimentos: null, midia_slug: null, cv_origem: null, tags: null };
 
     const acc = account !== undefined ? account : await getAccountBinding(c.account_id);
     const accOk = !!(acc && acc.mapping_active !== false && hasEmp(acc.bound_empreendimentos));
+    const accSkip = !!(acc && acc.mapping_active !== false && acc.cv_skip === true);
     const dft = defaults || await getDefaults();
 
     const midia  = c.midia_slug || (accOk ? acc.midia_slug : null) || dft.midia_slug;
@@ -119,6 +127,10 @@ export async function resolveForCampaign(camp, { account = undefined, defaults =
             midia_slug: midia, cv_origem: origem,
             tags: hasEmp(c.tags) ? c.tags : (hasEmp(acc.tags) ? acc.tags : null),
         };
+    }
+    // Conta externa (sem fila no CV): o lead fica no Office como "Fora do CV".
+    if (accSkip) {
+        return { source: 'conta', skip: true, account_id: c.account_id, bound_empreendimentos: null, midia_slug: null, cv_origem: null, tags: null };
     }
     // Legado: campanha só com mídia (lead sai sem idempreendimento). Nenhuma
     // campanha está assim hoje, mas quem estiver continua funcionando.
@@ -165,12 +177,17 @@ export const EFFECTIVE_EMPS_SQL = `
       ELSE NULL
     END`;
 
-/** Booleano: a campanha roteia (vínculo próprio, herdado ou só mídia legado). */
+/**
+ * Booleano: a campanha está RESOLVIDA (vínculo próprio, herdado, só mídia
+ * legado, ou marcada fora do CV). "Fora do CV" conta como resolvida porque
+ * ninguém precisa vincular nada: é decisão, não pendência.
+ */
 export const EFFECTIVELY_BOUND_SQL = `
     (COALESCE(mc.mapping_active, true) = true AND (
         mc.midia_slug IS NOT NULL
+        OR COALESCE(mc.cv_skip, false) = true
         OR ${EMPS_OK('mc.bound_empreendimentos')}
-        OR (COALESCE(ab.mapping_active, false) = true AND ${EMPS_OK('ab.bound_empreendimentos')})
+        OR (COALESCE(ab.mapping_active, false) = true AND (${EMPS_OK('ab.bound_empreendimentos')} OR COALESCE(ab.cv_skip, false) = true))
     ))`;
 
 // ── Contas ──────────────────────────────────────────────────────────────────
@@ -255,6 +272,7 @@ export async function listAccounts() {
             const b = bindingByAcc.get(a.account_id) || null;
             const emps = b ? normalizeEmps(b.bound_empreendimentos) : [];
             const bound = !!(b && b.mapping_active !== false && emps.length);
+            const foraDoCv = !!(b && b.mapping_active !== false && !emps.length && b.cv_skip === true);
             return {
                 account_id: a.account_id,
                 account_name: a.account_name,
@@ -266,6 +284,8 @@ export async function listAccounts() {
                 leads_30d: leadsByAcc.get(a.account_id) || 0,
                 last_synced_at: a.last_synced_at,
                 is_bound: bound,
+                fora_do_cv: foraDoCv,                                 // conta externa: lead não vai ao CV
+                cv_skip: b?.cv_skip === true,
                 mapping_active: b ? b.mapping_active !== false : true,
                 bound_empreendimentos: emps,
                 empreendimentos: emps.map(describeEmp),
@@ -300,10 +320,48 @@ export async function setAccountBinding(accountId, patch = {}, { userId = null }
         row.tags = tags.length ? tags : null;
     }
     if (patch.mapping_active !== undefined) row.mapping_active = patch.mapping_active !== false;
+    if (patch.cv_skip !== undefined) row.cv_skip = patch.cv_skip === true;
     if (patch.notes !== undefined) row.notes = String(patch.notes || '').trim() || null;
 
     await MetaAdAccountBinding.upsert(row);
-    return getAccountBinding(id);
+    const saved = await getAccountBinding(id);
+
+    // Conta fora do CV: os leads que já estão represados nas campanhas dela
+    // (sem vínculo próprio) saem de 'held' para 'ignored' na hora, senão a
+    // Central continuaria cobrando. Desmarcar devolve para 'held'.
+    if (patch.cv_skip !== undefined) {
+        const camps = await MetaCampaign.findAll({ where: { account_id: id }, attributes: ['id', 'bound_empreendimentos', 'midia_slug', 'cv_skip'] });
+        const ids = camps.filter(c => !hasEmp(c.bound_empreendimentos) && !c.midia_slug && !c.cv_skip).map(c => c.id);
+        if (ids.length) await applySkipToHeldLeads({ campaignIds: ids, skip: saved?.cv_skip === true && saved?.mapping_active !== false, actor: userId ? `user:${userId}` : 'system' });
+    }
+    return saved;
+}
+
+/**
+ * Move os leads represados das campanhas para "Fora do CV" (ou de volta).
+ * held → ignored quando a conta/campanha é marcada externa; ignored → held
+ * quando desmarcada. Cada lead ganha um evento, para a timeline contar.
+ */
+export async function applySkipToHeldLeads({ campaignIds = [], skip, actor = 'system' }) {
+    const ids = (campaignIds || []).map(String).filter(Boolean);
+    if (!ids.length) return 0;
+    const { InboundLead } = db;
+    const { recordLeadEvent } = await import('./leadEventLog.js');
+    const from = skip ? 'held' : 'ignored';
+    const to = skip ? 'ignored' : 'held';
+    const leads = await InboundLead.findAll({ where: { status: from, meta_campaign_id: { [Op.in]: ids } }, attributes: ['id'] });
+    if (!leads.length) return 0;
+    await InboundLead.update({ status: to }, { where: { id: { [Op.in]: leads.map(l => l.id) } } });
+    for (const l of leads) {
+        await recordLeadEvent({
+            leadId: l.id, type: skip ? 'ignored' : 'held', actor,
+            statusFrom: from, statusTo: to,
+            message: skip
+                ? 'Conta/campanha marcada como fora do CV - o lead fica no Office e não vai ao CRM.'
+                : 'Conta/campanha voltou a valer para o CV - lead aguarda vínculo de novo.',
+        });
+    }
+    return leads.length;
 }
 
 /** Quantas campanhas ativas de lead nada resolve hoje - para o alerta e o badge. */
@@ -314,6 +372,6 @@ export async function countUnboundAccounts() {
 
 export default {
     ensureSchema, getDefaults, getAccountBinding, resolveForCampaign, resolveMany,
-    listAccounts, setAccountBinding, countUnboundAccounts,
+    listAccounts, setAccountBinding, countUnboundAccounts, applySkipToHeldLeads,
     ACCOUNT_JOIN_SQL, EFFECTIVE_EMPS_SQL, EFFECTIVELY_BOUND_SQL,
 };

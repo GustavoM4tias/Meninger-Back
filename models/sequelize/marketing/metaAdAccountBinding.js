@@ -28,6 +28,10 @@ export default (sequelize, DataTypes) => {
     cv_origem:             { type: DataTypes.STRING(4) },                  // FB | IG; null = padrão
     tags:                  { type: DataTypes.JSONB },                      // [string]
     mapping_active:        { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    // Conta EXTERNA: os leads dela não vão ao CV (o empreendimento nem tem
+    // fila lá). Lead entra como 'ignored' ("Fora do CV") em vez de 'held', e
+    // a Central deixa de cobrar vínculo e de alertar (caso London, 17/09/2026).
+    cv_skip:               { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
 
     notes:        { type: DataTypes.TEXT },
     definido_por: { type: DataTypes.INTEGER },

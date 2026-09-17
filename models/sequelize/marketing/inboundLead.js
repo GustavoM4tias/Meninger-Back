@@ -17,8 +17,9 @@ export default (sequelize, DataTypes) => {
     channel: { type: DataTypes.STRING(30), allowNull: false },
 
     // Máquina de estados:
-    //   received | validated | spam | held | routed | dispatching
+    //   received | validated | spam | held | ignored | routed | dispatching
     //           | delivered | rejected | failed
+    //   ignored = "Fora do CV" (conta/campanha externa; fica só no Office)
     status: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'received' },
 
     // ── Dados do lead ────────────────────────────────────────────────────────
