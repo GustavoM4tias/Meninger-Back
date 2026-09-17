@@ -13,9 +13,12 @@ function filtrosDaQuery(req) {
         paymentStatus: req.query.paymentStatus,
         empreendimento: req.query.empreendimento,
         idreserva: req.query.idreserva,
+        // Emitido de/até (created_at) e pago de/até (paid_at), independentes.
         dateFrom: req.query.dateFrom,
         dateTo: req.query.dateTo,
-        // 'created_at' (emissão, padrão) | 'paid_at' (pagamento)
+        paidFrom: req.query.paidFrom,
+        paidTo: req.query.paidTo,
+        // formato antigo: um período só + 'created_at' | 'paid_at'
         dateField: req.query.dateField,
         // Etapa CV (reserva / repasse): a tela manda desde sempre, e o
         // histórico unificado vinha ignorando - filtro que não filtra.

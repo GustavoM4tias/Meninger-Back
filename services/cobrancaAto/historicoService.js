@@ -140,10 +140,20 @@ function filtrosEscopo(f, nomesPermitidos, cvIds) {
 
     if (f.idreserva) { cond.push('idreserva = :idreserva'); rep.idreserva = Number(f.idreserva); }
 
-    // Data de EMISSÃO (padrão) ou de PAGAMENTO — a tela escolhe.
-    const dateCol = String(f.dateField) === 'paid_at' ? 'paid_at' : 'created_at';
-    if (f.dateFrom) { cond.push(`${dateCol} >= :dateFrom`); rep.dateFrom = `${f.dateFrom} 00:00:00`; }
-    if (f.dateTo) { cond.push(`${dateCol} <= :dateTo`); rep.dateTo = `${f.dateTo} 23:59:59`; }
+    // Dois períodos INDEPENDENTES: emissão (created_at) e pagamento (paid_at).
+    // Dá para pedir "emitido em agosto" e "pago em setembro" ao mesmo tempo.
+    // O período de pagamento só casa linha com paid_at, então sozinho ele já
+    // é "o que foi pago no período". `dateField=paid_at` é o formato antigo da
+    // tela (um período só + qual data): vira o período de pagamento.
+    const legadoPago = String(f.dateField) === 'paid_at';
+    const emitidoDe = legadoPago ? null : f.dateFrom;
+    const emitidoAte = legadoPago ? null : f.dateTo;
+    const pagoDe = f.paidFrom || (legadoPago ? f.dateFrom : null);
+    const pagoAte = f.paidTo || (legadoPago ? f.dateTo : null);
+    if (emitidoDe) { cond.push('created_at >= :dateFrom'); rep.dateFrom = `${emitidoDe} 00:00:00`; }
+    if (emitidoAte) { cond.push('created_at <= :dateTo'); rep.dateTo = `${emitidoAte} 23:59:59`; }
+    if (pagoDe) { cond.push('paid_at >= :paidFrom'); rep.paidFrom = `${pagoDe} 00:00:00`; }
+    if (pagoAte) { cond.push('paid_at <= :paidTo'); rep.paidTo = `${pagoAte} 23:59:59`; }
 
     if (f.q) {
         cond.push(`(

@@ -789,7 +789,12 @@ export async function listarRodadas(user, { limit = 30 } = {}) {
 /**
  * Boletos de PARCELA emitidos (ou que falharam) num periodo, com o canal de
  * cada um e o motivo quando nao saiu. E o "boleto a boleto" da aba Parcelas.
- * Periodo pela data de Brasilia da emissao: hoje | 7d | 30d | dia=YYYY-MM-DD.
+ *
+ * Dois periodos INDEPENDENTES, os mesmos da aba Historico do ato, pela data
+ * de Brasilia: emitido de/ate (`dateFrom`/`dateTo`, sobre created_at) e pago
+ * de/ate (`paidFrom`/`paidTo`, sobre paid_at). O de pagamento sozinho ja
+ * devolve "o que foi pago no periodo", venha de que emissao vier. Sem nenhum
+ * dos dois, cai no formato antigo: periodo=hoje | 7d | 30d, ou dia=YYYY-MM-DD.
  */
 export async function listarBoletosParcela(user, f = {}) {
     const nomes = await allowedEnterpriseNames(user);
@@ -800,12 +805,23 @@ export async function listarBoletosParcela(user, f = {}) {
         rep.escopo = nomes.length ? nomes : [''];
     }
     const hoje = hojeYmd();
-    const dias = { hoje: 0, '7d': 6, '30d': 29 };
-    if (f.dia && /^\d{4}-\d{2}-\d{2}$/.test(String(f.dia))) {
-        cond.push("(h.created_at AT TIME ZONE 'America/Sao_Paulo')::date = :dia"); rep.dia = String(f.dia);
-    } else {
-        const n = dias[f.periodo] ?? 0;
-        cond.push("(h.created_at AT TIME ZONE 'America/Sao_Paulo')::date >= :de"); rep.de = addDays(hoje, -n);
+    const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+    const emitidoDe = ymd(f.dateFrom), emitidoAte = ymd(f.dateTo);
+    const pagoDe = ymd(f.paidFrom), pagoAte = ymd(f.paidTo);
+    const DIA_EMISSAO = "(h.created_at AT TIME ZONE 'America/Sao_Paulo')::date";
+    const DIA_PAGO = "(h.paid_at AT TIME ZONE 'America/Sao_Paulo')::date";
+    if (emitidoDe) { cond.push(`${DIA_EMISSAO} >= :de`); rep.de = emitidoDe; }
+    if (emitidoAte) { cond.push(`${DIA_EMISSAO} <= :ate`); rep.ate = emitidoAte; }
+    if (pagoDe) { cond.push(`${DIA_PAGO} >= :pagoDe`); rep.pagoDe = pagoDe; }
+    if (pagoAte) { cond.push(`${DIA_PAGO} <= :pagoAte`); rep.pagoAte = pagoAte; }
+    if (!emitidoDe && !emitidoAte && !pagoDe && !pagoAte) {
+        const dias = { hoje: 0, '7d': 6, '30d': 29 };
+        if (ymd(f.dia)) {
+            cond.push(`${DIA_EMISSAO} = :dia`); rep.dia = ymd(f.dia);
+        } else {
+            const n = dias[f.periodo] ?? 0;
+            cond.push(`${DIA_EMISSAO} >= :de`); rep.de = addDays(hoje, -n);
+        }
     }
     if (f.status && ['success', 'error', 'processing'].includes(String(f.status))) { cond.push('h.status = :st'); rep.st = String(f.status); }
     if (f.q) {
@@ -837,7 +853,9 @@ export async function listarBoletosParcela(user, f = {}) {
          WHERE ${cond.join(' AND ')}
          ORDER BY h.id DESC
          LIMIT :limit`, { replacements: rep });
-    const resumo = { total: rows.length, sucesso: 0, erro: 0, processando: 0, whatsapp_nao_enviado: 0, email_nao_enviado: 0, cv_nao_anexado: 0, pagos: 0, cep_contingencia: 0 };
+    // `sucesso_valor` e `pagos_valor`: a tela mostra o VALOR emitido e pago no
+    // periodo, nao so a contagem - e para isso que o periodo de pagamento existe.
+    const resumo = { total: rows.length, sucesso: 0, sucesso_valor: 0, erro: 0, processando: 0, whatsapp_nao_enviado: 0, email_nao_enviado: 0, cv_nao_anexado: 0, pagos: 0, pagos_valor: 0, cep_contingencia: 0 };
     for (const r of rows) {
         if (r.status === 'success') resumo.sucesso++;
         else if (r.status === 'error') resumo.erro++;
@@ -845,13 +863,16 @@ export async function listarBoletosParcela(user, f = {}) {
         const avisos = Array.isArray(r.warnings) ? r.warnings : [];
         r.cep_contingencia = avisos.find(w => w?.etapa === 'cep_contingencia')?.erro || null;
         if (r.status === 'success') {
+            resumo.sucesso_valor += Number(r.valor) || 0;
             if (!r.cliente_whatsapp_enviado) resumo.whatsapp_nao_enviado++;
             if (!r.cliente_email_enviado) resumo.email_nao_enviado++;
             if (!r.cv_documento_anexado) resumo.cv_nao_anexado++;
-            if (r.payment_status === 'paid') resumo.pagos++;
+            if (r.payment_status === 'paid') { resumo.pagos++; resumo.pagos_valor += Number(r.valor) || 0; }
             if (r.cep_contingencia) resumo.cep_contingencia++;
         }
     }
+    resumo.sucesso_valor = Math.round(resumo.sucesso_valor * 100) / 100;
+    resumo.pagos_valor = Math.round(resumo.pagos_valor * 100) / 100;
     return { rows, resumo, hoje };
 }
 

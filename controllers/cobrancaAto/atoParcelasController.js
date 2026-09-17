@@ -199,7 +199,14 @@ export async function listRodadas(req, res) {
 
 /** Boletos de parcela do periodo, boleto a boleto, com canal e motivo. */
 export async function listBoletos(req, res) {
-    try { return res.json(await Planos.listarBoletosParcela(req.user, { periodo: req.query.periodo, dia: req.query.dia, status: req.query.status, q: req.query.q, limit: req.query.limit })); }
+    try {
+        const q = req.query;
+        return res.json(await Planos.listarBoletosParcela(req.user, {
+            // emitido de/ate e pago de/ate (independentes); periodo/dia e o formato antigo
+            dateFrom: q.dateFrom, dateTo: q.dateTo, paidFrom: q.paidFrom, paidTo: q.paidTo,
+            periodo: q.periodo, dia: q.dia, status: q.status, q: q.q, limit: q.limit,
+        }));
+    }
     catch (err) { console.error('[PARCELAS] listBoletos:', err); return res.status(500).json({ error: `Falha ao listar os boletos de parcela: ${err.message}` }); }
 }
 
