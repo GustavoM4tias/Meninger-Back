@@ -40,6 +40,8 @@ export const fetchFilas = async (req, res) => {
                 vazia: f.vazia,
                 presente_no_cv: f.presente_no_cv,
                 empreendimentos: f.empreendimentos,
+                cidades: f.cidades,            // praça da fila (pelo vínculo)
+                praca_mista: f.praca_mista,    // atende mais de uma cidade
                 synced_at: f.synced_at,
             })),
             // Empreendimento sem fila trava o retorno automático de lead.

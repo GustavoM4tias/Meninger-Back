@@ -221,10 +221,22 @@ export async function listAccounts() {
     const filaByEmp = new Map(filaBindings.map(b => [b.idempreendimento, b.idfila]));
     const empById = new Map(enterprises.map(e => [Number(e.cv_id), e]));
 
+    // Praça da fila = cidades dos empreendimentos vinculados a ela (o CV não
+    // expõe isso). Fila que atende outra praça e não a deste empreendimento é
+    // divergente: foi assim que Ibitinga caiu na fila de Avaré.
+    const cidadesDaFila = new Map();
+    for (const b of filaBindings) {
+        const cidade = empById.get(Number(b.idempreendimento))?.city;
+        if (!b.idfila || !cidade) continue;
+        if (!cidadesDaFila.has(b.idfila)) cidadesDaFila.set(b.idfila, new Set());
+        cidadesDaFila.get(b.idfila).add(cidade);
+    }
+
     const describeEmp = (id) => {
         const e = empById.get(Number(id));
         const idfila = filaByEmp.get(Number(id)) || null;
         const fila = idfila ? filaById.get(idfila) : null;
+        const filaCidades = idfila ? [...(cidadesDaFila.get(idfila) || [])] : [];
         return {
             idempreendimento: Number(id),
             nome: e?.name || `#${id}`,
@@ -232,6 +244,8 @@ export async function listAccounts() {
             idfila,
             fila_nome: fila?.nome || null,
             fila_sumiu_do_cv: !!(idfila && fila && !fila.presente_no_cv),
+            fila_cidades: filaCidades,
+            fila_praca_divergente: !!(idfila && e?.city && filaCidades.length && !filaCidades.includes(e.city)),
         };
     };
 

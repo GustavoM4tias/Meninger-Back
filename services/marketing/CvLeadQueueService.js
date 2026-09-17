@@ -154,6 +154,25 @@ export async function listWithBindings() {
     const porEmp = new Map(bindings.map(b => [b.idempreendimento, b]));
     const nomeEmp = new Map(empreendimentos.map(e => [e.cv_id, e]));
 
+    // Praça de cada fila = cidades dos empreendimentos que ela atende. O CV não
+    // diz qual empreendimento a fila serve, então a única leitura possível é
+    // pelo vínculo daqui - e é por ela que se pega Três Marias (Ibitinga)
+    // apontado para a fila da Esmeralda (Avaré), que foi o caso de 26/08 a 17/09.
+    const cidadesDaFila = new Map();
+    for (const b of bindings) {
+        if (!b.idfila) continue;
+        const cidade = nomeEmp.get(b.idempreendimento)?.city;
+        if (!cidade) continue;
+        if (!cidadesDaFila.has(b.idfila)) cidadesDaFila.set(b.idfila, new Set());
+        cidadesDaFila.get(b.idfila).add(cidade);
+    }
+    const filaCidades = (idfila) => [...(cidadesDaFila.get(idfila) || [])];
+    // Divergente = a fila atende outra praça e NÃO atende a deste empreendimento.
+    const pracaDivergente = (idfila, cidade) => {
+        const c = filaCidades(idfila);
+        return !!(cidade && c.length && !c.includes(cidade));
+    };
+
     return {
         filas: filas.map(f => ({
             idfila: f.idfila,
@@ -163,11 +182,14 @@ export async function listWithBindings() {
             sem_atendente_listado: f.sem_atendente_listado,
             presente_no_cv: f.presente_no_cv,
             synced_at: f.synced_at,
+            cidades: filaCidades(f.idfila),
+            praca_mista: filaCidades(f.idfila).length > 1,
             empreendimentos: bindings
                 .filter(b => b.idfila === f.idfila)
                 .map(b => ({
                     idempreendimento: b.idempreendimento,
                     nome: nomeEmp.get(b.idempreendimento)?.name || `empreendimento ${b.idempreendimento}`,
+                    cidade: nomeEmp.get(b.idempreendimento)?.city || null,
                     origem: b.origem,
                     motivo: b.motivo,
                 })),
@@ -185,6 +207,8 @@ export async function listWithBindings() {
                 idfila: b?.idfila || null,
                 fila_nome: fila?.nome || null,
                 fila_sumiu_do_cv: !!(b?.idfila && !fila?.presente_no_cv),
+                fila_cidades: b?.idfila ? filaCidades(b.idfila) : [],
+                fila_praca_divergente: b?.idfila ? pracaDivergente(b.idfila, e.city) : false,
                 motivo: b?.motivo || null,
             };
         }),
