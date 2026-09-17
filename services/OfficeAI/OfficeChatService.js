@@ -929,6 +929,22 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   let lastFinishReason = null; // finishReason do último candidate (main + follow-up)
   const toolCalls = [];
   const actionTypesSeen = []; // tipos das actions bem-sucedidas da cadeia (p/ supressão de card órfão)
+
+  // Qual resultado vira o CARD do turno. A regra era "o último ganha", e ela
+  // apagava o editor de alerta: o modelo abria o editor (open_alert_editor) e
+  // em seguida rodava preview_alert de novo para conferir; o preview (objeto
+  // sem `type`) sobrescrevia o card, e a pessoa lia "confirme no card abaixo"
+  // sem card nenhum (17/09/2026). Card interativo, uma vez aberto, fica; um
+  // resultado sem forma (sem type nem blocks) só entra quando não há nada.
+  const FIXA_O_TURNO = new Set(['open_alert_editor']);
+  const adotarAction = (r) => {
+    if (!r) return;
+    if (r.error) { if (!actionResult) actionResult = r; return; }
+    if (actionResult && !actionResult.error && FIXA_O_TURNO.has(actionResult.type)) return;
+    const temForma = !!(r.type || Array.isArray(r.blocks));
+    if (!temForma && actionResult && !actionResult.error) return;
+    actionResult = r;
+  };
   const startedAt = Date.now();
   const bridgeFilter = makeBridgeFilter();
 
@@ -1151,7 +1167,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
             ms: Date.now() - toolStart,
           });
 
-          actionResult = toolResult;
+          adotarAction(toolResult);
           if (toolResult && !toolResult.error && toolResult.type) actionTypesSeen.push(toolResult.type);
           sendSSE(res, { type: 'action', action: toolResult });
 
@@ -1330,7 +1346,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           ok: !toolResult?.error,
           ms: Date.now() - toolStart,
         });
-        actionResult = toolResult;
+        adotarAction(toolResult);
         if (toolResult && !toolResult.error && toolResult.type) actionTypesSeen.push(toolResult.type);
         sendSSE(res, { type: 'action', action: toolResult });
 
@@ -1441,6 +1457,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           ms: Date.now() - inicio,
         });
         sendSSE(res, { type: 'tool_result', name: chamada.name, ms: Date.now() - inicio, error: resultado?.error || null });
+        // O que a cutucada executou também vira card: sem isto o editor de
+        // alerta aberto aqui nunca chegava à tela (nem ao histórico).
+        adotarAction(resultado);
+        if (resultado && !resultado.error && resultado.type) actionTypesSeen.push(resultado.type);
+        sendSSE(res, { type: 'action', action: resultado });
 
         texto = '';
         stream = (await chat.sendMessageStream([
@@ -1748,10 +1769,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     }
   }
 
-  // `action: null` explícito quando o card foi suprimido — o front usa isso para
-  // descartar o pendingAction recebido via SSE no meio da cadeia. Quando o campo
-  // não vem, o front mantém o comportamento histórico (usa o último `action`).
-  sendSSE(res, { type: 'done', sessionId: session.id, msgId: savedMsg.id, ...(suppressAction ? { action: null } : {}) });
+  // O `done` leva SEMPRE a action que o turno adotou: o front recebeu uma
+  // `action` por tool no meio da cadeia e guardava a última, que podia ser o
+  // preview sem forma e não o editor. `null` quando o card foi suprimido.
+  sendSSE(res, { type: 'done', sessionId: session.id, msgId: savedMsg.id, action: actionResult });
 }
 
 function sendSSE(res, data) {
