@@ -622,11 +622,60 @@ function escopoSql(nomes, f) {
         cond.push(`(unaccent(lower(coalesce(p.titular_nome, ''))) LIKE unaccent(lower(:q)) OR CAST(p.idreserva AS text) LIKE :q)`);
         rep.q = `%${String(f.q).trim()}%`;
     }
+    /* Periodo (so quando a tela manda): fica o plano que teve boleto de
+       parcela EMITIDO no periodo e/ou parcela PAGA no periodo. Os dois sao
+       independentes, como na aba Historico do ato. */
+    const per = faixaPeriodo(f);
+    if (per.emitidoDe || per.emitidoAte) {
+        cond.push(`EXISTS (SELECT 1 FROM boleto_history h WHERE h.idreserva = p.idreserva AND h.tipo = 'parcela' AND h.status = 'success'
+                    ${per.emitidoDe ? `AND ${DIA_BR('h.created_at')} >= :emitidoDe` : ''} ${per.emitidoAte ? `AND ${DIA_BR('h.created_at')} <= :emitidoAte` : ''})`);
+        if (per.emitidoDe) rep.emitidoDe = per.emitidoDe;
+        if (per.emitidoAte) rep.emitidoAte = per.emitidoAte;
+    }
+    if (per.pagoDe || per.pagoAte) {
+        cond.push(`EXISTS (SELECT 1 FROM ato_parcelas y WHERE y.plano_id = p.id AND y.status = 'paga'
+                    ${per.pagoDe ? `AND ${DIA_BR('y.pago_em')} >= :pagoDe` : ''} ${per.pagoAte ? `AND ${DIA_BR('y.pago_em')} <= :pagoAte` : ''})`);
+        if (per.pagoDe) rep.pagoDe = per.pagoDe;
+        if (per.pagoAte) rep.pagoAte = per.pagoAte;
+    }
     return { where: cond.length ? `WHERE ${cond.join(' AND ')}` : '', rep };
 }
 
+/* Data de Brasilia de um timestamp (o servidor roda em UTC). */
+const DIA_BR = (col) => `(${col} AT TIME ZONE 'America/Sao_Paulo')::date`;
+
+const YMD = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+
+/* Periodo pedido pela tela: { emitidoDe, emitidoAte, pagoDe, pagoAte } (so o
+   que veio valido). `informado` diz se algum dos dois foi preenchido. */
+function faixaPeriodo(f = {}) {
+    const per = { emitidoDe: YMD(f.dateFrom), emitidoAte: YMD(f.dateTo), pagoDe: YMD(f.paidFrom), pagoAte: YMD(f.paidTo) };
+    per.informado = !!(per.emitidoDe || per.emitidoAte || per.pagoDe || per.pagoAte);
+    return per;
+}
+
+/* Faixa EFETIVA dos cartoes e da coluna "no periodo": a pedida pela tela ou,
+   sem nada preenchido, os ultimos 30 dias (hoje incluso) para as duas. Um
+   lado aberto (so "de" ou so "ate") vira a faixa aberta mesmo. */
+function faixaEfetiva(f = {}) {
+    const per = faixaPeriodo(f);
+    const hoje = hojeYmd();
+    const d30 = addDays(hoje, -29);
+    const lado = (de, ate) => ((de || ate) ? { de: de || '1900-01-01', ate: ate || '2999-12-31' } : { de: d30, ate: hoje });
+    return { emitido: lado(per.emitidoDe, per.emitidoAte), pago: lado(per.pagoDe, per.pagoAte), padrao: !per.informado };
+}
+
+/* Alem dos totais do plano, dois numeros "no periodo" (faixa efetiva: a da
+   tela ou 30 dias): boletos de parcela emitidos e parcelas pagas. E o que
+   deixa a lista responder "o que saiu / o que entrou" sem uma segunda lista. */
 const AGREGADO = `
     SELECT p.*,
+           (SELECT count(*)::int FROM boleto_history h WHERE h.idreserva = p.idreserva AND h.tipo = 'parcela' AND h.status = 'success'
+             AND ${DIA_BR('h.created_at')} BETWEEN :perEmitDe AND :perEmitAte)                              AS per_emitidas,
+           (SELECT coalesce(sum(h.valor), 0)::numeric FROM boleto_history h WHERE h.idreserva = p.idreserva AND h.tipo = 'parcela' AND h.status = 'success'
+             AND ${DIA_BR('h.created_at')} BETWEEN :perEmitDe AND :perEmitAte)                              AS per_emitidas_valor,
+           count(x.id) FILTER (WHERE x.status = 'paga' AND ${DIA_BR('x.pago_em')} BETWEEN :perPagoDe AND :perPagoAte)::int AS per_pagas,
+           coalesce(sum(coalesce(x.valor_cobrado, x.valor)) FILTER (WHERE x.status = 'paga' AND ${DIA_BR('x.pago_em')} BETWEEN :perPagoDe AND :perPagoAte), 0)::numeric AS per_pagas_valor,
            count(x.id)::int                                                   AS parcelas_total,
            count(x.id) FILTER (WHERE x.status = 'paga')::int                  AS parcelas_pagas,
            count(x.id) FILTER (WHERE x.status = 'emitida')::int               AS parcelas_emitidas,
@@ -674,6 +723,7 @@ const ORDENAVEIS = {
     // quanto do plano ja foi pago, em proporcao: 2/4 vem antes de 3/12
     progresso: '(CASE WHEN parcelas_total > 0 THEN parcelas_pagas::numeric / parcelas_total ELSE 0 END)',
     sienge: 'sienge_venda_faturada_em',
+    periodo: 'per_pagas_valor',
     // apelidos antigos, para quem chama a rota direto
     reserva: 'idreserva', titular: 'titular_nome', criado: 'created_at',
 };
@@ -693,22 +743,25 @@ export async function listarPlanos(user, f = {}) {
     const having = f.comAtraso === '1' || f.comAtraso === true
         ? `HAVING count(x.id) FILTER (WHERE x.status = 'vencida' OR (x.status = 'emitida' AND x.vencimento_cobrado < CURRENT_DATE) OR (x.status IN ('prevista','erro') AND x.vencimento < CURRENT_DATE)) > 0`
         : '';
+    const per = faixaEfetiva(f);
+    const repPer = { ...rep, perEmitDe: per.emitido.de, perEmitAte: per.emitido.ate, perPagoDe: per.pago.de, perPagoAte: per.pago.ate };
     const base = `${AGREGADO} ${where} GROUP BY p.id ${having}`;
-    const [[{ total }]] = await db.sequelize.query(`SELECT count(*)::int AS total FROM (${base}) t`, { replacements: rep });
+    const [[{ total }]] = await db.sequelize.query(`SELECT count(*)::int AS total FROM (${base}) t`, { replacements: repPer });
     const [rows] = await db.sequelize.query(
         `SELECT * FROM (${base}) t ORDER BY ${coluna} ${dir} NULLS LAST, idreserva DESC LIMIT :limit OFFSET :offset`,
-        { replacements: { ...rep, limit, offset: (page - 1) * limit } },
+        { replacements: { ...repPer, limit, offset: (page - 1) * limit } },
     );
     for (const r of rows) {
         if (typeof r.divergencias === 'string') { try { r.divergencias = JSON.parse(r.divergencias); } catch { r.divergencias = null; } }
     }
-    return { total, page, limit, rows };
+    return { total, page, limit, rows, periodo: per };
 }
 
 /** KPIs da aba, no mesmo escopo da lista. */
 export async function estatisticas(user, f = {}) {
     const nomes = await allowedEnterpriseNames(user);
     const { where, rep } = escopoSql(nomes, { ...f, status: undefined });
+    const per = faixaEfetiva(f);
     const [[k]] = await db.sequelize.query(`
         WITH pl AS (SELECT p.* FROM ato_planos p ${where})
         SELECT
@@ -723,20 +776,26 @@ export async function estatisticas(user, f = {}) {
             count(x.id) FILTER (WHERE x.status = 'vencida' OR (x.status = 'emitida' AND x.vencimento_cobrado < CURRENT_DATE) OR (x.status IN ('prevista','erro') AND pl.status = 'ativo' AND x.vencimento < CURRENT_DATE))::int AS atraso_qty,
             coalesce(sum(coalesce(x.valor_cobrado, x.valor)) FILTER (WHERE x.status = 'vencida' OR (x.status = 'emitida' AND x.vencimento_cobrado < CURRENT_DATE) OR (x.status IN ('prevista','erro') AND pl.status = 'ativo' AND x.vencimento < CURRENT_DATE)), 0)::numeric AS atraso_valor,
             count(x.id) FILTER (WHERE x.status IN ('prevista','erro') AND pl.status = 'ativo' AND x.vencimento < CURRENT_DATE)::int AS nunca_cobradas_qty,
-            count(x.id) FILTER (WHERE x.status = 'paga' AND x.pago_em >= CURRENT_DATE - 30)::int AS pagas_30_qty,
-            coalesce(sum(coalesce(x.valor_cobrado, x.valor)) FILTER (WHERE x.status = 'paga' AND x.pago_em >= CURRENT_DATE - 30), 0)::numeric AS pagas_30_valor,
+            count(x.id) FILTER (WHERE x.status = 'paga' AND ${DIA_BR('x.pago_em')} BETWEEN :perPagoDe AND :perPagoAte)::int AS per_pagas_qty,
+            coalesce(sum(coalesce(x.valor_cobrado, x.valor)) FILTER (WHERE x.status = 'paga' AND ${DIA_BR('x.pago_em')} BETWEEN :perPagoDe AND :perPagoAte), 0)::numeric AS per_pagas_valor,
+            (SELECT count(*)::int FROM boleto_history h JOIN pl ON pl.idreserva = h.idreserva
+              WHERE h.tipo = 'parcela' AND h.status = 'success' AND ${DIA_BR('h.created_at')} BETWEEN :perEmitDe AND :perEmitAte) AS per_emitidas_qty,
+            (SELECT coalesce(sum(h.valor), 0)::numeric FROM boleto_history h JOIN pl ON pl.idreserva = h.idreserva
+              WHERE h.tipo = 'parcela' AND h.status = 'success' AND ${DIA_BR('h.created_at')} BETWEEN :perEmitDe AND :perEmitAte) AS per_emitidas_valor,
             count(x.id) FILTER (WHERE x.status = 'paga')::int                                   AS pagas_qty,
             coalesce(sum(coalesce(x.valor_cobrado, x.valor)) FILTER (WHERE x.status = 'paga'), 0)::numeric AS pagas_valor,
             count(x.id) FILTER (WHERE x.status = 'erro')::int                                   AS erro_qty,
             count(x.id) FILTER (WHERE x.status = 'transferida')::int                            AS transferidas_qty
-          FROM pl LEFT JOIN ato_parcelas x ON x.plano_id = pl.id`, { replacements: rep });
+          FROM pl LEFT JOIN ato_parcelas x ON x.plano_id = pl.id`,
+        { replacements: { ...rep, perEmitDe: per.emitido.de, perEmitAte: per.emitido.ate, perPagoDe: per.pago.de, perPagoAte: per.pago.ate } });
     const n = (v) => Number(v) || 0;
     return {
         planos: { ativos: n(k.planos_ativos), pausados: n(k.planos_pausados), encerrados: n(k.planos_encerrados), cancelados: n(k.planos_cancelados) },
         aVencer30: { qty: n(k.a_vencer_30_qty), valor: n(k.a_vencer_30_valor) },
         emitidas: { qty: n(k.emitidas_qty), valor: n(k.emitidas_valor) },
         atraso: { qty: n(k.atraso_qty), valor: n(k.atraso_valor), nuncaCobradas: n(k.nunca_cobradas_qty) },
-        pagas30: { qty: n(k.pagas_30_qty), valor: n(k.pagas_30_valor) },
+        // "no periodo" = a faixa da tela ou, sem nada preenchido, 30 dias (padrao=true)
+        periodo: { ...per, emitidas: { qty: n(k.per_emitidas_qty), valor: n(k.per_emitidas_valor) }, pagas: { qty: n(k.per_pagas_qty), valor: n(k.per_pagas_valor) } },
         pagas: { qty: n(k.pagas_qty), valor: n(k.pagas_valor) },
         erro: { qty: n(k.erro_qty) },
         transferidas: { qty: n(k.transferidas_qty) },
@@ -805,11 +864,11 @@ export async function listarBoletosParcela(user, f = {}) {
         rep.escopo = nomes.length ? nomes : [''];
     }
     const hoje = hojeYmd();
-    const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+    const ymd = YMD;
     const emitidoDe = ymd(f.dateFrom), emitidoAte = ymd(f.dateTo);
     const pagoDe = ymd(f.paidFrom), pagoAte = ymd(f.paidTo);
-    const DIA_EMISSAO = "(h.created_at AT TIME ZONE 'America/Sao_Paulo')::date";
-    const DIA_PAGO = "(h.paid_at AT TIME ZONE 'America/Sao_Paulo')::date";
+    const DIA_EMISSAO = DIA_BR('h.created_at');
+    const DIA_PAGO = DIA_BR('h.paid_at');
     if (emitidoDe) { cond.push(`${DIA_EMISSAO} >= :de`); rep.de = emitidoDe; }
     if (emitidoAte) { cond.push(`${DIA_EMISSAO} <= :ate`); rep.ate = emitidoAte; }
     if (pagoDe) { cond.push(`${DIA_PAGO} >= :pagoDe`); rep.pagoDe = pagoDe; }

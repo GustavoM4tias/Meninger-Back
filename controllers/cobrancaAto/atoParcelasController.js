@@ -16,6 +16,8 @@ import { PARCELA_STATUS } from '../../lib/atoParcelas.js';
 const filtros = (q) => ({
     status: q.status, empreendimento: q.empreendimento, idreserva: q.idreserva, q: q.q,
     comAtraso: q.comAtraso, page: q.page, limit: q.limit, sortBy: q.sortBy, sortDir: q.sortDir,
+    // emitido de/ate e pago de/ate, os mesmos da aba Historico do ato
+    dateFrom: q.dateFrom, dateTo: q.dateTo, paidFrom: q.paidFrom, paidTo: q.paidTo,
 });
 
 export async function listPlanos(req, res) {
