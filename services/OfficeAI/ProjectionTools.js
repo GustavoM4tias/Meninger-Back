@@ -82,8 +82,11 @@ registerTool({
             out.chartType = 'bar';
             out.title = 'VGV projetado por empreendimento';
             out.subtitle = `${projection.name} · ${periodoTxt} · Total ${fmtMoney(totalVgv)}`;
-            out.labels = sorted.slice(0, 15).map(([k]) => k);
-            out.data = sorted.slice(0, 15).map(([, v]) => Number(v.vgv.toFixed(2)));
+            // Todos os empreendimentos, não os 15 maiores: o resumo que vai ao
+            // modelo manda responder "qual total?" com a SOMA das barras, e
+            // com o corte a Eme dizia R$ 43,1 mi para uma meta de R$ 45,9 mi.
+            out.labels = sorted.slice(0, 60).map(([k]) => k);
+            out.data = sorted.slice(0, 60).map(([, v]) => Number(v.vgv.toFixed(2)));
         }
         return { result: out, resultCount: visible.length, filtersApplied: { data_inicio: m.startM, data_fim: m.endM, empreendimento: filtro || undefined } };
     },
@@ -162,6 +165,10 @@ async function metasDaProjecaoAtiva(user, args = {}) {
         const byEnt = new Map();   // enterprise → { units, vgv }
         const byMonth = new Map(); // year_month → { units, vgv }
         const byErp = new Map();   // erp_id (dígitos) → { nome, units, vgv }
+        // Toda meta, tenha ou não centro de custo: chave = erp, senão o nome.
+        // Só contar quem tem erp escondia 84 das 210 unidades de set/2026 (a
+        // tela soma tudo e casa pelo nome quando não há ERP).
+        const byChave = new Map(); // erp | 'nome:<nome normalizado>' → { nome, erp, units, vgv }
         for (const l of visible) {
             const units = Number(l.units_target || 0);
             const vgv = units * priceOf(l);
@@ -176,9 +183,12 @@ async function metasDaProjecaoAtiva(user, args = {}) {
                 const x = byErp.get(erp) || { nome: ek, units: 0, vgv: 0 };
                 x.units += units; x.vgv += vgv; byErp.set(erp, x);
             }
+            const chave = erp || `nome:${normText(ek)}`;
+            const c = byChave.get(chave) || { nome: ek, erp: erp || null, units: 0, vgv: 0 };
+            c.units += units; c.vgv += vgv; byChave.set(chave, c);
         }
 
-        return { projection, startM, endM, periodoTxt, filtro, visible, totalUnits, totalVgv, byEnt, byMonth, byErp, allowedErp: erpIds };
+        return { projection, startM, endM, periodoTxt, filtro, visible, totalUnits, totalVgv, byEnt, byMonth, byErp, byChave, allowedErp: erpIds };
     }
 }
 
@@ -207,7 +217,7 @@ function mesesEntre(startM, endM) {
     return out;
 }
 
-/** Realizado por erp_id no mês: consolidado (oficial) ou parcial ao vivo. */
+/** Realizado por erp_id no mês (com o nome, para casar meta sem ERP): consolidado (oficial) ou parcial ao vivo. */
 async function realizadoDoMes(period, allowedErp) {
     const scope = allowedErp === null ? null : allowedErp;
     const closing = await getClosing(period);
@@ -217,7 +227,7 @@ async function realizadoDoMes(period, allowedErp) {
         for (const l of closing.lines || []) {
             if (set && !set.has(Number(l.enterprise_id))) continue;
             const k = normErp(l.enterprise_id);
-            const e = byErp.get(k) || { vendas: 0, vgv: 0 };
+            const e = byErp.get(k) || { vendas: 0, vgv: 0, nome: l.enterprise_name || '' };
             e.vendas += 1; e.vgv += Number(l.value_net) || 0; byErp.set(k, e);
         }
         return { consolidado: true, byErp };
@@ -225,7 +235,7 @@ async function realizadoDoMes(period, allowedErp) {
     const partial = await livePartialAggregate(period, scope);
     for (const e of partial.by_enterprise) {
         const k = normErp(e.enterprise_id);
-        const x = byErp.get(k) || { vendas: 0, vgv: 0 };
+        const x = byErp.get(k) || { vendas: 0, vgv: 0, nome: e.name || '' };
         x.vendas += e.count; x.vgv += e.vgv_net; byErp.set(k, x);
     }
     return { consolidado: false, byErp };
@@ -253,17 +263,20 @@ registerTool({
 
         const meses = mesesEntre(m.startM, m.endM);
         const modo = await modoDeMeta();
-        const realizado = new Map();   // erp → { vendas, vgv }
+        const realizado = new Map();   // erp → { vendas, vgv, nome }
         const consolidados = [];
         const parciais = [];
         for (const ym of meses) {
             const r = await realizadoDoMes(ym, m.allowedErp);
             (r.consolidado ? consolidados : parciais).push(dayjs(`${ym}-01`).format('MM/YYYY'));
             for (const [erp, v] of r.byErp) {
-                const x = realizado.get(erp) || { vendas: 0, vgv: 0 };
-                x.vendas += v.vendas; x.vgv += v.vgv; realizado.set(erp, x);
+                const x = realizado.get(erp) || { vendas: 0, vgv: 0, nome: v.nome || '' };
+                x.vendas += v.vendas; x.vgv += v.vgv; if (!x.nome) x.nome = v.nome || ''; realizado.set(erp, x);
             }
         }
+        // Mesmo casamento da tela: pelo ERP e, sem ERP na meta, pelo nome.
+        const realizadoPorNome = new Map();
+        for (const [erp, v] of realizado) if (v.nome) realizadoPorNome.set(normText(v.nome), erp);
 
         // Tempo decorrido do período (mesma régua do relatório): meses passados
         // inteiros + fração do mês corrente.
@@ -281,15 +294,14 @@ registerTool({
 
         const linhas = [];
         let metaUn = 0, metaVgv = 0, vendUn = 0, vendVgv = 0;
-        for (const [erp, meta] of m.byErp) {
-            const r = realizado.get(erp) || { vendas: 0, vgv: 0 };
-            const md = modo(erp);
+        const erpsUsados = new Set();
+        const empurrar = (nome, meta, r, md) => {
             const pct = md === 'units'
                 ? (meta.units > 0 ? Math.round((r.vendas / meta.units) * 1000) / 10 : null)
                 : (meta.vgv > 0 ? Math.round((r.vgv / meta.vgv) * 1000) / 10 : null);
             metaUn += meta.units; metaVgv += meta.vgv; vendUn += r.vendas; vendVgv += r.vgv;
             linhas.push({
-                empreendimento: meta.nome,
+                empreendimento: nome,
                 meta_unidades: meta.units,
                 vendas: r.vendas,
                 meta_vgv: fmtMoney(meta.vgv),
@@ -300,6 +312,20 @@ registerTool({
                 _pct: pct ?? -1,
                 _raw: { meta_vgv: Math.round(meta.vgv), vgv: Math.round(r.vgv), atingido: pct },
             });
+        };
+        // TODA meta da projeção (com ou sem centro de custo), como na tela.
+        for (const [, meta] of m.byChave) {
+            const erp = meta.erp || realizadoPorNome.get(normText(meta.nome)) || null;
+            const r = (erp && realizado.get(erp)) || { vendas: 0, vgv: 0 };
+            if (erp) erpsUsados.add(erp);
+            empurrar(meta.nome, meta, r, modo(erp || ''));
+        }
+        // Vendas de centro de custo SEM meta no período: entram como "Sem meta"
+        // para o total de vendas ser o mesmo da tela (o numerador dela inclui
+        // todas as vendas; só o denominador é restrito a quem tem meta).
+        for (const [erp, r] of realizado) {
+            if (erpsUsados.has(erp) || !r.vendas) continue;
+            empurrar(r.nome || `ERP ${erp}`, { units: 0, vgv: 0 }, r, modo(erp));
         }
         linhas.sort((a, b) => b._pct - a._pct);
         // Contrato novo: valores crus e tipados (o antigo abaixo segue formatado).

@@ -972,7 +972,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     args = repararLinks(args, userMessage, { toolName: name });
 
     if (findTool(name)) {
-      return runSecureTool({
+      const r = await runSecureTool({
         user: fullUser,
         toolName: name,
         args: args || {},
@@ -981,6 +981,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         ip: req?.ip || null,
         userAgent: req?.headers?.['user-agent'] || null,
       });
+      // Tool que devolveu nada: sem isto o functionResponse ia com `null`, o
+      // Gemini recusava o follow-up e a pessoa recebia "não consegui gerar uma
+      // resposta" com a consulta contada como feita.
+      return r ?? { error: 'A consulta não devolveu resultado. Tente de novo ou reformule.' };
     }
     const allowed = await legacyToolAllowed(fullUser, name);
     const toolResult = allowed
