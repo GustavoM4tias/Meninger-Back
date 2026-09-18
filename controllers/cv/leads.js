@@ -2,6 +2,7 @@
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
 import makeLogger from '../../lib/makeLogger.js';
+import { sqlEntreCv } from '../../lib/cvDate.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 import { listWithBindings, refresh as refreshQueues } from '../../services/marketing/CvLeadQueueService.js';
 
@@ -136,7 +137,7 @@ export async function getLeads(req, res) {
 
     const whereClauses = hasIdFilter
       ? [`l.idlead IN (:idleads_arr)`]
-      : [`l.data_cad BETWEEN :start AND :end`];
+      : [sqlEntreCv('l.data_cad')];   // dia de Brasília, não de UTC
     const replacements = {
       start: start.format('YYYY-MM-DD 00:00:00'),
       end: end.format('YYYY-MM-DD 23:59:59'),

@@ -109,6 +109,7 @@ import { ensureSiengeBackupSettingsSchema } from './lib/ensureSiengeBackupSettin
 import { ensureSiengeConnectionSchema } from './lib/ensureSiengeConnectionSchema.js';
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
 import { ensureEmeRetrievalSchema } from './lib/ensureEmeRetrievalSchema.js';
+import { ensureLeadsFusoCv } from './lib/ensureLeadsFusoCv.js';
 import { ensureEmeReportsSchema } from './lib/ensureEmeReportsSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
 import { ensureWhatsappMessagesSchema } from './lib/ensureWhatsappMessagesSchema.js';
@@ -435,6 +436,11 @@ async function initBackground() {
   // (upsert falhando calado) e a configuração por pessoa nunca gravava.
   await ensureEmeRetrievalSchema().catch(err =>
       console.warn('⚠️  ensureEmeRetrievalSchema falhou:', err.message));
+  // Datas de leads gravadas como UTC quando eram Brasília (18/09): desloca as
+  // linhas antigas UMA vez, antes dos crons do CV subirem. Fora do gate pelo
+  // mesmo motivo dos anteriores.
+  await ensureLeadsFusoCv().catch(err =>
+      console.warn('⚠️  ensureLeadsFusoCv falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {

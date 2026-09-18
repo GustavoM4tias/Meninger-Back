@@ -3,6 +3,7 @@ import apiCv from '../../../lib/apiCv.js';
 import db from '../../../models/sequelize/index.js';
 import { Op } from 'sequelize';
 import crypto from 'crypto';
+import { parseCvDate } from '../../../lib/cvDate.js';
 
 const { Lead } = db;
 const LIMIT = 1000;
@@ -171,7 +172,10 @@ export default class CvLeadSyncService {
             email: raw.email,
             telefone: raw.telefone,
             score: raw.score,
-            data_cad: raw.data_cad,
+            // Datas do CV são parede de Brasília sem fuso; gravar o texto cru
+            // fazia o Railway (UTC) guardar um instante 3h antes do real e todo lead
+            // aparecer "há 4 horas" com 1 hora de vida (ver lib/cvDate.js).
+            data_cad: parseCvDate(raw.data_cad),
             midia_principal: raw.midia_principal,
             documento_tipo: raw.documento_tipo,
             documento: raw.documento,
@@ -187,9 +191,9 @@ export default class CvLeadSyncService {
             cidade: raw.cidade,
             profissao: raw.profissao,
             origem: raw.origem,
-            data_reativacao: raw.data_reativacao,
-            data_vencimento: raw.data_vencimento,
-            ultima_data_conversao: raw.ultima_data_conversao,
+            data_reativacao: parseCvDate(raw.data_reativacao),
+            data_vencimento: parseCvDate(raw.data_vencimento),
+            ultima_data_conversao: parseCvDate(raw.ultima_data_conversao),
             codigointerno: raw.codigointerno,
             valor_venda: raw.valor_venda?.replace(',', '.'),
             tags: raw.tags,

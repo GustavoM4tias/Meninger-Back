@@ -4,6 +4,7 @@ import { QueryTypes } from 'sequelize';
 import { visibleCvIds, visibleCities } from '../permissions/accessScopeService.js';
 import { describeScreenCatalog, resolveScreenRoute } from '../../lib/screenCatalog.js';
 import { resolverPeriodo, PERIODO_PARAM_GEMINI } from './periodo.js';
+import { sqlEntreCv, sqlDiaCv, sqlMesCv } from '../../lib/cvDate.js';
 
 /**
  * Monta uma linha resumo (subtitle) com período + cidade + filtros principais.
@@ -157,7 +158,7 @@ async function executeQueryLeads(args, user) {
   const whereClauses = [];
   const replacements = {};
   if (!hasIdFilter) {
-    whereClauses.push(`l.data_cad BETWEEN :start AND :end`);
+    whereClauses.push(sqlEntreCv('l.data_cad'));   // dia de Brasília, não de UTC
     replacements.start = `${start} 00:00:00`;
     replacements.end   = `${end} 23:59:59`;
   }
@@ -457,8 +458,8 @@ async function executeLeadsGrouped(groupBy, where, replacements, context, painel
     corretor:            { select: `COALESCE(l.corretor->>'nome', 'Sem corretor') AS label`, group: `l.corretor->>'nome'`,       count: DISTINTO },
     imobiliaria:         { select: `COALESCE(l.imobiliaria->>'nome', 'Sem imobiliária') AS label`, group: `l.imobiliaria->>'nome'`, count: DISTINTO },
     motivo_cancelamento: { select: `COALESCE(l.motivo_cancelamento, 'Não informado') AS label`, group: `l.motivo_cancelamento`, count: DISTINTO },
-    dia:                 { select: `DATE(l.data_cad)::text AS label`,                       group: `DATE(l.data_cad)`,           count: DISTINTO },
-    mes:                 { select: `TO_CHAR(l.data_cad, 'YYYY-MM') AS label`,               group: `TO_CHAR(l.data_cad, 'YYYY-MM')`, count: DISTINTO },
+    dia:                 { select: `${sqlDiaCv('l.data_cad')}::text AS label`,             group: sqlDiaCv('l.data_cad'),       count: DISTINTO },
+    mes:                 { select: `${sqlMesCv('l.data_cad')} AS label`,                    group: sqlMesCv('l.data_cad'),       count: DISTINTO },
   };
 
   const { select, group, count } = groupMap[groupBy] || groupMap.situacao;
