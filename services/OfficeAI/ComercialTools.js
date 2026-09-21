@@ -26,9 +26,18 @@ export const PRECAD_BUCKET_CASE = `
 // Buckets de Reservas — alinhados com Meninger-Front/.../Reservas/stages.js.
 // Ordem: cancelada → vendida → em_repasse → contrato → reservada → outros.
 // Combina situacao_nome + status_repasse + flag vendida.
+// Reserva MORTA: o mesmo agrupamento que o funil já chamava de "cancelada",
+// mais "vencida". Uma regra só, num lugar só - manter um segundo conceito de
+// "reserva morta" em outro arquivo é como os dois divergem em silêncio e dois
+// relatórios passam a dar números diferentes para a mesma pergunta.
+export const RESERVA_CANCELADA_SQL = `(
+  LOWER(COALESCE(r.situacao->>'nome', r.status_reserva, '')) ~ 'cancelad|distrato|reprovad|negad|vencid'
+  OR LOWER(COALESCE(r.status_repasse, '')) ~ 'cancelad|distrato'
+)`;
+
 const RESERVA_BUCKET_CASE = `
   CASE
-    WHEN LOWER(COALESCE(r.situacao->>'nome', r.status_reserva, '')) ~ 'cancelad|distrato|reprovad|negad'
+    WHEN LOWER(COALESCE(r.situacao->>'nome', r.status_reserva, '')) ~ 'cancelad|distrato|reprovad|negad|vencid'
       OR LOWER(COALESCE(r.status_repasse, ''))                       ~ 'cancelad|distrato'                  THEN 'cancelada'
     WHEN r.vendida = 'S'
       OR LOWER(COALESCE(r.situacao->>'nome', r.status_reserva, '')) ~ 'vendid|contrato\\s*assinado'         THEN 'vendida'
@@ -41,6 +50,29 @@ const RESERVA_BUCKET_CASE = `
     ELSE 'outros'
   END
 `;
+
+/**
+ * A exclusão padrão de canceladas vale NESTE pedido?
+ *
+ * Três saídas, e cada uma existe por um motivo concreto:
+ *
+ *   incluir_cancelados   quem pediu explicitamente quer o universo cheio.
+ *   bucket = 'cancelada' "quantas foram canceladas?" com o filtro ligado
+ *                        devolveria ZERO. É a pergunta se respondendo sozinha
+ *                        com a resposta errada.
+ *   situacao nomeando    quem escreve "Distrato" no filtro está procurando
+ *                        distrato. Tirar o que a pessoa pediu é pior que
+ *                        mostrar o que ela não pediu.
+ */
+export function deveExcluirCanceladas(args = {}) {
+    if (args.incluir_cancelados === true || args.incluir_cancelados === 'true') return false;
+    if (String(args.bucket || '') === 'cancelada') return false;
+
+    const situacao = String(args.situacao || '').toLowerCase();
+    if (situacao && /cancelad|distrato|reprovad|negad|vencid/.test(situacao)) return false;
+
+    return true;
+}
 
 // ── Imobiliária/corretor da RESERVA ─────────────────────────────────────────
 // O bloco `imobiliaria` que o CV manda na reserva só traz `nome` em ~15% das
@@ -141,7 +173,7 @@ export const TOOL_DECLARATIONS = [
   },
   {
     name: 'query_reservas',
-    description: 'Consulta reservas (etapa após Pré-cadastro). Por padrão (sem group_by/format) retorna KPIs (total, reservadas, em contrato, em repasse, vendidas, canceladas, taxa de conversão, tempo médio em reserva). Use group_by para gráficos comparativos. Use format="list" para tabela com clientes individuais. ATENÇÃO: vendida="S" é apenas a ETAPA do CRM, NÃO significa venda concretizada — venda real é validada no módulo de Faturamento. Filtro temporal padrão é data_reserva (cadastro).',
+    description: 'Consulta reservas (etapa após Pré-cadastro). IMPORTANTE: por padrão o total e as listas EXCLUEM as reservas canceladas, distratadas, reprovadas e vencidas - o retorno traz `universo` (o total bruto) e `cancelada_excluida` para você dizer isso quando fizer diferença. A taxa de distrato continua calculada sobre o universo cheio. Por padrão (sem group_by/format) retorna KPIs (total, reservadas, em contrato, em repasse, vendidas, canceladas, taxa de conversão, tempo médio em reserva). Use group_by para gráficos comparativos. Use format="list" para tabela com clientes individuais. ATENÇÃO: vendida="S" é apenas a ETAPA do CRM, NÃO significa venda concretizada — venda real é validada no módulo de Faturamento. Filtro temporal padrão é data_reserva (cadastro).',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -166,6 +198,12 @@ export const TOOL_DECLARATIONS = [
         documento:      { type: 'STRING', description: 'CPF/CNPJ do titular. CSV aceito (busca exata por dígitos normalizados ou parcial).' },
         nome:           { type: 'STRING', description: 'Nome do titular (busca parcial).' },
         cidade:         { type: 'STRING', description: 'Filtro adicional por cidade do empreendimento, aplicado DENTRO do escopo de acesso do usuário (nunca amplia o que ele pode ver).' },
+        incluir_cancelados: {
+          type: 'BOOLEAN',
+          description: 'POR PADRÃO as reservas canceladas, distratadas, reprovadas e vencidas FICAM DE FORA do total e das listas. '
+            + 'Passe true só quando a pergunta for sobre o universo cheio ("incluindo canceladas", "total bruto", "todas as reservas"). '
+            + 'Não precisa passar para perguntar QUANTAS foram canceladas: use bucket="cancelada", que já traz o recorte certo.',
+        },
         only_active:    { type: 'BOOLEAN', description: 'Apenas reservas em curso (não vendidas e não distratadas/canceladas).' },
         only_vendida:   { type: 'BOOLEAN', description: 'Apenas reservas com flag vendida="S" (ETAPA CRM, não venda concretizada).' },
         with_lead:      { type: 'BOOLEAN', description: 'Apenas reservas com pelo menos 1 lead associado.' },
@@ -1266,10 +1304,22 @@ async function executeQueryReservas(args, user) {
     ));
   }
 
-  const where = whereClauses.length ? whereClauses.join(' AND ') : '1=1';
+  // O WHERE do UNIVERSO, sem a exclusão. O resumo precisa dele para manter a
+  // taxa de distrato sobre o total bruto: escondê-la junto com as canceladas
+  // apagaria justamente a métrica que mostra que elas existem.
+  const whereUniverso = whereClauses.length ? whereClauses.join(' AND ') : '1=1';
+
+  const excluirCanceladas = deveExcluirCanceladas(args);
+  const where = excluirCanceladas
+    ? `${whereUniverso} AND NOT ${RESERVA_CANCELADA_SQL}`
+    : whereUniverso;
 
   const context = {
     source: 'reservas',
+    // Vai no contexto para a tela e o card mostrarem o recorte. Filtro que
+    // muda o número e não aparece é o que faz alguém comparar com o CV e
+    // achar que o sistema está errado.
+    cancelados_excluidos: excluirCanceladas,
     data_inicio: hasIdFilter ? null : start,
     data_fim:    hasIdFilter ? null : end,
     empreendimento:         args.empreendimento         || null,
@@ -1301,10 +1351,22 @@ async function executeQueryReservas(args, user) {
   if (args.group_by) {
     return executeReservasGrouped(args, where, replacements, context);
   }
-  return executeReservasSummary(where, replacements, context, start, end);
+  return executeReservasSummary(whereUniverso, replacements, context, start, end, excluirCanceladas);
 }
 
-async function executeReservasSummary(whereSql, replacements, context, start, end) {
+/**
+ * KPIs das reservas.
+ *
+ * Roda sobre o UNIVERSO CHEIO e separa depois, em vez de filtrar no WHERE. É o
+ * que permite a decisão de produto: o total mostra o volume sem canceladas,
+ * mas a taxa de distrato continua sendo canceladas/universo - o 13% que a
+ * diretoria olha não pode virar 0% porque o filtro escondeu o numerador.
+ *
+ * As médias de tempo vêm em dois sabores e a escolha é feita aqui: quando as
+ * canceladas estão fora do total, o tempo médio também as ignora, senão o
+ * número descreveria uma população diferente da que está sendo contada.
+ */
+async function executeReservasSummary(whereSql, replacements, context, start, end, excluirCanceladas = false) {
   const sql = `
     WITH base AS (
       SELECT
@@ -1331,22 +1393,36 @@ async function executeReservasSummary(whereSql, replacements, context, start, en
       COUNT(*) FILTER (WHERE bucket IN ('reservada','contrato','em_repasse')) AS ativas,
       AVG(dias_em_reserva)                                  AS tempo_medio_em_reserva,
       AVG(dias_ate_venda)    FILTER (WHERE data_venda    IS NOT NULL) AS tempo_medio_ate_venda,
-      AVG(dias_ate_contrato) FILTER (WHERE data_contrato IS NOT NULL) AS tempo_medio_ate_contrato
+      AVG(dias_ate_contrato) FILTER (WHERE data_contrato IS NOT NULL) AS tempo_medio_ate_contrato,
+      -- As mesmas médias, sem as canceladas. Uma consulta só para os dois
+      -- recortes: a alternativa era um segundo round-trip para trocar um FILTER.
+      AVG(dias_em_reserva)   FILTER (WHERE bucket <> 'cancelada') AS tempo_medio_em_reserva_vivas,
+      AVG(dias_ate_venda)    FILTER (WHERE data_venda    IS NOT NULL AND bucket <> 'cancelada') AS tempo_medio_ate_venda_vivas,
+      AVG(dias_ate_contrato) FILTER (WHERE data_contrato IS NOT NULL AND bucket <> 'cancelada') AS tempo_medio_ate_contrato_vivas
     FROM base
   `;
   const [row] = await db.sequelize.query(sql, { replacements, type: QueryTypes.SELECT });
-  const total      = Number(row?.total || 0);
+  const universo   = Number(row?.total || 0);
   const vendida    = Number(row?.vendida || 0);
   const cancelada  = Number(row?.cancelada || 0);
+  // O total que a pessoa lê. Com a exclusão ligada, é o volume vivo.
+  const total      = excluirCanceladas ? universo - cancelada : universo;
 
   const pct = (n, d) => (d > 0 ? Math.round((n / d) * 1000) / 10 : 0);
   const round1 = (v) => (v == null ? null : Math.round(Number(v) * 10) / 10);
+  const medio = (vivas, cheia) => round1(excluirCanceladas ? vivas : cheia);
 
   return {
     type:    'reservas_summary',
     source:  'reservas',
     title:   `Reservas — ${dayjs(start).format('DD/MM/YYYY')} a ${dayjs(end).format('DD/MM/YYYY')}`,
     total,
+    // O universo bruto e quantas ficaram de fora: é o que deixa a Eme e a tela
+    // dizerem "60 reservas (9 canceladas/vencidas fora)" em vez de um 60 solto
+    // que ninguém consegue conciliar com o CV.
+    universo,
+    cancelada_excluida: excluirCanceladas ? cancelada : 0,
+    cancelados_excluidos: excluirCanceladas,
     reservada:                Number(row?.reservada || 0),
     contrato:                 Number(row?.contrato || 0),
     em_repasse:               Number(row?.em_repasse || 0),
@@ -1354,12 +1430,20 @@ async function executeReservasSummary(whereSql, replacements, context, start, en
     cancelada,
     outros:                   Number(row?.outros || 0),
     ativas:                   Number(row?.ativas || 0),
-    taxa_venda:               pct(vendida, total),    // % das reservas que viraram "vendida" (etapa CRM)
-    taxa_distrato:            pct(cancelada, total),
-    tempo_medio_em_reserva:   round1(row?.tempo_medio_em_reserva),
-    tempo_medio_ate_venda:    round1(row?.tempo_medio_ate_venda),
-    tempo_medio_ate_contrato: round1(row?.tempo_medio_ate_contrato),
+    // As DUAS taxas sobre o UNIVERSO, sempre. Denominadores diferentes para
+    // taxas que aparecem lado a lado é como um painel deixa de fechar: 13% de
+    // distrato e 0% de venda precisam estar falando da mesma população.
+    taxa_venda:               pct(vendida, universo),  // % do universo que virou "vendida" (etapa CRM)
+    taxa_distrato:            pct(cancelada, universo),
+    tempo_medio_em_reserva:   medio(row?.tempo_medio_em_reserva_vivas, row?.tempo_medio_em_reserva),
+    tempo_medio_ate_venda:    medio(row?.tempo_medio_ate_venda_vivas, row?.tempo_medio_ate_venda),
+    tempo_medio_ate_contrato: medio(row?.tempo_medio_ate_contrato_vivas, row?.tempo_medio_ate_contrato),
     aviso_vendida:            'A flag "vendida" indica apenas a etapa do CRM; a venda concretizada é validada no módulo de Faturamento.',
+    ...(excluirCanceladas && cancelada ? {
+      aviso_cancelados: `O total de ${total} NÃO inclui ${cancelada} reserva(s) cancelada/distratada/vencida do período. `
+        + `O universo bruto é ${universo}, e a taxa de distrato (${pct(cancelada, universo)}%) é calculada sobre ele. `
+        + 'Diga esse recorte quando citar o total. Para o número bruto, refaça com incluir_cancelados=true.',
+    } : {}),
     context,
   };
 }

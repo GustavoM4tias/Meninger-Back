@@ -1,6 +1,7 @@
 // Endpoints de leitura (do banco) para reservas já sincronizadas.
 // Espelha o padrão do precadastros.js — não confundir com `reservas.js` (read-through na API CV).
 import dayjs from 'dayjs';
+import { RESERVA_CANCELADA_SQL, deveExcluirCanceladas } from '../../services/OfficeAI/ComercialTools.js';
 import db from '../../models/sequelize/index.js';
 import { getScope, isErpAllowed } from '../../services/permissions/accessScopeService.js';
 // A regra do triângulo (venda travada para o ERP) mora em um lugar só, para a
@@ -89,6 +90,7 @@ export const listReservasReport = async (req, res) => {
             only_active, only_vendida, with_lead,
             excluir_painel, lead_origem,
             only_alerta_erp,
+            incluir_cancelados,
             data_inicio, data_fim,
         } = req.query;
 
@@ -129,6 +131,20 @@ export const listReservasReport = async (req, res) => {
         addIlikeCsv(whereClauses, replacements, 'tipovenda',      'r.tipovenda',      tipovenda);
         addIlikeCsv(whereClauses, replacements, 'status_repasse', REPASSE_SQL, status_repasse);
         addIlikeCsv(whereClauses, replacements, 'situacao',       ETAPA_SQL, situacao);
+
+        // ── Canceladas/vencidas fora por padrão ─────────────────────────────
+        //
+        // A MESMA regra da Eme (services/OfficeAI/ComercialTools.js): tela e
+        // chat precisam dar o mesmo número para a mesma pergunta, e a forma de
+        // garantir isso é não existir uma segunda definição de "reserva morta".
+        //
+        // A exclusão se desliga sozinha quando a pessoa está procurando
+        // justamente uma cancelada - senão o filtro de situação "Distrato"
+        // devolveria vazio.
+        const excluirCanceladas = deveExcluirCanceladas({ incluir_cancelados, situacao });
+        if (excluirCanceladas) {
+            whereClauses.push(`NOT ${RESERVA_CANCELADA_SQL}`);
+        }
         addIlikeCsv(whereClauses, replacements, 'imobiliaria',    `r.imobiliaria->>'nome'`, imobiliaria);
         addIlikeCsv(whereClauses, replacements, 'corretor',       `r.corretor->>'nome'`,    corretor);
         addIlikeCsv(whereClauses, replacements, 'empresa_correspondente',
@@ -188,6 +204,7 @@ export const listReservasReport = async (req, res) => {
                 return res.json({
                     count: 0,
                     periodo: { data_inicio: replacements.start, data_fim: replacements.end },
+                    cancelados_excluidos: excluirCanceladas,
                     took_ms: 0,
                     results: [],
                 });
@@ -293,6 +310,9 @@ ${sql}`, {
         return res.json({
             count: rows.length,
             periodo: { data_inicio: replacements.start, data_fim: replacements.end },
+            // A tela mostra o recorte. Filtro que muda o número e não aparece
+            // é o que faz alguém comparar com o CV e achar que o sistema errou.
+            cancelados_excluidos: excluirCanceladas,
             took_ms: took,
             results: rows,
         });
