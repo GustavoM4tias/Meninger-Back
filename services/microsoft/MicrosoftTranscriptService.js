@@ -1,5 +1,6 @@
 // services/microsoft/MicrosoftTranscriptService.js
 import axios from 'axios';
+import { isoDeGraph } from './graphTime.js';
 import graph from './MicrosoftGraphService.js';
 import microsoftAuthService from './MicrosoftAuthService.js';
 import settingsService from './MicrosoftSettingsService.js';
@@ -470,12 +471,16 @@ class MicrosoftTranscriptService {
 
         return items
             .filter(e => e.isOnlineMeeting && e.onlineMeeting?.joinUrl)
-            .sort((a, b) => new Date(b.start?.dateTime || 0) - new Date(a.start?.dateTime || 0))
+            // O horário do Graph vem como RELÓGIO DE PAREDE de Brasília (é o que
+            // o cabeçalho Prefer acima pede), sem sufixo de fuso. `new Date()`
+            // direto o interpretava no fuso do servidor - em UTC no Railway - e
+            // a reunião das 09:00 virava 06:00 na tela. Ver graphTime.js.
+            .sort((a, b) => (isoDeGraph(b.start) || '').localeCompare(isoDeGraph(a.start) || ''))
             .map(e => ({
                 eventId:   e.id,
                 subject:   e.subject || '(Sem título)',
-                start:     e.start?.dateTime || null,
-                end:       e.end?.dateTime || null,
+                start:     isoDeGraph(e.start),
+                end:       isoDeGraph(e.end),
                 joinUrl:   e.onlineMeeting?.joinUrl || null,
                 webLink:   e.webLink || null,
                 organizer: { name: e.organizer?.emailAddress?.name, email: e.organizer?.emailAddress?.address },

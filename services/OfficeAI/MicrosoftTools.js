@@ -660,7 +660,11 @@ function resumoDaReuniao(l) {
 
 registerTool({
     name: 'my_meetings',
-    description: 'Lista as REUNIÕES do Teams que já têm transcrição no Office e que o usuário pode ver (as que ele organizou e as que apenas participou). Use para "quais reuniões eu tive", "teve reunião sobre o Ibitinga?", "minhas reuniões da semana passada", "quais reuniões já têm relatório". Devolve assunto, data, participantes e se o relatório de IA já existe.',
+    description: 'Lista reuniões PASSADAS do Teams que JÁ TÊM TRANSCRIÇÃO gravada no Office. '
+        + 'NÃO é a agenda e NÃO sabe nada sobre hoje, amanhã ou o futuro: só devolve o que já aconteceu E foi transcrito. '
+        + 'Para "minhas reuniões de hoje", "o que eu tenho amanhã", "minha agenda", "quantas reuniões eu tenho" use SEMPRE my_agenda. '
+        + 'Use esta aqui para "quais reuniões eu TIVE", "teve reunião sobre o Ibitinga?", "reuniões da semana passada", "quais já têm relatório". '
+        + 'Devolve assunto, data, participantes e se o relatório de IA já existe.',
     parameters: {
         type: 'object',
         properties: {
@@ -675,19 +679,58 @@ registerTool({
         const u = await fullUser(user);
         if (!u) return { result: { erro: 'Usuário não encontrado.' } };
 
+        const dias = Math.min(Number(args?.dias) || DIAS_REUNIAO, 365);
         const linhas = await reunioesVisiveis(u, {
-            dias: Math.min(Number(args?.dias) || DIAS_REUNIAO, 365),
+            dias,
             exigeRelatorio: args?.somenteComRelatorio === true,
         });
-        const achadas = linhas.filter(l => casaComTermo(l, args?.termo)).map(resumoDaReuniao);
+
+        // A MESMA reunião pode ter duas transcrições (duas gravações, duas
+        // ocorrências da recorrência salvas juntas). `reunioesVisiveis` já
+        // junta por transcrição, mas isso deixa passar o par com ids
+        // diferentes - e foi o que fez a mesma "Reunião Comercial - Menin"
+        // aparecer duas vezes na mesma lista para o usuário.
+        const vistas = new Set();
+        const achadas = [];
+        for (const l of linhas) {
+            if (!casaComTermo(l, args?.termo)) continue;
+            const r = resumoDaReuniao(l);
+            const chave = `${r.assunto}|${r.data || ''}`;
+            if (vistas.has(chave)) continue;
+            vistas.add(chave);
+            achadas.push(r);
+        }
+
+        const desde = new Date();
+        desde.setDate(desde.getDate() - dias);
+        const periodo = {
+            de: desde.toLocaleDateString('pt-BR', { timeZone: TZ }),
+            ate: new Date().toLocaleDateString('pt-BR', { timeZone: TZ }),
+            dias,
+        };
+
+        const mostradas = achadas.slice(0, 25);
 
         return {
             result: {
+                periodo,
                 total: achadas.length,
-                reunioes: achadas.slice(0, 25),
+                mostradas: mostradas.length,
+                reunioes: mostradas,
                 resumo: achadas.length
-                    ? `${achadas.length} reunião(ões) com transcrição. Mais recente: "${achadas[0].assunto}"${achadas[0].data ? ` (${achadas[0].data})` : ''}.`
-                    : 'Nenhuma reunião com transcrição carregada no Office nesse período. A transcrição precisa ter sido ligada durante a reunião no Teams, e alguém precisa ter aberto a reunião na Central Microsoft.',
+                    ? `${achadas.length} reunião(ões) com transcrição entre ${periodo.de} e ${periodo.ate}. Mais recente: "${achadas[0].assunto}"${achadas[0].data ? ` (${achadas[0].data})` : ''}.`
+                    : `Nenhuma reunião com transcrição entre ${periodo.de} e ${periodo.ate}. A transcrição precisa ter sido ligada durante a reunião no Teams, e alguém precisa ter aberto a reunião na Central Microsoft.`,
+                // O modelo apresentou este mesmo resultado como "suas reuniões
+                // de hoje" - listando encontros de três semanas atrás. E disse
+                // "9" e listou 8. As duas coisas: o período nunca ficava
+                // explícito no retorno, e o número saía de recontar a lista.
+                mensagem: `Estas são reuniões PASSADAS, entre ${periodo.de} e ${periodo.ate}, que já têm transcrição. `
+                    + 'NÃO são a agenda e NÃO são "as reuniões de hoje". Se a pergunta foi sobre hoje, amanhã ou a agenda, '
+                    + 'diga que consultou o histórico de transcrições e chame my_agenda. '
+                    + `Ao dizer quantas são, use o número ${achadas.length} deste retorno e NÃO reconte a lista. `
+                    + (achadas.length > mostradas.length
+                        ? `Só ${mostradas.length} vieram aqui: diga que mostrou as mais recentes de ${achadas.length}.`
+                        : 'A lista está completa.'),
             },
         };
     },
