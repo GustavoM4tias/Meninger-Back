@@ -24,6 +24,8 @@ import {
 } from './autonomia.js';
 import { alcanceDaEvidencia, dentroDoEscopo, escopoDaObservacao } from './escopo.js';
 import { avaliarProposta, ordenarFila, PADROES } from './propostas.js';
+import { ativas, revogadas, acharRegra, revogar, restaurar, resumir } from './regras.js';
+import { montarTrilha, resumoDeSaude } from './trilha.js';
 
 const {
     ProcessoDefinicao, ProcessoObservacao, ProcessoProposta, ProcessoAcao, ProcessoSettings,
@@ -183,13 +185,21 @@ export async function listarProcessos() {
     // `efetivo` e `degraus` vão prontos para a tela: deixar o front recalcular
     // o degrau a partir de autonomia + teto é como UI e API divergem, e aqui
     // divergir significa a tela dizer que o processo age quando ele não age.
-    return rows.map(p => ({
-        ...p,
-        autonomia_efetiva: efetivo(p),
-        pode_propor: permite(p, 'propor'),
-        pode_executar: permite(p, 'executar'),
-        regras_n: Array.isArray(p.regras) ? p.regras.length : 0,
-    }));
+    return rows.map(p => {
+        // A tela NUNCA recebe o JSONB cru: `resumir` é quem decide o que
+        // aparece, e é ele que carrega o estado ("em uso", "nunca
+        // consultada") que muda a decisão de quem lê.
+        const vivas = ativas(p.regras);
+        return {
+            ...p,
+            regras: vivas.map(resumir),
+            regras_revogadas: revogadas(p.regras).map(resumir),
+            autonomia_efetiva: efetivo(p),
+            pode_propor: permite(p, 'propor'),
+            pode_executar: permite(p, 'executar'),
+            regras_n: vivas.length,
+        };
+    });
 }
 
 export async function acharProcesso(key) {
@@ -327,11 +337,14 @@ export async function registrarProposta({ processo_key, texto, confianca, observ
     const cfg = await getSettings();
 
     const proc = await ProcessoDefinicao.findOne({ where: { key: processo_key }, raw: true });
-    const ativas = (proc?.regras || []).map((r, i) => ({
+    // Só as VIVAS entram na comparação. Uma regra revogada não pode silenciar
+    // uma proposta como duplicata: se o padrão voltou, ele merece ser visto de
+    // novo - foi exatamente por isso que a regra antiga saiu do mapa.
+    const vigentes = ativas(proc?.regras).map((r, i) => ({
         id: r.id ?? i, texto: r.texto, processo_key,
     }));
 
-    const veredito = avaliarProposta({ processo_key, texto, confianca, observacoes }, { ativas, cfg });
+    const veredito = avaliarProposta({ processo_key, texto, confianca, observacoes }, { ativas: vigentes, cfg });
 
     // Duplicata não vira item: a evidência reforça a regra que já existe. Ver
     // a mesma coisa de novo é informação sobre a regra antiga, não uma nova.
@@ -493,7 +506,7 @@ export async function decidirProposta(id, decisao, userId, nota = '') {
  * aqui, e não em quem chama, porque em quem chama elas seriam esquecidas na
  * terceira integração - e a que for esquecida é a que vira incidente.
  */
-export async function registrarAcao(processo_key, { acao, alvo = {}, detalhe = {}, executar }) {
+export async function registrarAcao(processo_key, { acao, alvo = {}, detalhe = {}, regra_id = null, executar }) {
     const proc = await ProcessoDefinicao.findOne({ where: { key: processo_key }, raw: true });
     if (!proc) erro404('Processo não encontrado.');
 
@@ -523,6 +536,9 @@ export async function registrarAcao(processo_key, { acao, alvo = {}, detalhe = {
         processo_key,
         autonomia_no_momento: degrau,
         acao: String(acao || 'acao').slice(0, 80),
+        // Qual regra mandou fazer isso. Ação sem regra é ação sem justificativa
+        // na auditoria, e é o que impede responder "por que ela fez isso?".
+        regra_id: Number.isInteger(Number(regra_id)) ? Number(regra_id) : null,
         alvo_tipo: alvo.caso_tipo ? String(alvo.caso_tipo).slice(0, 40) : null,
         alvo_ref: alvo.caso_ref ? String(alvo.caso_ref).slice(0, 120) : null,
         detalhe: (detalhe && typeof detalhe === 'object') ? detalhe : {},
@@ -613,15 +629,195 @@ export async function sugestoesDePromocao() {
     return out;
 }
 
+// ── Memória: revogar, auditar, enxergar ──────────────────────────────────────
+
+/**
+ * Tira uma regra do mapa.
+ *
+ * Fica em 'aprovar' (quem tem a tela), e não em admin, de propósito: quem viu
+ * a regra errada precisa poder puxar o freio sem procurar ninguém. Puxar o
+ * freio é sempre mais fácil que soltá-lo, e é assim que tem que ser.
+ *
+ * A regra NÃO some - fica marcada. Apagar destruiria a resposta para "por que
+ * a Eme dizia isso em março?", que é a pergunta que aparece justamente quando
+ * alguém percebe o erro.
+ */
+export async function revogarRegra(key, regraId, userId, motivo) {
+    const row = await acharProcesso(key);
+    const r = revogar(row.regras, regraId, { userId, motivo });
+    if (!r.ok) erro400(r.erro);
+
+    await row.update({ regras: r.regras, versao: (row.versao || 1) + 1, updated_by: userId });
+    console.warn(`[processos] ${key}: regra ${regraId} revogada por ${userId}.`);
+    return resumir(r.regra);
+}
+
+/** Devolve ao mapa uma regra revogada por engano. O histórico fica. */
+export async function restaurarRegra(key, regraId, userId) {
+    const row = await acharProcesso(key);
+    const r = restaurar(row.regras, regraId, { userId });
+    if (!r.ok) erro400(r.erro);
+
+    await row.update({ regras: r.regras, versao: (row.versao || 1) + 1, updated_by: userId });
+    return resumir(r.regra);
+}
+
+/**
+ * A cadeia completa de UMA regra: quem aprovou, a proposta que a originou, os
+ * casos que a sustentaram e as ações que ela moveu.
+ *
+ * É o que responde "como eu valido se isso está correto?". Sem ela, a regra é
+ * uma frase com um número do lado, e número sem os casos por trás é exatamente
+ * o tipo de coisa que se aprova sem conferir.
+ */
+export async function evidenciaDaRegra(key, regraId) {
+    const proc = await ProcessoDefinicao.findOne({ where: { key }, raw: true });
+    if (!proc) erro404('Processo não encontrado.');
+
+    const regra = acharRegra(proc.regras, regraId);
+    if (!regra) erro404('Regra não encontrada neste processo.');
+
+    const proposta = regra.proposta_id
+        ? await ProcessoProposta.findByPk(regra.proposta_id, { raw: true })
+        : null;
+
+    const ids = Array.isArray(proposta?.evidencia) ? proposta.evidencia : [];
+    const casos = ids.length
+        ? await ProcessoObservacao.findAll({
+            where: { id: { [Op.in]: ids.slice(0, 200) } },
+            order: [['occurred_at', 'DESC']],
+            raw: true,
+        })
+        : [];
+
+    // O que esta regra MOVEU. É a outra metade da validação: uma regra correta
+    // que nunca moveu nada e uma incorreta que moveu trinta ações são problemas
+    // de tamanhos muito diferentes.
+    const acoes = await ProcessoAcao.findAll({
+        where: { processo_key: key, regra_id: Number(regraId) },
+        order: [['created_at', 'DESC']],
+        limit: 100,
+        raw: true,
+    });
+
+    return {
+        regra: resumir(regra),
+        proposta: proposta
+            ? {
+                id: proposta.id, classe: proposta.classe, motivo: proposta.motivo,
+                alcance_motivo: proposta.alcance_motivo,
+                criada_em: proposta.created_at, decidida_em: proposta.decidido_em,
+                decisao_nota: proposta.decisao_nota,
+            }
+            : null,
+        casos,
+        casos_total: ids.length,
+        acoes,
+        acoes_revertidas: acoes.filter(a => a.revertida).length,
+    };
+}
+
+/**
+ * As ações automáticas. A tela que faltava para poder subir um processo
+ * para "agir".
+ *
+ * Enquanto isto não existia, promover era pedir para a pessoa confiar sem ter
+ * onde olhar nem onde puxar o freio - e essa é a promoção que ninguém deveria
+ * fazer.
+ */
+export async function listarAcoes({ processo_key = null, limite = 100 } = {}) {
+    const where = {};
+    if (processo_key) where.processo_key = processo_key;
+
+    const rows = await ProcessoAcao.findAll({
+        where, order: [['created_at', 'DESC']],
+        limit: Math.min(500, Math.max(1, Number(limite) || 100)),
+        raw: true,
+    });
+
+    // O texto da regra vai junto: "notificou o corretor" sem a regra ao lado
+    // não deixa ninguém julgar se a ação fazia sentido.
+    const chaves = [...new Set(rows.map(r => r.processo_key))];
+    const procs = chaves.length
+        ? await ProcessoDefinicao.findAll({ where: { key: { [Op.in]: chaves } }, raw: true })
+        : [];
+    const porChave = new Map(procs.map(p => [p.key, p]));
+
+    return rows.map(a => {
+        const proc = porChave.get(a.processo_key);
+        const regra = a.regra_id != null ? acharRegra(proc?.regras, a.regra_id) : null;
+        return {
+            ...a,
+            processo_nome: proc?.nome || a.processo_key,
+            regra_texto: regra?.texto || null,
+            regra_revogada: !!regra?.revogada_em,
+        };
+    });
+}
+
+/** A trilha: o caminho, não o estado. */
+export async function trilhaDe({ processo_key = null, dias = 45, limite = 120 } = {}) {
+    const desde = new Date(Date.now() - Math.min(365, Math.max(1, Number(dias) || 45)) * 86400000);
+    const filtro = processo_key ? { processo_key } : {};
+
+    const [observacoes, propostas, acoes] = await Promise.all([
+        ProcessoObservacao.findAll({
+            where: { ...filtro, occurred_at: { [Op.gte]: desde } },
+            attributes: ['processo_key', 'caso_tipo', 'resultado', 'occurred_at'],
+            limit: 5000, raw: true,
+        }),
+        ProcessoProposta.findAll({
+            where: { ...filtro, created_at: { [Op.gte]: desde } },
+            limit: 500, raw: true,
+        }),
+        ProcessoAcao.findAll({
+            where: { ...filtro, created_at: { [Op.gte]: desde } },
+            limit: 500, raw: true,
+        }),
+    ]);
+
+    return montarTrilha({ observacoes, propostas, acoes }, { limite });
+}
+
+/** O boletim do motor, semana a semana, com o diagnóstico do que fazer. */
+export async function saudeDoMotor({ semanas = 8 } = {}) {
+    const desde = new Date(Date.now() - (semanas + 1) * 7 * 86400000);
+
+    const [observacoes, propostas, acoes] = await Promise.all([
+        ProcessoObservacao.findAll({
+            where: { occurred_at: { [Op.gte]: desde } },
+            attributes: ['occurred_at'], limit: 20000, raw: true,
+        }),
+        ProcessoProposta.findAll({
+            where: { created_at: { [Op.gte]: desde } },
+            attributes: ['created_at', 'decidido_em', 'status'], limit: 2000, raw: true,
+        }),
+        ProcessoAcao.findAll({
+            where: { created_at: { [Op.gte]: desde } },
+            attributes: ['created_at', 'revertida_em'], limit: 2000, raw: true,
+        }),
+    ]);
+
+    return resumoDeSaude({ observacoes, propostas, acoes }, { semanas });
+}
+
 /** Tudo o que a tela precisa, numa chamada. */
 export async function paraTela() {
-    const [processos, fila, settings, promocoes] = await Promise.all([
-        listarProcessos(), filaDePropostas({ incluirParadas: true }), getSettings(), sugestoesDePromocao(),
+    // A saúde vem junto de propósito: é o número que decide se a pessoa deve
+    // mexer nos Ajustes, e deixá-lo atrás de outra chamada significaria que
+    // ninguém olharia até já estar cansado da fila.
+    const [processos, fila, settings, promocoes, saude] = await Promise.all([
+        listarProcessos(),
+        filaDePropostas({ incluirParadas: true }),
+        getSettings(),
+        sugestoesDePromocao(),
+        saudeDoMotor({ semanas: 8 }).catch(() => null),
     ]);
-    return { processos, fila, settings, promocoes, niveis: NIVEIS, rotulos: ROTULOS };
+    return { processos, fila, settings, promocoes, saude, niveis: NIVEIS, rotulos: ROTULOS };
 }
 
 export default {
+    revogarRegra, restaurarRegra, evidenciaDaRegra, listarAcoes, trilhaDe, saudeDoMotor,
     getSettings, salvarSettings, sanitizeSettings, invalidarCache,
     listarProcessos, salvarProcesso, trocarAutonomia,
     registrarObservacao, observacoesDe,

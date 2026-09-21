@@ -33,6 +33,7 @@
 import { registerTool } from './ToolRegistry.js';
 import db from '../../models/sequelize/index.js';
 import { efetivo, ROTULOS } from '../processos/autonomia.js';
+import { ativas, marcarConsulta } from '../processos/regras.js';
 
 const SCREEN = '/tools/eme-processos';
 const MAX = 8;
@@ -84,7 +85,10 @@ registerTool({
         }
 
         const processos = achados.slice(0, MAX).map(p => {
-            const regras = Array.isArray(p.regras) ? p.regras : [];
+            // Regra REVOGADA nunca chega ao modelo. Se ela chegasse, a Eme
+            // continuaria afirmando para a empresa inteira algo que alguém
+            // tirou do mapa justamente por estar errado.
+            const regras = ativas(p.regras);
             return {
                 nome: p.nome,
                 descricao: p.descricao,
@@ -105,6 +109,18 @@ registerTool({
         });
 
         const totalRegras = processos.reduce((s, p) => s + p.regras.length, 0);
+
+        // Marca as regras entregues como consultadas. Best-effort e sem await
+        // bloqueante no caminho da resposta: contar uso é útil, mas não ao
+        // ponto de atrasar o que a pessoa perguntou.
+        Promise.all(achados.slice(0, MAX).map(async (p) => {
+            const ids = ativas(p.regras).map((r, i) => r.id ?? i);
+            if (!ids.length) return;
+            await db.ProcessoDefinicao.update(
+                { regras: marcarConsulta(p.regras, ids) },
+                { where: { key: p.key } },
+            );
+        })).catch(err => console.warn('[ProcessosTools] contagem de consulta falhou:', err?.message));
 
         return {
             result: {

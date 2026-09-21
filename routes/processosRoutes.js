@@ -29,6 +29,7 @@ import {
     paraTela, listarProcessos, salvarProcesso, trocarAutonomia,
     filaDePropostas, decidirProposta, observacoesDe,
     reverterAcao, salvarSettings, sugestoesDePromocao, acharProcesso,
+    revogarRegra, restaurarRegra, evidenciaDaRegra, listarAcoes, trilhaDe, saudeDoMotor,
 } from '../services/processos/processoService.js';
 import { minerarTudo, minerarProcesso } from '../services/processos/mineracao.js';
 import processosScheduler from '../scheduler/processosScheduler.js';
@@ -112,6 +113,75 @@ router.post('/acoes/:id/reverter', requireCapability(ROTA, 'aprovar'), async (re
         const r = await reverterAcao(Number(req.params.id), req.user?.id, req.body?.nota, req.body?.tipo);
         res.json({ success: true, data: r });
     } catch (err) { falhar(res, err, 'POST /acoes/:id/reverter'); }
+});
+
+// ── Memória ──────────────────────────────────────────────────────────────────
+
+/**
+ * A trilha: o que o motor observou, propôs, o que foi decidido e o que ele
+ * executou, em ordem. É a sinopse que a tela não tinha.
+ */
+router.get('/trilha', requireCapability(ROTA, 'view'), async (req, res) => {
+    try {
+        res.json({
+            success: true,
+            data: await trilhaDe({
+                processo_key: req.query.processo || null,
+                dias: Number(req.query.dias) || 45,
+                limite: Number(req.query.limite) || 120,
+            }),
+        });
+    } catch (err) { falhar(res, err, 'GET /trilha'); }
+});
+
+/**
+ * As ações automáticas. É esta tela que destrava subir um processo para
+ * "agir": promover sem ter onde ver e onde desfazer é a promoção que ninguém
+ * deveria fazer.
+ */
+router.get('/acoes', requireCapability(ROTA, 'view'), async (req, res) => {
+    try {
+        res.json({
+            success: true,
+            data: await listarAcoes({
+                processo_key: req.query.processo || null,
+                limite: Number(req.query.limite) || 100,
+            }),
+        });
+    } catch (err) { falhar(res, err, 'GET /acoes'); }
+});
+
+router.get('/saude', requireCapability(ROTA, 'view'), async (req, res) => {
+    try { res.json({ success: true, data: await saudeDoMotor({ semanas: Number(req.query.semanas) || 8 }) }); }
+    catch (err) { falhar(res, err, 'GET /saude'); }
+});
+
+/** A cadeia de uma regra: proposta, casos que a sustentaram e ações que moveu. */
+router.get('/processos/:key/regras/:id/evidencia', requireCapability(ROTA, 'aprovar'), async (req, res) => {
+    try { res.json({ success: true, data: await evidenciaDaRegra(req.params.key, Number(req.params.id)) }); }
+    catch (err) { falhar(res, err, 'GET /regras/:id/evidencia'); }
+});
+
+/**
+ * Revoga uma regra aprovada.
+ *
+ * Fica em 'aprovar' e não em admin: quem viu a regra errada precisa poder
+ * puxar o freio sem procurar ninguém. Puxar o freio é sempre mais fácil que
+ * soltá-lo, e é assim que tem que ser.
+ */
+router.post('/processos/:key/regras/:id/revogar', requireCapability(ROTA, 'aprovar'), async (req, res) => {
+    try {
+        const r = await revogarRegra(req.params.key, Number(req.params.id), req.user?.id, req.body?.motivo);
+        res.json({ success: true, data: r });
+    } catch (err) { falhar(res, err, 'POST /regras/:id/revogar'); }
+});
+
+/** Devolve ao mapa uma regra revogada por engano. O histórico da revogação fica. */
+router.post('/processos/:key/regras/:id/restaurar', requireCapability(ROTA, 'aprovar'), async (req, res) => {
+    try {
+        const r = await restaurarRegra(req.params.key, Number(req.params.id), req.user?.id);
+        res.json({ success: true, data: r });
+    } catch (err) { falhar(res, err, 'POST /regras/:id/restaurar'); }
 });
 
 router.get('/promocoes', requireCapability(ROTA, 'view'), async (req, res) => {

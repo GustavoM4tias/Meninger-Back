@@ -16,6 +16,9 @@ export default (sequelize, DataTypes) => {
         autonomia_no_momento: { type: DataTypes.STRING(16), allowNull: false },
 
         acao: { type: DataTypes.STRING(80), allowNull: false },
+        // A regra que motivou. É o que responde "esta regra é letra morta?" e
+        // o que liga a ação de volta ao conhecimento que a produziu.
+        regra_id: { type: DataTypes.INTEGER, allowNull: true },
         alvo_tipo: { type: DataTypes.STRING(40), allowNull: true },
         alvo_ref: { type: DataTypes.STRING(120), allowNull: true },
         detalhe: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
