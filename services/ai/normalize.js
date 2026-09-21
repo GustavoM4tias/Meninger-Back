@@ -426,6 +426,48 @@ export function criarLeitorDeStream(tipo) {
  * comparar `totalTokenCount` com `total_tokens` com `input_tokens + output_tokens`
  * exige saber de qual fornecedor veio cada número.
  */
+/**
+ * RESERVA O LUGAR da resposta do modelo no histórico, antes de ela existir.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * O DEFEITO QUE ISTO EVITA
+ *
+ * Quem consome um turno com ferramentas chama `enviar()` DE DENTRO do laço que
+ * está iterando o `enviar()` anterior - é assim que o resultado da tool volta
+ * para o modelo. Se a resposta do modelo só entrasse no histórico ao fim do
+ * stream, a ordem sairia assim:
+ *
+ *      [ pergunta do usuário ]
+ *      [ RESULTADO da tool  ]   <- entrou primeiro, pela chamada aninhada
+ *      [ chamada da tool    ]   <- entrou depois, quando o stream acabou
+ *
+ * Um resultado de ferramenta ANTES da chamada que o originou é recusado por
+ * todos os três fornecedores, e o erro chega como um 400 genérico no meio de
+ * uma conversa - sem dizer que o problema é a ordem.
+ *
+ * Reservando o lugar antes, a chamada aninhada entra DEPOIS da resposta que a
+ * gerou, e a ordem fica certa sem o consumidor precisar saber de nada disso.
+ *
+ * `cancelar()` tira a reserva quando o modelo não produziu nada (erro antes do
+ * primeiro evento, ou turno vazio). Remove POR IDENTIDADE e não por índice:
+ * uma chamada aninhada pode ter acrescentado mensagens depois, e remover pelo
+ * fim apagaria a mensagem errada.
+ *
+ * @returns {{ partes: Array, cancelar: () => void }}
+ */
+export function reservarResposta(historico) {
+    const partes = [];
+    const slot = { papel: 'model', partes };
+    historico.push(slot);
+    return {
+        partes,
+        cancelar() {
+            const i = historico.indexOf(slot);
+            if (i >= 0) historico.splice(i, 1);
+        },
+    };
+}
+
 export function normalizarUso(uso, tipo) {
     if (!uso) return null;
     if (tipo === 'openai') {

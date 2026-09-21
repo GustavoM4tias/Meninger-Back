@@ -51,10 +51,7 @@ export const SUPORTE = {
     academy: { roteavel: true },
     // Nasceu já na porta única: o motor de processos é posterior a ela.
     processos: { roteavel: true },
-    office_chat: {
-        roteavel: false,
-        motivo: 'O chat da Eme ainda usa a sessão nativa do Gemini (histórico com estado, rodadas de tool e os passes de correção). A migração é o próximo passo e precisa da régua de avaliação como prova.',
-    },
+    office_chat: { roteavel: true },
     relatorios: { roteavel: true },
     eme_atende: {
         roteavel: false,

@@ -150,4 +150,7 @@ test('os contextos já migrados são os que passam pela porta única', () => {
     // lembrete de que a tela precisa parar de dizer "caminho nativo".
     assert.equal(SUPORTE.utilidades.roteavel, true);
     assert.equal(SUPORTE.academy.roteavel, true);
+    assert.equal(SUPORTE.processos.roteavel, true);
+    assert.equal(SUPORTE.relatorios.roteavel, true);
+    assert.equal(SUPORTE.office_chat.roteavel, true);
 });

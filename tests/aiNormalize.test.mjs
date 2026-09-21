@@ -325,3 +325,53 @@ test('os outros fins do Gemini seguem como antes', () => {
     assert.equal(normalizarFim('SAFETY', 'gemini'), FIM.FILTRO);
     assert.equal(normalizarFim('STOP', 'gemini'), FIM.NORMAL);
 });
+
+// ── Reserva de lugar no histórico ────────────────────────────────────────────
+//
+// O defeito que isto evita só aparece num turno COM ferramenta: quem consome
+// chama `enviar()` de dentro do laço que itera o `enviar()` anterior, para
+// devolver o resultado da tool. Sem a reserva, o resultado entra no histórico
+// ANTES da chamada que o originou - ordem que os três fornecedores recusam,
+// com um 400 genérico no meio da conversa.
+
+const { reservarResposta } = await import('../services/ai/normalize.js');
+
+test('a resposta do modelo fica ANTES do que a chamada aninhada acrescenta', () => {
+    const hist = [{ papel: 'user', partes: [{ texto: 'pergunta' }] }];
+
+    const reserva = reservarResposta(hist);                  // começou a responder
+    reserva.partes.push({ tool: { id: 'c1', nome: 'x', args: {} } });
+    // Aqui o consumidor devolve o resultado da tool, de dentro do laço:
+    hist.push({ papel: 'tool', partes: [{ resultado: { id: 'c1', nome: 'x', valor: 1 } }] });
+
+    assert.deepEqual(hist.map(m => m.papel), ['user', 'model', 'tool']);
+    assert.equal(hist[1].partes[0].tool.id, 'c1');
+});
+
+test('as partes continuam chegando na reserva DEPOIS de ela entrar no histórico', () => {
+    // A reserva guarda a MESMA referência de array que o stream preenche; se
+    // fosse uma cópia, a mensagem no histórico ficaria vazia para sempre.
+    const hist = [];
+    const r = reservarResposta(hist);
+    r.partes.push({ texto: 'oi' });
+    assert.equal(hist[0].partes[0].texto, 'oi');
+});
+
+test('cancelar remove POR IDENTIDADE, não pelo fim da lista', () => {
+    // Uma chamada aninhada pode ter acrescentado mensagens depois; remover
+    // pelo fim apagaria a mensagem errada.
+    const hist = [{ papel: 'user', partes: [] }];
+    const r = reservarResposta(hist);
+    hist.push({ papel: 'tool', partes: [{ resultado: { id: 'c1', nome: 'x', valor: 1 } }] });
+
+    r.cancelar();
+    assert.deepEqual(hist.map(m => m.papel), ['user', 'tool']);
+});
+
+test('cancelar duas vezes não apaga nada a mais', () => {
+    const hist = [{ papel: 'user', partes: [] }];
+    const r = reservarResposta(hist);
+    r.cancelar();
+    r.cancelar();
+    assert.equal(hist.length, 1);
+});

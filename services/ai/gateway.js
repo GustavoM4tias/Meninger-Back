@@ -37,6 +37,7 @@
 // punha a chave em cooldown por um 503 e matava a análise em dois segundos.
 
 import { adaptadorDe, ErroDeProvedor } from './adapters.js';
+import { reservarResposta } from './normalize.js';
 import { provedorDe, chavesDe, registrarChecagem } from './providers.js';
 
 /** Espera entre tentativas no mesmo modelo, crescente. */
@@ -57,11 +58,21 @@ export function limparCooldowns() { _cooldown.clear(); }
  * Resolve o provedor, o pool de modelos e as chaves de um contexto.
  * Erros aqui são de CONFIGURAÇÃO e vêm com a mensagem que diz o que fazer.
  */
-async function resolver(contexto, uso) {
+async function resolver(contexto, uso, { modelos: override = null } = {}) {
     const r = await provedorDe(contexto);
     if (r.erro) throw new ErroDeProvedor(r.erro, { causa: r.pausado ? 'pausado' : 'config' });
 
-    const modelos = r.models?.[uso] || [];
+    // ESCAPE HATCH, e só isso. Existe porque o chat da Eme tem um seletor
+    // rápido/inteligente por pessoa, com pools que já vêm configurados no
+    // Cérebro. Sem o override, migrar o chat para a porta única APAGARIA esse
+    // seletor - uma regressão escondida dentro de uma mudança de infraestrutura.
+    //
+    // A tela de Conexões continua dona do PADRÃO: quem não passa override usa
+    // o pool dela, e um override vazio também. O que o chamador escolhe aqui é
+    // a faixa, não o fornecedor.
+    const modelos = (Array.isArray(override) && override.length)
+        ? override
+        : (r.models?.[uso] || []);
     if (!modelos.length) {
         throw new ErroDeProvedor(
             `O provedor "${r.provider.label}" não tem modelo configurado para "${uso}". Ajuste em Configurações > Conexões de IA.`,
@@ -86,7 +97,11 @@ async function resolver(contexto, uso) {
  * @returns {Promise<{texto, tools, fim, uso, modelo, provider}>}
  */
 export async function chamar(contexto, uso, opcoes = {}) {
-    const { provider, modelos, chaves, adaptador } = await resolver(contexto, uso);
+    // `modelos` é escolha do POOL e não parâmetro de chamada: fica fora do que
+    // vai para o adaptador, senão viraria um campo desconhecido no corpo HTTP
+    // de quem quer que esteja atendendo.
+    const { modelos: override, ...paraOAdaptador } = opcoes;
+    const { provider, modelos, chaves, adaptador } = await resolver(contexto, uso, { modelos: override });
     let ultimo = null;
 
     for (const modelo of modelos) {
@@ -102,7 +117,7 @@ export async function chamar(contexto, uso, opcoes = {}) {
                     chave: chaves[i],
                     extra: provider.extra,
                     modelo,
-                    ...opcoes,
+                    ...paraOAdaptador,
                     stream: false,
                 });
                 return { ...r, modelo, provider: provider.key, kind: provider.kind };
@@ -238,8 +253,8 @@ export async function embed(contexto, texto, { dimensoes = null, tarefa = 'RETRI
  * É o que permite trocar de fornecedor no meio da vida do produto sem o chat
  * saber: quem chama recebe sempre os mesmos eventos normalizados.
  */
-export async function conversa(contexto, { system = '', historico = [], tools = [], modoTool = 'auto', maxSaida = null } = {}) {
-    const { provider, modelos, chaves, adaptador } = await resolver(contexto, 'chat');
+export async function conversa(contexto, { system = '', historico = [], tools = [], modoTool = 'auto', maxSaida = null, modelos: override = null } = {}) {
+    const { provider, modelos, chaves, adaptador } = await resolver(contexto, 'chat', { modelos: override });
     const hist = [...historico];
     let modeloEscolhido = null;
 
@@ -261,6 +276,9 @@ export async function conversa(contexto, { system = '', historico = [], tools = 
             if (mensagem) hist.push(mensagem);
 
             let ultimo = null;
+            // Visível para o catch: é ele que desfaz a reserva da tentativa
+            // que morreu no meio do stream.
+            let reservaAtual = null;
             for (const modelo of modelos) {
                 for (let i = 0; i < chaves.length; i++) {
                     if (gelada(provider.key, i) && chaves.length > 1) continue;
@@ -272,7 +290,14 @@ export async function conversa(contexto, { system = '', historico = [], tools = 
                         });
                         modeloEscolhido = modelo;
 
-                        const partes = [];
+                        // O lugar da resposta é reservado ANTES de emitir: quem
+                        // consome chama `enviar()` de dentro deste laço para
+                        // devolver o resultado de uma tool, e sem a reserva esse
+                        // resultado entraria no histórico ANTES da chamada que o
+                        // originou - ordem que os três fornecedores recusam.
+                        const reserva = reservarResposta(hist);
+                        reservaAtual = reserva;
+                        const { partes } = reserva;
                         for await (const bruto of sse) {
                             for (const ev of leitor.push(bruto)) {
                                 if (ev.tipo === 'texto') partes.push({ texto: ev.texto });
@@ -285,16 +310,21 @@ export async function conversa(contexto, { system = '', historico = [], tools = 
                             yield ev;
                         }
 
-                        // A resposta do modelo entra no histórico: sem isso, o
-                        // próximo envio (o resultado da tool) chegaria sem a
-                        // chamada que o originou, e o fornecedor recusaria.
-                        if (partes.length) hist.push({ papel: 'model', partes });
+                        // Turno que não produziu nada não deixa mensagem vazia
+                        // no histórico: alguns fornecedores recusam, e todos se
+                        // confundem com ela.
+                        if (!partes.length) reserva.cancelar();
+                        reservaAtual = null;
 
                         const r = leitor.resultado();
                         this._ultimo = { ...r, modelo, provider: provider.key };
                         return;
                     } catch (err) {
                         ultimo = err;
+                        // A reserva some junto com a tentativa que falhou: deixá-la
+                        // faria a próxima tentativa mandar uma resposta vazia do
+                        // modelo no meio do histórico.
+                        reservaAtual?.cancelar();
                         const causa = err?.causa || 'fatal';
                         if (causa === 'credencial') throw err;
                         if (causa === 'modelo') break;

@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { conversa, chamar as chamarIA } from '../ai/gateway.js';
 import dotenv from 'dotenv';
 import dayjs from 'dayjs';
 import db from '../../models/sequelize/index.js';
@@ -373,18 +373,9 @@ dotenv.config();
 
 const STORAGE_LIMIT_BYTES = 20 * 1024 * 1024; // 20 MB
 
-// ── Chaves Gemini com rotação por tentativa ──────────────────────────────────
-function getGeminiKeys() {
-  return (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
-    .split(',').map(k => k.trim()).filter(Boolean);
-}
-
-function getGeminiClient(keyIndex = null) {
-  const keys = getGeminiKeys();
-  if (!keys.length) throw new Error('GEMINI_API_KEY(S) não configurada(s).');
-  const idx = keyIndex == null ? Math.floor(Math.random() * keys.length) : keyIndex % keys.length;
-  return new GoogleGenerativeAI(keys[idx]);
-}
+// A leitura de chave e a escolha de cliente saíram daqui em definitivo: quem
+// guarda credencial é a tela de Conexões de IA (cifrada), e quem roda a
+// rotação é o gateway. Este arquivo não conhece mais nenhum fornecedor.
 
 // ── Listas de modelos: fast (padrão) e smart (escalonado para queries complexas) ──
 function parseList(env) {
@@ -599,7 +590,10 @@ async function buildHistory(sessionId) {
     if (m.role === 'assistant' && !hadAction && text && /\d{2,}/.test(text)) {
       text = `[ATENÇÃO: resposta anterior sem tool call — dados podem estar incorretos, NÃO use como fonte] ${text}`;
     }
-    return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] };
+    // Formato INTERNO do gateway (papel/partes). O adaptador do fornecedor
+    // traduz na hora do envio - daqui para cá nada mais conhece o formato do
+    // Gemini, e é isso que faz trocar de IA não virar um projeto.
+    return { papel: m.role === 'assistant' ? 'model' : 'user', partes: [{ texto: text }] };
   });
 }
 
@@ -1109,15 +1103,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   const modelList = pool === 'smart' ? getSmartModels(activeSettings) : getFastModels(activeSettings);
   let geminiModel = modelList[0];
 
-  // Tenta cada modelo + cada chave em ordem — fallback automático em 503/429/401/500.
-  // IMPORTANTE: o erro 503 do Gemini frequentemente surge no PRIMEIRO chunk (durante
-  // a iteração do stream), não na chamada `sendMessageStream`. Por isso puxamos o
-  // primeiro chunk dentro do loop de retry — só assim conseguimos cair no próximo modelo.
-  const keysCount = Math.max(getGeminiKeys().length, 1);
-  const RETRYABLE = new Set([401, 403, 429, 500, 503]);
-  let chat = null;
-  let streamIterator = null;
-  let firstChunk = null;
+  // A rotação de chave e a tabela de retry saíram daqui: são do gateway, que
+  // já distingue credencial (para na hora), quota (esfria a chave) e
+  // sobrecarga (espera na mesma). O laço duplicado que existia aqui tratava
+  // 401 e 503 do mesmo jeito, e insistia com credencial errada em toda chave.
+  let sessao = null;
   // Chat que a autocorreção anti-alucinação deve continuar. No Office o
   // follow-up roda no PRÓPRIO `chat`, que já tem o resultado da tool — por isso
   // o default é null (cai em `chat`). Quando o follow-up acontece num chat
@@ -1130,214 +1120,198 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // Teto opcional de tokens de saída (inclui thinking nos modelos 2.5 — por isso
   // não há default hardcoded; valor baixo truncaria respostas do pool smart).
   const maxOut = Number(process.env.EME_MAX_OUTPUT_TOKENS);
-  // A seleção de modelo/chave roda ANTES do try do stream — sem este guard, uma
-  // falha aqui (todas as chaves fora, GEMINI_API_KEY ausente) escapava do caminho
-  // SSE e o cliente ficava sem o evento de erro padronizado.
+  // Abrir a sessão roda ANTES do try do stream: uma falha aqui (sem chave,
+  // contexto pausado) escapava do caminho SSE e o cliente ficava sem o evento
+  // de erro padronizado.
+  //
+  // `modelos: modelList` preserva o seletor rápido/inteligente da pessoa - os
+  // pools vêm do Cérebro (settings.model_pools), então continuam sendo
+  // configuração de tela, não código. Quem escolhe o FORNECEDOR é Conexões de
+  // IA; o que se escolhe aqui é a faixa dentro dele.
   try {
-  outer: for (let i = 0; i < modelList.length; i++) {
-    for (let k = 0; k < keysCount; k++) {
-      try {
-        const genAI = getGeminiClient(k);
-        const modelParams = {
-          model: modelList[i],
-          systemInstruction: systemPrompt,
-          tools: [{ functionDeclarations: activeDeclarations }],
-        };
-        if (Number.isFinite(maxOut) && maxOut > 0) {
-          modelParams.generationConfig = { maxOutputTokens: maxOut };
-        }
-        // ACADEMY — TRAVA anti-alucinação: força o modelo a chamar uma
-        // ferramenta ANTES de responder (proíbe responder "de cabeça").
-        // O follow-up, após o resultado da tool, roda em modo NONE p/ o
-        // modelo ser obrigado a escrever o texto a partir do dado real.
-        if (isAcademy) {
-          modelParams.toolConfig = { functionCallingConfig: { mode: 'ANY' } };
-        }
-        const mdl = genAI.getGenerativeModel(modelParams);
-        chat = mdl.startChat({ history: historyWithoutLast });
-        const streamResult = await chat.sendMessageStream(userMessage);
-        streamIterator = streamResult.stream[Symbol.asyncIterator]();
-        // Consome o primeiro chunk dentro do retry para capturar 503 que vem assíncrono
-        const first = await streamIterator.next();
-        firstChunk = first.done ? null : first.value;
-        geminiModel = modelList[i];
-        break outer;
-      } catch (err) {
-        const status = err?.status || err?.response?.status;
-        const lastModel = i === modelList.length - 1;
-        const lastKey = k === keysCount - 1;
-        if (RETRYABLE.has(status) && !(lastModel && lastKey)) {
-          console.warn(`[OfficeChatService] Falha ${status} em ${modelList[i]} (key #${k}), tentando próximo...`);
-          continue;
-        }
-        throw err;
-      }
-    }
-  }
-  if (!streamIterator) throw new Error('Nenhum modelo Gemini disponível.');
+    sessao = await conversa('office_chat', {
+      system: systemPrompt,
+      historico: historyWithoutLast,
+      tools: activeDeclarations,
+      modelos: modelList,
+      ...(Number.isFinite(maxOut) && maxOut > 0 ? { maxSaida: maxOut } : {}),
+      // ACADEMY — TRAVA anti-alucinação: obriga o modelo a chamar uma
+      // ferramenta ANTES de responder (proíbe responder "de cabeça"). O
+      // follow-up, após o resultado, roda em modo 'nenhuma' para ele ser
+      // obrigado a escrever o texto a partir do dado real.
+      modoTool: isAcademy ? 'obrigatorio' : 'auto',
+    });
   } catch (err) {
-    console.error('[OfficeChatService] Falha ao iniciar o stream Gemini:', err?.message || err);
-    sendSSE(res, { type: 'error', message: 'Desculpe, o assistente está indisponível no momento. Tente novamente em instantes.' });
+    console.error('[OfficeChatService] Falha ao abrir a sessão de IA:', err?.message || err);
+    // Erro de CONFIGURAÇÃO tem mensagem que diz o que fazer; escondê-la atrás
+    // de "indisponível" manda quem administra procurar no lugar errado.
+    const config = ['config', 'credencial', 'pausado'].includes(err?.causa);
+    sendSSE(res, { type: 'error', message: config ? err.message : 'Desculpe, o assistente está indisponível no momento. Tente novamente em instantes.' });
     sendSSE(res, { type: 'done', sessionId: session.id });
     return;
   }
 
-  // Gera um async iterator que reemite o primeiro chunk + resto do stream
-  async function* mergedStream() {
-    if (firstChunk) yield firstChunk;
-    while (true) {
-      const r = await streamIterator.next();
-      if (r.done) break;
-      yield r.value;
-    }
+  /**
+   * Abre uma sessão PARALELA, com histórico montado na mão.
+   *
+   * É o que o Academy e a recuperação usam: um turno em que o modelo já
+   * "chamou" a tool e recebe o resultado, proibido de chamar outra. Precisa ser
+   * sessão nova porque o histórico é sintético - a sessão principal nunca viu
+   * essa chamada.
+   */
+  async function sessaoParalela(historico, { modoTool = 'nenhuma' } = {}) {
+    return conversa('office_chat', {
+      system: systemPrompt,
+      historico,
+      tools: activeDeclarations,
+      modelos: modelList,
+      modoTool,
+      ...(Number.isFinite(maxOut) && maxOut > 0 ? { maxSaida: maxOut } : {}),
+    });
   }
 
   try {
 
-    for await (const chunk of mergedStream()) {
-      const candidate = chunk.candidates?.[0];
-      if (!candidate) continue;
-      if (candidate.finishReason) lastFinishReason = candidate.finishReason;
+    // Eventos JÁ NORMALIZADOS: { tipo:'texto' } ou { tipo:'tool', id, nome, args }.
+    // O formato do fornecedor morreu no adaptador.
+    for await (const ev of sessao.enviar({ papel: 'user', partes: [{ texto: userMessage }] })) {
+      if (ev.tipo === 'texto') {
+        emitTextChunk(ev.texto);
+      }
 
-      for (const part of candidate.content?.parts || []) {
-        if (part.text) {
-          emitTextChunk(part.text);
+      if (ev.tipo === 'tool') {
+        // Descarta qualquer texto emitido antes da tool call (pode conter valores
+        // do treinamento do modelo, incorretos em relação ao banco de dados)
+        if (fullAssistantText || bridgeFilter.flush()) {
+          fullAssistantText = '';
+          // O buffer de referência morre junto: ele guarda o pedaço de uma
+          // frase que acabou de ser descartada, e carregá-lo para o texto
+          // seguinte colaria meia citação no começo da resposta de verdade.
+          if (ancoragem.enabled) refFilter.flush();
+          sendSSE(res, { type: 'clear' });
         }
 
-        if (part.functionCall) {
-          // Descarta qualquer texto emitido antes da tool call (pode conter valores
-          // do treinamento do modelo, incorretos em relação ao banco de dados)
-          if (fullAssistantText || bridgeFilter.flush()) {
-            fullAssistantText = '';
-            // O buffer de referência morre junto: ele guarda o pedaço de uma
-            // frase que acabou de ser descartada, e carregá-lo para o texto
-            // seguinte colaria meia citação no começo da resposta de verdade.
-            if (ancoragem.enabled) refFilter.flush();
-            sendSSE(res, { type: 'clear' });
+        // ── Encadeamento de tools ──────────────────────────────────────
+        // Uma pergunta real raramente se resolve com UMA consulta: a Eme
+        // procura o empreendimento, não acha pelo nome exato, e precisa
+        // buscar no cadastro para tentar de novo.
+        //
+        // Antes, o follow-up só lia `text` e DESCARTAVA qualquer tool call
+        // que viesse junto. O modelo pedia a segunda consulta, o pedido ia
+        // para o lixo e sobrava só a frase que ele escreveu no caminho
+        // ("vou verificar", "um momento") — daí a impressão de que a Eme
+        // promete continuar e abandona. Ela tentava; nós é que travávamos.
+        //
+        // Agora o resultado volta para o modelo enquanto ele pedir novas
+        // tools, até o teto abaixo (evita laço infinito e custo sem fim).
+        let pendingCall = { id: ev.id, name: ev.nome, args: ev.args };
+        let toolStep = 0;
+
+        while (pendingCall && toolStep < MAX_TOOL_STEPS) {
+        toolStep++;
+        const { id: callId, name, args } = pendingCall;
+        pendingCall = null;
+        const toolStart = Date.now();
+
+        // Progresso visível: o front mostra "Consultando <label>…" em vez do
+        // "..." mudo (que ficava até 1 min sem sinal em cadeias longas).
+        sendSSE(res, { type: 'tool_start', name, label: toolLabel(name), detalhe: toolDetalhe(name, args), step: toolStep });
+
+        // Roteamento da tool (ACADEMY e OFFICE) — ver runToolCall acima.
+        const toolResult = await runToolCall(name, args, toolStart);
+
+        toolCalls.push({
+          name,
+          args: args || {},
+          result_summary: summarizeForFeedback(toolResult),
+          error: toolResult?.error || null,
+          ms: Date.now() - toolStart,
+        });
+
+        sendSSE(res, {
+          type: 'tool_result',
+          name,
+          label: toolLabel(name),
+          ok: !toolResult?.error,
+          ms: Date.now() - toolStart,
+        });
+
+        adotarAction(toolResult);
+        if (toolResult && !toolResult.error && toolResult.type) actionTypesSeen.push(toolResult.type);
+        sendSSE(res, { type: 'action', action: toolResult });
+
+        // Envia o resultado de volta para o Gemini (sem arrays volumosos — evita JSON no texto).
+        // Falhas aqui (503, etc.) não devem matar a resposta: o usuário já recebeu a ação/dados.
+        try {
+          // OFFICE: follow-up no mesmo chat (comportamento histórico, intacto).
+          // ACADEMY: o chat principal está em modo ANY (tool obrigatória). O
+          // follow-up usa um chat NOVO em modo NONE — assim o modelo é
+          // OBRIGADO a responder em TEXTO a partir do resultado da tool
+          // (não chama outra tool nem inventa). Histórico reconstruído.
+          const respostaDaTool = {
+            papel: 'tool',
+            // O `id` vai junto: OpenAI e Anthropic casam resultado com
+            // chamada por id, não por nome. O Gemini perdoa, os outros não.
+            partes: [{ resultado: { id: callId, nome: name, valor: paraOModelo(toolResult) } }],
+          };
+
+          let fonte;
+          if (isAcademy) {
+            // ACADEMY: a sessão principal está em modo obrigatório. O
+            // follow-up abre uma sessão NOVA em modo 'nenhuma', para o
+            // modelo ser OBRIGADO a escrever o texto a partir do resultado
+            // - sem chamar outra tool nem inventar. Histórico sintético.
+            const paralela = await sessaoParalela([
+              ...historyWithoutLast,
+              { papel: 'user', partes: [{ texto: userMessage }] },
+              { papel: 'model', partes: [{ tool: { id: callId, nome: name, args: args || {} } }] },
+            ]);
+            fonte = paralela;
+            correctionChat = paralela; // é esta que tem a tool + o texto final
+          } else {
+            // OFFICE: follow-up na MESMA sessão (comportamento histórico).
+            fonte = sessao;
           }
+          // No último passo permitido não faz sentido aceitar nova tool: o
+          // teto já foi atingido e o que precisamos é do texto final.
+          const canChainMore = !isAcademy && toolStep < MAX_TOOL_STEPS;
 
-          // ── Encadeamento de tools ──────────────────────────────────────
-          // Uma pergunta real raramente se resolve com UMA consulta: a Eme
-          // procura o empreendimento, não acha pelo nome exato, e precisa
-          // buscar no cadastro para tentar de novo.
-          //
-          // Antes, o follow-up só lia `text` e DESCARTAVA qualquer tool call
-          // que viesse junto. O modelo pedia a segunda consulta, o pedido ia
-          // para o lixo e sobrava só a frase que ele escreveu no caminho
-          // ("vou verificar", "um momento") — daí a impressão de que a Eme
-          // promete continuar e abandona. Ela tentava; nós é que travávamos.
-          //
-          // Agora o resultado volta para o modelo enquanto ele pedir novas
-          // tools, até o teto abaixo (evita laço infinito e custo sem fim).
-          let pendingCall = { name: part.functionCall.name, args: part.functionCall.args };
-          let toolStep = 0;
+          for await (const fev of fonte.enviar(respostaDaTool)) {
+            if (fev.tipo === 'texto') emitTextChunk(fev.texto);
 
-          while (pendingCall && toolStep < MAX_TOOL_STEPS) {
-          toolStep++;
-          const { name, args } = pendingCall;
-          pendingCall = null;
-          const toolStart = Date.now();
-
-          // Progresso visível: o front mostra "Consultando <label>…" em vez do
-          // "..." mudo (que ficava até 1 min sem sinal em cadeias longas).
-          sendSSE(res, { type: 'tool_start', name, label: toolLabel(name), detalhe: toolDetalhe(name, args), step: toolStep });
-
-          // Roteamento da tool (ACADEMY e OFFICE) — ver runToolCall acima.
-          const toolResult = await runToolCall(name, args, toolStart);
-
-          toolCalls.push({
-            name,
-            args: args || {},
-            result_summary: summarizeForFeedback(toolResult),
-            error: toolResult?.error || null,
-            ms: Date.now() - toolStart,
-          });
-
-          sendSSE(res, {
-            type: 'tool_result',
-            name,
-            label: toolLabel(name),
-            ok: !toolResult?.error,
-            ms: Date.now() - toolStart,
-          });
-
-          adotarAction(toolResult);
-          if (toolResult && !toolResult.error && toolResult.type) actionTypesSeen.push(toolResult.type);
-          sendSSE(res, { type: 'action', action: toolResult });
-
-          // Envia o resultado de volta para o Gemini (sem arrays volumosos — evita JSON no texto).
-          // Falhas aqui (503, etc.) não devem matar a resposta: o usuário já recebeu a ação/dados.
-          try {
-            // OFFICE: follow-up no mesmo chat (comportamento histórico, intacto).
-            // ACADEMY: o chat principal está em modo ANY (tool obrigatória). O
-            // follow-up usa um chat NOVO em modo NONE — assim o modelo é
-            // OBRIGADO a responder em TEXTO a partir do resultado da tool
-            // (não chama outra tool nem inventa). Histórico reconstruído.
-            let followStream;
-            if (isAcademy) {
-              const followChat = getGeminiClient()
-                .getGenerativeModel({
-                  model: geminiModel,
-                  systemInstruction: systemPrompt,
-                  tools: [{ functionDeclarations: activeDeclarations }],
-                  toolConfig: { functionCallingConfig: { mode: 'NONE' } },
-                })
-                .startChat({
-                  history: [
-                    ...historyWithoutLast,
-                    { role: 'user', parts: [{ text: userMessage }] },
-                    { role: 'model', parts: [{ functionCall: { name, args: args || {} } }] },
-                  ],
-                });
-              followStream = (await followChat.sendMessageStream([
-                { functionResponse: { name, response: paraOModelo(toolResult) } },
-              ])).stream;
-              correctionChat = followChat; // é este que tem a tool + o texto final
-            } else {
-              followStream = (await chat.sendMessageStream([
-                { functionResponse: { name, response: paraOModelo(toolResult) } },
-              ])).stream;
-            }
-            // No último passo permitido não faz sentido aceitar nova tool: o
-            // teto já foi atingido e o que precisamos é do texto final.
-            const canChainMore = !isAcademy && toolStep < MAX_TOOL_STEPS;
-
-            for await (const followChunk of followStream) {
-              const followCandidate = followChunk.candidates?.[0];
-              if (followCandidate?.finishReason) lastFinishReason = followCandidate.finishReason;
-              for (const followPart of followCandidate?.content?.parts || []) {
-                if (followPart.text) emitTextChunk(followPart.text);
-
-                // O modelo quer consultar mais alguma coisa antes de responder.
-                if (followPart.functionCall && canChainMore && !pendingCall) {
-                  // O texto escrito até aqui é só o "vou verificar" — descarta,
-                  // porque a resposta de verdade vem depois da próxima consulta.
-                  if (fullAssistantText || bridgeFilter.flush()) {
-                    fullAssistantText = '';
-                    if (ancoragem.enabled) refFilter.flush();
-                    sendSSE(res, { type: 'clear' });
-                  }
-                  pendingCall = {
-                    name: followPart.functionCall.name,
-                    args: followPart.functionCall.args,
-                  };
-                }
+            // O modelo quer consultar mais alguma coisa antes de responder.
+            if (fev.tipo === 'tool' && canChainMore && !pendingCall) {
+              // O texto escrito até aqui é só o "vou verificar" — descarta,
+              // porque a resposta de verdade vem depois da próxima consulta.
+              if (fullAssistantText || bridgeFilter.flush()) {
+                fullAssistantText = '';
+                if (ancoragem.enabled) refFilter.flush();
+                sendSSE(res, { type: 'clear' });
               }
+              pendingCall = { id: fev.id, name: fev.nome, args: fev.args };
             }
-          } catch (followErr) {
-            console.warn('[OfficeChatService] Falha no follow-up após tool call:', followErr?.status || followErr?.message);
-            // Mantém a actionResult — o frontend já exibe os dados sem texto final.
           }
-          } // while (pendingCall)
+          lastFinishReason = fonte.resultado()?.fim || lastFinishReason;
+        } catch (followErr) {
+          console.warn('[OfficeChatService] Falha no follow-up após tool call:', followErr?.status || followErr?.message);
+          // Mantém a actionResult — o frontend já exibe os dados sem texto final.
+        }
+        } // while (pendingCall)
 
-          if (pendingCall) {
-            console.warn(`[OfficeChatService] Teto de ${MAX_TOOL_STEPS} tools atingido; a chamada "${pendingCall.name}" não foi executada.`);
-          }
+        if (pendingCall) {
+          console.warn(`[OfficeChatService] Teto de ${MAX_TOOL_STEPS} tools atingido; a chamada "${pendingCall.name}" não foi executada.`);
         }
       }
     }
+    // O motivo da parada vem normalizado do gateway ('normal', 'tamanho',
+    // 'filtro', 'tool', 'malformado') em vez do rótulo cru do fornecedor.
+    lastFinishReason = sessao.resultado()?.fim || lastFinishReason;
+    // Com fallback de modelo, o que respondeu pode não ser o primeiro da
+    // lista. Registrar `modelList[0]` faria o log e a métrica de duração
+    // culparem o modelo errado justamente quando o principal caiu.
+    geminiModel = sessao.modelo || geminiModel;
   } catch (err) {
-    console.error('[OfficeChatService] Erro no stream Gemini:', err);
+    console.error('[OfficeChatService] Erro no stream da IA:', err);
     sendSSE(res, { type: 'error', message: 'Desculpe, ocorreu um erro ao processar sua mensagem.' });
     sendSSE(res, { type: 'done', sessionId: session.id });
     return;
@@ -1405,26 +1379,23 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       // do segundo tiro fica mínimo. No turno mudo não há nome, então vai o
       // conjunto do turno e o modelo escolhe.
       const soAQueVazou = leaked ? todasDeclaracoes.filter(d => d?.name === leaked) : [];
-      const forcedChat = getGeminiClient()
-        .getGenerativeModel({
-          model: geminiModel,
-          systemInstruction: systemPrompt,
-          tools: [{ functionDeclarations: soAQueVazou.length ? soAQueVazou : (mudo ? activeDeclarations : todasDeclaracoes) }],
-          toolConfig: {
-            functionCallingConfig: soAQueVazou.length
-              ? { mode: 'ANY', allowedFunctionNames: [leaked] }
-              : { mode: 'ANY' },
-          },
-        })
-        .startChat({ history: historyWithoutLast });
-      const forced = await forcedChat.sendMessage(userMessage);
-      const forcedCall = (forced?.response?.candidates?.[0]?.content?.parts || [])
-        .find(p => p.functionCall)?.functionCall;
+      // Chamada única, sem stream: aqui não interessa o texto, interessa QUAL
+      // ferramenta ele finalmente pede. O recorte da lista faz o segundo tiro
+      // ser mínimo quando se sabe qual ele tentou chamar.
+      const forced = await chamarIA('office_chat', 'chat', {
+        system: systemPrompt,
+        historico: [...historyWithoutLast, { papel: 'user', partes: [{ texto: userMessage }] }],
+        tools: soAQueVazou.length ? soAQueVazou : (mudo ? activeDeclarations : todasDeclaracoes),
+        modoTool: 'obrigatorio',
+        modelos: modelList,
+      });
+      const forcedCall = (forced?.tools || [])[0] || null;
 
-      if (forcedCall && declaredToolNames.has(forcedCall.name)) {
+      if (forcedCall && declaredToolNames.has(forcedCall.nome)) {
         // Recuperado: o turno tem dado de verdade em vez de silêncio.
-        const name = forcedCall.name;
+        const name = forcedCall.nome;
         const args = forcedCall.args || {};
+        const callId = forcedCall.id || name;
         // Some a narração da tela — a resposta de verdade vem do dado real.
         fullAssistantText = '';
         sendSSE(res, { type: 'clear' });
@@ -1453,33 +1424,21 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
 
         // Texto final em modo NONE: obrigado a escrever a partir do resultado,
         // sem chance de narrar outra chamada.
-        const followChat = getGeminiClient()
-          .getGenerativeModel({
-            model: geminiModel,
-            systemInstruction: systemPrompt,
-            tools: [{ functionDeclarations: activeDeclarations }],
-            toolConfig: { functionCallingConfig: { mode: 'NONE' } },
-          })
-          .startChat({
-            history: [
-              ...historyWithoutLast,
-              { role: 'user', parts: [{ text: userMessage }] },
-              { role: 'model', parts: [{ functionCall: { name, args } }] },
-            ],
-          });
-        const followStream = (await followChat.sendMessageStream([
-          { functionResponse: { name, response: paraOModelo(toolResult) } },
-        ])).stream;
-        // A validação anti-alucinação corrige a partir DESTE chat: só ele viu a
-        // tool recuperada e o resultado real.
-        correctionChat = followChat;
-        for await (const followChunk of followStream) {
-          const followCandidate = followChunk.candidates?.[0];
-          if (followCandidate?.finishReason) lastFinishReason = followCandidate.finishReason;
-          for (const followPart of followCandidate?.content?.parts || []) {
-            if (followPart.text) emitTextChunk(followPart.text);
-          }
+        const paralela = await sessaoParalela([
+          ...historyWithoutLast,
+          { papel: 'user', partes: [{ texto: userMessage }] },
+          { papel: 'model', partes: [{ tool: { id: callId, nome: name, args } }] },
+        ]);
+        // A validação anti-alucinação corrige a partir DESTA sessão: só ela viu
+        // a tool recuperada e o resultado real.
+        correctionChat = paralela;
+        for await (const fev of paralela.enviar({
+          papel: 'tool',
+          partes: [{ resultado: { id: callId, nome: name, valor: paraOModelo(toolResult) } }],
+        })) {
+          if (fev.tipo === 'texto') emitTextChunk(fev.texto);
         }
+        lastFinishReason = paralela.resultado()?.fim || lastFinishReason;
         const recoveredTail = bridgeFilter.flush();
         if (recoveredTail) {
           fullAssistantText += recoveredTail;
@@ -1524,7 +1483,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         'usando os dados que você já consultou neste turno. Se faltar informação para agir, faça UMA pergunta ' +
         'objetiva. Nunca escreva "um momento" de novo.';
 
-      let stream = (await chat.sendMessageStream([{ text: cutucada }])).stream;
+      let proxima = { papel: 'user', partes: [{ texto: cutucada }] };
       let texto = '';
       let chamada = null;
       let passos = 0;
@@ -1533,16 +1492,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       // segunda chance, não um caminho para laço infinito.
       do {
         chamada = null;
-        for await (const chunk of stream) {
-          const cand = chunk.candidates?.[0];
-          if (cand?.finishReason) lastFinishReason = cand.finishReason;
-          for (const part of cand?.content?.parts || []) {
-            if (part.text) texto += part.text;
-            if (part.functionCall && !chamada) {
-              chamada = { name: part.functionCall.name, args: part.functionCall.args };
-            }
-          }
+        for await (const ev of sessao.enviar(proxima)) {
+          if (ev.tipo === 'texto') texto += ev.texto;
+          if (ev.tipo === 'tool' && !chamada) chamada = { id: ev.id, name: ev.nome, args: ev.args };
         }
+        lastFinishReason = sessao.resultado()?.fim || lastFinishReason;
 
         if (!chamada) break;
         passos++;
@@ -1565,9 +1519,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         sendSSE(res, { type: 'action', action: resultado });
 
         texto = '';
-        stream = (await chat.sendMessageStream([
-          { functionResponse: { name: chamada.name, response: paraOModelo(resultado) } },
-        ])).stream;
+        proxima = {
+          papel: 'tool',
+          partes: [{ resultado: { id: chamada.id || chamada.name, nome: chamada.name, valor: paraOModelo(resultado) } }],
+        };
       } while (passos < 4);
 
       const finalLimpo = stripPseudoToolCalls(texto).trim();
@@ -1681,7 +1636,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // pequeno e dirigido, ao contrário do bloco autoritativo de 6000 caracteres
   // que a trava antiga reenvia. UMA tentativa - se o modelo errou o id duas
   // vezes, insistir só queima token.
-  if (ancoragem.enabled && refsNaoResolvidas.length && temDadoDoTurno && (correctionChat || chat)) {
+  if (ancoragem.enabled && refsNaoResolvidas.length && temDadoDoTurno && (correctionChat || sessao)) {
     sendSSE(res, { type: 'status', stage: 'verifying', message: 'Conferindo as referências dos dados…' });
     try {
       const catalogo = [...citacoes.registro.entries()]
@@ -1697,10 +1652,14 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         `Responda direto, sem pedir desculpas e sem mencionar esta correção. ` +
         `NÃO chame nenhuma ferramenta.`;
 
-      const fix = (await (correctionChat || chat).sendMessageStream([{ text: pedido }])).stream;
+      // A sessão de correção é a que VIU a tool e o resultado. No Office é a
+      // principal; no Academy e na recuperação é a paralela, porque a
+      // principal nunca viu a consulta - pedir reescrita a ela seria pedir a
+      // quem não tem o dado.
+      const fonteFix = correctionChat || sessao;
       let bruto = '';
-      for await (const c of fix) {
-        for (const pt of c.candidates?.[0]?.content?.parts || []) if (pt.text) bruto += pt.text;
+      for await (const fev of fonteFix.enviar({ papel: 'user', partes: [{ texto: pedido }] })) {
+        if (fev.tipo === 'texto') bruto += fev.texto;
       }
       bruto = stripPseudoToolCalls(bruto).trim();
       if (bruto) {
@@ -1741,7 +1700,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   const originalSuspectText = initialSuspicious.length ? fullAssistantText : null;
 
   const MAX_FIX_ATTEMPTS = 3;
-  if (hallucinationReport.suspicious.length > 0 && temDadoDoTurno && (correctionChat || chat)) {
+  if (hallucinationReport.suspicious.length > 0 && temDadoDoTurno && (correctionChat || sessao)) {
     const authoritative = buildAuthoritativeBlock(cadeiaDoTurno);
     if (authoritative) {
       while (hallucinationReport.suspicious.length > 0 && correctionAttempts < MAX_FIX_ATTEMPTS) {
@@ -1770,12 +1729,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
             `- Responda direto, sem pedir desculpas e sem mencionar esta correção.\n` +
             `- NÃO chame nenhuma ferramenta: escreva só o texto final.`;
 
-          const fixStream = (await (correctionChat || chat).sendMessageStream([{ text: correctivePrompt }])).stream;
+          const fonteFix = correctionChat || sessao;
           let fixedText = '';
-          for await (const fixChunk of fixStream) {
-            for (const p of fixChunk.candidates?.[0]?.content?.parts || []) {
-              if (p.text) fixedText += p.text;   // functionCall é ignorada de propósito
-            }
+          for await (const fev of fonteFix.enviar({ papel: 'user', partes: [{ texto: correctivePrompt }] })) {
+            // tool é ignorada de propósito: aqui só interessa o texto final.
+            if (fev.tipo === 'texto') fixedText += fev.texto;
           }
           fixedText = stripPseudoToolCalls(fixedText).trim();
           if (!fixedText) break;
