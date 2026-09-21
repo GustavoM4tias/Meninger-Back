@@ -34,6 +34,7 @@ import db from '../../models/sequelize/index.js';
 import ai from '../microsoft/MicrosoftOutlookAiService.js';
 import outlookService from '../microsoft/MicrosoftOutlookService.js';
 import { userCan } from '../permissions/capabilityService.js';
+import { emailBlock } from './blocks.js';
 
 /**
  * Registro completo do usuário: o req.user do middleware não traz o microsoft_id.
@@ -207,6 +208,65 @@ registerTool({
 // ═══════════════════════════════════════════════════════════════════════════
 // ESCRITA — tudo aqui pede confirmação
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * E-mail NOVO: a Eme monta, a pessoa revisa e envia do cartão.
+ *
+ * Esta tool não toca no Graph. Ela devolve um bloco `email` que o chat mostra
+ * como cartão editável (Para, assunto, corpo, "Editar no Outlook", Enviar). O
+ * envio é um clique da pessoa, pela rota /outlook/send - com a alçada `send`
+ * conferida lá e a confirmação de "vai para fora da Menin" feita no cartão.
+ * Por isso não existe `confirmado` aqui: não há o que confirmar, a tool não
+ * age. E por isso o modelo não pode dizer "enviei": o resumo abaixo repete.
+ */
+registerTool({
+    name: 'outlook_escrever_email',
+    description: 'MONTA um e-mail NOVO para o usuário revisar e enviar, no cartão do chat. Use para "manda um e-mail para o João dizendo que...", "escreve um e-mail para a prefeitura pedindo...", "prepara um e-mail para o time sobre...". Passe os destinatários como E-MAIL (se a pessoa citou só o nome, ache o e-mail com query_people antes), o assunto e o corpo completo em texto simples, no tom do usuário. NÃO envia: quem envia é o usuário, clicando no cartão. Nunca diga que enviou.',
+    parameters: {
+        type: 'object',
+        properties: {
+            para:    { type: 'array', items: { type: 'string' }, description: 'E-mails dos destinatários principais.' },
+            cc:      { type: 'array', items: { type: 'string' }, description: 'E-mails em cópia, se o usuário pediu.' },
+            assunto: { type: 'string', description: 'Assunto do e-mail, curto e objetivo.' },
+            corpo:   { type: 'string', description: 'Corpo completo em texto simples (quebras de linha com \\n). Saudação, mensagem e despedida no nome do usuário.' },
+        },
+        required: ['para', 'assunto', 'corpo'],
+    },
+    requiredPermissions: ['/microsoft/outlook'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const { erro, u } = await comCaixa(user);
+        if (erro) return { result: erro };
+
+        if (!await userCan(u, '/microsoft/outlook', 'send')) {
+            return { result: { erro: 'Você não tem a ação de envio na tela de e-mail, então não posso montar e-mails para você enviar.' } };
+        }
+
+        const limpa = (arr) => (Array.isArray(arr) ? arr : [arr])
+            .map(e => String(e || '').trim().toLowerCase())
+            .filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+        const para = [...new Set(limpa(args?.para))];
+        const cc = [...new Set(limpa(args?.cc))].filter(e => !para.includes(e));
+        const assunto = String(args?.assunto || '').trim();
+        const corpo = String(args?.corpo || '').trim();
+
+        if (!para.length) return { result: { erro: 'Preciso do E-MAIL de pelo menos um destinatário. Se só tem o nome, procure com query_people.' } };
+        if (!corpo) return { result: { erro: 'Preciso do texto do e-mail.' } };
+
+        const externos = para.concat(cc).filter(e => !/@menin\.com\.br$/i.test(e));
+        return {
+            result: {
+                blocks: [emailBlock({ to: para, cc, subject: assunto, body: corpo })],
+                para, cc, assunto,
+                externos: externos.length ? externos : undefined,
+                message: 'O e-mail JÁ está no cartão do chat, editável, aguardando o usuário clicar em Enviar. '
+                    + 'NADA foi enviado. Responda em 1 frase dizendo que ele pode revisar e enviar pelo cartão'
+                    + (externos.length ? `, e avise que ${externos.join(', ')} é endereço de fora da Menin` : '')
+                    + '. Nunca diga que enviou.',
+            },
+        };
+    },
+});
 
 registerTool({
     name: 'outlook_redigir_resposta',

@@ -230,6 +230,7 @@ const TOOL_LABELS = {
   outlook_configuracao_ia: 'Configuração da IA da caixa',
   outlook_redigir_resposta: 'Rascunho de resposta',
   outlook_aprovar_envio: 'Aprovação de envio',
+  outlook_escrever_email: 'Escrever e-mail',
   outlook_tirar_da_lista: 'Tirar da lista',
   outlook_organizar: 'Organizar caixa',
   outlook_criar_regra: 'Regra da caixa',
@@ -2253,6 +2254,9 @@ function summarizeForGemini(result) {
       if (b.kind === 'kpis') return { kind: b.kind, title: b.title, kpis: b.kpis };
       if (b.kind === 'cards') return { kind: b.kind, title: b.title, total: b.cards?.length, cards: (b.cards || []).slice(0, 20).map(c => compactForModel({ title: c.title, subtitle: c.subtitle, fields: c.fields }, 1, { maxStr: 200 })) };
       if (b.kind === 'detail') return { kind: b.kind, title: b.title, detail: compactForModel(b.detail, 0, { maxDepth: 4 }) };
+      // Cartão de e-mail: o modelo vê para quem e o assunto, para comentar.
+      // O envio é um clique da pessoa - ele nunca pode dizer que "enviou".
+      if (b.kind === 'email') return { kind: b.kind, para: (b.email?.to || []).map(p => p.email), assunto: b.email?.subject, status: 'aguardando o usuário clicar em Enviar no cartão; NADA foi enviado' };
       return { kind: b.kind, title: b.title };
     });
     const RENDER_KEYS = new Set(['type', 'title', 'subtitle', 'blocks', 'message', 'context']);

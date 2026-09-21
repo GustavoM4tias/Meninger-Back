@@ -70,7 +70,30 @@ export function navBlock({ id, route, filters, message }) {
     return limpar({ id, kind: 'nav', nav: limpar({ route, filters, message }) });
 }
 
+/**
+ * E-mail para a pessoa REVISAR e enviar do cartão (ou abrir no Outlook).
+ * A tool que devolve isto NÃO envia nada: quem envia é o clique no cartão,
+ * pela rota /outlook/send, com a alçada de envio conferida lá.
+ * to/cc/bcc: e-mails (string) ou { email, name }. `body` é TEXTO simples.
+ */
+export function emailBlock({ id, to, cc, bcc, subject, body, note }) {
+    const pessoa = (p) => (typeof p === 'string'
+        ? { email: p.trim() }
+        : limpar({ email: String(p?.email || '').trim(), name: p?.name || undefined }));
+    const lista = (arr) => (Array.isArray(arr) ? arr.map(pessoa).filter(p => p.email) : []);
+    return limpar({
+        // Id estável: o front guarda "já enviado" por id, para o cartão de uma
+        // conversa reaberta não oferecer o mesmo envio de novo.
+        id: id || `email_${Date.now().toString(36)}`,
+        kind: 'email',
+        email: limpar({
+            to: lista(to), cc: lista(cc), bcc: lista(bcc),
+            subject: String(subject || ''), body: String(body || ''), note,
+        }),
+    });
+}
+
 /** Ação de abrir tela, para `actions` de qualquer bloco. */
 export const abrirTela = (route, label = 'Abrir tela', filters) => limpar({ kind: 'navigate', label, payload: limpar({ route, filters }) });
 
-export default { VISUALS, VISUAL_PARAM, VISUAL_PARAM_GEMINI, visualPedido, datasetBlock, kpisBlock, cardsBlock, detailBlock, choiceBlock, navBlock, abrirTela };
+export default { VISUALS, VISUAL_PARAM, VISUAL_PARAM_GEMINI, visualPedido, datasetBlock, kpisBlock, cardsBlock, detailBlock, choiceBlock, navBlock, emailBlock, abrirTela };
