@@ -15,6 +15,8 @@ import db from '../models/sequelize/index.js';
 import { buildBrainFromTables, invalidateBrainCache } from '../services/OfficeAI/ConfigService.js';
 import { assembleSystemPrompt } from '../services/OfficeAI/promptAssembler.js';
 import { retrievalSettings, sanitizeRetrievalSettings, invalidateRetrievalCache } from '../services/OfficeAI/promptRetrieval.js';
+import { anchoringSettings, sanitizeAnchoringSettings, invalidateAnchoringCache } from '../services/OfficeAI/anchoringSettings.js';
+import { evalGateSettings, sanitizeEvalGateSettings, invalidateEvalGateCache, avaliarPortao, impressaoDoRascunho } from '../services/OfficeAI/evalGate.js';
 import { indexStatus, resetIndex } from '../services/OfficeAI/embeddingIndex.js';
 import { iniciarRodada } from '../services/OfficeAI/EmeEvalService.js';
 import { loadAccessibleEnterprises } from '../services/OfficeAI/OfficeChatService.js';
@@ -304,14 +306,52 @@ router.get('/versions', async (req, res) => {
 // Congela o rascunho atual como nova versão ativa. A partir daqui o runtime lê do banco.
 router.post('/publish', async (req, res) => {
   try {
-    const { label, note } = req.body || {};
+    const { label, note, force, force_reason } = req.body || {};
     const payload = await buildBrainFromTables();
+
+    // ── A RÉGUA COMO PORTÃO ─────────────────────────────────────────────────
+    //
+    // O conjunto de avaliação já rodava no pipeline real, mas publicar sem
+    // rodá-lo era possível - e foi assim que a trava anti-invenção acumulou
+    // 200 linhas de exceção sem uma única regressão coberta.
+    //
+    // A prova válida é a rodada sobre o RASCUNHO, com a impressão batendo: se
+    // alguém rodou a régua e continuou editando, o selo não vale mais.
+    const gateCfg = await evalGateSettings();
+    const impressao = impressaoDoRascunho(payload);
+    if (gateCfg.enabled && force !== true) {
+      const ultima = await db.EmeEvalRun.findOne({
+        where: { target: 'rascunho' },
+        order: [['created_at', 'DESC']],
+        raw: true,
+      }).catch(() => null);
+
+      const portao = avaliarPortao(ultima, gateCfg, impressao);
+      if (!portao.ok) {
+        // 409 e não 403: não é falta de permissão, é estado do trabalho. O
+        // corpo carrega o conserto e a forma de forçar, porque portão sem saída
+        // de emergência trava até o conserto quando o provedor cai.
+        return res.status(409).json({
+          error: portao.motivo,
+          gate: { ...portao, run: ultima ? { id: ultima.id, passed: ultima.passed, total: ultima.total, status: ultima.status } : null },
+          como_forcar: 'Reenvie com { force: true, force_reason: "..." }. O motivo fica gravado na versão.',
+        });
+      }
+    }
+
+    // Forçar é decisão consciente e fica no registro da versão - é o que separa
+    // "exceção justificada" de "portão que ninguém respeita".
+    const notaFinal = (force === true && gateCfg.enabled)
+      ? [note, `[PUBLICADO SEM A RÉGUA] ${String(force_reason || 'sem motivo informado').slice(0, 400)}`]
+          .filter(Boolean).join(' — ')
+      : (note || null);
+
     const version = await db.sequelize.transaction(async (tx) => {
       await db.EmeConfigVersion.update({ is_active: false }, { where: { is_active: true }, transaction: tx });
       return db.EmeConfigVersion.create({
         label: label?.trim() || `Publicação ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
         payload, status: 'published', is_active: true,
-        published_by: actor(req), note: note || null,
+        published_by: actor(req), note: notaFinal,
       }, { transaction: tx });
     });
     invalidateBrainCache();
@@ -445,6 +485,66 @@ router.put('/retrieval', async (req, res) => {
   }
 });
 
+// ── Ancoragem (o modelo cita a célula em vez de digitar o número) ───────────
+router.get('/anchoring', async (req, res) => {
+  try {
+    res.json({ settings: await anchoringSettings() });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao carregar a ancoragem.' });
+  }
+});
+
+router.put('/anchoring', async (req, res) => {
+  try {
+    const value = sanitizeAnchoringSettings(req.body?.settings || req.body || {});
+    const [row] = await db.EmeSetting.findOrCreate({ where: { key: 'anchoring' }, defaults: { key: 'anchoring', value, updatedBy: actor(req) } });
+    if (!row.isNewRecord) await row.update({ value, updatedBy: actor(req) });
+    invalidateAnchoringCache();
+    res.json({ settings: value });
+  } catch (err) {
+    console.error('[officeBrain] PUT /anchoring', err);
+    res.status(500).json({ error: 'Erro ao salvar a ancoragem.' });
+  }
+});
+
+// ── Portão de publicação (a régua obrigatória) ─────────────────────────────
+router.get('/eval-gate', async (req, res) => {
+  try {
+    const cfg = await evalGateSettings();
+    const payload = await buildBrainFromTables();
+    const impressao = impressaoDoRascunho(payload);
+    const ultima = await db.EmeEvalRun.findOne({
+      where: { target: 'rascunho' }, order: [['created_at', 'DESC']], raw: true,
+    }).catch(() => null);
+    // A tela mostra o veredito ANTES de a pessoa tentar publicar: descobrir que
+    // o portão barrou no clique de publicar é a pior hora de descobrir.
+    res.json({
+      settings: cfg,
+      impressao,
+      ultima_rodada: ultima
+        ? { id: ultima.id, status: ultima.status, passed: ultima.passed, total: ultima.total, created_at: ultima.created_at, target_hash: ultima.target_hash }
+        : null,
+      veredito: avaliarPortao(ultima, cfg, impressao),
+    });
+  } catch (err) {
+    console.error('[officeBrain] GET /eval-gate', err);
+    res.status(500).json({ error: 'Erro ao carregar o portão de publicação.' });
+  }
+});
+
+router.put('/eval-gate', async (req, res) => {
+  try {
+    const value = sanitizeEvalGateSettings(req.body?.settings || req.body || {});
+    const [row] = await db.EmeSetting.findOrCreate({ where: { key: 'eval_gate' }, defaults: { key: 'eval_gate', value, updatedBy: actor(req) } });
+    if (!row.isNewRecord) await row.update({ value, updatedBy: actor(req) });
+    invalidateEvalGateCache();
+    res.json({ settings: value });
+  } catch (err) {
+    console.error('[officeBrain] PUT /eval-gate', err);
+    res.status(500).json({ error: 'Erro ao salvar o portão.' });
+  }
+});
+
 // Apaga o índice de embeddings; o próximo turno reindexa (aos poucos).
 router.post('/retrieval/reindex', async (req, res) => {
   try {
@@ -457,7 +557,7 @@ router.post('/retrieval/reindex', async (req, res) => {
 });
 
 // ── Avaliação (conjunto de casos + rodadas) ──────────────────────────────────
-const CASE_FIELDS = ['title', 'message', 'expected_tool', 'expected_args', 'expected_no_tool', 'expected_text', 'forbidden_text', 'tags', 'enabled', 'note'];
+const CASE_FIELDS = ['title', 'message', 'expected_tool', 'expected_args', 'expected_no_tool', 'expected_text', 'forbidden_text', 'min_ancoragem', 'tags', 'enabled', 'note'];
 function casePatch(body = {}) {
   const p = {};
   for (const k of CASE_FIELDS) if (body[k] !== undefined) p[k] = body[k];
@@ -469,6 +569,12 @@ function casePatch(body = {}) {
     if (p[k] !== undefined) p[k] = (Array.isArray(p[k]) ? p[k] : String(p[k] || '').split('\n')).map(x => String(x).trim()).filter(Boolean);
   }
   if (p.expected_no_tool !== undefined) p.expected_no_tool = !!p.expected_no_tool;
+  if (p.min_ancoragem !== undefined) {
+    // Vazio significa "não exijo ancoragem neste caso" - diferente de exigir 0,
+    // que passaria sempre e daria a falsa impressão de critério.
+    const n = Number(p.min_ancoragem);
+    p.min_ancoragem = Number.isFinite(n) && n > 0 ? Math.min(1, n) : null;
+  }
   if (p.enabled !== undefined) p.enabled = !!p.enabled;
   return p;
 }
@@ -486,8 +592,8 @@ router.post('/eval/cases', async (req, res) => {
   try {
     const p = casePatch(req.body);
     if (!p.title || !p.message) return res.status(400).json({ error: 'Título e pergunta são obrigatórios.' });
-    if (!p.expected_tool && !p.expected_no_tool && !(p.expected_text || []).length && !(p.forbidden_text || []).length) {
-      return res.status(400).json({ error: 'Diga o que se espera: uma tool, nenhuma tool, ou um trecho do texto.' });
+    if (!p.expected_tool && !p.expected_no_tool && !(p.expected_text || []).length && !(p.forbidden_text || []).length && !p.min_ancoragem) {
+      return res.status(400).json({ error: 'Diga o que se espera: uma tool, nenhuma tool, um trecho do texto ou uma ancoragem mínima.' });
     }
     const c = await db.EmeEvalCase.create({ ...p, created_by: actor(req), updated_by: actor(req) });
     res.status(201).json({ case: c });
@@ -546,7 +652,11 @@ router.post('/eval/run', async (req, res) => {
   try {
     const emAndamento = await db.EmeEvalRun.count({ where: { status: 'running' } });
     if (emAndamento) return res.status(409).json({ error: 'Já há uma rodada em andamento. Espere ela terminar.' });
-    const run = await iniciarRodada({ userId: req.user.id, caseIds: req.body?.case_ids || null, label: req.body?.label || null });
+    // `alvo` decide o que a rodada testa. 'rascunho' é o que serve de prova
+    // para o portão de publicação; 'ativo' continua útil para diagnosticar o
+    // que está no ar sem mexer no rascunho.
+    const alvo = req.body?.alvo === 'ativo' ? 'ativo' : 'rascunho';
+    const run = await iniciarRodada({ userId: req.user.id, caseIds: req.body?.case_ids || null, label: req.body?.label || null, alvo });
     res.status(202).json({ run });
   } catch (err) {
     res.status(400).json({ error: err?.message || 'Erro ao iniciar a rodada.' });

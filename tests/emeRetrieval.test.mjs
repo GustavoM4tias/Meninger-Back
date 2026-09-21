@@ -130,3 +130,37 @@ test('assembleSystemPrompt: bloco "sempre" nunca cai; "por similaridade" só com
     assert.ok(out.includes('"banco" → CCA'));
     assert.equal(blocoGlossario(null), '');
 });
+
+// ── Ancoragem no conjunto de avaliação ──────────────────────────────────────
+//
+// Chamar a tool certa e escrever o número de cabeça é meio acerto. Este
+// critério cobra a outra metade.
+
+test('avaliarCaso: min_ancoragem reprova resposta pouco ancorada', async () => {
+    const { avaliarCaso } = await import('../services/OfficeAI/EmeEvalService.js');
+    const caso = { expected_tool: 'query_reservas', min_ancoragem: 0.8 };
+    const chamada = [{ name: 'query_reservas', args: {} }];
+
+    const ruim = avaliarCaso(caso, { toolCalls: chamada, texto: 'Foram 143.', ancoragem: 0.2 });
+    assert.equal(ruim.ok, false);
+    assert.ok(ruim.motivos.some(m => /ancoragem/i.test(m)));
+
+    const bom = avaliarCaso(caso, { toolCalls: chamada, texto: 'Foram 143.', ancoragem: 1 });
+    assert.equal(bom.ok, true);
+});
+
+test('avaliarCaso: sem min_ancoragem o critério não existe', async () => {
+    const { avaliarCaso } = await import('../services/OfficeAI/EmeEvalService.js');
+    const caso = { expected_tool: 'query_reservas' };
+    const r = avaliarCaso(caso, { toolCalls: [{ name: 'query_reservas' }], texto: 'Foram 143.', ancoragem: 0 });
+    assert.equal(r.ok, true);
+});
+
+test('avaliarCaso: exigir ancoragem de resposta sem número é reprovação explicada', async () => {
+    // Ancoragem nula significa que não havia número para citar. O caso pede um
+    // motivo legível, não um "reprovado" seco.
+    const { avaliarCaso } = await import('../services/OfficeAI/EmeEvalService.js');
+    const r = avaliarCaso({ min_ancoragem: 0.8 }, { toolCalls: [], texto: 'Certo, anotado.', ancoragem: null });
+    assert.equal(r.ok, false);
+    assert.ok(r.motivos.some(m => /não citou número/i.test(m)));
+});

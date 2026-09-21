@@ -17,7 +17,7 @@ const normText = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
  * Compara o que aconteceu com o que o caso espera. Puro - testável.
  * @returns {{ ok: boolean, motivos: string[] }}
  */
-export function avaliarCaso(caso, { toolCalls = [], texto = '' } = {}) {
+export function avaliarCaso(caso, { toolCalls = [], texto = '', ancoragem = null } = {}) {
     const motivos = [];
     const nomes = toolCalls.map(t => t.name).filter(Boolean);
 
@@ -47,6 +47,25 @@ export function avaliarCaso(caso, { toolCalls = [], texto = '' } = {}) {
     for (const trecho of caso.forbidden_text || []) {
         if (trecho && t.includes(normText(trecho))) motivos.push(`texto contém "${trecho}" (proibido)`);
     }
+
+    // ── Ancoragem esperada ───────────────────────────────────────────────────
+    //
+    // Chamar a tool certa e escrever o número de cabeça é meio acerto. Este
+    // critério fecha a outra metade: quanto da resposta veio por referência à
+    // célula. `null` (a maioria dos casos) não exige nada - só os casos
+    // escritos para medir adesão é que apertam.
+    //
+    // Ancoragem nula na resposta significa que não havia número para citar;
+    // cobrar adesão aí seria reprovar por falta de dado, não por invenção.
+    const min = Number(caso.min_ancoragem);
+    if (Number.isFinite(min) && min > 0) {
+        if (ancoragem == null) {
+            motivos.push(`esperava ancoragem mínima de ${Math.round(min * 100)}% e a resposta não citou número nenhum`);
+        } else if (ancoragem < min) {
+            motivos.push(`ancoragem de ${Math.round(ancoragem * 100)}% abaixo do mínimo de ${Math.round(min * 100)}%`);
+        }
+    }
+
     return { ok: motivos.length === 0, motivos };
 }
 
@@ -66,7 +85,7 @@ function coletor() {
     };
 }
 
-async function rodarCaso(caso, userId) {
+async function rodarCaso(caso, userId, brainOverride = null) {
     const t0 = Date.now();
     const session = await db.ChatSession.create({ user_id: userId, title: `[avaliação] ${caso.title}`.slice(0, 255), context: 'EVAL' });
     const res = coletor();
@@ -75,7 +94,7 @@ async function rodarCaso(caso, userId) {
         // Import tardio de propósito: o OfficeChatService puxa o chat inteiro
         // (tools, alertas, timers). Quem só usa avaliarCaso (testes) não paga isso.
         const { streamChat } = await import('./OfficeChatService.js');
-        await streamChat({ req: null, res, userId, sessionId: session.id, userMessage: caso.message, context: 'OFFICE' });
+        await streamChat({ req: null, res, userId, sessionId: session.id, userMessage: caso.message, context: 'OFFICE', brainOverride });
     } catch (err) {
         erro = err?.message || String(err);
     }
@@ -88,7 +107,10 @@ async function rodarCaso(caso, userId) {
         try { texto = JSON.parse(resposta.content).text || ''; } catch { /* mantém */ }
     }
     const toolCalls = Array.isArray(resposta?.metadata?.tool_calls) ? resposta.metadata.tool_calls : [];
-    const veredito = erro ? { ok: false, motivos: [`erro no turno: ${erro}`] } : avaliarCaso(caso, { toolCalls, texto });
+    const ancoragemDoCaso = resposta?.metadata?.ancoragem?.taxa ?? null;
+    const veredito = erro
+        ? { ok: false, motivos: [`erro no turno: ${erro}`] }
+        : avaliarCaso(caso, { toolCalls, texto, ancoragem: ancoragemDoCaso });
     return {
         case_id: caso.id,
         title: caso.title,
@@ -98,6 +120,9 @@ async function rodarCaso(caso, userId) {
         args: toolCalls[0]?.args || null,
         text: String(texto).slice(0, 400),
         model: resposta?.metadata?.model || null,
+        // Ancoragem do caso: a régua passa a medir também QUANTO da resposta
+        // veio por referência, não só se a tool certa foi chamada.
+        ancoragem: ancoragemDoCaso,
         ms: Date.now() - t0,
     };
 }
@@ -106,17 +131,30 @@ async function rodarCaso(caso, userId) {
  * Cria a rodada e a executa em segundo plano. Devolve a linha criada (status
  * running) na hora; a tela acompanha por GET /eval/runs/:id.
  */
-export async function iniciarRodada({ userId, caseIds = null, label = null }) {
+export async function iniciarRodada({ userId, caseIds = null, label = null, alvo = 'ativo' }) {
     const where = { enabled: true };
     if (Array.isArray(caseIds) && caseIds.length) where.id = caseIds;
     const casos = await db.EmeEvalCase.findAll({ where, order: [['created_at', 'ASC']] });
     if (!casos.length) throw new Error('Nenhum caso habilitado para rodar.');
+
+    // ALVO da rodada. 'rascunho' é o que o portão de publicação exige: avaliar
+    // o que VAI entrar, não o que já está no ar. A impressão do rascunho é
+    // gravada junto para o portão detectar edição feita depois da rodada.
+    let brainOverride = null;
+    let targetHash = null;
+    if (alvo === 'rascunho') {
+        const { buildBrainFromTables } = await import('./ConfigService.js');
+        const { impressaoDoRascunho } = await import('./evalGate.js');
+        brainOverride = await buildBrainFromTables();
+        targetHash = impressaoDoRascunho(brainOverride);
+    }
 
     const versao = await db.EmeConfigVersion.findOne({ where: { is_active: true }, attributes: ['id', 'label'], raw: true }).catch(() => null);
     const run = await db.EmeEvalRun.create({
         label: label || `Rodada ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`,
         status: 'running', total: casos.length, results: [],
         brain_version_id: versao?.id || null, brain_label: versao?.label || null, started_by: userId,
+        target: alvo, target_hash: targetHash,
     });
 
     (async () => {
@@ -124,7 +162,7 @@ export async function iniciarRodada({ userId, caseIds = null, label = null }) {
         const results = [];
         try {
             for (const caso of casos) {
-                results.push(await rodarCaso(caso.get({ plain: true }), userId));
+                results.push(await rodarCaso(caso.get({ plain: true }), userId, brainOverride));
                 await run.update({ results: [...results], passed: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length });
             }
             await run.update({ status: 'done', duration_ms: Date.now() - t0 });

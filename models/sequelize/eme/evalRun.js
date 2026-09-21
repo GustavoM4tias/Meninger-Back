@@ -19,6 +19,14 @@ export default (sequelize, DataTypes) => {
         // Versão publicada do cérebro no momento da rodada (null = fallback).
         brain_version_id: { type: DataTypes.UUID, allowNull: true },
         brain_label: { type: DataTypes.STRING(200), allowNull: true },
+        // O que a rodada avaliou: 'ativo' (o prompt no ar) ou 'rascunho' (o que
+        // vai entrar). Só a de rascunho serve de prova para o portão de
+        // publicação - travar a porta olhando para o que já está no ar seria
+        // olhar para o lado errado.
+        target: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'ativo' },
+        // Impressão do rascunho avaliado. É ela que impede publicar com o selo
+        // de uma rodada anterior à última edição.
+        target_hash: { type: DataTypes.STRING(64), allowNull: true },
         started_by: { type: DataTypes.INTEGER, allowNull: true },
         duration_ms: { type: DataTypes.INTEGER, allowNull: true },
         error: { type: DataTypes.TEXT, allowNull: true },

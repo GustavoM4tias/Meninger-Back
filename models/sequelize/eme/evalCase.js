@@ -24,6 +24,10 @@ export default (sequelize, DataTypes) => {
         // Trechos que o texto da resposta precisa conter / não pode conter.
         expected_text: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         forbidden_text: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+        // Ancoragem mínima esperada (0..1), ou null para não exigir. Chamar a
+        // tool certa e escrever o número de cabeça é meio acerto; este campo
+        // cobra a outra metade nos casos escritos para medir adesão.
+        min_ancoragem: { type: DataTypes.FLOAT, allowNull: true },
         tags: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         enabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
         note: { type: DataTypes.TEXT, allowNull: true },

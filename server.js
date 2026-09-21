@@ -111,6 +111,7 @@ import { ensureSiengeConnectionSchema } from './lib/ensureSiengeConnectionSchema
 import { ensureEmeBrainSchema } from './lib/ensureEmeBrainSchema.js';
 import { ensureEmeRetrievalSchema } from './lib/ensureEmeRetrievalSchema.js';
 import { ensureEmeValidationTriageSchema } from './lib/ensureEmeValidationTriageSchema.js';
+import { ensureEmeEvalTargetSchema } from './lib/ensureEmeEvalTargetSchema.js';
 import { ensureLeadsFusoCv } from './lib/ensureLeadsFusoCv.js';
 import { ensureEmeReportsSchema } from './lib/ensureEmeReportsSchema.js';
 import { ensureWhatsappAutomationSchema } from './lib/ensureWhatsappAutomationSchema.js';
@@ -635,6 +636,9 @@ async function syncModelsAndPatches(fingerprint) {
     // Triagem dos incidentes da trava anti-invenção: o veredito do admin e a
     // evidência que torna esse veredito possível.
     ['EmeValidationTriage', ensureEmeValidationTriageSchema],
+    // Alvo da régua: separa a rodada de diagnóstico da que serve de prova para
+    // o portão de publicação.
+    ['EmeEvalTarget', ensureEmeEvalTargetSchema],
     ['EmeReports', ensureEmeReportsSchema],
     ['WhatsappAutomation', ensureWhatsappAutomationSchema],
     ['WhatsappMessages', ensureWhatsappMessagesSchema],
