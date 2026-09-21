@@ -18,6 +18,23 @@ export default (sequelize, DataTypes) => {
     context: { type: DataTypes.JSONB, allowNull: true, defaultValue: null },
     // Triagem no Brain Studio (aba Validação): admin marca como revisado.
     reviewed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+
+    // ── O VEREDITO ───────────────────────────────────────────────────────────
+    // A trava acertou ou atrapalhou? É a única pergunta que diz se ela deve
+    // ficar como está, endurecer ou sair. Sem isto, "corrected/blocked/warned"
+    // só conta o que a trava FEZ, nunca se estava certa ao fazer.
+    //   'alucinacao'     - o valor acusado não existia; a trava acertou
+    //   'falso_positivo' - o valor era real; a resposta certa foi penalizada
+    //   'inconclusivo'   - não dá para dizer com o que ficou guardado
+    verdict: { type: DataTypes.STRING(20), allowNull: true },
+    verdict_by: { type: DataTypes.INTEGER, allowNull: true },
+    verdict_at: { type: DataTypes.DATE, allowNull: true },
+    verdict_note: { type: DataTypes.TEXT, allowNull: true },
+
+    // Retrato compacto do que as consultas do turno devolveram. Sem ele o
+    // veredito seria chute: para dizer se "143" estava no dado, é preciso ver
+    // o dado. Guardado no momento do incidente porque a consulta não se repete.
+    evidence: { type: DataTypes.JSONB, allowNull: true, defaultValue: null },
   }, {
     tableName: 'eme_validation_incidents',
     underscored: true,

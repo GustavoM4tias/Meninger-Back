@@ -422,6 +422,11 @@ async function buildFeedbackContext(assistantMsg) {
 // ── POST /api/office-chat/messages/:id/feedback ───────────────────────────────
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// O veredito da triagem. Fechado em enum de propósito: a taxa de acerto da
+// trava é somada por estes três valores, e texto livre aqui a tornaria
+// incalculável no dia seguinte.
+const VEREDITOS = ['alucinacao', 'falso_positivo', 'inconclusivo'];
+
 router.post('/messages/:id/feedback', authenticate, async (req, res) => {
   try {
     const { rating, comment } = req.body;
@@ -519,12 +524,15 @@ router.get('/incidents', authenticate, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso restrito a administradores.' });
 
-    const { page = 1, per_page = 30, outcome, reviewed } = req.query;
+    const { page = 1, per_page = 30, outcome, reviewed, verdict } = req.query;
     const offset = (Number(page) - 1) * Number(per_page);
     const where = {};
     if (outcome) where.outcome = outcome;
     if (reviewed === 'true') where.reviewed = true;
     if (reviewed === 'false') where.reviewed = false;
+    // `pendente` é a fila de trabalho da triagem: o que ainda não foi julgado.
+    if (verdict === 'pendente') where.verdict = { [db.Sequelize.Op.is]: null };
+    else if (verdict && VEREDITOS.includes(verdict)) where.verdict = verdict;
 
     const { count, rows } = await db.EmeValidationIncident.findAndCountAll({
       where,
@@ -533,12 +541,24 @@ router.get('/incidents', authenticate, async (req, res) => {
       offset,
     });
 
-    const [correctedCount, blockedCount, warnedCount, pendingCount] = await Promise.all([
+    const [correctedCount, blockedCount, warnedCount, pendingCount,
+           alucinacaoCount, falsoPositivoCount, inconclusivoCount, semVeredito] = await Promise.all([
       db.EmeValidationIncident.count({ where: { outcome: 'corrected' } }),
       db.EmeValidationIncident.count({ where: { outcome: 'blocked' } }),
       db.EmeValidationIncident.count({ where: { outcome: 'warned' } }),
       db.EmeValidationIncident.count({ where: { reviewed: false } }),
+      db.EmeValidationIncident.count({ where: { verdict: 'alucinacao' } }),
+      db.EmeValidationIncident.count({ where: { verdict: 'falso_positivo' } }),
+      db.EmeValidationIncident.count({ where: { verdict: 'inconclusivo' } }),
+      db.EmeValidationIncident.count({ where: { verdict: { [db.Sequelize.Op.is]: null } } }),
     ]);
+
+    // A TAXA DE ACERTO DA TRAVA. É o número que a aba existe para produzir:
+    // dos incidentes já julgados, quantos eram invenção de verdade. Inconclusivo
+    // fica de fora dos dois lados - contá-lo como acerto inflaria a trava, como
+    // erro a condenaria por falta de prova.
+    const julgados = alucinacaoCount + falsoPositivoCount;
+    const precisao = julgados ? alucinacaoCount / julgados : null;
 
     const enriched = await Promise.all(rows.map(async (inc) => {
       const user = inc.user_id
@@ -556,6 +576,15 @@ router.get('/incidents', authenticate, async (req, res) => {
         warned: warnedCount,
         pending: pendingCount,
         total: correctedCount + blockedCount + warnedCount,
+        // Triagem
+        alucinacao: alucinacaoCount,
+        falso_positivo: falsoPositivoCount,
+        inconclusivo: inconclusivoCount,
+        sem_veredito: semVeredito,
+        julgados,
+        // null = ninguém julgou nada ainda. A tela mostra "sem dados", que é a
+        // verdade - e não 0%, que pareceria uma trava péssima.
+        precisao,
       },
     });
   } catch (err) {
@@ -575,8 +604,39 @@ router.patch('/incidents/:id', authenticate, async (req, res) => {
     if (!inc) return res.status(404).json({ error: 'Incidente não encontrado.' });
 
     if (typeof req.body?.reviewed === 'boolean') inc.reviewed = req.body.reviewed;
+
+    if ('verdict' in (req.body || {})) {
+      const v = req.body.verdict;
+      if (v === null || v === '') {
+        // Desfazer o veredito é parte do trabalho: quem julga erra, e um
+        // veredito preso enviesaria a taxa para sempre.
+        inc.verdict = null;
+        inc.verdict_by = null;
+        inc.verdict_at = null;
+      } else if (VEREDITOS.includes(v)) {
+        inc.verdict = v;
+        inc.verdict_by = req.user.id;
+        inc.verdict_at = new Date();
+        // Julgar é revisar: marcar as duas coisas na mão seria trabalho dobrado
+        // para a mesma decisão.
+        inc.reviewed = true;
+      } else {
+        return res.status(400).json({ error: `Veredito inválido. Use: ${VEREDITOS.join(', ')}.` });
+      }
+    }
+
+    if (typeof req.body?.verdict_note === 'string') {
+      inc.verdict_note = req.body.verdict_note.slice(0, 2000) || null;
+    }
+
     await inc.save();
-    res.json({ ok: true, reviewed: inc.reviewed });
+    res.json({
+      ok: true,
+      reviewed: inc.reviewed,
+      verdict: inc.verdict,
+      verdict_at: inc.verdict_at,
+      verdict_note: inc.verdict_note,
+    });
   } catch (err) {
     console.error('[officeChatRoutes] incident review error:', err);
     res.status(500).json({ error: 'Erro ao atualizar incidente.' });
