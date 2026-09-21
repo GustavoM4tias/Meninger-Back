@@ -609,7 +609,17 @@ class ContractAnalysisService {
 
     /** Um aviso por episódio: o registro sai do quadro quando o repasse anda. */
     async _avisarSeParado(linha) {
-        const limiteHoras = Number(process.env.CONTRACT_STUCK_ALERT_HOURS || 4);
+        // O prazo mora em validator_settings (tela /validator > Saúde). A env
+        // ficou só como piso de quando a linha ainda não existe: prazo de
+        // operação que só muda com deploy não é prazo de operação.
+        let limiteHoras = Number(process.env.CONTRACT_STUCK_ALERT_HOURS) || 4;
+        try {
+            const { getSettings } = await import('./validator/validatorSettings.js');
+            limiteHoras = (await getSettings()).stuck_alert_hours || limiteHoras;
+        } catch (err) {
+            console.warn('[validador] prazo de parado veio do piso:', err.message);
+        }
+
         if (linha.alerted_at || !linha.status_since) return;
 
         const horasParado = (Date.now() - new Date(linha.status_since).getTime()) / 3600000;

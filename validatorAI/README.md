@@ -1,113 +1,94 @@
-# 📄 ValidatorAI – API de Validação de Contratos (Gemini 2.0)
+# ValidatorAI - API de validação de contratos
 
-Esta API permite validar dois documentos obrigatórios (Contrato Caixa e Confissão de Dívida), assegurando conformidade com as diretrizes internas de uma construtora, utilizando IA (Google Gemini 2.0).
+Compara o **Contrato Caixa** (financiamento MCMV pela CEF) com a **Confissão de
+Dívida** da construtora e aponta divergência de pessoas, valores, datas e
+assinaturas. Monta o `app` Express que o backend monta em `/api/ai`
+(`server.js`); não sobe sozinho.
 
----
+## Quem chama
 
-## 🚀 Instalação
+Duas portas, e nenhuma pode barrar a outra (o portão está em `index.js`):
 
-### 1. Clone o projeto ou acesse a pasta `validatorAI` dentro do seu backend existente:
+1. **O job de análise automática**, server-to-server, sem usuário no fluxo.
+   Entra pelo token interno (`security/internalJobToken.js`). Quem dispara é o
+   webhook `CONTRATOS_IA` do CV, quando o repasse entra em "Analise Contratos"
+   (`services/contractAnalysisService.js`).
+2. **A tela `/validator`**, onde alguém sobe os dois PDFs na mão. Entra pelo JWT
+   do usuário, com a alçada da rota.
 
-```bash
-cd validatorAI
-```
+## Modelos
 
-### 2. Instale as dependências:
+**A lista de modelos NÃO mora mais em `GEMINI_MODELS`.** Ela mora em
+`validator_settings.models` e é editada na tela `/validator` > aba **Saúde**,
+que também mostra qual modelo respondeu e qual devolveu 404.
 
-```bash
-npm install express multer cors helmet pdf-parse @google/generative-ai
-```
+O motivo é o dia em que o provedor aposenta um modelo: com a lista presa na
+variável de ambiente, toda análise passava a responder 404 e o conserto dependia
+de quem tem acesso ao painel de deploy. A env continua como **piso** - vale
+enquanto a linha não existe (primeiro boot) e quando o banco não responde.
 
-### 3. Configure seu `.env` (opcional):
+`AIService` tenta os modelos na ordem e trata as falhas de forma diferente,
+porque elas pedem remédios diferentes: **429** é a chave que estourou (esfria
+ela e vai para a próxima), **5xx** é o modelo sobrecarregado (repete na mesma
+chave, esperando mais a cada rodada), **404** é o modelo que não existe (pula
+para o próximo e aparece na aba Saúde).
 
-```env
-CONFISSAO_REGRAS="Texto completo do procedimento interno da empresa"
-```
+## Saúde
 
-Caso prefira, insira o texto diretamente no `DocumentValidator.js` como `systemPrompt` (já incluso no código).
+`AIService.ping(model)` toca em UM modelo, sem fallback, e é o que a sonda
+(`services/validator/validatorHealthService.js`, agendada por
+`scheduler/validatorHealthScheduler.js`) usa para responder "daria para validar
+agora?" sem depender de haver contrato na fila. `GET /validator/health` é a
+prova de vida desta API, batida pelo mesmo cliente axios que a análise usa -
+assim a sonda testa a `VALIDATOR_API_BASE_URL` de verdade.
 
----
+Quando a sonda encontra problema, sai aviso (sino + e-mail) para os
+destinatários escolhidos na tela, ou para todos os administradores quando
+ninguém foi escolhido. E sai outro quando volta ao normal.
 
-## 🔧 Executando a API
+## Variáveis de ambiente
 
-Adicione a linha abaixo no seu `main` backend (por exemplo, `server.js`, `app.js`, etc):
+| Variável | Para quê |
+| --- | --- |
+| `GEMINI_API_KEYS` | Chaves do Gemini, separadas por vírgula. Rotação round-robin com cooldown por chave. Ausente = a API não carrega. |
+| `GEMINI_MODELS` | **Piso** do pool de modelos. Quem manda é `validator_settings.models`. |
+| `GEMINI_MAX_RETRIES` | Mínimo de tentativas por modelo (padrão 3). |
+| `VALIDATOR_API_BASE_URL` | Onde o job encontra esta API (padrão `http://localhost:5000/api/ai`). |
+| `VALIDATOR_TIMEOUT_MS` | Teto de uma análise (padrão 300000). |
+| `CONFISSAO_REGRAS` | Texto do procedimento interno, quando não se quer o prompt embutido. |
+| `ENABLE_VALIDATOR_HEALTH` | Liga a sonda fora de produção (em produção ela sobe sozinha). |
 
-```js
-import validatorAI from './validatorAI/index.js';
-app.use('/ai', validatorAI);
-```
+## Rotas
 
-Em seguida, execute seu servidor normalmente:
+| Rota | Portão | O que faz |
+| --- | --- | --- |
+| `POST /validator` | token interno **ou** alçada `/validator` | Valida o par de PDFs. |
+| `GET /validator/health` | idem | Prova de vida (não devolve dado). |
+| `GET /validator/history` | alçada `/validator` | Histórico de validações. |
+| `POST /chat` | alçada `/validator` | Pergunta livre sobre documento. |
+| `GET /token` | alçada `/validator` | Consumo de tokens (total e por mês/modelo). |
+| `POST /payment-flow` | autenticado | Extração de dados de pagamento. |
 
-```bash
-npm run dev
-# ou
-node app.js
-```
-
----
-
-## 📫 Como testar via Terminal
-
-1. Crie uma pasta `testes/` com os dois arquivos PDF:
-
-```
-testes/
-├── contrato_caixa.pdf
-└── confissao_divida.pdf
-```
-
-2. Execute o seguinte comando usando `curl`:
-
-```bash
-curl -X POST http://localhost:3000/ai/validate \
-  -F "contrato_caixa=@testes/contrato_caixa.pdf" \
-  -F "confissao_divida=@testes/confissao_divida.pdf"
-```
-
-3. Resposta esperada (exemplo):
-
-```json
-{
-  "status": "ERRO",
-  "resultado": "status: ERRO\nmensagens: [\"Data de assinatura não coincide.\", \"Valor do recurso próprio está divergente em R$ 0,03.\"]"
-}
-```
-
----
-
-## 📦 Estrutura de Diretórios
+## Estrutura
 
 ```
 validatorAI/
-├── index.js
-├── src/
-│   ├── config/
-│   │   └── geminiClient.js
-│   ├── services/
-│   │   └── DocumentValidator.js
-│   ├── utils/
-│   │   └── TokenCounter.js
-│   └── middleware/
-│       ├── validation.js
-│       └── errorHandler.js
+├── index.js                     app Express + portões de acesso
+└── src/
+    ├── config/geminiClient.js   chaves, rotação e cooldown
+    ├── services/
+    │   ├── AIService.js         tentativas, fallback, ping e contagem de tokens
+    │   ├── DocumentValidator.js o prompt e a comparação dos dois contratos
+    │   ├── PaymentExtractorService.js
+    │   ├── MeetingSummaryService.js
+    │   └── ChatService.js
+    ├── routes/                  document, history, chat, stats, payment-flow
+    ├── middleware/              validation, errorHandler
+    └── utils/db.js              acesso ao Sequelize do backend
 ```
 
----
+## Consumo de tokens
 
-## 🧠 Expansão futura
-
-* Cache de resultados com Redis
-* Interface web de upload e resultado
-* Dashboard de validações realizadas
-* Histórico por responsável ou empreendimento
-
----
-
-## 📮 Suporte
-
-Para dúvidas, contate o departamento comercial: **[comercial@menin.com.br](mailto:comercial@menin.com.br)**
-
----
-
-**ValidatorAI © 2025 – Menin Engenharia**
+Toda chamada bem-sucedida grava uma linha em `token_usages` com o modelo, o
+total de tokens (do `usageMetadata` do provedor, não estimado) e o índice da
+chave usada. `GET /token/total` e `GET /token/mensal` somam isso.

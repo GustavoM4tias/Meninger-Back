@@ -100,6 +100,7 @@ import atoParcelasScheduler from './scheduler/atoParcelasScheduler.js';
 import useredeKeepAliveScheduler from './scheduler/useredeKeepAliveScheduler.js';
 import useredeConciliacaoScheduler from './scheduler/useredeConciliacaoScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
+import validatorHealthScheduler from './scheduler/validatorHealthScheduler.js';
 import marketingDispatchScheduler from './scheduler/marketingDispatchScheduler.js';
 import marketingSyncScheduler     from './scheduler/marketingSyncScheduler.js';
 import { ensureFinanceOverridesSchema } from './lib/ensureFinanceOverridesSchema.js';
@@ -117,6 +118,7 @@ import { ensureUserPhoneBackfill } from './lib/ensureUserPhoneBackfill.js';
 import { ensurePlatformUpdatesSchema } from './lib/ensurePlatformUpdatesSchema.js';
 import { ensureCvPanelSchema } from './lib/ensureCvPanelSchema.js';
 import { ensureCvWebhookSchema } from './lib/ensureCvWebhookSchema.js';
+import { ensureValidatorHealthSchema } from './lib/ensureValidatorHealthSchema.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
@@ -638,6 +640,9 @@ async function syncModelsAndPatches(fingerprint) {
     ['CvPanel', ensureCvPanelSchema],
     // Depois de CvPanel: acrescenta a coluna de retencao no mesmo singleton.
     ['CvWebhook', ensureCvWebhookSchema],
+    // Regra de operacao e saude do Validador de Contratos (pool de modelos,
+    // ritmo da sonda, prazos e destinatarios do alerta).
+    ['ValidatorHealth', ensureValidatorHealthSchema],
     ['AlertShares', ensureAlertSharesSchema],
     ['DeptSpending', ensureDeptSpendingSchema],
     ['DepartmentVisibility', ensureDepartmentVisibilitySchema],
@@ -739,6 +744,21 @@ async function startBackgroundServices() {
   // (routes/contractAutomationRoutes.js). A varredura manual continua
   // disponível em POST /api/contracts/execute para recuperar o que o webhook
   // perder.
+  //
+  // O que TEM cron é a SONDA de saúde: ela não analisa nada, só confere se
+  // daria para analisar (modelo do pool responde, API do validador de pé,
+  // gatilho do CV chamando). É ela que faz "nenhum contrato hoje" parar de ser
+  // indistinguível de "validador morto desde a madrugada".
+  //
+  // Passa pelo gate de dev como os outros, e não por excesso de zelo: a sonda
+  // MANDA E-MAIL para os administradores quando encontra problema, e rodando da
+  // máquina local ela avisaria produção de uma falha que só existe no .env de
+  // quem está desenvolvendo. O ritmo e o liga/desliga finos moram em
+  // validator_settings, editáveis na tela.
+  if (schedulerOn('ENABLE_VALIDATOR_HEALTH')) {
+    validatorHealthScheduler.start()
+      .catch(err => console.warn('⚠️  validatorHealthScheduler não subiu:', err?.message));
+  }
 
   // Crons opt-in (já eram OFF por padrão em qualquer ambiente):
   if (process.env.ENABLE_SIENGE_CONTRACT_SCHEDULE === 'true') contractSiengeScheduler.start();

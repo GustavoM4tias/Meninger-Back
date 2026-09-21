@@ -54,6 +54,12 @@ export const NotificationType = {
     // resolver fica parado de propósito, e sem aviso ninguém percebe.
     CONTRACT_VALIDATOR_STUCK: 'validador.contrato.parado',
 
+    // Validador de contratos — a FERRAMENTA, não um contrato. Modelo aposentado,
+    // chave vencida, API inalcançável ou gatilho do CV mudo: tudo isso para a
+    // validação inteira, e o aviso de "contrato parado" só chegaria horas depois
+    // (e só se um contrato tivesse entrado na etapa).
+    VALIDATOR_UNHEALTHY:      'validador.saude',
+
     // Alertas — compartilhamento entre usuários
     ALERT_SHARED:            'alert.shared',
 
@@ -182,6 +188,19 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         // Vale e-mail: a venda para de andar até alguém agir, e quem age pode
         // estar fora do Office.
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.VALIDATOR_UNHEALTHY]: {
+        label: 'Validador de Contratos fora do ar',
+        group: 'Sistema',
+        description: 'Quando a sonda não consegue validar: modelo de IA aposentado ou indisponível, '
+            + 'chave sem quota, API do validador inalcançável ou o gatilho do CV parado de chamar. '
+            + 'Também avisa quando volta ao normal.',
+        emailType: 'generic.notification',
+        whatsapp: null,
+        // Vale e-mail: validação parada é fila de repasse parada, e quem
+        // conserta (trocar o modelo na tela) pode estar fora do Office.
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },
@@ -854,6 +873,10 @@ const SCREENS_BY_TYPE = {
     [NotificationType.LEAD_WEBHOOK_REJECTED]: ['/meta', '/marketing/leads'],
     [NotificationType.LEAD_BINDING_MISSING]:  ['/meta', '/marketing/leads'],
     [NotificationType.META_CAMPAIGNS_TOKEN_EXPIRING]: ['/meta'],
+
+    // Quem não tem o Validador na alçada não precisa escolher canal para a
+    // saúde dele (o envio continua sendo por destinatário escolhido na tela).
+    [NotificationType.VALIDATOR_UNHEALTHY]: ['/validator'],
 
     [NotificationType.SALES_CLOSING_DIVERGENCE]:  ['/comercial/relatorios/faturamento'],
     [NotificationType.CONTRACT_ADJUSTMENT_DRIFT]: ['/comercial/relatorios/faturamento'],

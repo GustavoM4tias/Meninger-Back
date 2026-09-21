@@ -1,8 +1,10 @@
 // routes/contractAutomationRoutes.js
 import express from 'express';
 import controller from '../controllers/contractAutomationController.js';
+import health from '../controllers/validatorHealthController.js';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireAdmin from '../middlewares/requireAdmin.js';
+import requireCapability from '../middlewares/requireCapability.js';
 
 const router = express.Router();
 
@@ -49,5 +51,19 @@ router.post('/process/:idRepasse', authenticate, requireAdmin, async (req, res) 
 router.get('/pending', authenticate, requireAdmin, async (req, res) => {
     await controller.listPendingRepasses(req, res);
 });
+
+// ── Saúde do validador ───────────────────────────────────────────────────────
+//
+// A sonda (scheduler/validatorHealthScheduler.js) responde, sem depender de
+// contrato nenhum, se DARIA para validar agora: os modelos do pool respondem, a
+// API do validador está na URL certa, o gatilho do CV continua chamando.
+//
+// O farol é da tela (quem valida precisa saber que está fora do ar antes de
+// subir o PDF). O detalhe e a configuração são de admin: ali moram o endereço
+// secreto do webhook, os nomes de modelo e o que mexe na conta do provedor.
+router.get('/health', authenticate, requireCapability('/validator', 'view'), health.getEstado);
+router.get('/health/full', authenticate, requireCapability('/validator', 'configure'), health.getDetalhe);
+router.post('/health/check', authenticate, requireCapability('/validator', 'configure'), health.rodarSonda);
+router.put('/health/settings', authenticate, requireCapability('/validator', 'configure'), health.salvarConfig);
 
 export default router;
