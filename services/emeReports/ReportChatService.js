@@ -16,7 +16,7 @@
 //  { type:'spec', spec, changedIds, meta }      — spec atualizado (re-render preview)
 //  { type:'done', msgId } | { type:'error' }
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { conversa } from '../ai/gateway.js';
 import db from '../../models/sequelize/index.js';
 import {
   executeTool as officeExecuteTool,
@@ -295,15 +295,6 @@ export function startReportRun({ user, report, userMessage, selectedBlockIds = [
 }
 
 // ── Gemini (mesmo esquema de chaves/modelos do Office chat) ──────────────────
-function getKeys() {
-  return (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
-    .split(',').map((k) => k.trim()).filter(Boolean);
-}
-function getModels() {
-  const smart = (process.env.GEMINI_SMART_MODELS || '').split(',').map((m) => m.trim()).filter(Boolean);
-  if (smart.length) return smart;
-  return ['gemini-2.5-pro', 'gemini-2.5-flash'];
-}
 
 // Aplica as ops do report_apply_ops sobre o spec atual. Retorna { spec, changedIds }.
 export function applyOps(currentSpec, payload) {
@@ -464,12 +455,14 @@ function trimHistory(messages) {
   }
 
   const omitidas = recorte.length - mantidas.length;
-  const history = mantidas.map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
+  // Formato INTERNO do gateway (papel/partes). O adaptador do fornecedor
+  // traduz na hora do envio - este arquivo não conhece formato de ninguém.
+  const history = mantidas.map((m) => ({ papel: m.role === 'model' ? 'model' : 'user', partes: [{ texto: m.text }] }));
   if (omitidas > 0) {
     history.unshift({
-      role: 'user',
-      parts: [{
-        text: `[${omitidas} mensagem(ns) anterior(es) desta conversa foram omitidas por tamanho. `
+      papel: 'user',
+      partes: [{
+        texto: `[${omitidas} mensagem(ns) anterior(es) desta conversa foram omitidas por tamanho. `
           + 'O relatório atual, que você recebe no system prompt, é a fonte da verdade sobre o que já foi montado. '
           + 'Se precisar de qualquer NÚMERO que estava nessas mensagens, RECONSULTE com a ferramenta — nunca reconstrua de memória.]',
       }],
@@ -580,46 +573,33 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
     ? `[O usuário selecionou ${selectedBlocks.length} bloco(s) no relatório: ${selectedBlocks.map((b) => `"${b.id}" (${b.type})`).join(', ')}. Altere APENAS esses blocos, com upsert mantendo os mesmos ids. Não use replace_all.]\n\n${userMessage}`
     : userMessage;
 
-  // Cliente com retry modelo×chave (mesma estratégia do Office chat, compacta)
-  const keys = getKeys();
-  if (!keys.length) {
-    emitRun(run, { type: 'error', message: 'GEMINI_API_KEY(S) não configurada(s).' });
-    emitRun(run, { type: 'done' });
-    return;
-  }
-  const models = getModels();
-  const RETRYABLE = new Set([401, 403, 429, 500, 503]);
-
-  let chat = null;
-  let firstStream = null;
-  outer: for (const model of models) {
-    for (let k = 0; k < keys.length; k++) {
-      try {
-        const genAI = new GoogleGenerativeAI(keys[k]);
-        const mdl = genAI.getGenerativeModel({
-          model,
-          systemInstruction: systemPrompt,
-          tools: [{ functionDeclarations: declarations }],
-        });
-        chat = mdl.startChat({ history });
-        firstStream = await chat.sendMessageStream(effectiveMessage);
-        break outer;
-      } catch (err) {
-        const status = err?.status || err?.response?.status;
-        if (RETRYABLE.has(status)) continue;
-        throw err;
-      }
-    }
-  }
-  if (!chat || !firstStream) {
-    emitRun(run, { type: 'error', message: 'IA indisponível no momento. Tente novamente.' });
+  // Porta única: quem atende o contexto 'relatorios' sai da tela Conexões de
+  // IA. O retry por modelo e a rotação de chave, que antes viviam num laço
+  // duplicado aqui, agora são do gateway - com a tabela de causas certa
+  // (credencial para na hora, quota esfria a chave, sobrecarga espera).
+  let sessao;
+  try {
+    sessao = await conversa('relatorios', {
+      system: systemPrompt,
+      historico: history,
+      tools: declarations,
+    });
+  } catch (err) {
+    // Erro de CONFIGURAÇÃO vem com a frase que diz o que fazer ("sem chave",
+    // "contexto pausado"). Escondê-lo atrás de "IA indisponível" mandaria o
+    // admin procurar no lugar errado.
+    const config = ['config', 'credencial', 'pausado'].includes(err?.causa);
+    emitRun(run, { type: 'error', message: config ? err.message : 'IA indisponível no momento. Tente novamente.' });
     emitRun(run, { type: 'done' });
     return;
   }
 
   let fullText = '';
   const toolCalls = [];
-  let stream = firstStream;
+  // A PRIMEIRA mensagem do turno. Depois dela, cada rodada envia o resultado
+  // das tools ou uma cutucada - e `proxima = null` quer dizer "continue a
+  // partir do que já está no histórico".
+  let proxima = { papel: 'user', partes: [{ texto: effectiveMessage }] };
   let lastFinishReason = null;
   let malformedRetries = 0;
   let emptyBuildNudged = false;
@@ -628,34 +608,40 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       const pendingCalls = [];
       lastFinishReason = null;
-      for await (const chunk of stream.stream) {
-        const candidate = chunk.candidates?.[0];
-        if (candidate?.finishReason) lastFinishReason = candidate.finishReason;
-        for (const part of candidate?.content?.parts || []) {
-          if (part.text) {
-            fullText += part.text;
-            emitRun(run, { type: 'chunk', text: part.text });
-          }
-          if (part.functionCall) pendingCalls.push(part.functionCall);
+
+      // Eventos JÁ NORMALIZADOS pelo gateway: { tipo:'texto' } ou
+      // { tipo:'tool', id, nome, args }. O formato do fornecedor morreu no
+      // adaptador, então trocar de IA não mexe em nada daqui para baixo.
+      for await (const ev of sessao.enviar(proxima)) {
+        if (ev.tipo === 'texto') {
+          fullText += ev.texto;
+          emitRun(run, { type: 'chunk', text: ev.texto });
         }
+        if (ev.tipo === 'tool') pendingCalls.push({ id: ev.id, name: ev.nome, args: ev.args });
       }
+      proxima = null;
+
+      // O motivo da parada também vem normalizado ('tool', 'tamanho',
+      // 'filtro', 'normal'). O caso MALFORMED do Gemini, que o resgate abaixo
+      // trata, chega aqui como 'tool' sem chamada nenhuma - que é exatamente a
+      // condição que o resgate procura.
+      lastFinishReason = sessao.resultado()?.fim || null;
       if (!pendingCalls.length) {
         // MALFORMED_FUNCTION_CALL: a API DESCARTA a chamada (tipicamente um
         // report_apply_ops grande demais) e o round termina "limpo". Sem este
         // resgate o modelo acha que montou, o relatório fica vazio e o texto
         // final mente para o usuário — foi exatamente o bug do relatório da
         // Moradas. Devolve o erro ao modelo e manda refazer em partes menores.
-        if (String(lastFinishReason).toUpperCase() === 'MALFORMED_FUNCTION_CALL'
+        if (lastFinishReason === 'malformado'
           && malformedRetries < 2 && round < MAX_TOOL_ROUNDS) {
           malformedRetries += 1;
           emitRun(run, { type: 'tool_start', name: 'report_apply_ops', label: 'Remontando (chamada malformada)' });
           emitRun(run, { type: 'tool_result', name: 'report_apply_ops', ok: false, summary: 'Chamada descartada pela API; refazendo em partes menores.' });
-          stream = await chat.sendMessageStream(
+          proxima = { papel: 'user', partes: [{ texto:
             'ERRO TÉCNICO: sua última chamada de ferramenta foi DESCARTADA pela API por vir malformada '
             + '(provavelmente grande demais). NADA foi aplicado ao relatório. Refaça agora a operação em '
             + 'chamadas report_apply_ops MENORES - uma seção com 2 a 4 blocos por chamada - até completar '
-            + 'o que você pretendia. Não escreva a resposta final antes de aplicar tudo.',
-          );
+            + 'o que você pretendia. Não escreva a resposta final antes de aplicar tudo.' }] };
           continue;
         }
         // Anti-alucinação: consultou dados, vai encerrar sem ter chamado
@@ -669,12 +655,11 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
         // esperando a resposta — cutucar aqui a faria montar no escuro.
         if (!aplicou && buscouDados && !temBlocos && !perguntou && !emptyBuildNudged && round < MAX_TOOL_ROUNDS) {
           emptyBuildNudged = true;
-          stream = await chat.sendMessageStream(
+          proxima = { papel: 'user', partes: [{ texto:
             'ERRO TÉCNICO: o relatório continua VAZIO - você não chamou report_apply_ops nenhuma vez '
             + 'nesta resposta. Texto no chat NÃO monta o relatório. Chame report_apply_ops AGORA, seção '
             + 'a seção (hero + metadados primeiro, depois cada seção com os dados já consultados), e só '
-            + 'então escreva a resposta final curta.',
-          );
+            + 'então escreva a resposta final curta.' }] };
           continue;
         }
         break;
@@ -682,7 +667,7 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
 
       // Executa as tools do round e devolve todas as respostas de uma vez
       const responses = [];
-      for (const { name, args } of pendingCalls) {
+      for (const { id, name, args } of pendingCalls) {
         const label = DATA_TOOL_LABELS[name]
           || (name === 'report_apply_ops' ? 'Montando o relatório'
             : name === 'report_analyze_data' ? `Analisando ${args?.group_by || 'os dados'}`
@@ -823,11 +808,14 @@ async function runReportGeneration(run, { user, report, userMessage, selectedBlo
           summary: ok ? resumoDoResultado(result) : String(result.error).slice(0, 200),
         });
         toolCalls.push({ name, args: args || {}, ok, ms: Date.now() - t0 });
-        responses.push({ functionResponse: { name, response: summarizeForGemini(result) } });
+        // O `id` da chamada vai junto: OpenAI e Anthropic casam resultado com
+        // chamada por id, não por nome. Sem ele, duas chamadas da mesma tool
+        // no mesmo turno ficariam ambíguas - o Gemini perdoa, os outros não.
+        responses.push({ resultado: { id, nome: name, valor: summarizeForGemini(result) } });
       }
 
       if (round === MAX_TOOL_ROUNDS) break;
-      stream = await chat.sendMessageStream(responses);
+      proxima = { papel: 'tool', partes: responses };
     }
   } catch (err) {
     console.error('[ReportChatService] Erro no stream:', err?.status || err?.message);

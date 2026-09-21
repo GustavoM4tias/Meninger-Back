@@ -309,3 +309,19 @@ test('mídia: PDF é aceito por Gemini e Anthropic, e recusado com recado na Ope
     // Mandar um anexo que o provedor ignora em silêncio é pior que a recusa.
     assert.throws(() => montarMensagens(h, 'openai'), /não lê PDF/i);
 });
+
+test('MALFORMED_FUNCTION_CALL do Gemini NÃO vira "normal"', () => {
+    // É o caso em que a API DESCARTA a chamada e devolve um turno limpo: quem
+    // chamou acha que a ferramenta rodou e o texto final mente, sem erro
+    // nenhum aparecer. Tratá-lo como fim normal apagaria o resgate que existe
+    // no chat de relatórios - e o sintoma seria relatório vazio com a Eme
+    // narrando que montou.
+    assert.equal(normalizarFim('MALFORMED_FUNCTION_CALL', 'gemini'), 'malformado');
+    assert.notEqual(normalizarFim('MALFORMED_FUNCTION_CALL', 'gemini'), FIM.NORMAL);
+});
+
+test('os outros fins do Gemini seguem como antes', () => {
+    assert.equal(normalizarFim('MAX_TOKENS', 'gemini'), FIM.TAMANHO);
+    assert.equal(normalizarFim('SAFETY', 'gemini'), FIM.FILTRO);
+    assert.equal(normalizarFim('STOP', 'gemini'), FIM.NORMAL);
+});

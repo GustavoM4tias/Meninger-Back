@@ -38,7 +38,12 @@
 //
 // Cada fornecedor tem o seu vocabulário; o produto precisa de três respostas:
 // acabou normal, cortou por tamanho, ou foi barrado por filtro.
-export const FIM = { NORMAL: 'normal', TAMANHO: 'tamanho', FILTRO: 'filtro', TOOL: 'tool' };
+// MALFORMADO merece existir ao lado dos outros: é o caso em que o fornecedor
+// DESCARTA a chamada de ferramenta e devolve um turno "limpo". Quem chamou
+// acha que a ferramenta rodou, e o texto final mente sem nenhum erro aparecer.
+// Custou caro descobrir isso uma vez (relatório montado vazio com a Eme
+// narrando que tinha montado), então o modo de falha fica nomeado.
+export const FIM = { NORMAL: 'normal', TAMANHO: 'tamanho', FILTRO: 'filtro', TOOL: 'tool', MALFORMADO: 'malformado' };
 
 export function normalizarFim(bruto, tipo) {
     const v = String(bruto || '').toUpperCase();
@@ -56,6 +61,7 @@ export function normalizarFim(bruto, tipo) {
         return FIM.NORMAL;
     }
     // Gemini
+    if (v === 'MALFORMED_FUNCTION_CALL') return FIM.MALFORMADO;
     if (v === 'MAX_TOKENS') return FIM.TAMANHO;
     if (['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(v)) return FIM.FILTRO;
     return FIM.NORMAL;

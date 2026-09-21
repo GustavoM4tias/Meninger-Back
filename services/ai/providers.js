@@ -55,10 +55,7 @@ export const SUPORTE = {
         roteavel: false,
         motivo: 'O chat da Eme ainda usa a sessão nativa do Gemini (histórico com estado, rodadas de tool e os passes de correção). A migração é o próximo passo e precisa da régua de avaliação como prova.',
     },
-    relatorios: {
-        roteavel: false,
-        motivo: 'O chat de relatórios ainda usa a sessão nativa do Gemini.',
-    },
+    relatorios: { roteavel: true },
     eme_atende: {
         roteavel: false,
         motivo: 'Mantido no caminho atual por decisão de produto.',
