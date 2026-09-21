@@ -759,11 +759,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // ocupado isso sozinho passava de 20 segundos.
   const turnoT0 = Date.now();
 
-  // Fase do preparo, para o front não ficar em "Pensando…" mudo enquanto
-  // sessão, cérebro, alçadas e histórico carregam (num banco ocupado isso
-  // sozinho passa de 20 s). `phase` é efêmero: não entra na linha do tempo
-  // persistida como o `status` entra - é só o que está acontecendo AGORA.
-  // `null` devolve o front ao "Pensando…" (o modelo entrou em cena).
+  // Fase REAL do turno, para o front não ficar em "Pensando…" mudo: cada
+  // etapa do preparo (cérebro, memórias, histórico, ferramentas), qual modelo
+  // está sendo aguardado e o que cada tool devolveu. Frase genérica girando
+  // não é estado; isto aqui é. `phase` é efêmero: não entra na linha do
+  // tempo persistida como o `status` entra - é só o que acontece AGORA.
   const fase = (message) => sendSSE(res, { type: 'phase', message });
   fase('Abrindo a conversa…');
 
@@ -820,7 +820,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // instrução no prompt o modelo não escreveria referência nenhuma, e resolver
   // o que não existe só gastaria trabalho.
   let ancoragem = { enabled: false, modo: 'suave', min_taxa: 0.8, max_citacoes: 400 };
-  fase('Carregando regras e permissões…');
+  fase('Carregando o Cérebro da Eme e suas alçadas…');
   try {
     ancoragem = await anchoringSettings();
   } catch (err) {
@@ -848,6 +848,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     // glossário que têm a ver com a pergunta (promptRetrieval). Falhou? Sem
     // recorte - o prompt inteiro, como sempre foi.
     let selecao = null;
+    fase('Selecionando o contexto do Cérebro para a pergunta…');
     try { selecao = await selecionarParaPrompt({ brain, userMessage, cfg: cfgRet }); }
     catch (err) { console.warn('[OfficeChatService] recuperação do prompt falhou:', err?.message); }
     systemPrompt = assembleSystemPrompt(brain, fullUser, enterprises, 'OFFICE', selecao);
@@ -855,6 +856,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     // Memória: preferências que a PESSOA confirmou (MemoryTools). Fora do
     // Cérebro, como as regras de plural, para valer também sem versão publicada.
     if (cfgRet.memory?.enabled && userCfg.memory_enabled) {
+      fase('Lendo suas memórias…');
       try { systemPrompt += blocoDeMemoria(await memoriasAtivas(userId)); }
       catch (err) { console.warn('[OfficeChatService] memória indisponível:', err?.message); }
     }
@@ -862,6 +864,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     systemPrompt += blocoDePeriodo(fullUser.emeDefaultPeriod);
     // Anexa contexto de bridge (IDs/filtros da última consulta) ao SYSTEM
     // instruction — não ao histórico — para evitar que o modelo replique o bloco.
+    fase('Recuperando o contexto da última consulta…');
     lastBridge = await getLastBridgeContext(session.id);
     if (lastBridge) {
       systemPrompt += `\n\n## CONTEXTO TÉCNICO INTERNO (não reproduza em respostas)\n` +
@@ -927,7 +930,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // o retry mais abaixo usam ELE, para que uma tool cortada aqui volte no
   // segundo tiro em vez de virar um "não consegui".
   const todasDeclaracoes = activeDeclarations;
-  fase('Escolhendo as ferramentas…');
+  fase(`Escolhendo as ferramentas (${todasDeclaracoes.length} disponíveis)…`);
   try {
     const ultimas = await db.ChatMessage.findAll({
       where: { session_id: session.id },
@@ -1145,7 +1148,11 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // pools vêm do Cérebro (settings.model_pools), então continuam sendo
   // configuração de tela, não código. Quem escolhe o FORNECEDOR é Conexões de
   // IA; o que se escolhe aqui é a faixa dentro dele.
-  fase(null);
+  // "Aguardando gemini-2.5-flash (rápido) · 12 ferramentas": é o que está
+  // acontecendo de fato enquanto nenhum byte chega.
+  const aguardandoModelo = () => fase(
+    `Aguardando ${geminiModel} (${pool === 'smart' ? 'inteligente' : 'rápido'}) · ${activeDeclarations.length} ferramentas à mão…`);
+  aguardandoModelo();
   try {
     sessao = await conversa('office_chat', {
       system: systemPrompt,
@@ -1253,6 +1260,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           ok: !toolResult?.error,
           ms: Date.now() - toolStart,
         });
+        // O que voltou e para onde vai: "Reservas devolveu 37 registros ·
+        // enviando ao modelo…" fica no ar até o modelo escrever ou pedir
+        // outra tool.
+        fase(`${toolLabel(name)} devolveu ${resumoDoResultado(toolResult)} · enviando a ${geminiModel}…`);
 
         adotarAction(toolResult);
         if (toolResult && !toolResult.error && toolResult.type) actionTypesSeen.push(toolResult.type);
@@ -2116,6 +2127,17 @@ function makeBridgeFilter() {
  * Preserva os filtros aplicados, totais e amostra dos dados — útil para
  * reconstruir o raciocínio do assistente no painel de Insights.
  */
+/** Contagem curta do que a tool devolveu, para a fase visível. */
+function resumoDoResultado(result) {
+  if (!result || typeof result !== 'object') return 'nada';
+  if (result.error) return 'erro';
+  const n = result.total ?? result.rows?.length ?? result.data?.length ?? result.items?.length
+    ?? result.campaign_cards?.length ?? result.blocks?.length;
+  if (Number.isFinite(n)) return `${n} ${n === 1 ? 'registro' : 'registros'}`;
+  if (result.type === 'detail') return '1 item';
+  return 'dados';
+}
+
 function summarizeForFeedback(result) {
   if (!result || typeof result !== 'object') return null;
   if (result.error) return { error: result.error };
