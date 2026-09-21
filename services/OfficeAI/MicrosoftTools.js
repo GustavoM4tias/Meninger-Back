@@ -22,6 +22,7 @@ import transcriptService from '../microsoft/MicrosoftTranscriptService.js';
 import chatService from '../microsoft/MicrosoftChatService.js';
 import sharepointService from '../microsoft/MicrosoftSharepointService.js';
 import outlookService from '../microsoft/MicrosoftOutlookService.js';
+import { cardsBlock, detailBlock, choiceBlock } from './blocks.js';
 
 const TZ = 'America/Sao_Paulo';
 
@@ -497,6 +498,59 @@ registerTool({
 
 // ─── E-mail ──────────────────────────────────────────────────────────────────
 
+const ROTA_OUTLOOK = '/microsoft/outlook';
+
+function quandoEmail(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString('pt-BR', { timeZone: TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Corpo HTML do Outlook em texto legível, sem estilo nem script. */
+function htmlParaTexto(html, max = 6000) {
+    let t = String(html || '')
+        .replace(/<(style|script|head)[\s\S]*?<\/\1>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|li|tr|h[1-6]|blockquote)>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+        .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    if (t.length > max) t = t.slice(0, max) + '\n\n[... e-mail cortado aqui]';
+    return t;
+}
+
+/**
+ * Lista de e-mails como CARDS no chat: "mostre para mim" precisa virar algo
+ * que se vê, não uma frase. Cada card oferece ler e responder como próximo
+ * prompt, e a lista abre a tela de e-mail.
+ */
+function emailCards(items, { title, subtitle } = {}) {
+    const cards = items.map(m => {
+        const de = m.from?.name || m.from?.email || '(sem remetente)';
+        const assunto = m.subject || '(sem assunto)';
+        const badges = [];
+        if (!m.isRead) badges.push({ label: 'Não lido', variant: 'accent' });
+        if (m.hasAttachments) badges.push({ label: 'Anexo', variant: 'neutral' });
+        if (m.importance === 'high') badges.push({ label: 'Importante', variant: 'warn' });
+        return {
+            title: assunto,
+            subtitle: `${de} · ${quandoEmail(m.receivedAt || m.sentAt)}`,
+            icon: m.isRead ? 'far fa-envelope-open' : 'fas fa-envelope',
+            badges,
+            fields: m.preview ? [{ label: 'Prévia', value: String(m.preview).slice(0, 160) }] : [],
+            actions: [
+                { kind: 'prompt', label: 'Ler', payload: { prompt: `Mostra o conteúdo do e-mail "${assunto}" de ${de}` } },
+                { kind: 'prompt', label: 'Responder', payload: { prompt: `Responde o e-mail "${assunto}" de ${de}` } },
+            ],
+        };
+    });
+    return cardsBlock({
+        title: title || 'E-mails', subtitle, source: 'Outlook', cards,
+        actions: [{ kind: 'navigate', label: 'Abrir e-mail', payload: { route: ROTA_OUTLOOK, filters: { tab: 'caixa' } } }],
+    });
+}
+
 registerTool({
     name: 'search_email',
     description: 'Procura E-MAIL na caixa do próprio usuário e resume o que achou. Use quando pedirem "acha o e-mail do fulano sobre X", "recebi algo do Sienge?", "qual foi a resposta sobre o contrato", "meus e-mails não lidos". Devolve id, remetente, assunto, data e prévia (o id serve para outlook_responder_email). Não abre anexo nem manda e-mail.',
@@ -540,11 +594,111 @@ registerTool({
 
         return {
             result: {
+                blocks: [emailCards(items, {
+                    title: args?.termo ? `E-mails sobre "${args.termo}"` : (args?.naoLidos ? 'E-mails não lidos' : 'E-mails'),
+                    subtitle: `${emails.length} encontrado${emails.length === 1 ? '' : 's'}`,
+                })],
                 total: emails.length,
                 emails,
                 resumo: emails.length
                     ? `${emails.length} e-mail(s)${args?.termo ? ` sobre "${args.termo}"` : ''}. Mais recente: "${emails[0].assunto}" de ${emails[0].de}.`
                     : `Nenhum e-mail${args?.termo ? ` sobre "${args.termo}"` : ''} nessa pasta.`,
+            },
+        };
+    },
+});
+
+/**
+ * Ler UM e-mail. Sem isto a Eme só tinha lista e prévia: "mostra o conteúdo
+ * do e-mail do João" caía na tool de chat do Teams, por falta de opção.
+ * Aceita o id (vindo de search_email/inbox_summary/outlook_triagem) ou acha
+ * pelo assunto/remetente. Devolve o corpo em texto e o cartão de leitura,
+ * com os próximos passos (responder, encaminhar, abrir na tela).
+ */
+registerTool({
+    name: 'read_email',
+    description: 'ABRE e MOSTRA o conteúdo completo de UM e-mail da caixa do usuário (corpo, de quem, para quem, anexos). Use para "mostra o e-mail do João", "abre esse e-mail", "o que diz o e-mail da prefeitura", "lê o e-mail sobre o contrato". Passe o `id` se já tiver (de search_email, inbox_summary ou outlook_triagem); senão passe `termo` (assunto/palavra) e/ou `de` (nome ou e-mail do remetente) e eu acho o mais recente. E-mail é Outlook, não Teams.',
+    parameters: {
+        type: 'object',
+        properties: {
+            id:    { type: 'string', description: 'Id da mensagem, se já conhecido.' },
+            termo: { type: 'string', description: 'Palavra do assunto ou do corpo para achar o e-mail, quando não há id.' },
+            de:    { type: 'string', description: 'Nome ou e-mail do remetente, para desempatar.' },
+            pasta: { type: 'string', description: 'inbox (padrão), sentitems, drafts, archive.' },
+        },
+    },
+    requiredPermissions: ['/microsoft/outlook'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const u = await fullUser(user);
+        if (!u?.microsoft_id) return { result: semConta };
+        const caixa = u.microsoft_id;
+
+        let id = String(args?.id || '').trim();
+        let outros = [];
+        if (!id) {
+            const termo = String(args?.termo || '').trim();
+            const de = String(args?.de || '').trim().toLowerCase();
+            const { items } = await outlookService.listMessages(caixa, {
+                folder: ['inbox', 'sentitems', 'drafts', 'archive'].includes(args?.pasta) ? args.pasta : 'inbox',
+                search: termo || de,
+                top: 15,
+            });
+            const bate = (m) => !de || `${m.from?.name || ''} ${m.from?.email || ''}`.toLowerCase().includes(de);
+            const candidatos = items.filter(bate);
+            if (!candidatos.length) {
+                return { result: { erro: `Não achei e-mail${termo ? ` sobre "${termo}"` : ''}${de ? ` de ${de}` : ''} nessa pasta. Liste os recentes com search_email e escolha pela lista.` } };
+            }
+            id = candidatos[0].id;
+            outros = candidatos.slice(1, 4).map(m => ({ id: m.id, assunto: m.subject, de: m.from?.name || m.from?.email, recebidoEm: m.receivedAt }));
+        }
+
+        let msg;
+        try {
+            msg = await outlookService.getMessage(caixa, id);
+        } catch (err) {
+            return { result: { erro: `Não consegui abrir essa mensagem (${err.message}). Busque de novo com search_email.` } };
+        }
+        const anexos = msg.hasAttachments ? await outlookService.listAttachments(caixa, id).catch(() => []) : [];
+        const corpo = htmlParaTexto(msg.bodyType === 'html' ? msg.body : String(msg.body || '').replace(/\n/g, '<br>'));
+        const de = msg.from?.name || msg.from?.email || '(sem remetente)';
+        const lista = (ps) => (ps || []).map(p => (p.name && p.name !== p.email ? `${p.name} <${p.email}>` : p.email)).join(', ');
+
+        const campos = [
+            { label: 'De', value: `${de}${msg.from?.email && msg.from.email !== de ? ` <${msg.from.email}>` : ''}` },
+            { label: 'Para', value: lista(msg.to) || '-' },
+            ...(msg.cc?.length ? [{ label: 'Cc', value: lista(msg.cc) }] : []),
+            { label: 'Recebido', value: quandoEmail(msg.receivedAt || msg.sentAt) },
+            ...(anexos.length ? [{ label: 'Anexos', value: anexos.map(a => a.name).join(', '), wide: true }] : []),
+        ];
+
+        return {
+            result: {
+                blocks: [
+                    detailBlock({
+                        title: msg.subject || '(sem assunto)', subtitle: `de ${de}`, source: 'Outlook', icon: 'fas fa-envelope-open-text',
+                        detail: { fields: campos },
+                        actions: [{ kind: 'navigate', label: 'Abrir na tela', payload: { route: ROTA_OUTLOOK, filters: { tab: 'caixa', mensagem: msg.id } } }],
+                    }),
+                    { kind: 'text', text: corpo || '_(e-mail sem texto)_' },
+                    choiceBlock({
+                        label: 'Próximo passo',
+                        options: [
+                            { label: 'Responder', icon: 'fas fa-reply', prompt: `Responde o e-mail "${msg.subject}" de ${de}` },
+                            { label: 'Responder a todos', icon: 'fas fa-reply-all', prompt: `Responde a todos o e-mail "${msg.subject}" de ${de}` },
+                            { label: 'Encaminhar', icon: 'fas fa-share', prompt: `Encaminha o e-mail "${msg.subject}" de ${de}` },
+                        ],
+                    }),
+                ],
+                id: msg.id,
+                assunto: msg.subject,
+                de: msg.from,
+                para: (msg.to || []).map(p => p.email),
+                recebidoEm: msg.receivedAt,
+                anexos: anexos.map(a => a.name),
+                corpo,
+                outros_candidatos: outros.length ? outros : undefined,
+                message: 'O e-mail JÁ está aberto no chat (cabeçalho, corpo e próximos passos). Resuma em 1-2 frases o que ele diz e pergunte se quer responder ou encaminhar. Se outros_candidatos vier, diga que havia outros parecidos.',
             },
         };
     },
@@ -577,6 +731,7 @@ registerTool({
 
         return {
             result: {
+                blocks: items.length ? [emailCards(items.slice(0, 8), { title: 'Não lidos', subtitle: `${contagem.unread} na Caixa de Entrada` })] : undefined,
                 naoLidos: contagem.unread,
                 totalNaCaixa: contagem.total,
                 porRemetente: remetentes,

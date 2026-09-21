@@ -232,6 +232,7 @@ const TOOL_LABELS = {
   outlook_aprovar_envio: 'Aprovação de envio',
   outlook_escrever_email: 'Escrever e-mail',
   outlook_responder_email: 'Responder e-mail',
+  read_email: 'Leitura de e-mail',
   outlook_tirar_da_lista: 'Tirar da lista',
   outlook_organizar: 'Organizar caixa',
   outlook_criar_regra: 'Regra da caixa',

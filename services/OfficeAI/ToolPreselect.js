@@ -64,7 +64,7 @@ const NUCLEO = [
 const PISTAS = [
     { quando: /tarefa|lembr|anota|prazo|pendenc|pendênc|afazer|to-?do|cobrar|acompanh|subtarefa|parceir|convite/i,
       tools: /^(meu_dia|criar_tarefa|minhas_tarefas|concluir_tarefa|atualizar_tarefa|marcar_subtarefa|adicionar_parceiro|meus_convites|responder_convite|configurar_assistente)$/ },
-    { quando: /e-?mail|caixa|outlook|inbox|remetente|responder|encaminhar|triagem/i, tools: /^(outlook|email)/ },
+    { quando: /e-?mail|caixa|outlook|inbox|remetente|responder|encaminhar|triagem/i, tools: /^(outlook|email|read_email|search_email|inbox_summary)/ },
     { quando: /reuni|agenda|teams|calend|compromiss/i, tools: /(meeting|agenda|teams|calendar)/i },
     { quando: /checklist|demanda|lançamento|lancamento/i, tools: /checklist/ },
     { quando: /relat[óo]rio|report|dashboard/i, tools: /report/ },
@@ -95,7 +95,7 @@ const PISTAS = [
     { quando: /mcmv|minha casa|teto|faixa|renda|subs[ií]dio/i, tools: /mcmv/ },
     { quando: /sharepoint|arquivo|documento|planilha|pasta do/i, tools: /sharepoint/ },
     { quando: /disponib|hor[áa]rio livre|agenda d[eo]|encaixar/i, tools: /(availability|agenda)/ },
-    { quando: /caixa de entrada|resumo d[oa]s? e-?mail|n[ãa]o lid|e-?mail(s)? de/i, tools: /(inbox|search_email|outlook)/ },
+    { quando: /caixa de entrada|resumo d[oa]s? e-?mail|n[ãa]o lid|e-?mail(s)? de/i, tools: /(inbox|search_email|read_email|outlook)/ },
     { quando: /notifica|sino|aviso/i, tools: /notification/ },
     { quando: /abr[ae]|ir para|me leva|navega|mostra a tela|tela d[eo]/i, tools: /navigate/ },
     { quando: /processo|procedimento|pop|como fa[çz]|academy|treinamento|trilha/i, tools: /^academy/ },
