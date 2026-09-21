@@ -15,7 +15,7 @@
 //     tem a tela não tem a tool.
 
 import { registerTool } from './ToolRegistry.js';
-import { resolverAlvo } from '../microsoft/serieDeEventos.js';
+import { resolverAlvo, normalizarAlcance } from '../microsoft/serieDeEventos.js';
 import db from '../../models/sequelize/index.js';
 import teamsService from '../microsoft/MicrosoftTeamsService.js';
 import transcriptService from '../microsoft/MicrosoftTranscriptService.js';
@@ -952,7 +952,7 @@ registerTool({
         // partir de qualquer ocorrência.
         const alvo = await acharEvento(u, {
             id: args?.id, termo: args?.termo,
-            alvoEhSerie: String(args?.alcance || '') === 'serie',
+            alvoEhSerie: normalizarAlcance(args?.alcance) === 'serie',
         });
         if (alvo.erro) return { result: { erro: alvo.erro } };
         if (alvo.ambiguo) {
@@ -1041,7 +1041,17 @@ registerTool({
             id:         { type: 'string', description: 'Id do evento (de my_agenda).' },
             termo:      { type: 'string', description: 'Parte do assunto, quando não tem o id.' },
             motivo:     { type: 'string', description: 'Motivo, enviado aos participantes (opcional).' },
-            alcance:    { type: 'string', description: 'Para reunião que se repete: "ocorrencia" (só aquele dia) ou "serie" (todas as ocorrências, passadas e futuras). Se o usuário já disse "a recorrência", "a série", "todas" ou "todas as ocorrências", passe "serie" direto - não pergunte de novo.' },
+            alcance: {
+                type: 'string',
+                // `enum` declarado: sem ele o campo aceitava qualquer string e
+                // era comparado com igualdade exata contra 'serie'. "a série
+                // inteira" nunca casava, e a mesma pergunta voltava para
+                // sempre - a pessoa respondeu três vezes e nada aconteceu.
+                enum: ['ocorrencia', 'serie'],
+                description: 'Para reunião que se repete. "serie" = TODAS as ocorrências (passadas e futuras). "ocorrencia" = só aquele dia. '
+                    + 'Se o usuário disse "a recorrência", "a série", "série inteira", "todas" ou "tudo" - inclusive no primeiro pedido - passe "serie" DIRETO, sem perguntar. '
+                    + 'Mande exatamente "serie" ou "ocorrencia", nunca a frase do usuário.',
+            },
             confirmado: { type: 'boolean', description: 'Passe true SÓ depois de o usuário confirmar.' },
         },
     },
@@ -1072,7 +1082,11 @@ registerTool({
 
         // Série sem escolha declarada não é chute: a diferença entre apagar um
         // dia e apagar o compromisso de todo mês é grande demais.
-        if (e.isRecurring && !['ocorrencia', 'serie'].includes(String(args?.alcance || ''))) {
+        // Normalizado, nunca comparado cru: o modelo repassa o que ouviu
+        // ("a série inteira", "todas"), e comparar com igualdade exata contra
+        // 'serie' foi o que prendeu a conversa num laço.
+        const alcance = normalizarAlcance(args?.alcance);
+        if (e.isRecurring && !alcance) {
             const quantas = alvo.grupo?.ocorrencias || null;
             return { result: {
                 precisaEscolher: true,
@@ -1093,14 +1107,17 @@ registerTool({
                 previa: true,
                 reuniao: resumoDoEvento(e),
                 acao: souDono ? 'cancelar e avisar os participantes' : 'remover da sua agenda (sem avisar ninguém)',
+                alcance: alcance || null,
                 resumo: souDono
-                    ? `Confirme: cancelar "${e.subject}" de ${dia(e.start)} às ${hora(e.start)} avisa ${(e.attendees || []).length} participante(s).`
+                    ? (alcance === 'serie'
+                        ? `Confirme: cancelar a SÉRIE INTEIRA de "${e.subject}" (todas as ocorrências) avisa ${(e.attendees || []).length} participante(s).`
+                        : `Confirme: cancelar "${e.subject}" de ${dia(e.start)} às ${hora(e.start)} avisa ${(e.attendees || []).length} participante(s).`)
                     : `Confirme: remover "${e.subject}" da sua agenda. Você não organiza, então ninguém é avisado.`,
             } };
         }
 
         const scope = e.isRecurring
-            ? (args.alcance === 'serie' ? 'series' : 'occurrence')
+            ? (alcance === 'serie' ? 'series' : 'occurrence')
             : (souDono ? 'single' : 'occurrence');
 
         if (souDono) {

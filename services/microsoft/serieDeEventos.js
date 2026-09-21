@@ -34,6 +34,47 @@ const instante = (v) => {
     return (d && !Number.isNaN(d.getTime())) ? d.getTime() : null;
 };
 
+/**
+ * "a série inteira" → 'serie'. E todas as outras formas de dizer a mesma coisa.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * O LAÇO QUE ISTO QUEBRA
+ *
+ * O campo era comparado com igualdade exata contra 'serie'. A pessoa respondeu
+ * "a serie inteira" TRÊS vezes; o modelo repassou o que ouviu - com acento, ou
+ * a frase toda - e nada casou. A tool devolveu a MESMA pergunta nas três, e a
+ * conversa ficou presa sem nenhum erro aparecer em lugar nenhum.
+ *
+ * Campo com cara de enum e sem `enum` declarado aceita qualquer string e
+ * compara com uma só: é um laço esperando para acontecer.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * A ORDEM DAS CHECAGENS É A REGRA
+ *
+ * O marcador de SINGULAR vem primeiro porque "todas as ocorrências" e "só esta
+ * ocorrência" compartilham a palavra "ocorrência" - e significam o oposto.
+ * Quem diz "só", "apenas" ou "este dia" está restringindo; sem isso, plural e
+ * "série" mandam.
+ */
+export function normalizarAlcance(valor) {
+    const t = String(valor || '')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase().trim();
+    if (!t) return null;
+
+    // Restringiu explicitamente: é UMA data, mesmo que a frase diga "ocorrência".
+    if (/\b(so|apenas|somente|unica|unico)\b/.test(t)) return 'ocorrencia';
+    if (/\b(est[ae]|ess[ae]|nest[ae]|ness[ae])\s+(dia|data|ocorrenc\w*|reuniao)\b/.test(t)) return 'ocorrencia';
+
+    // Plural, série, recorrência, "inteira", "completa": tudo.
+    if (/serie|series|recorren|todas|todos|tudo|inteir|complet|all\b|futuras/.test(t)) return 'serie';
+
+    // "ocorrencia" sozinha, sem marcador de plural: uma data.
+    if (/ocorrenc|single|avuls/.test(t)) return 'ocorrencia';
+
+    return null;
+}
+
 /** O relógio de parede "HH:MM" do início, sem depender de fuso. */
 const horaDe = (iso) => String(iso || '').slice(11, 16);
 
@@ -185,4 +226,7 @@ export function resolverAlvo(achados = [], { agora = Date.now(), alvoEhSerie = f
     };
 }
 
-export default { chaveDeSerie, ehDeSerie, agruparPorSerie, ocorrenciaRepresentativa, resolverAlvo };
+export default {
+    chaveDeSerie, ehDeSerie, agruparPorSerie, ocorrenciaRepresentativa, resolverAlvo,
+    assinaturaDeRecorrencia, normalizarAlcance,
+};

@@ -164,3 +164,50 @@ test('o id sai rotulado como INTERNO, para não virar texto na tela', () => {
     assert.ok('id_interno' in r.ambiguo[0]);
     assert.equal('id' in r.ambiguo[0], false);
 });
+
+// ── O laço da pergunta que nunca acabava ─────────────────────────────────────
+//
+// O CASO 3, e o mais simples dos três: o campo `alcance` era comparado com
+// igualdade exata contra 'serie'. A pessoa respondeu "a serie inteira" TRÊS
+// vezes, o modelo repassou o que ouviu, nada casou, e a MESMA pergunta voltou
+// nas três - sem nenhum erro aparecer em lugar nenhum.
+
+const { normalizarAlcance } = await import('../services/microsoft/serieDeEventos.js');
+
+test('O CASO 3: as frases que a pessoa realmente usou viram "serie"', () => {
+    for (const frase of [
+        'a serie inteira', 'a série inteira', 'série', 'serie',
+        'todas', 'remova todas', 'a recorrencia', 'recorrência completa',
+        'quero excluir a recorrencia inteira', 'tudo', 'todas as ocorrências',
+    ]) {
+        assert.equal(normalizarAlcance(frase), 'serie', `"${frase}" deveria ser serie`);
+    }
+});
+
+test('"todas as ocorrências" e "só esta ocorrência" são OPOSTOS', () => {
+    // As duas frases compartilham a palavra "ocorrência". É por isso que o
+    // marcador de singular é checado ANTES do plural.
+    assert.equal(normalizarAlcance('todas as ocorrências'), 'serie');
+    assert.equal(normalizarAlcance('só esta ocorrência'), 'ocorrencia');
+});
+
+test('restringir explicitamente vira ocorrência', () => {
+    for (const frase of ['só esta', 'apenas o dia 21', 'somente essa data', 'só o dia', 'este dia', 'ocorrencia']) {
+        assert.equal(normalizarAlcance(frase), 'ocorrencia', `"${frase}" deveria ser ocorrencia`);
+    }
+});
+
+test('acento nunca decide nada', () => {
+    assert.equal(normalizarAlcance('série'), normalizarAlcance('serie'));
+    assert.equal(normalizarAlcance('ocorrência'), normalizarAlcance('ocorrencia'));
+});
+
+test('vazio e frase sem sinal devolvem null: a pergunta é legítima', () => {
+    // Null é o que faz a tool PERGUNTAR. Chutar aqui seria apagar uma série
+    // inteira porque alguém disse "pode ser".
+    assert.equal(normalizarAlcance(''), null);
+    assert.equal(normalizarAlcance(null), null);
+    assert.equal(normalizarAlcance(undefined), null);
+    assert.equal(normalizarAlcance('sei lá'), null);
+    assert.equal(normalizarAlcance('pode ser'), null);
+});
