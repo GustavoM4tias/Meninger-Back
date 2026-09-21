@@ -32,6 +32,7 @@ import {
     revogarRegra, restaurarRegra, evidenciaDaRegra, listarAcoes, trilhaDe, saudeDoMotor,
 } from '../services/processos/processoService.js';
 import { minerarTudo, minerarProcesso } from '../services/processos/mineracao.js';
+import { rodarDiagnostico } from '../services/processos/observadores/diagnostico.js';
 import processosScheduler from '../scheduler/processosScheduler.js';
 
 const ROTA = '/tools/eme-processos';
@@ -220,6 +221,22 @@ router.post('/minerar/ensaio', requireCapability(ROTA, 'configurar'), async (req
         }
         res.json({ success: true, data: await minerarTudo({ seco: true }) });
     } catch (err) { falhar(res, err, 'POST /minerar/ensaio'); }
+});
+
+/**
+ * DIAGNÓSTICO. Confere se as premissas dos coletores batem com o dado real.
+ *
+ * Os coletores supõem o significado de colunas que o CV preenche
+ * ("ultima_data_conversao" seria quando o lead andou). Suposição sobre dado
+ * alheio só o dado confirma - e a alternativa, "rode o ensaio e olhe no olho",
+ * é trabalho que ninguém faz duas vezes.
+ *
+ * Fica em 'view': é leitura, não custa IA, e é a primeira coisa que alguém
+ * precisa ver antes de acreditar na fila.
+ */
+router.get('/diagnostico', requireCapability(ROTA, 'view'), async (req, res) => {
+    try { res.json({ success: true, data: await rodarDiagnostico({ dias: Number(req.query.dias) || 90 }) }); }
+    catch (err) { falhar(res, err, 'GET /diagnostico'); }
 });
 
 /** Roda a mineração DE VERDADE agora, sem esperar a madrugada. */

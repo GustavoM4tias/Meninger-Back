@@ -232,3 +232,60 @@ test('aprovadas sem ação nenhuma é o desenho, e o diagnóstico diz isso', () 
     assert.equal(d.tom, 'bom');
     assert.match(d.texto, /observar ou propor/);
 });
+
+// ── Diagnóstico dos coletores ────────────────────────────────────────────────
+//
+// O diagnóstico existe porque os coletores leem colunas de OUTRO sistema e
+// supõem o significado delas. Se o julgamento aqui errar, ele dá "tudo certo"
+// para uma premissa que não se sustenta - e o motor grava pouco, ou errado,
+// em silêncio.
+
+const { julgarCobertura, piorVeredito, resumoGeral } = await import(
+    '../services/processos/observadores/diagnostico.js');
+
+test('cobertura zero é FALHA, não atenção', () => {
+    // Coluna que nunca vem preenchida não é "pouco dado": é sinal de que ela
+    // não significa o que o coletor supôs.
+    assert.equal(julgarCobertura(0, 100).veredito, 'falha');
+});
+
+test('nenhuma linha no período é falha, e não um ok vazio', () => {
+    // Dividir por zero daria NaN e um verde enganoso.
+    const j = julgarCobertura(0, 0);
+    assert.equal(j.veredito, 'falha');
+    assert.equal(j.pct, 0);
+});
+
+test('a faixa do meio é atenção, não reprovação', () => {
+    // O CV é de outra gente e sempre terá buraco: o objetivo é separar "tem
+    // buraco" de "a coluna não quer dizer isso".
+    assert.equal(julgarCobertura(10, 100, { bom: 30, ruim: 5 }).veredito, 'atencao');
+    assert.equal(julgarCobertura(50, 100, { bom: 30, ruim: 5 }).veredito, 'ok');
+});
+
+test('o pior veredito manda no conjunto', () => {
+    assert.equal(piorVeredito([{ veredito: 'ok' }, { veredito: 'falha' }, { veredito: 'atencao' }]), 'falha');
+    assert.equal(piorVeredito([{ veredito: 'ok' }, { veredito: 'atencao' }]), 'atencao');
+    assert.equal(piorVeredito([{ veredito: 'ok' }]), 'ok');
+});
+
+test('sem checagem nenhuma o veredito NÃO é ok', () => {
+    // Verde por ausência de evidência é o pior tipo de verde.
+    assert.equal(piorVeredito([]), 'atencao');
+});
+
+test('o resumo NOMEIA as premissas que caíram e diz o sintoma', () => {
+    const r = resumoGeral([
+        { veredito: 'ok', titulo: 'Escopo' },
+        { veredito: 'falha', titulo: 'Carimbo de movimento do lead' },
+    ]);
+    assert.equal(r.veredito, 'falha');
+    assert.match(r.texto, /Carimbo de movimento do lead/);
+    assert.match(r.texto, /fila que nunca enche/);
+});
+
+test('tudo verde libera ligar a mineração, e o texto diz isso', () => {
+    const r = resumoGeral([{ veredito: 'ok', titulo: 'x' }, { veredito: 'ok', titulo: 'y' }]);
+    assert.equal(r.veredito, 'ok');
+    assert.match(r.texto, /ligar a mineração/i);
+});
