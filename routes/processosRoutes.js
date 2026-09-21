@@ -28,8 +28,10 @@ import requireCapability from '../middlewares/requireCapability.js';
 import {
     paraTela, listarProcessos, salvarProcesso, trocarAutonomia,
     filaDePropostas, decidirProposta, observacoesDe,
-    reverterAcao, salvarSettings, sugestoesDePromocao,
+    reverterAcao, salvarSettings, sugestoesDePromocao, acharProcesso,
 } from '../services/processos/processoService.js';
+import { minerarTudo, minerarProcesso } from '../services/processos/mineracao.js';
+import processosScheduler from '../scheduler/processosScheduler.js';
 
 const ROTA = '/tools/eme-processos';
 const router = express.Router();
@@ -118,8 +120,42 @@ router.get('/promocoes', requireCapability(ROTA, 'view'), async (req, res) => {
 });
 
 router.put('/settings', requireCapability(ROTA, 'configurar'), async (req, res) => {
-    try { res.json({ success: true, data: await salvarSettings(req.body || {}, req.user?.id) }); }
-    catch (err) { falhar(res, err, 'PUT /settings'); }
+    try {
+        const data = await salvarSettings(req.body || {}, req.user?.id);
+        // O horário novo vale na hora, sem deploy: é a razão de ele morar em
+        // tabela em vez de env.
+        processosScheduler.reload().catch(e => console.warn('[processos] scheduler não recarregou:', e?.message));
+        res.json({ success: true, data });
+    } catch (err) { falhar(res, err, 'PUT /settings'); }
+});
+
+/**
+ * ENSAIO. Roda a coleta e a mineração SEM GRAVAR NADA e devolve o que faria.
+ *
+ * Existe porque os coletores leem tabelas do CV cuja semântica ninguém
+ * consegue conferir sem olhar dado real: `data_contrato_liberado` é mesmo
+ * quando o repasse travou? `ultima_data_conversao` é mesmo quando o lead
+ * andou? A forma responsável de ligar isto é ver a saída antes de deixá-la
+ * escrever - e é mais barato descobrir aqui que o coletor entendeu errado do
+ * que depois de 400 observações gravadas com o sentido trocado.
+ *
+ * Custa chamadas de IA (a redação roda), então fica atrás de 'configurar'.
+ */
+router.post('/minerar/ensaio', requireCapability(ROTA, 'configurar'), async (req, res) => {
+    try {
+        const key = req.body?.processo_key;
+        if (key) {
+            const p = await acharProcesso(key);
+            return res.json({ success: true, data: await minerarProcesso(p.get({ plain: true }), { seco: true }) });
+        }
+        res.json({ success: true, data: await minerarTudo({ seco: true }) });
+    } catch (err) { falhar(res, err, 'POST /minerar/ensaio'); }
+});
+
+/** Roda a mineração DE VERDADE agora, sem esperar a madrugada. */
+router.post('/minerar', requireCapability(ROTA, 'configurar'), async (req, res) => {
+    try { res.json({ success: true, data: await minerarTudo({ seco: false }) }); }
+    catch (err) { falhar(res, err, 'POST /minerar'); }
 });
 
 export default router;

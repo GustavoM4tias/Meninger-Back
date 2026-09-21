@@ -40,6 +40,10 @@ import './MicrosoftTools.js';
 import './OutlookAiTools.js';
 import './AssistantTools.js';
 import './MemoryTools.js';
+// O mapa de processos da empresa: como a casa trabalha em cada fluxo, com as
+// regras que foram APROVADAS por gente. E o que separa "a Eme sabe o setor" de
+// "a Eme sabe a casa".
+import './ProcessosTools.js';
 import { userEmeSettings, memoriasAtivas, blocoDeMemoria } from './MemoryTools.js';
 import { retrievalSettings, selecionarParaPrompt } from './promptRetrieval.js';
 import { ensureEmbeddings, embedQuery, rank } from './embeddingIndex.js';

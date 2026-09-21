@@ -31,7 +31,7 @@ export const TIPOS = ['gemini', 'openai', 'anthropic'];
 export const USOS = ['chat', 'json', 'visao', 'embed'];
 
 /** Contextos do produto que podem ser roteados. */
-export const CONTEXTOS = ['office_chat', 'relatorios', 'eme_atende', 'validador', 'utilidades', 'academy'];
+export const CONTEXTOS = ['office_chat', 'relatorios', 'eme_atende', 'validador', 'utilidades', 'academy', 'processos'];
 
 /**
  * QUEM JÁ PASSA PELA PORTA ÚNICA - e quem ainda não.
@@ -49,6 +49,8 @@ export const CONTEXTOS = ['office_chat', 'relatorios', 'eme_atende', 'validador'
 export const SUPORTE = {
     utilidades: { roteavel: true },
     academy: { roteavel: true },
+    // Nasceu já na porta única: o motor de processos é posterior a ela.
+    processos: { roteavel: true },
     office_chat: {
         roteavel: false,
         motivo: 'O chat da Eme ainda usa a sessão nativa do Gemini (histórico com estado, rodadas de tool e os passes de correção). A migração é o próximo passo e precisa da régua de avaliação como prova.',

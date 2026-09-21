@@ -103,6 +103,7 @@ import useredeKeepAliveScheduler from './scheduler/useredeKeepAliveScheduler.js'
 import useredeConciliacaoScheduler from './scheduler/useredeConciliacaoScheduler.js';
 import siengeBackupScheduler from './scheduler/siengeBackupScheduler.js';
 import validatorHealthScheduler from './scheduler/validatorHealthScheduler.js';
+import processosScheduler from './scheduler/processosScheduler.js';
 import marketingDispatchScheduler from './scheduler/marketingDispatchScheduler.js';
 import marketingSyncScheduler     from './scheduler/marketingSyncScheduler.js';
 import { ensureFinanceOverridesSchema } from './lib/ensureFinanceOverridesSchema.js';
@@ -778,6 +779,14 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_VALIDATOR_HEALTH')) {
     validatorHealthScheduler.start()
       .catch(err => console.warn('⚠️  validatorHealthScheduler não subiu:', err?.message));
+  }
+
+  // Motor de processos: uma passada por dia, de madrugada. Observa e propõe -
+  // nenhuma acao sobre lead, reserva ou repasse sai daqui. Ritmo e liga/desliga
+  // finos moram em processo_settings, editaveis na tela.
+  if (schedulerOn('ENABLE_PROCESSOS')) {
+    processosScheduler.start()
+      .catch(err => console.warn('⚠️  processosScheduler não subiu:', err?.message));
   }
 
   // Crons opt-in (já eram OFF por padrão em qualquer ambiente):
