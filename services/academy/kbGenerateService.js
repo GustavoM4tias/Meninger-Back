@@ -1,32 +1,19 @@
 // services/academy/kbGenerateService.js
 //
-// Gerador de artigos do Academy via Gemini — usado pelo Admin para criar
-// rascunhos a partir de contexto bruto (notas, transcrições, descrição livre).
+// Gerador de artigos do Academy — usado pelo Admin para criar rascunhos a
+// partir de contexto bruto (notas, transcrições, descrição livre).
 //
 // Pontos importantes:
 //   - SEMPRE retorna conteúdo como SUGESTÃO. O admin revisa, edita e publica.
-//   - Usa o JSON mode do Gemini (responseMimeType=application/json) — o modelo
-//     já devolve um objeto válido, sem precisar parsear texto solto.
-//   - Faz rotação de chave: tenta cada GEMINI_API_KEY em sequência se falhar.
-//
-// Variáveis de ambiente:
-//   - GEMINI_API_KEYS (lista, separada por vírgula) ou GEMINI_API_KEY
-//   - GEMINI_ARTICLE_MODEL (opcional, default: gemini-2.5-flash)
+//   - Pede JSON ao modelo, então a resposta já vem como objeto válido em vez
+//     de texto solto para parsear no grito.
+//   - QUEM atende sai da tela Conexões de IA (contexto 'utilidades'). Rotação
+//     de chave, fallback de modelo e tradução de formato são do gateway: este
+//     arquivo não conhece fornecedor nenhum.
 //
 // Aceita os estilos: procedimento | tutorial | faq | checklist.
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
-function getKeys() {
-    return (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
-        .split(',').map((k) => k.trim()).filter(Boolean);
-}
-
-function getModelName() {
-    return process.env.GEMINI_ARTICLE_MODEL
-        || process.env.GEMINI_MODEL
-        || 'gemini-2.5-flash';
-}
+import { jsonDetalhado } from '../ai/gateway.js';
 
 const STYLE_HINT = {
     procedimento: 'um procedimento operacional padrão (POP) com: # Título, ## Objetivo, ## Pré-requisitos, ## Passo a passo, ## Validação, ## Erros comuns.',
@@ -75,15 +62,12 @@ no formato exato:
 }
 
 /**
- * Gera um rascunho de artigo. Lança erro em caso de falha em todas as chaves.
+ * Gera um rascunho de artigo. Lança erro quando o provedor não responde ou
+ * devolve algo inaproveitável - aqui a falha PRECISA subir: quem chamou está
+ * numa tela esperando o rascunho, e devolver vazio em silêncio pareceria bug.
  * @returns {Promise<{title: string, suggestedCategorySlug: string, body: string, model: string}>}
  */
 export async function generateArticle({ topic, context = '', style = 'procedimento', categorySlug = '' } = {}) {
-    const keys = getKeys();
-    if (!keys.length) {
-        throw new Error('GEMINI_API_KEY(S) não configurada(s) no servidor.');
-    }
-
     const t = String(topic || '').trim();
     if (!t) throw new Error('topic obrigatório.');
 
@@ -94,53 +78,24 @@ export async function generateArticle({ topic, context = '', style = 'procedimen
         categorySlug: String(categorySlug || '').trim(),
     });
 
-    const modelName = getModelName();
+    // Uma chamada só: o gateway já percorre o pool de modelos e roda as
+    // chaves por dentro. Repetir isso aqui era o que multiplicava o mesmo erro
+    // de credencial no log sem melhorar nada.
+    const { dados: parsed, modelo } = await jsonDetalhado('utilidades', prompt, { maxSaida: 2048, temperatura: 0.55 });
 
-    let lastErr = null;
-    for (let attempt = 0; attempt < keys.length; attempt++) {
-        try {
-            const client = new GoogleGenerativeAI(keys[attempt]);
-            const model = client.getGenerativeModel({
-                model: modelName,
-                generationConfig: {
-                    temperature: 0.55,
-                    maxOutputTokens: 2048,
-                    responseMimeType: 'application/json',
-                },
-            });
-
-            const result = await model.generateContent({
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            });
-
-            const raw = (result?.response?.text?.() || '').trim();
-            let parsed = null;
-            try {
-                parsed = JSON.parse(raw);
-            } catch {
-                // Fallback: se o modelo embrulhar o JSON em texto, tenta extrair.
-                const match = raw.match(/\{[\s\S]*\}/);
-                if (match) parsed = JSON.parse(match[0]);
-            }
-
-            const title = String(parsed?.title || '').trim();
-            const body = String(parsed?.body || '').trim();
-
-            if (!title || !body) {
-                throw new Error('A IA não retornou título ou corpo válidos.');
-            }
-
-            return {
-                title,
-                suggestedCategorySlug:
-                    String(parsed?.suggestedCategorySlug || categorySlug || '').trim(),
-                body,
-                model: modelName,
-            };
-        } catch (err) {
-            lastErr = err;
-        }
+    const title = String(parsed?.title || '').trim();
+    const body = String(parsed?.body || '').trim();
+    if (!title || !body) {
+        throw new Error('A IA não retornou título ou corpo válidos. Confira o provedor em Configurações > Conexões de IA.');
     }
 
-    throw lastErr || new Error('Falha ao gerar artigo.');
+    return {
+        title,
+        suggestedCategorySlug: String(parsed?.suggestedCategorySlug || categorySlug || '').trim(),
+        body,
+        // A tela mostra quem gerou. Com pool e fallback, o modelo que
+        // respondeu pode nao ser o primeiro da lista - entao ele vem de quem
+        // atendeu, nao de uma variavel de ambiente.
+        model: modelo,
+    };
 }

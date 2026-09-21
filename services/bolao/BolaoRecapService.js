@@ -4,12 +4,14 @@
 // a partir de dados reais — jogos encerrados/ao vivo e ranking oficial), para
 // garantir "somente dados reais": o texto nunca inventa placar, líder ou critério.
 //
-// A versão com IA (Gemini) fica DESLIGADA por padrão. Para ligar, defina
+// A versão com IA fica DESLIGADA por padrão (o fornecedor sai da tela
+// Conexões de IA, contexto 'utilidades'). Para ligar, defina
 // BOLAO_RECAP_AI=true — e mesmo assim ela recebe instrução dura de não inventar
 // nada, apenas reescrever o resumo factual com a pegada do Eme.
 
 import db from '../../models/sequelize/index.js';
 import { buildRanking } from './BolaoScoringService.js';
+import { texto as gwTexto } from '../ai/gateway.js';
 
 const { Bolao, BolaoMatch } = db;
 
@@ -46,12 +48,6 @@ function factualRecap(bolao, matches, ranking) {
   return `${last.home_team} ${last.home_score} x ${last.away_score} ${last.away_team}. ${lead}. ${cravadas} cravada(s) até aqui. ${tail}`;
 }
 
-function pickKey() {
-  const multi = (process.env.GEMINI_API_KEYS || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (multi.length) return multi[0];
-  return process.env.GEMINI_API_KEY || null;
-}
-
 function aiPrompt(matches, ranking, factual) {
   const games = matches.map(m => {
     const s = m.status === 'finished' ? `${m.home_score}x${m.away_score} (encerrado)`
@@ -85,18 +81,13 @@ export async function generateRecap(bolaoId) {
   const factual = factualRecap(bolao, matches, ranking);
 
   if (process.env.BOLAO_RECAP_AI === 'true') {
-    const key = pickKey();
-    if (key) {
-      try {
-        const { GoogleGenerativeAI } = await import('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(key);
-        const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL_FAST || 'gemini-2.5-flash' });
-        const resp = await model.generateContent(aiPrompt(matches, ranking, factual));
-        const text = resp?.response?.text?.();
-        if (text && text.trim()) return { text: text.trim(), source: 'ai' };
-      } catch (e) {
-        console.warn('[BolaoRecap] IA indisponível, usando texto factual:', e?.message);
-      }
+    try {
+      // Contexto 'utilidades': quem atende sai da tela Conexões de IA, e a
+      // resenha nao e motivo para acordar um modelo caro.
+      const text = await gwTexto('utilidades', aiPrompt(matches, ranking, factual), { maxSaida: 700 });
+      if (text && text.trim()) return { text: text.trim(), source: 'ai' };
+    } catch (e) {
+      console.warn('[BolaoRecap] IA indisponível, usando texto factual:', e?.message);
     }
   }
   return { text: factual, source: 'factual' };

@@ -17,6 +17,8 @@ import ContractValidatorStuckDefine from './contractValidatorStuck.js';
 import ContractWebhookSettingDefine from './contractWebhookSetting.js';
 import ValidatorSettingsDefine from './validatorSettings.js';
 import ValidatorHealthCheckDefine from './validatorHealthCheck.js';
+import AiProviderDefine from './ai/provider.js';
+import AiRouteDefine from './ai/route.js';
 
 // Singe imports
 import SalesContractDefine from './sienge/salesContract.js';
@@ -347,6 +349,8 @@ db.ContractValidatorStuck = ContractValidatorStuckDefine(sequelize, DataTypes);
 db.ContractWebhookSetting = ContractWebhookSettingDefine(sequelize, DataTypes);
 db.ValidatorSettings = ValidatorSettingsDefine(sequelize, DataTypes);
 db.ValidatorHealthCheck = ValidatorHealthCheckDefine(sequelize, DataTypes);
+db.AiProvider = AiProviderDefine(sequelize, DataTypes);
+db.AiRoute = AiRouteDefine(sequelize, DataTypes);
 
 // sienge db 
 db.SalesContract = SalesContractDefine(sequelize, DataTypes);

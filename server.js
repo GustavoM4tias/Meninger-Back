@@ -44,6 +44,7 @@ import aditivoPainelRoutes from './routes/aditivoPainelRoutes.js';
 import mcmvRoutes from './routes/mcmvRoutes.js';
 import officeChatRoutes from './routes/officeChatRoutes.js';
 import officeBrainRoutes from './routes/officeBrainRoutes.js';
+import aiProvidersRoutes from './routes/aiProvidersRoutes.js';
 import whatsappAutomationRoutes from './routes/whatsappAutomationRoutes.js';
 import emeAtendeRoutes from './routes/emeAtendeRoutes.js';
 import emeAtendeSweepScheduler from './scheduler/emeAtendeSweepScheduler.js';
@@ -121,6 +122,7 @@ import { ensurePlatformUpdatesSchema } from './lib/ensurePlatformUpdatesSchema.j
 import { ensureCvPanelSchema } from './lib/ensureCvPanelSchema.js';
 import { ensureCvWebhookSchema } from './lib/ensureCvWebhookSchema.js';
 import { ensureValidatorHealthSchema } from './lib/ensureValidatorHealthSchema.js';
+import { ensureAiProvidersSchema } from './lib/ensureAiProvidersSchema.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
@@ -341,6 +343,7 @@ app.use('/api/aditivos', aditivoAssinaturaRoutes);
 app.use('/api/mcmv', mcmvRoutes);
 app.use('/api/office-chat', officeChatRoutes);
 app.use('/api/office-brain', officeBrainRoutes);
+app.use('/api/ai-providers', aiProvidersRoutes); // Conexoes de IA (admin)
 app.use('/api/reports', emeReportsRoutes); // Relatórios da Eme (builder admin + view interna)
 app.use('/api/whatsapp-automations', whatsappAutomationRoutes);
 app.use('/api/eme-atende/public', emeAtendePublicRoutes); // intake de leads (X-Api-Key)
@@ -651,6 +654,9 @@ async function syncModelsAndPatches(fingerprint) {
     // Regra de operacao e saude do Validador de Contratos (pool de modelos,
     // ritmo da sonda, prazos e destinatarios do alerta).
     ['ValidatorHealth', ensureValidatorHealthSchema],
+    // Conexoes de IA: qual fornecedor atende cada contexto, com qual chave e
+    // com quais modelos. Precisa vir ANTES de qualquer chamada de IA no boot.
+    ['AiProviders', ensureAiProvidersSchema],
     ['AlertShares', ensureAlertSharesSchema],
     ['DeptSpending', ensureDeptSpendingSchema],
     ['DepartmentVisibility', ensureDepartmentVisibilitySchema],

@@ -20,7 +20,7 @@ import { evalGateSettings, sanitizeEvalGateSettings, invalidateEvalGateCache, av
 import { indexStatus, resetIndex } from '../services/OfficeAI/embeddingIndex.js';
 import { iniciarRodada } from '../services/OfficeAI/EmeEvalService.js';
 import { loadAccessibleEnterprises } from '../services/OfficeAI/OfficeChatService.js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { chamar as chamarIA } from '../services/ai/gateway.js';
 
 const router = express.Router();
 router.use(authenticate, requireAdmin);
@@ -425,39 +425,40 @@ router.post('/sandbox/preview', async (req, res) => {
   }
 });
 
-function sandboxKeys() {
-  return (process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '')
-    .split(',').map(s => s.trim()).filter(Boolean);
-}
-function sandboxModel() {
-  return (process.env.GEMINI_FAST_MODELS || process.env.GEMINI_MODELS || 'gemini-2.5-flash')
-    .split(',')[0].trim();
-}
 
-// Resposta one-shot do Gemini com o prompt do rascunho (SEM tools, SEM persistir).
+// Resposta one-shot com o prompt do rascunho (SEM tools, SEM persistir).
 // Valida persona/tom/regras. Comportamento de dados (tools) é testado no chat real.
 router.post('/sandbox/chat', async (req, res) => {
   try {
     const { message, role, city } = req.body || {};
     if (!message?.trim()) return res.status(400).json({ error: 'Mensagem obrigatória.' });
-    const keys = sandboxKeys();
-    if (!keys.length) return res.status(503).json({ error: 'GEMINI_API_KEY não configurada.' });
-
     const user = simulatedUser({ role, city });
     const enterprises = await loadAccessibleEnterprises(user).catch(() => []);
     const brain = await buildBrainFromTables();
     const systemPrompt = assembleSystemPrompt(brain, user, enterprises, 'OFFICE');
 
-    const model = sandboxModel();
-    const genAI = new GoogleGenerativeAI(keys[0]);
-    const mdl = genAI.getGenerativeModel({ model, systemInstruction: systemPrompt });
-    const result = await mdl.generateContent(message.trim());
-    const text = result?.response?.text?.() || '';
+    // Mesmo contexto do chat de verdade ('office_chat'): testar a persona
+    // contra um fornecedor diferente do que vai atender seria testar outra
+    // coisa. Quem responde sai da tela Conexões de IA.
+    const r = await chamarIA('office_chat', 'chat', {
+      system: systemPrompt,
+      historico: [{ papel: 'user', partes: [{ texto: message.trim() }] }],
+    });
 
-    res.json({ text, model, prompt_chars: systemPrompt.length, note: 'Sandbox sem ferramentas — valida persona/tom/regras.' });
+    res.json({
+      text: r.texto || '',
+      model: r.modelo,
+      provider: r.provider,
+      prompt_chars: systemPrompt.length,
+      note: 'Sandbox sem ferramentas — valida persona/tom/regras.',
+    });
   } catch (err) {
     console.error('[officeBrain] sandbox/chat', err?.message || err);
-    res.status(502).json({ error: 'Falha ao gerar resposta de teste.' });
+    // Erro de CONFIGURAÇÃO (sem chave, sem modelo, contexto pausado) tem
+    // recado que diz o que fazer, e esconder isso atrás de "falha ao gerar"
+    // manda o admin procurar no lugar errado.
+    const config = ['config', 'credencial', 'pausado'].includes(err?.causa);
+    res.status(config ? 503 : 502).json({ error: config ? err.message : 'Falha ao gerar resposta de teste.' });
   }
 });
 
