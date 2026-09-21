@@ -600,6 +600,11 @@ registerTool({
                 })],
                 total: emails.length,
                 emails,
+                // Os cards JÁ listam tudo: sem isto o modelo repetia a lista em
+                // texto embaixo dos cards.
+                message: emails.length
+                    ? 'A lista JÁ está na tela em cards. Responda em 1 frase: quantos são e, no máximo, o mais recente. NÃO repita a lista.'
+                    : undefined,
                 resumo: emails.length
                     ? `${emails.length} e-mail(s)${args?.termo ? ` sobre "${args.termo}"` : ''}. Mais recente: "${emails[0].assunto}" de ${emails[0].de}.`
                     : `Nenhum e-mail${args?.termo ? ` sobre "${args.termo}"` : ''} nessa pasta.`,
@@ -734,6 +739,9 @@ registerTool({
                 blocks: items.length ? [emailCards(items.slice(0, 8), { title: 'Não lidos', subtitle: `${contagem.unread} na Caixa de Entrada` })] : undefined,
                 naoLidos: contagem.unread,
                 totalNaCaixa: contagem.total,
+                message: items.length
+                    ? 'Os não lidos JÁ estão na tela em cards. Responda em 1 frase: quantos não lidos e quem mais escreveu. NÃO repita a lista.'
+                    : undefined,
                 porRemetente: remetentes,
                 maisRecentes: items.slice(0, 8).map(m => ({
                     id: m.id,
