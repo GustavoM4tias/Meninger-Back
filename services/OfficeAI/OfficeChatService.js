@@ -756,6 +756,14 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // ocupado isso sozinho passava de 20 segundos.
   const turnoT0 = Date.now();
 
+  // Fase do preparo, para o front não ficar em "Pensando…" mudo enquanto
+  // sessão, cérebro, alçadas e histórico carregam (num banco ocupado isso
+  // sozinho passa de 20 s). `phase` é efêmero: não entra na linha do tempo
+  // persistida como o `status` entra - é só o que está acontecendo AGORA.
+  // `null` devolve o front ao "Pensando…" (o modelo entrou em cena).
+  const fase = (message) => sendSSE(res, { type: 'phase', message });
+  fase('Abrindo a conversa…');
+
   // Contexto do Eme: OFFICE (operacional) ou ACADEMY (tutor de estudos).
   // É determinado pela ROTA — nunca pelo cliente.
   const ctx = String(context || 'OFFICE').toUpperCase() === 'ACADEMY' ? 'ACADEMY' : 'OFFICE';
@@ -809,6 +817,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // instrução no prompt o modelo não escreveria referência nenhuma, e resolver
   // o que não existe só gastaria trabalho.
   let ancoragem = { enabled: false, modo: 'suave', min_taxa: 0.8, max_citacoes: 400 };
+  fase('Carregando regras e permissões…');
   try {
     ancoragem = await anchoringSettings();
   } catch (err) {
@@ -899,6 +908,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // montado com teto e com aviso de que aquilo é DADO, nunca instrução.
   systemPrompt += buildScreenContextBlock(screen);
 
+  fase('Lendo o histórico da conversa…');
   const history = await buildHistory(session.id);
   // Remove a última mensagem do histórico (acabamos de salvar, não deve estar no "passado")
   const historyWithoutLast = history.slice(0, -1);
@@ -914,6 +924,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // o retry mais abaixo usam ELE, para que uma tool cortada aqui volte no
   // segundo tiro em vez de virar um "não consegui".
   const todasDeclaracoes = activeDeclarations;
+  fase('Escolhendo as ferramentas…');
   try {
     const ultimas = await db.ChatMessage.findAll({
       where: { session_id: session.id },
@@ -1131,6 +1142,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // pools vêm do Cérebro (settings.model_pools), então continuam sendo
   // configuração de tela, não código. Quem escolhe o FORNECEDOR é Conexões de
   // IA; o que se escolhe aqui é a faixa dentro dele.
+  fase(null);
   try {
     sessao = await conversa('office_chat', {
       system: systemPrompt,
