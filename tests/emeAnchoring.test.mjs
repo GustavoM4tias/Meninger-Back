@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 
 import {
     anotarParaCitacao,
+    criarRegistroDeCitacoes,
     resolverRefs,
     makeRefFilter,
     taxaDeAncoragem,
@@ -322,4 +323,14 @@ test('stats: número partido entre chunks conta UMA vez', () => {
     f.push('3 reservas.');
     f.flush();
     assert.equal(f.stats().crus, 1);
+});
+
+test('referência pelo caminho do resumo resolve; caminho inexistente vira marcador, nunca texto cru', () => {
+    const reg = criarRegistroDeCitacoes();
+    reg.anotar({ naoLidos: 1, emails: [{ id: 'X', de: 'JOÃO PEREZ', assunto: 'RE: Erro', previa: 'Bom dia' }] });
+    const r = resolverRefs('{{ref:r1.de}} · {{ref:emails.0.assunto}} · {{ref:emails[0].previa}} · {{ref:v1}} · {{ref:emails.9.assunto}}', reg.registro);
+    assert.equal(r.texto, 'JOÃO PEREZ · RE: Erro · Bom dia · 1 · …');
+    assert.equal(r.resolvidas, 4);
+    assert.deepEqual(r.naoResolvidas, ['emails.9.assunto']);
+    assert.ok(!r.texto.includes('{{ref:'));
 });

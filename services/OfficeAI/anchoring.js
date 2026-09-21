@@ -51,7 +51,14 @@
 // `{{ref:r3.vendas}}` (célula de linha) ou `{{ref:v1}}` (valor avulso).
 // As chaves duplas e o prefixo `ref:` foram escolhidos por serem improváveis em
 // texto de negócio e fáceis de segurar num stream partido ao meio.
-const REF_RE = /\{\{ref:([a-z]\d+(?:\.[a-zA-Z0-9_]+)?)\}\}/g;
+//
+// O formato oficial é `r3.vendas` / `v1`, mas o modelo às vezes escreve a
+// referência pelo CAMINHO do resumo (`{{ref:emails.0.assunto}}`, visto em
+// produção em 21/09/2026). Antes isso nem casava com a regex e o marcador ia
+// cru para a tela. Agora toda `{{ref:...}}` é capturada: o caminho é
+// resolvido pelo índice de caminhos (abaixo) e, se não existir, vira o
+// marcador de falha - nunca texto de máquina na frente da pessoa.
+const REF_RE = /\{\{ref:([a-zA-Z_][a-zA-Z0-9_.\[\]]*)\}\}/g;
 
 /**
  * Onde o chunk pode ser cortado com segurança.
@@ -73,10 +80,14 @@ function pontoDeCorte(buf) {
 
 // Sobra de referência que nunca fechou (stream cortado no meio). Some do texto
 // em vez de virar lixo na tela.
-const TRUNCADA_RE = /\{\{ref:[a-zA-Z0-9_.]*$/;
+const TRUNCADA_RE = /\{\{ref:[a-zA-Z0-9_.\[\]]*$/;
 
 /** Chaves cujo array o modelo cita item a item. */
-const COLECOES_CITAVEIS = ['rows', 'campanhas', 'cards', 'top3', 'kpis', 'pendencias', 'itens'];
+const COLECOES_CITAVEIS = ['rows', 'campanhas', 'cards', 'top3', 'kpis', 'pendencias', 'itens', 'emails', 'maisRecentes'];
+
+// Teto do índice de caminhos por turno: resumo grande não pode virar um mapa
+// de dezenas de milhares de entradas só para um atalho do modelo.
+const MAX_CAMINHOS = 4000;
 
 /** Campos que são só mecânica de renderização e não valem citação. */
 const NAO_CITAVEL = new Set(['ref', 'id', 'key', 'kind', 'visual', 'icon', 'icone', 'color', 'cor', 'route', 'rota', 'link', 'url']);
@@ -151,6 +162,29 @@ export function criarRegistroDeCitacoes() {
     let seqLinha = 0;
     let seqCategoria = 0;
     let seqValor = 0;
+    let caminhos = 0;
+
+    /**
+     * Índice por CAMINHO: toda folha escalar do resumo entra como
+     * `emails.0.assunto`, para a referência escrita "pelo caminho" resolver
+     * no mesmo valor que o modelo viu. Não substitui o `ref` de linha (que é
+     * o que amarra nome e número da mesma linha); é a rede de segurança.
+     */
+    const indexarCaminhos = (no, prefixo, profundidade) => {
+        if (caminhos >= MAX_CAMINHOS || profundidade > 6 || no == null) return;
+        if (Array.isArray(no)) { no.forEach((v, i) => indexarCaminhos(v, prefixo ? `${prefixo}.${i}` : String(i), profundidade + 1)); return; }
+        if (typeof no !== 'object') return;
+        for (const [chave, v] of Object.entries(no)) {
+            const caminho = prefixo ? `${prefixo}.${chave}` : chave;
+            if (ehEscalar(v)) {
+                if (v === null || v === '' || NAO_CITAVEL.has(chave) || registro.has(caminho)) continue;
+                registro.set(caminho, { valor: v, tipo: typeof v === 'number' ? 'number' : null, rotulo: chave });
+                if (++caminhos >= MAX_CAMINHOS) return;
+            } else {
+                indexarCaminhos(v, caminho, profundidade + 1);
+            }
+        }
+    };
 
     const anotarItem = (item, tiposPorCampo) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
@@ -233,6 +267,7 @@ export function criarRegistroDeCitacoes() {
             avulsos.push({ ref, o_que: chave, valor });
         }
         if (avulsos.length) saida.citacoes_valores = avulsos;
+        indexarCaminhos(saida, '', 0);
         return saida;
     };
 
@@ -273,7 +308,9 @@ export function resolverRefs(texto, registro, { marcadorFalha = '…' } = {}) {
     const naoResolvidas = [];
 
     const saida = String(texto).replace(REF_RE, (_, id) => {
-        const achado = registro.get(id);
+        // `emails[0].assunto` e `emails.0.assunto` são o mesmo caminho.
+        const chave = id.replace(/\[(\d+)\]/g, '.$1').replace(/^\./, '');
+        const achado = registro.get(chave) || registro.get(id);
         if (!achado) { naoResolvidas.push(id); return marcadorFalha; }
         resolvidas++;
         return formatarValor(achado.valor, achado.tipo);
