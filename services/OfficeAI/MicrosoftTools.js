@@ -23,6 +23,7 @@ import chatService from '../microsoft/MicrosoftChatService.js';
 import sharepointService from '../microsoft/MicrosoftSharepointService.js';
 import outlookService from '../microsoft/MicrosoftOutlookService.js';
 import { cardsBlock, detailBlock, choiceBlock } from './blocks.js';
+import { userCan } from '../permissions/capabilityService.js';
 
 const TZ = 'America/Sao_Paulo';
 
@@ -117,7 +118,9 @@ function momentoDe(texto) {
 async function fullUser(user) {
     const id = user?.id ?? user;
     return db.User.findByPk(id, {
-        attributes: ['id', 'username', 'email', 'microsoft_id',
+        // `role` entra porque userCan() decide o bypass de admin por ele (ver
+        // OutlookAiTools.fullUser): sem o campo, admin vira usuário comum.
+        attributes: ['id', 'username', 'email', 'role', 'microsoft_id',
                      'microsoft_access_token', 'microsoft_refresh_token', 'microsoft_token_expires_at'],
     });
 }
@@ -665,6 +668,14 @@ registerTool({
             return { result: { erro: `Não consegui abrir essa mensagem (${err.message}). Busque de novo com search_email.` } };
         }
         const anexos = msg.hasAttachments ? await outlookService.listAttachments(caixa, id).catch(() => []) : [];
+
+        // Ler aqui É ler: marca como lido no Outlook, como a tela faz ao abrir.
+        // Mesma capacidade da tela (organize); sem ela, só lê. Falha do Graph
+        // não impede a leitura - vira aviso.
+        let marcadoLido = false;
+        if (!msg.isRead && await userCan(u, '/microsoft/outlook', 'organize').catch(() => false)) {
+            marcadoLido = await outlookService.setRead(caixa, msg.id, true).then(() => true).catch(() => false);
+        }
         const corpo = htmlParaTexto(msg.bodyType === 'html' ? msg.body : String(msg.body || '').replace(/\n/g, '<br>'));
         const de = msg.from?.name || msg.from?.email || '(sem remetente)';
         const lista = (ps) => (ps || []).map(p => (p.name && p.name !== p.email ? `${p.name} <${p.email}>` : p.email)).join(', ');
@@ -702,8 +713,10 @@ registerTool({
                 recebidoEm: msg.receivedAt,
                 anexos: anexos.map(a => a.name),
                 corpo,
+                marcadoLido: marcadoLido || undefined,
                 outros_candidatos: outros.length ? outros : undefined,
-                message: 'O e-mail JÁ está aberto no chat (cabeçalho, corpo e próximos passos). Resuma em 1-2 frases o que ele diz e pergunte se quer responder ou encaminhar. Se outros_candidatos vier, diga que havia outros parecidos.',
+                message: 'O e-mail JÁ está aberto no chat (cabeçalho, corpo e próximos passos)'
+                    + (marcadoLido ? ' e foi marcado como lido no Outlook' : '') + '. Resuma em 1-2 frases o que ele diz e pergunte se quer responder ou encaminhar. Se outros_candidatos vier, diga que havia outros parecidos.',
             },
         };
     },
