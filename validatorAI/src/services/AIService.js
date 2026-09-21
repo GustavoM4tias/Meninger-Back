@@ -1,5 +1,5 @@
 // src/services/AIService.js
-import { nextClient, markCooldown, getKeyCount } from '../config/geminiClient.js';
+import { nextClient, markCooldown, getKeyCount, SEM_CHAVE } from '../config/geminiClient.js';
 import { TokenUsage } from '../utils/db.js';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -11,7 +11,7 @@ dotenv.config();
 // gemini-2.5-pro punha a chave em cooldown, o fallback para o flash encontrava
 // a mesma chave gelada e a análise morria em 2 segundos - deixando o contrato
 // parado em "Analise Contratos" até alguém reparar na mão.
-function classificaErro(err) {
+export function classificaErro(err) {
   const code = err?.status ?? err?.code ?? err?.response?.status;
   if (code === 429) return 'quota';
   if (code === 500 || code === 502 || code === 503) return 'sobrecarga';
@@ -79,9 +79,11 @@ export class AIService {
     const nome = String(model || '').trim();
     if (!nome) return { model: nome, ok: false, ms: 0, tipo: 'modelo', erro: 'modelo não informado' };
 
-    const { client, index } = nextClient();
+    const { client, index, motivo } = nextClient();
     if (!client) {
-      return { model: nome, ok: false, ms: Date.now() - t0, tipo: 'quota', erro: 'todas as chaves em cooldown' };
+      return motivo === 'sem_chave'
+        ? { model: nome, ok: false, ms: Date.now() - t0, tipo: 'config', erro: SEM_CHAVE }
+        : { model: nome, ok: false, ms: Date.now() - t0, tipo: 'quota', erro: 'todas as chaves em cooldown' };
     }
 
     try {
@@ -122,8 +124,15 @@ export class AIService {
       let attempts = 0;
       let sobrecargas = 0;
       while (attempts < maxAttempts) {
-        const { client, index } = nextClient();
+        const { client, index, motivo } = nextClient();
         if (!client) {
+          // Sem chave NENHUMA não é o mesmo que chave gelada: trocar de modelo
+          // não conserta configuração, e insistir nos outros modelos só
+          // devolveria a mesma falha três vezes, com uma mensagem que não diz
+          // o que fazer. Sai na hora, com o recado certo.
+          if (motivo === 'sem_chave') {
+            return { response: null, tokensUsed: 0, model: modelToUse, keyIndex: -1, error: SEM_CHAVE };
+          }
           console.warn(`Todas as chaves estão em cooldown para ${modelToUse}; alternando para próximo modelo.`);
           break;
         }

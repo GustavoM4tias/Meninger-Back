@@ -53,6 +53,10 @@ export function agregar(checks = {}) {
     let motivo = 'Validador respondendo normalmente.';
     let motivoChave = 'ok';
 
+    // Saída única: há um caminho que corta o resto da checagem (sem chave, onde
+    // conferir gatilho e fila só somaria ruído a um problema de configuração).
+    const finalizar = () => ({ status, motivo, motivoChave, detalhes });
+
     const modelos = Array.isArray(checks.modelos) ? checks.modelos : [];
     const vivos = modelos.filter(m => m?.ok);
     const mortos = modelos.filter(m => m && !m.ok);
@@ -71,6 +75,18 @@ export function agregar(checks = {}) {
     if (modelos.length) {
         if (!vivos.length) {
             status = pior(status, STATUS.DOWN);
+
+            // Falta de CHAVE não é falha de modelo: repetir "gemini-2.5-pro
+            // (config), gemini-2.5-flash (config)" manda o admin trocar de
+            // modelo quando o conserto é uma variável de ambiente.
+            const semChave = mortos.filter(m => m.tipo === 'config');
+            if (semChave.length === mortos.length) {
+                const msg = `Sem chave do provedor configurada: ${semChave[0]?.erro || 'GEMINI_API_KEYS ausente'}.`;
+                detalhes.push(msg);
+                if (motivoChave === 'ok') { motivo = msg; motivoChave = 'sem-chave'; }
+                return finalizar();
+            }
+
             const porModelo = mortos.map(m => `${m.model} (${m.tipo || 'erro'})`).join(', ');
             const msg = `Nenhum modelo do pool respondeu: ${porModelo}.`;
             detalhes.push(msg);

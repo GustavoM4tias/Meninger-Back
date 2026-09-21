@@ -66,21 +66,22 @@ let rodando = false;
 /**
  * Um ping por modelo do pool, na ordem. Sequencial: a rotação de chave é global.
  *
- * O import do AIService é DINÂMICO de propósito. O geminiClient do validador
- * lança no carregamento quando não há `GEMINI_API_KEYS` - e uma sonda que morre
- * junto com aquilo que ela deveria vigiar não serve para nada. Assim, chave
- * ausente vira um diagnóstico legível ("sem chave configurada") em vez de um
- * módulo que não carrega.
+ * O import do AIService é DINÂMICO de propósito. O geminiClient já não lança no
+ * carregamento (chave ausente virou erro na chamada, com `tipo: 'config'`), mas
+ * a sonda não pode depender disso continuar verdade: ela é justamente quem
+ * avisa que o validador quebrou, e uma sonda que morre junto com o que vigia
+ * não serve para nada. Qualquer falha ao carregar vira diagnóstico legível.
  */
 async function checarModelos(models = [], timeoutMs = 25000) {
     let AIService;
     try {
         ({ AIService } = await import('../../validatorAI/src/services/AIService.js'));
     } catch (err) {
-        const erro = /chave/i.test(err?.message || '')
+        const semChave = /chave/i.test(err?.message || '');
+        const erro = semChave
             ? 'sem chave Gemini configurada (GEMINI_API_KEYS)'
             : String(err?.message || err).slice(0, 300);
-        return models.map(model => ({ model, ok: false, tipo: 'fatal', erro }));
+        return models.map(model => ({ model, ok: false, tipo: semChave ? 'config' : 'fatal', erro }));
     }
 
     const out = [];

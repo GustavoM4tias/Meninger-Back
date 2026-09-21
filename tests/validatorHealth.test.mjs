@@ -186,3 +186,80 @@ test('sanitize: destinatários viram ids numéricos únicos', () => {
     const out = sanitize({ notify_user_ids: ['3', 3, 0, null, 7] });
     assert.deepEqual(out.notify_user_ids, [3, 7]);
 });
+
+// ── Chave ausente ───────────────────────────────────────────────────────────
+
+test('agregar: sem chave do provedor diz CONFIGURAÇÃO, não "troque o modelo"', async () => {
+    // Repetir "gemini-2.5-pro (config), gemini-2.5-flash (config)" mandaria o
+    // admin trocar de modelo quando o conserto é uma variável de ambiente.
+    const r = agregar({
+        modelos: [
+            { model: 'gemini-2.5-pro', ok: false, tipo: 'config', erro: 'Nenhuma chave Gemini configurada.' },
+            { model: 'gemini-2.5-flash', ok: false, tipo: 'config', erro: 'Nenhuma chave Gemini configurada.' },
+        ],
+        api: { ok: true },
+    });
+    assert.equal(r.status, STATUS.DOWN);
+    assert.equal(r.motivoChave, 'sem-chave');
+    assert.match(r.motivo, /chave/i);
+    assert.ok(!/gemini-2\.5-pro/.test(r.motivo), 'não deve listar modelo: o problema não é o modelo');
+});
+
+test('agregar: chave ausente em UM modelo e outro vivo continua sendo degradação normal', () => {
+    const r = agregar({
+        modelos: [
+            { model: 'gemini-2.5-pro', ok: false, tipo: 'modelo' },
+            { model: 'gemini-2.5-flash', ok: true },
+        ],
+        api: { ok: true },
+    });
+    assert.equal(r.status, STATUS.DEGRADED);
+    assert.match(r.motivoChave, /^modelo-404/);
+});
+
+// ── AIService: o módulo carrega e falha na CHAMADA, não no import ───────────
+
+test('geminiClient e AIService carregam SEM chave nenhuma', async () => {
+    // Era isto que derrubava o boot inteiro do Office e tornava tudo abaixo
+    // impossível de testar: o módulo lançava no carregamento.
+    const { classificaErro, AIService } = await import('../validatorAI/src/services/AIService.js');
+    assert.equal(typeof classificaErro, 'function');
+    assert.equal(typeof AIService.ping, 'function');
+});
+
+test('classificaErro separa quota, sobrecarga, modelo e fatal', async () => {
+    // A separação não é cosmética: quota esfria a CHAVE, sobrecarga repete na
+    // mesma chave, 404 pula o MODELO. Tratar tudo como transiente já matou
+    // análise em 2 segundos e deixou contrato parado.
+    const { classificaErro } = await import('../validatorAI/src/services/AIService.js');
+    assert.equal(classificaErro({ status: 429 }), 'quota');
+    assert.equal(classificaErro({ status: 503 }), 'sobrecarga');
+    assert.equal(classificaErro({ status: 500 }), 'sobrecarga');
+    assert.equal(classificaErro({ status: 502 }), 'sobrecarga');
+    assert.equal(classificaErro({ status: 404 }), 'modelo');
+    assert.equal(classificaErro({ status: 400 }), 'fatal');
+    assert.equal(classificaErro(new Error('rede caiu')), 'fatal');
+    // O SDK ora põe em `status`, ora em `code`, ora em `response.status`.
+    assert.equal(classificaErro({ code: 429 }), 'quota');
+    assert.equal(classificaErro({ response: { status: 404 } }), 'modelo');
+});
+
+test('ping sem chave devolve tipo "config" com a mensagem que diz o que fazer', async () => {
+    const { AIService } = await import('../validatorAI/src/services/AIService.js');
+    const { resetClients } = await import('../validatorAI/src/config/geminiClient.js');
+
+    const antes = { keys: process.env.GEMINI_API_KEYS, key: process.env.GEMINI_API_KEY };
+    delete process.env.GEMINI_API_KEYS;
+    delete process.env.GEMINI_API_KEY;
+    resetClients();
+    try {
+        const r = await AIService.ping('gemini-2.5-flash');
+        assert.equal(r.ok, false);
+        assert.equal(r.tipo, 'config');
+        assert.match(r.erro, /GEMINI_API_KEYS/);
+    } finally {
+        if (antes.keys !== undefined) process.env.GEMINI_API_KEYS = antes.keys;
+        if (antes.key !== undefined) process.env.GEMINI_API_KEY = antes.key;
+        resetClients();
+    }
+});
