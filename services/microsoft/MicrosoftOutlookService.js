@@ -271,6 +271,10 @@ class MicrosoftOutlookService {
         // manda, e a ordenação vem por relevância.
         if (search) {
             params.$search = `"${String(search).replace(/"/g, '')}"`;
+            // O Graph recusa $skip junto de $search, MESMO com skip=0
+            // ("SearchWithSkip", 400). Isso derrubava toda busca por termo, na
+            // tela e na Eme. Busca não pagina: a primeira página é o resultado.
+            delete params.$skip;
         } else {
             const filters = [];
             if (unreadOnly)      filters.push('isRead eq false');
@@ -314,8 +318,8 @@ class MicrosoftOutlookService {
         return {
             items,
             // Sem total confiável no Graph: "tem mais" é ter vindo página cheia.
-            hasMore: (data.value || []).length === params.$top,
-            skip: params.$skip,
+            hasMore: !search && (data.value || []).length === params.$top,
+            skip: params.$skip ?? 0,
         };
     }
 
