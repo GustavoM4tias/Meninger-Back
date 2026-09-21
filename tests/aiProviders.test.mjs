@@ -154,3 +154,52 @@ test('os contextos já migrados são os que passam pela porta única', () => {
     assert.equal(SUPORTE.relatorios.roteavel, true);
     assert.equal(SUPORTE.office_chat.roteavel, true);
 });
+
+// ── Piso de emergência ───────────────────────────────────────────────────────
+//
+// O registro de provedores é a FONTE da configuração, não uma dependência do
+// funcionamento. `app.listen` roda ANTES da fase de schema (decisão do
+// server.js, para o site responder no deploy), então existe uma janela real em
+// que o chat aceita pergunta antes de `ai_providers` existir.
+//
+// Sem o piso, essa janela derruba o assistente inteiro com "indisponível" - e
+// sem dizer que o problema é o registro, não o modelo. Foi exatamente o que
+// aconteceu no primeiro teste em produção.
+
+const { provedorDeEmergencia } = await import('../services/ai/providers.js');
+
+test('o piso de emergência atende os QUATRO usos', () => {
+    // Faltar um uso faria o gateway recusar com "sem modelo configurado" - o
+    // mesmo tipo de parada que o piso existe para evitar.
+    const p = provedorDeEmergencia();
+    for (const uso of USOS) {
+        assert.ok(Array.isArray(p.models[uso]) && p.models[uso].length, `uso "${uso}" sem modelo no piso`);
+    }
+});
+
+test('o piso não carrega credencial: a chave vem da env pelo caminho normal', () => {
+    // `api_keys_enc` vazio + kind gemini é o que faz `chavesDe` cair na env.
+    const p = provedorDeEmergencia();
+    assert.deepEqual(p.api_keys_enc, []);
+    assert.equal(p.kind, 'gemini');
+    assert.equal(p.enabled, true);
+});
+
+test('o piso se identifica como emergência, para a tela poder avisar', () => {
+    // Rodar fora da configuração da tela precisa ser visível: escondido, alguém
+    // editaria uma configuração que não está sendo lida.
+    const p = provedorDeEmergencia();
+    assert.equal(p.emergencia, true);
+    assert.match(p.label, /emerg/i);
+});
+
+test('o piso respeita GEMINI_MODELS quando existe', () => {
+    const antes = process.env.GEMINI_MODELS;
+    process.env.GEMINI_MODELS = 'modelo-a, modelo-b';
+    try {
+        assert.deepEqual(provedorDeEmergencia().models.chat, ['modelo-a', 'modelo-b']);
+    } finally {
+        if (antes === undefined) delete process.env.GEMINI_MODELS;
+        else process.env.GEMINI_MODELS = antes;
+    }
+});

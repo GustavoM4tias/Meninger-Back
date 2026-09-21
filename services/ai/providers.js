@@ -84,15 +84,88 @@ export function temProvedorSync() {
 
 // ── Leitura ──────────────────────────────────────────────────────────────────
 
+/**
+ * PROVEDOR DE EMERGÊNCIA: o Gemini montado direto da env, sem banco nenhum.
+ *
+ * Existe porque o registro é a FONTE da configuração, não uma dependência do
+ * funcionamento. Sem isto, uma tabela ausente derruba o assistente inteiro -
+ * e foi o que aconteceu: `app.listen` roda na linha 428 do server.js e os
+ * patches de schema na 663, então existe uma janela em que o chat aceita
+ * pergunta antes de `ai_providers` existir. O sintoma era "o assistente está
+ * indisponível", sem dizer que o problema era o registro e não o modelo.
+ *
+ * A regra geral: quem ESCOLHE o fornecedor é a tela; quem GARANTE que existe
+ * um é este piso. Trocar de fornecedor é decisão; ficar sem nenhum é defeito.
+ */
+export function provedorDeEmergencia() {
+    const doEnv = (process.env.GEMINI_MODELS || '').split(',').map(m => m.trim()).filter(Boolean);
+    const rapido = (process.env.GEMINI_DIGEST_MODEL || 'gemini-2.5-flash').trim();
+    return {
+        id: null,
+        key: 'gemini',
+        label: 'Google Gemini (emergência, direto do ambiente)',
+        kind: 'gemini',
+        base_url: null,
+        api_keys_enc: [],                 // `chavesDe` cai na env para kind gemini
+        models: {
+            chat: doEnv.length ? doEnv : ['gemini-2.5-pro', 'gemini-2.5-flash'],
+            json: [rapido],
+            visao: [rapido],
+            embed: [(process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001').trim()],
+        },
+        capabilities: { chat: true, tools: true, json: true, visao: true, embed: true, stream: true },
+        extra: {},
+        enabled: true,
+        ordem: 0,
+        status: 'unknown',
+        emergencia: true,
+    };
+}
+
+/** Por quanto tempo o modo de emergência fica valendo antes de tentar o banco de novo. */
+const TTL_DEGRADADO = 5 * 1000;
+
 async function carregar() {
-    if (_cache && Date.now() - _cacheAt < TTL) return _cache;
-    const [providers, routes] = await Promise.all([
-        db.AiProvider.findAll({ order: [['ordem', 'ASC'], ['id', 'ASC']], raw: true }),
-        db.AiRoute.findAll({ raw: true }),
-    ]);
-    _cache = { providers, routes };
-    _cacheAt = Date.now();
-    return _cache;
+    if (_cache && Date.now() - _cacheAt < (_cache.degradado ? TTL_DEGRADADO : TTL)) return _cache;
+
+    try {
+        const [providers, routes] = await Promise.all([
+            db.AiProvider.findAll({ order: [['ordem', 'ASC'], ['id', 'ASC']], raw: true }),
+            db.AiRoute.findAll({ raw: true }),
+        ]);
+
+        // Tabela existe mas está vazia conta como indisponível: é o estado do
+        // primeiro boot, entre o CREATE TABLE e a semente, e nele o assistente
+        // precisa continuar respondendo.
+        if (!providers.length) {
+            _cache = {
+                providers: [provedorDeEmergencia()], routes,
+                degradado: 'O registro de provedores está vazio. Respondendo pelo Gemini do ambiente até a tela ser configurada.',
+            };
+            _cacheAt = Date.now();
+            return _cache;
+        }
+
+        _cache = { providers, routes, degradado: null };
+        _cacheAt = Date.now();
+        return _cache;
+    } catch (err) {
+        // Log ALTO: é uma degradação silenciosa para quem usa, e quem opera
+        // precisa saber que o sistema está fora da configuração da tela.
+        console.error('⚠️  [ai/providers] registro indisponível, usando o provedor de emergência:', err?.message);
+        _cache = {
+            providers: [provedorDeEmergencia()], routes: [],
+            degradado: `Não deu para ler o registro de provedores (${String(err?.message || err).slice(0, 200)}). Respondendo pelo Gemini do ambiente.`,
+        };
+        _cacheAt = Date.now();
+        return _cache;
+    }
+}
+
+/** O sistema está rodando fora da configuração da tela? Frase ou null. */
+export async function estadoDegradado() {
+    const c = await carregar();
+    return c.degradado || null;
 }
 
 /**
@@ -166,8 +239,12 @@ export async function provedorDe(contexto) {
 
 /** Tudo o que a tela precisa - sem nenhuma credencial. */
 export async function paraTela() {
-    const { providers, routes } = await carregar();
+    const { providers, routes, degradado } = await carregar();
     return {
+        // Quando isto vem preenchido, NADA do que a tela mostra está valendo:
+        // o sistema caiu no piso de emergência. Esconder seria deixar alguém
+        // editar uma configuração que não está sendo lida.
+        degradado: degradado || null,
         providers: providers.map(p => ({
             id: p.id, key: p.key, label: p.label, kind: p.kind,
             base_url: p.base_url, models: p.models, capabilities: p.capabilities,
@@ -353,7 +430,7 @@ export async function registrarChecagem(id, { status, erro = null, modelos = [] 
 }
 
 export default {
-    provedorDe, paraTela, chavesDe, resumoDeChaves, SUPORTE,
+    provedorDe, paraTela, chavesDe, resumoDeChaves, SUPORTE, estadoDegradado, provedorDeEmergencia,
     salvarProvider, removerProvider, salvarRota, registrarChecagem,
     sanitizeProvider, cifrarChaves, invalidateProvidersCache,
     TIPOS, USOS, CONTEXTOS,
