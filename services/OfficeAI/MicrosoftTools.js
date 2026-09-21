@@ -871,7 +871,7 @@ registerTool({
 // para a pessoa dizer qual.
 
 /** Acha a reunião pelo id ou pelo assunto, dentro de uma janela de dias. */
-async function acharEvento(u, { id, termo, dias = 30 }) {
+async function acharEvento(u, { id, termo, dias = 30, alvoEhSerie = false }) {
     if (id) {
         try { return { evento: await teamsService.getEvent(u, id) }; }
         catch { return { erro: 'Não encontrei esse compromisso na sua agenda.' }; }
@@ -891,12 +891,12 @@ async function acharEvento(u, { id, termo, dias = 30 }) {
     // Seis ocorrências da mesma série NÃO são seis reuniões. O Graph já manda
     // `seriesMasterId` e o código ignorava: a pessoa via seis datas, respondia
     // "todas", e continuava sendo perguntada. Ver serieDeEventos.js.
-    const alvo = resolverAlvo(achados);
-    if (alvo.evento) return { evento: alvo.evento, grupo: alvo.grupo };
+    const alvo = resolverAlvo(achados, { alvoEhSerie });
+    if (alvo.evento) return { evento: alvo.evento, grupo: alvo.grupo, unificado: !!alvo.unificadoPorAssunto };
 
     return {
         ambiguo: alvo.ambiguo.map(a => ({
-            id: a.id,
+            id_interno: a.id_interno,
             assunto: a.assunto,
             dia: dia(a.inicio),
             inicio: hora(a.inicio),
@@ -947,7 +947,13 @@ registerTool({
         const u = await fullUser(user);
         if (!u?.microsoft_id) return { result: semConta };
 
-        const alvo = await acharEvento(u, { id: args?.id, termo: args?.termo });
+        // O alcance entra na BUSCA: quem já pediu a série não precisa escolher
+        // entre datas da mesma reunião - cancelar a série resolve o mestre a
+        // partir de qualquer ocorrência.
+        const alvo = await acharEvento(u, {
+            id: args?.id, termo: args?.termo,
+            alvoEhSerie: String(args?.alcance || '') === 'serie',
+        });
         if (alvo.erro) return { result: { erro: alvo.erro } };
         if (alvo.ambiguo) {
             return { result: {
@@ -1055,8 +1061,9 @@ registerTool({
                 // seguidas num caso real - um identificador do Graph que a
                 // pessoa não tem como saber, e que já está aqui no payload.
                 resumo: 'São compromissos DIFERENTES (cada linha é uma reunião; a recorrente aparece uma vez só, com o total de ocorrências). '
-                    + 'Pergunte qual pelo ASSUNTO e pelo DIA. NUNCA peça o id ao usuário: ele não tem como saber, e você já o tem aqui - '
-                    + 'use o id da linha que ele escolher na próxima chamada.',
+                    + 'Pergunte qual pelo ASSUNTO e pelo DIA, em uma frase curta. '
+                    + 'PROIBIDO escrever `id_interno` na resposta ou pedir um id ao usuário: é um identificador do Graph, '
+                    + 'ilegível e impossível de digitar. Ele já está aqui - guarde e use na próxima chamada.',
             } };
         }
 
