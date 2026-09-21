@@ -15,6 +15,7 @@
 //     tem a tela não tem a tool.
 
 import { registerTool } from './ToolRegistry.js';
+import { resolverAlvo } from '../microsoft/serieDeEventos.js';
 import db from '../../models/sequelize/index.js';
 import teamsService from '../microsoft/MicrosoftTeamsService.js';
 import transcriptService from '../microsoft/MicrosoftTranscriptService.js';
@@ -886,14 +887,23 @@ async function acharEvento(u, { id, termo, dias = 30 }) {
     const achados = items.filter(e => !e.isCancelled && String(e.subject || '').toLowerCase().includes(t));
 
     if (!achados.length) return { erro: `Não achei nenhum compromisso com "${termo}" entre 7 dias atrás e ${dias} dias à frente.` };
-    if (achados.length > 1) {
-        return {
-            ambiguo: achados.slice(0, 6).map(e => ({
-                id: e.id, assunto: e.subject, dia: dia(e.start), inicio: hora(e.start),
-            })),
-        };
-    }
-    return { evento: achados[0] };
+
+    // Seis ocorrências da mesma série NÃO são seis reuniões. O Graph já manda
+    // `seriesMasterId` e o código ignorava: a pessoa via seis datas, respondia
+    // "todas", e continuava sendo perguntada. Ver serieDeEventos.js.
+    const alvo = resolverAlvo(achados);
+    if (alvo.evento) return { evento: alvo.evento, grupo: alvo.grupo };
+
+    return {
+        ambiguo: alvo.ambiguo.map(a => ({
+            id: a.id,
+            assunto: a.assunto,
+            dia: dia(a.inicio),
+            inicio: hora(a.inicio),
+            recorrente: a.recorrente,
+            ocorrencias: a.ocorrencias,
+        })),
+    };
 }
 
 function resumoDoEvento(e) {
@@ -943,7 +953,8 @@ registerTool({
             return { result: {
                 precisaEscolher: true,
                 candidatos: alvo.ambiguo,
-                resumo: `Achei ${alvo.ambiguo.length} compromissos com esse nome. Pergunte ao usuário qual deles.`,
+                resumo: `Achei ${alvo.ambiguo.length} compromissos DIFERENTES com esse nome (série recorrente conta uma vez só). `
+                    + 'Pergunte qual pelo ASSUNTO e pelo DIA. NUNCA peça o id ao usuário: você já o tem aqui.',
             } };
         }
 
@@ -1024,7 +1035,7 @@ registerTool({
             id:         { type: 'string', description: 'Id do evento (de my_agenda).' },
             termo:      { type: 'string', description: 'Parte do assunto, quando não tem o id.' },
             motivo:     { type: 'string', description: 'Motivo, enviado aos participantes (opcional).' },
-            alcance:    { type: 'string', description: 'Para reunião que se repete: "ocorrencia" (só aquele dia) ou "serie" (todas). Pergunte ao usuário.' },
+            alcance:    { type: 'string', description: 'Para reunião que se repete: "ocorrencia" (só aquele dia) ou "serie" (todas as ocorrências, passadas e futuras). Se o usuário já disse "a recorrência", "a série", "todas" ou "todas as ocorrências", passe "serie" direto - não pergunte de novo.' },
             confirmado: { type: 'boolean', description: 'Passe true SÓ depois de o usuário confirmar.' },
         },
     },
@@ -1037,8 +1048,16 @@ registerTool({
         const alvo = await acharEvento(u, { id: args?.id, termo: args?.termo });
         if (alvo.erro) return { result: { erro: alvo.erro } };
         if (alvo.ambiguo) {
-            return { result: { precisaEscolher: true, candidatos: alvo.ambiguo,
-                resumo: 'Mais de um compromisso com esse nome. Pergunte qual.' } };
+            return { result: {
+                precisaEscolher: true,
+                candidatos: alvo.ambiguo,
+                // A instrução é explícita porque o modelo pediu o ID três vezes
+                // seguidas num caso real - um identificador do Graph que a
+                // pessoa não tem como saber, e que já está aqui no payload.
+                resumo: 'São compromissos DIFERENTES (cada linha é uma reunião; a recorrente aparece uma vez só, com o total de ocorrências). '
+                    + 'Pergunte qual pelo ASSUNTO e pelo DIA. NUNCA peça o id ao usuário: ele não tem como saber, e você já o tem aqui - '
+                    + 'use o id da linha que ele escolher na próxima chamada.',
+            } };
         }
 
         const e = alvo.evento;
@@ -1047,10 +1066,18 @@ registerTool({
         // Série sem escolha declarada não é chute: a diferença entre apagar um
         // dia e apagar o compromisso de todo mês é grande demais.
         if (e.isRecurring && !['ocorrencia', 'serie'].includes(String(args?.alcance || ''))) {
+            const quantas = alvo.grupo?.ocorrencias || null;
             return { result: {
                 precisaEscolher: true,
                 reuniao: resumoDoEvento(e),
-                resumo: `"${e.subject}" se repete. Pergunte ao usuário se é só o dia ${dia(e.start)} ou a série inteira, e chame de novo com alcance "ocorrencia" ou "serie".`,
+                ocorrencias: quantas,
+                // A pergunta precisa ser respondível em uma palavra. Antes ela
+                // vinha junto com um pedido de id, e a pessoa respondia "todas"
+                // sem conseguir sair do lugar.
+                resumo: `"${e.subject}" se repete${quantas ? ` (${quantas} ocorrência(s) no período consultado)` : ''}. `
+                    + `Pergunte APENAS isto: é só o dia ${dia(e.start)} ou a série inteira? `
+                    + 'Não peça id nem peça para escolher entre as datas - é uma reunião só. '
+                    + 'Com a resposta, chame de novo com alcance "ocorrencia" ou "serie".',
             } };
         }
 
