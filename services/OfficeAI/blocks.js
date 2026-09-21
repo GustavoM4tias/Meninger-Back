@@ -75,8 +75,11 @@ export function navBlock({ id, route, filters, message }) {
  * A tool que devolve isto NÃO envia nada: quem envia é o clique no cartão,
  * pela rota /outlook/send, com a alçada de envio conferida lá.
  * to/cc/bcc: e-mails (string) ou { email, name }. `body` é TEXTO simples.
+ * `replyTo` = { messageId, kind: 'reply'|'replyAll'|'forward', subject, from, preview }
+ * quando é resposta/encaminhamento: o cartão mostra a conversa e envia por
+ * /outlook/messages/:id/:kind/send, com a citação montada pelo Outlook.
  */
-export function emailBlock({ id, to, cc, bcc, subject, body, note }) {
+export function emailBlock({ id, to, cc, bcc, subject, body, note, replyTo }) {
     const pessoa = (p) => (typeof p === 'string'
         ? { email: p.trim() }
         : limpar({ email: String(p?.email || '').trim(), name: p?.name || undefined }));
@@ -89,6 +92,10 @@ export function emailBlock({ id, to, cc, bcc, subject, body, note }) {
         email: limpar({
             to: lista(to), cc: lista(cc), bcc: lista(bcc),
             subject: String(subject || ''), body: String(body || ''), note,
+            replyTo: replyTo?.messageId ? limpar({
+                messageId: replyTo.messageId, kind: replyTo.kind || 'reply',
+                subject: replyTo.subject, from: replyTo.from, preview: replyTo.preview,
+            }) : undefined,
         }),
     });
 }

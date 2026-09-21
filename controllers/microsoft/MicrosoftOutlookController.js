@@ -223,6 +223,30 @@ class MicrosoftOutlookController {
         } catch (err) { return this._guard(res, err) || fail(res, err, 'send'); }
     };
 
+    /**
+     * Responder/encaminhar direto, com a citação montada pelo Outlook.
+     * Mesma trava do envio (kill-switch, log de quem e para quem).
+     */
+    replyNow = async (req, res) => {
+        try {
+            const { mailbox, user } = await this._resolveMailbox(req);
+            const s = await settingsService.get();
+            if (s.outlook_send_enabled === false) {
+                return res.status(403).json({ error: 'O envio de e-mail pelo Office está desligado na configuração.' });
+            }
+            const { kind, id } = req.params;
+            const to = (req.body?.to || []).map(t => (typeof t === 'string' ? t : t?.email)).filter(Boolean);
+            const cc = (req.body?.cc || []).map(t => (typeof t === 'string' ? t : t?.email)).filter(Boolean);
+            if (kind === 'forward' && !to.length) return res.status(400).json({ error: 'Informe para quem encaminhar.' });
+
+            await outlook.replyNow(mailbox, id, kind, { comment: String(req.body?.comment || ''), to, cc });
+
+            console.log(`📧 [Outlook] user ${user.id} (${user.email}) ${kind} em ${String(id).slice(0, 12)}…`
+                      + `${to.length ? ` para ${to.join(', ')}` : ''}`);
+            return res.json({ ok: true });
+        } catch (err) { return this._guard(res, err) || fail(res, err, 'replyNow'); }
+    };
+
     // ── Organização ──────────────────────────────────────────────────────────
 
     setRead = async (req, res) => {

@@ -268,9 +268,91 @@ registerTool({
     },
 });
 
+/**
+ * Resposta/encaminhamento pelo MESMO cartão. Também não envia: o cartão chama
+ * /outlook/messages/:id/:kind/send, que responde com a citação montada pelo
+ * Outlook (mesma conversa). A Eme escreve o texto; a tool só lê a mensagem
+ * original para preencher para quem vai e o assunto, e devolve o bloco.
+ */
+const TIPO_RESPOSTA = { responder: 'reply', responder_todos: 'replyAll', encaminhar: 'forward' };
+
+registerTool({
+    name: 'outlook_responder_email',
+    description: 'MONTA a RESPOSTA ou o ENCAMINHAMENTO de um e-mail existente, no cartão do chat, para o usuário revisar e enviar. Use para "responde o e-mail da Julia dizendo que...", "responde a todos que...", "encaminha esse e-mail para o Marcus". O `id` da mensagem vem de outlook_triagem, search_email ou inbox_summary. Escreva o `corpo` completo em texto simples, no tom do usuário: a conversa anterior vai junto automaticamente, não a repita. Para encaminhar, `para` é obrigatório. NÃO envia: quem envia é o usuário, clicando no cartão. Nunca diga que enviou.',
+    parameters: {
+        type: 'object',
+        properties: {
+            id:    { type: 'string', description: 'Id da mensagem original.' },
+            tipo:  { type: 'string', enum: ['responder', 'responder_todos', 'encaminhar'], description: 'responder (só ao remetente), responder_todos ou encaminhar.' },
+            corpo: { type: 'string', description: 'O que o usuário quer dizer, pronto para enviar, em texto simples (quebras com \\n).' },
+            para:  { type: 'array', items: { type: 'string' }, description: 'E-mails de destino. Obrigatório ao encaminhar; em resposta, só se o usuário quiser trocar o destinatário.' },
+            cc:    { type: 'array', items: { type: 'string' }, description: 'E-mails em cópia, se pedido.' },
+        },
+        required: ['id', 'tipo', 'corpo'],
+    },
+    requiredPermissions: ['/microsoft/outlook'],
+    contexts: ['OFFICE'],
+    async handler(user, args) {
+        const { erro, u, caixa } = await comCaixa(user);
+        if (erro) return { result: erro };
+
+        if (!await userCan(u, '/microsoft/outlook', 'send')) {
+            return { result: { erro: 'Você não tem a ação de envio na tela de e-mail, então não posso montar respostas para você enviar.' } };
+        }
+
+        const kind = TIPO_RESPOSTA[args?.tipo] || 'reply';
+        const limpa = (arr) => (Array.isArray(arr) ? arr : [arr])
+            .map(e => String(e || '').trim().toLowerCase())
+            .filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+        const corpo = String(args?.corpo || '').trim();
+        if (!corpo) return { result: { erro: 'Preciso do texto da resposta.' } };
+
+        let msg;
+        try {
+            msg = await outlookService.getMessage(caixa, String(args?.id || ''));
+        } catch (err) {
+            return { result: { erro: `Não achei essa mensagem na sua caixa (${err.message}). Busque de novo com search_email ou outlook_triagem.` } };
+        }
+
+        // Para quem vai: o que a pessoa pediu ganha; senão, o que o Outlook faria.
+        const eu = String(u.email || '').toLowerCase();
+        const semEu = (lista) => (lista || []).map(p => String(p?.email || '').toLowerCase()).filter(e => e && e !== eu);
+        let para = [...new Set(limpa(args?.para))];
+        let cc = [...new Set(limpa(args?.cc))];
+        if (!para.length) {
+            if (kind === 'forward') return { result: { erro: 'Para encaminhar preciso do E-MAIL de quem vai receber. Se só tem o nome, procure com query_people.' } };
+            para = semEu([msg.from]);
+            if (kind === 'replyAll') {
+                para = [...new Set([...para, ...semEu(msg.to)])];
+                if (!cc.length) cc = semEu(msg.cc).filter(e => !para.includes(e));
+            }
+        }
+        cc = cc.filter(e => !para.includes(e));
+
+        const prefixo = kind === 'forward' ? 'Enc:' : 'Re:';
+        const assuntoBase = String(msg.subject || '').replace(/^\s*((re|enc|fwd?|fw)\s*:\s*)+/i, '');
+        const externos = para.concat(cc).filter(e => !/@menin\.com\.br$/i.test(e));
+
+        return {
+            result: {
+                blocks: [emailBlock({
+                    to: para, cc, subject: `${prefixo} ${assuntoBase}`, body: corpo,
+                    replyTo: { messageId: msg.id, kind, subject: msg.subject, from: msg.from?.name || msg.from?.email, preview: (msg.preview || '').slice(0, 160) },
+                })],
+                tipo: args?.tipo, para, cc, assunto: `${prefixo} ${assuntoBase}`,
+                externos: externos.length ? externos : undefined,
+                message: `A ${kind === 'forward' ? 'mensagem encaminhada' : 'resposta'} JÁ está no cartão do chat, editável, aguardando o usuário clicar em Enviar. `
+                    + 'NADA foi enviado. Responda em 1 frase dizendo que ele pode revisar e enviar pelo cartão'
+                    + (externos.length ? `, e avise que ${externos.join(', ')} é endereço de fora da Menin` : '')
+                    + '. Nunca diga que enviou.',
+            },
+        };
+    },
+});
+
 registerTool({
     name: 'outlook_redigir_resposta',
-    description: 'Manda a IA ESCREVER a resposta de um e-mail, no tom do usuário, e deixar na fila de aprovação. NÃO envia nada. Use para "responde aquele e-mail da Julia", "escreve uma resposta para o pedido de orçamento". Passe `instrucao` com o que ele quer dizer, se ele disser. O id vem de outlook_triagem.',
+    description: 'Manda a IA da CAIXA escrever a resposta de um e-mail e deixar na FILA DE APROVAÇÃO da tela de e-mail (painel da direita), sem mostrar no chat. Use só quando o usuário pedir explicitamente para "deixar na fila" ou "preparar para eu aprovar depois". Para responder AGORA, com o texto no chat, use outlook_responder_email. NÃO envia nada. O id vem de outlook_triagem.',
     parameters: {
         type: 'object',
         properties: {

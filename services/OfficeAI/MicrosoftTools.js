@@ -499,7 +499,7 @@ registerTool({
 
 registerTool({
     name: 'search_email',
-    description: 'Procura E-MAIL na caixa do próprio usuário e resume o que achou. Use quando pedirem "acha o e-mail do fulano sobre X", "recebi algo do Sienge?", "qual foi a resposta sobre o contrato", "meus e-mails não lidos". Devolve remetente, assunto, data e prévia. Não abre anexo nem manda e-mail.',
+    description: 'Procura E-MAIL na caixa do próprio usuário e resume o que achou. Use quando pedirem "acha o e-mail do fulano sobre X", "recebi algo do Sienge?", "qual foi a resposta sobre o contrato", "meus e-mails não lidos". Devolve id, remetente, assunto, data e prévia (o id serve para outlook_responder_email). Não abre anexo nem manda e-mail.',
     parameters: {
         type: 'object',
         properties: {
@@ -525,7 +525,10 @@ registerTool({
             top: Math.min(Number(args?.limite) || 10, 25),
         });
 
+        // O id vai junto para a Eme poder responder/encaminhar pelo cartão
+        // (outlook_responder_email) sem nova busca.
         const emails = items.map(m => ({
+            id: m.id,
             de: m.from?.name || m.from?.email,
             email: m.from?.email,
             assunto: m.subject,
@@ -578,6 +581,7 @@ registerTool({
                 totalNaCaixa: contagem.total,
                 porRemetente: remetentes,
                 maisRecentes: items.slice(0, 8).map(m => ({
+                    id: m.id,
                     de: m.from?.name || m.from?.email,
                     assunto: m.subject,
                     recebidoEm: m.receivedAt,

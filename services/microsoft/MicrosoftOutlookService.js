@@ -400,6 +400,26 @@ class MicrosoftOutlookService {
         return normalizeMessage(m, { withBody: true });
     }
 
+    /**
+     * Responde/encaminha DIRETO, sem rascunho: `/messages/{id}/reply|replyAll|forward`.
+     * O Outlook monta a citação e mantém a conversa (mesmo conversationId); o
+     * que a pessoa escreveu vai em `comment`. É o caminho que só precisa de
+     * Mail.Send - o do rascunho (`createReply`) exige Mail.ReadWrite, que o
+     * tenant ainda não liberou. `to`/`cc` sobrescrevem os destinatários que o
+     * Outlook deduziria (no forward, `to` é obrigatório).
+     */
+    async replyNow(mailbox, id, kind, { comment, to, cc } = {}) {
+        const endpoint = { reply: 'reply', replyAll: 'replyAll', forward: 'forward' }[kind];
+        if (!endpoint) throw new Error('Tipo de resposta inválido.');
+        const message = {};
+        if (Array.isArray(to) && to.length) message.toRecipients = toRecipients(to);
+        if (Array.isArray(cc) && cc.length) message.ccRecipients = toRecipients(cc);
+        if (endpoint === 'forward' && !message.toRecipients) throw new Error('Encaminhar exige ao menos um destinatário.');
+        const payload = { comment: comment || '' };
+        if (Object.keys(message).length) payload.message = message;
+        return graph.appPost(`/users/${mailbox}/messages/${id}/${endpoint}`, payload);
+    }
+
     // ── Organização ──────────────────────────────────────────────────────────
 
     /**

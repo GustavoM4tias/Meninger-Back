@@ -151,6 +151,9 @@ router.delete('/outlook/folders/:id',             ...olOrganiza, oc.deleteFolder
 router.post('/outlook/drafts',                    ...olEnvia, oc.createDraft);
 router.patch('/outlook/drafts/:id',               ...olEnvia, oc.updateDraft);
 router.post('/outlook/messages/:id/:kind(reply|replyAll|forward)', ...olEnvia, oc.replyDraft);
+// Responder/encaminhar DIRETO (sem rascunho): so precisa de Mail.Send. E o
+// caminho do cartao de e-mail da Eme enquanto o rascunho continua em 403.
+router.post('/outlook/messages/:id/:kind(reply|replyAll|forward)/send', ...olEnvia, oc.replyNow);
 router.post('/outlook/drafts/:id/attachments',    ...olEnvia, oc.addAttachment);
 router.delete('/outlook/drafts/:id/attachments/:attachmentId', ...olEnvia, oc.removeAttachment);
 router.post('/outlook/drafts/:id/send',           ...olEnvia, oc.send);
