@@ -326,6 +326,10 @@ registerTool({
                 para = [...new Set([...para, ...semEu(msg.to)])];
                 if (!cc.length) cc = semEu(msg.cc).filter(e => !para.includes(e));
             }
+            // Mensagem que a própria pessoa mandou (Enviados): responder vai
+            // para quem recebeu, não para ela mesma - o cartão saía sem "Para".
+            if (!para.length) para = semEu(msg.to);
+            if (!para.length && eu) para = [eu];
         }
         cc = cc.filter(e => !para.includes(e));
 
