@@ -58,6 +58,17 @@ export default (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: true,
     },
+    // Nomes que este empreendimento JÁ TEVE no CV.
+    //
+    // O CV renomeia: "Park Alameda" virou "Park Alameda - Sarandi". Filtro por
+    // nome quebra em silêncio nessa hora - a reserva antiga guarda o nome
+    // velho, a busca usa o novo, e some metade do histórico sem nenhum erro
+    // aparecer. O id é a identidade; o nome é rótulo, e rótulo muda.
+    name_history: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: [],
+    },
     cv_payload: {
       type: DataTypes.JSONB,
       allowNull: true,

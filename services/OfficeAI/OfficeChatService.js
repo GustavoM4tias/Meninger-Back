@@ -44,6 +44,9 @@ import './MemoryTools.js';
 // regras que foram APROVADAS por gente. E o que separa "a Eme sabe o setor" de
 // "a Eme sabe a casa".
 import './ProcessosTools.js';
+// Reconciliação estoque x fluxo: o mapa de unidades contra as reservas,
+// unidade a unidade. Nasceu de "por que o CV diz 48 e a Eme diz 149?".
+import './ReconciliacaoTools.js';
 import { userEmeSettings, memoriasAtivas, blocoDeMemoria } from './MemoryTools.js';
 import { retrievalSettings, selecionarParaPrompt } from './promptRetrieval.js';
 import { ensureEmbeddings, embedQuery, rank } from './embeddingIndex.js';

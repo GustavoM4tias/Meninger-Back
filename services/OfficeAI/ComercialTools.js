@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { resolverLista } from '../org/enterpriseResolver.js';
 import db from '../../models/sequelize/index.js';
 import { QueryTypes, Op, where, fn, col } from 'sequelize';
 import fetch from 'node-fetch';
@@ -1188,8 +1189,29 @@ async function executeQueryReservas(args, user) {
     replacements.end   = `${end} 23:59:59`;
   }
 
+  // ── Empreendimento: por ID, nunca por nome ──────────────────────────────
+  //
+  // O CV renomeia ("Park Alameda" virou "Park Alameda - Sarandi") e a reserva
+  // guarda o nome DA ÉPOCA. Comparar nome com nome perdia metade do histórico
+  // sem nenhum erro aparecer - o total fechava e estava errado.
+  //
+  // O nome do usuário vira ID no resolvedor (que sabe nome atual, nome antigo
+  // e o nome como foi gravado nas reservas), e o filtro é por id.
+  let empreendimentoResolvido = null;
+  if (args.empreendimento) {
+    empreendimentoResolvido = await resolverLista(args.empreendimento);
+    const ids = empreendimentoResolvido.cv_ids;
+    if (ids.length) {
+      replacements.empCvIds = ids;
+      whereClauses.push(reservaEnterpriseExists(`ec_r.cv_id IN (:empCvIds)`));
+    } else {
+      // Nada resolveu: fail-closed. Cair no filtro por nome aqui devolveria um
+      // resultado parcial que parece completo, que é pior que zero explicado.
+      whereClauses.push('1=0');
+    }
+  }
+
   // Filtros de string com CSV
-  addIlikeCsv(whereClauses, replacements, 'empreendimento',         `r.empreendimento`,                  args.empreendimento);
   addIlikeCsv(whereClauses, replacements, 'etapa',                  `r.etapa`,                           args.etapa);
   addIlikeCsv(whereClauses, replacements, 'bloco',                  `r.bloco`,                           args.bloco);
   addIlikeCsv(whereClauses, replacements, 'unidade',                `r.unidade`,                         args.unidade);
@@ -1323,6 +1345,12 @@ async function executeQueryReservas(args, user) {
     data_inicio: hasIdFilter ? null : start,
     data_fim:    hasIdFilter ? null : end,
     empreendimento:         args.empreendimento         || null,
+    // Como o nome virou id, e o que não virou. Filtro que não resolve e some
+    // em silêncio é o que faz alguém confiar num total menor.
+    empreendimento_ids:     empreendimentoResolvido?.cv_ids || null,
+    empreendimento_via:     empreendimentoResolvido?.via || null,
+    empreendimento_nao_resolvido: empreendimentoResolvido?.nao_resolvidos?.length
+      ? empreendimentoResolvido.nao_resolvidos : null,
     etapa:                  args.etapa                  || null,
     bloco:                  args.bloco                  || null,
     unidade:                args.unidade                || null,

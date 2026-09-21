@@ -126,6 +126,7 @@ import { ensureCvWebhookSchema } from './lib/ensureCvWebhookSchema.js';
 import { ensureValidatorHealthSchema } from './lib/ensureValidatorHealthSchema.js';
 import { ensureAiProvidersSchema } from './lib/ensureAiProvidersSchema.js';
 import { ensureProcessosSchema } from './lib/ensureProcessosSchema.js';
+import { ensureEnterpriseNameHistory } from './lib/ensureEnterpriseNameHistory.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
@@ -664,6 +665,9 @@ async function syncModelsAndPatches(fingerprint) {
     // Motor de processos: o mapa de como a empresa trabalha, o que o motor
     // observou e o que ele quer propor. Autonomia por processo, com teto.
     ['Processos', ensureProcessosSchema],
+    // Nomes anteriores de empreendimento. O CV renomeia, e filtro por nome
+    // quebra em silêncio: a reserva antiga guarda o nome da época.
+    ['EnterpriseNames', ensureEnterpriseNameHistory],
     ['AlertShares', ensureAlertSharesSchema],
     ['DeptSpending', ensureDeptSpendingSchema],
     ['DepartmentVisibility', ensureDepartmentVisibilitySchema],
