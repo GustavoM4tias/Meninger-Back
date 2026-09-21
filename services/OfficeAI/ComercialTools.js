@@ -1429,7 +1429,14 @@ async function executeReservasSummary(whereSql, replacements, context, start, en
     vendida,                                          // vendida = 'S' (etapa CRM, NÃO venda concretizada)
     cancelada,
     outros:                   Number(row?.outros || 0),
+    // `ativas` é um SUBCONJUNTO: em curso, sem as vendidas e sem as canceladas.
+    // O nome convidou a Eme a narrar "149 no total, 49 ativas e 63 canceladas"
+    // - e 37 vendidas sumiram da frase, sem nada avisar. Os dois nomes novos
+    // existem para que o número que a pessoa vai ouvir seja o certo: `em_curso`
+    // diz o que é, e `nao_canceladas` é o complemento de verdade.
     ativas:                   Number(row?.ativas || 0),
+    em_curso:                 Number(row?.ativas || 0),
+    nao_canceladas:           universo - cancelada,
     // As DUAS taxas sobre o UNIVERSO, sempre. Denominadores diferentes para
     // taxas que aparecem lado a lado é como um painel deixa de fechar: 13% de
     // distrato e 0% de venda precisam estar falando da mesma população.
@@ -1439,6 +1446,14 @@ async function executeReservasSummary(whereSql, replacements, context, start, en
     tempo_medio_ate_venda:    medio(row?.tempo_medio_ate_venda_vivas, row?.tempo_medio_ate_venda),
     tempo_medio_ate_contrato: medio(row?.tempo_medio_ate_contrato_vivas, row?.tempo_medio_ate_contrato),
     aviso_vendida:            'A flag "vendida" indica apenas a etapa do CRM; a venda concretizada é validada no módulo de Faturamento.',
+    // A identidade que fecha a conta. Sem ela, a Eme subtrai `ativas` do total
+    // e some com as vendidas - foi o que aconteceu em produção.
+    conferencia: `Os grupos somam o universo: reservada(${Number(row?.reservada || 0)}) + contrato(${Number(row?.contrato || 0)}) `
+        + `+ em_repasse(${Number(row?.em_repasse || 0)}) + vendida(${vendida}) + cancelada(${cancelada}) `
+        + `+ outros(${Number(row?.outros || 0)}) = ${universo}. `
+        + `"em_curso" (${Number(row?.ativas || 0)}) é um SUBCONJUNTO - não inclui as vendidas - e NUNCA é o complemento das canceladas. `
+        + `O complemento das canceladas é nao_canceladas (${universo - cancelada}). `
+        + 'Ao narrar, use os grupos ou os dois complementos; não invente uma terceira conta.',
     ...(excluirCanceladas && cancelada ? {
       aviso_cancelados: `O total de ${total} NÃO inclui ${cancelada} reserva(s) cancelada/distratada/vencida do período. `
         + `O universo bruto é ${universo}, e a taxa de distrato (${pct(cancelada, universo)}%) é calculada sobre ele. `
