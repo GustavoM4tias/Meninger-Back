@@ -59,6 +59,9 @@ import {
   buildSafeFallbackText,
   compactForModel,
 } from './hallucinationGuard.js';
+// Ancoragem: o modelo referencia a célula em vez de digitar o número.
+import { criarRegistroDeCitacoes, makeRefFilter, resolverRefs, taxaDeAncoragem } from './anchoring.js';
+import { anchoringSettings, BLOCO_ANCORAGEM } from './anchoringSettings.js';
 
 // Registry: nome → { declaration, executor }
 const TOOLS = new Map();
@@ -738,7 +741,14 @@ async function getLastBridgeContext(sessionId) {
  *   {type:"done", sessionId, msgId}  — stream concluído
  *   {type:"error", message:"..."}    — erro
  */
-export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE', viaVoice = false, screen = null }) {
+/**
+ * @param {object} [opts.brainOverride] Cérebro a usar NO LUGAR do publicado.
+ *   Existe para a régua (EmeEvalService) conseguir avaliar o RASCUNHO. Sem
+ *   isso, a rodada testava o prompt que já está no ar - e travar a publicação
+ *   nisso seria olhar para o lado errado: "o que está no ar vai bem" não diz
+ *   nada sobre o que vai entrar.
+ */
+export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE', viaVoice = false, screen = null, brainOverride = null }) {
   // O relógio do turno começa AQUI, não depois do preparo. Medir a partir do
   // momento em que o modelo entra em cena escondia o que a pessoa mais sente:
   // sessão, histórico, cérebro e alçadas rodam antes, e num banco remoto
@@ -793,6 +803,17 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   let lastBridge = null; // usado depois pela detecção de alucinação (só Office)
   let activeSettings = {}; // settings do cérebro ativo (model_pools/escalation_keywords) — {} = fallback
 
+  // Ancoragem: lida ANTES do prompt porque é ela que decide se a instrução de
+  // citação entra. Indisponível (primeiro boot, banco fora) = desligada: sem a
+  // instrução no prompt o modelo não escreveria referência nenhuma, e resolver
+  // o que não existe só gastaria trabalho.
+  let ancoragem = { enabled: false, modo: 'suave', min_taxa: 0.8, max_citacoes: 400 };
+  try {
+    ancoragem = await anchoringSettings();
+  } catch (err) {
+    console.warn('[OfficeChatService] configuração de ancoragem indisponível:', err?.message);
+  }
+
   if (isAcademy) {
     // ACADEMY: tutor de estudos. Tools do ToolRegistry (AcademyTools).
     // Se o usuário é INTERNO, o tutor também ganha as ferramentas do Office —
@@ -809,7 +830,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     const enterprises = await loadAccessibleEnterprises(fullUser);
     // Cérebro da Eme (DB-driven). Sem versão publicada → assembleSystemPrompt cai
     // em buildSystemPrompt (comportamento histórico intacto / zero regressão).
-    const brain = await getActiveBrain();
+    const brain = brainOverride || await getActiveBrain();
     // Recorte do turno: blocos marcados "por similaridade" e termos do
     // glossário que têm a ver com a pergunta (promptRetrieval). Falhou? Sem
     // recorte - o prompt inteiro, como sempre foi.
@@ -865,6 +886,13 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     const academyOfficeTools = await getToolsFor(fullUser, 'OFFICE');
     activeDeclarations = activeDeclarations.concat(toGeminiDeclarations(academyOfficeTools));
   }
+  // Como citar número e nome que vieram de consulta. Fora do Cérebro, como as
+  // regras de plural e o bloco de voz, por dois motivos: é CONTRATO com o
+  // resolvedor (editar na tela quebraria a resolução em silêncio) e precisa
+  // valer também sem versão publicada - senão a ancoragem dependeria de alguém
+  // lembrar de republicar o cérebro.
+  if (ancoragem.enabled) systemPrompt += `\n\n${BLOCO_ANCORAGEM}`;
+
   // Onde a pessoa está e o que ela marcou na tela (Ctrl+clique). Vale nos dois
   // contextos: no Academy ela também pergunta "o que é isso aqui". O bloco é
   // montado com teto e com aviso de que aquilo é DADO, nunca instrução.
@@ -970,9 +998,41 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   const startedAt = Date.now();
   const bridgeFilter = makeBridgeFilter();
 
+  // ── Ancoragem ────────────────────────────────────────────────────────────
+  //
+  // O registro é do TURNO, não da consulta: a cadeia de tools descobre os dados
+  // aos poucos e os ids precisam ser únicos do começo ao fim, senão a segunda
+  // consulta reescreveria o `r1` da primeira e a referência resolveria para o
+  // valor errado.
+  //
+  // O filtro de referência roda DEPOIS do bridgeFilter no caminho do texto: o
+  // primeiro tira dump de JSON e bloco de bridge, o segundo troca `{{ref:...}}`
+  // pelo valor real - e segura a referência partida entre dois chunks, para a
+  // pessoa nunca ver meio marcador piscando na tela.
+  const citacoes = criarRegistroDeCitacoes();
+  const refFilter = makeRefFilter(citacoes.registro);
+  let ancoragemUsada = false;   // alguma consulta chegou a ser anotada
+
+  /**
+   * O resultado da tool no formato que vai ao modelo.
+   *
+   * Uma porta só para os quatro pontos que mandam resultado ao Gemini - com
+   * quatro chamadas soltas, bastava um ponto esquecido para o modelo receber
+   * linhas sem `ref` e escrever referência para um id que não existe.
+   */
+  const paraOModelo = (resultado) => {
+    const resumo = summarizeForGemini(resultado);
+    if (!ancoragem.enabled) return resumo;
+    if (citacoes.total >= ancoragem.max_citacoes) return resumo;  // teto de contexto
+    ancoragemUsada = true;
+    return citacoes.anotar(resumo);
+  };
+
   // Helper: filtra chunk antes de emitir + acumula só o que sai limpo
   const emitTextChunk = (raw) => {
-    const safe = bridgeFilter.push(raw);
+    const semBridge = bridgeFilter.push(raw);
+    if (!semBridge) return;
+    const safe = ancoragem.enabled ? refFilter.push(semBridge) : semBridge;
     if (safe) {
       fullAssistantText += safe;
       sendSSE(res, { type: 'chunk', text: safe });
@@ -1145,6 +1205,10 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           // do treinamento do modelo, incorretos em relação ao banco de dados)
           if (fullAssistantText || bridgeFilter.flush()) {
             fullAssistantText = '';
+            // O buffer de referência morre junto: ele guarda o pedaço de uma
+            // frase que acabou de ser descartada, e carregá-lo para o texto
+            // seguinte colaria meia citação no começo da resposta de verdade.
+            if (ancoragem.enabled) refFilter.flush();
             sendSSE(res, { type: 'clear' });
           }
 
@@ -1222,12 +1286,12 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
                   ],
                 });
               followStream = (await followChat.sendMessageStream([
-                { functionResponse: { name, response: summarizeForGemini(toolResult) } },
+                { functionResponse: { name, response: paraOModelo(toolResult) } },
               ])).stream;
               correctionChat = followChat; // é este que tem a tool + o texto final
             } else {
               followStream = (await chat.sendMessageStream([
-                { functionResponse: { name, response: summarizeForGemini(toolResult) } },
+                { functionResponse: { name, response: paraOModelo(toolResult) } },
               ])).stream;
             }
             // No último passo permitido não faz sentido aceitar nova tool: o
@@ -1246,6 +1310,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
                   // porque a resposta de verdade vem depois da próxima consulta.
                   if (fullAssistantText || bridgeFilter.flush()) {
                     fullAssistantText = '';
+                    if (ancoragem.enabled) refFilter.flush();
                     sendSSE(res, { type: 'clear' });
                   }
                   pendingCall = {
@@ -1274,8 +1339,14 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     return;
   }
 
-  // Flush final do filtro — emite qualquer texto retido (sem bridges) ao usuário
-  const tail = bridgeFilter.flush();
+  // Flush final dos filtros — emite qualquer texto retido ao usuário.
+  // A ordem importa e é a mesma da emissão: bridge primeiro, referência depois.
+  // O flush do refFilter é o que descarta uma referência que ficou pela metade
+  // (stream cortado no meio dela) em vez de deixá-la virar texto cru na tela.
+  const tailBridge = bridgeFilter.flush();
+  const tail = ancoragem.enabled
+    ? (tailBridge ? refFilter.push(tailBridge) : '') + refFilter.flush()
+    : tailBridge;
   if (tail) {
     fullAssistantText += tail;
     sendSSE(res, { type: 'chunk', text: tail });
@@ -1393,7 +1464,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
             ],
           });
         const followStream = (await followChat.sendMessageStream([
-          { functionResponse: { name, response: summarizeForGemini(toolResult) } },
+          { functionResponse: { name, response: paraOModelo(toolResult) } },
         ])).stream;
         // A validação anti-alucinação corrige a partir DESTE chat: só ele viu a
         // tool recuperada e o resultado real.
@@ -1491,7 +1562,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
 
         texto = '';
         stream = (await chat.sendMessageStream([
-          { functionResponse: { name: chamada.name, response: summarizeForGemini(resultado) } },
+          { functionResponse: { name: chamada.name, response: paraOModelo(resultado) } },
         ])).stream;
       } while (passos < 4);
 
@@ -1587,7 +1658,76 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     ...resultadosDoTurno.filter(r => r !== actionResult),
   ];
   const temDadoDoTurno = cadeiaDoTurno.length > 0;
-  let hallucinationReport = temDadoDoTurno
+
+  // ── ANCORAGEM: o que a resposta citou por REFERÊNCIA ─────────────────────
+  //
+  // Referência resolvida não precisa de auditoria: o valor saiu da célula, não
+  // da cabeça do modelo. Isto é o ganho central da ancoragem e o que faz o
+  // detector de texto encolher em vez de crescer mais uma exceção.
+  const refStats = ancoragem.enabled ? refFilter.stats() : { resolvidas: 0, naoResolvidas: [], crus: 0 };
+  let refsNaoResolvidas = [...refStats.naoResolvidas];
+  // Contagens MUTÁVEIS: a reescrita abaixo troca o texto inteiro, e uma taxa
+  // calculada sobre o texto anterior descreveria uma resposta que não existe
+  // mais.
+  let refResolvidas = refStats.resolvidas;
+  let refCrus = refStats.crus;
+  let taxaAncoragem = ancoragem.enabled ? taxaDeAncoragem(refCrus, refResolvidas) : null;
+
+  // Referência que não resolveu tem conserto próprio e barato: o registro é
+  // pequeno e dirigido, ao contrário do bloco autoritativo de 6000 caracteres
+  // que a trava antiga reenvia. UMA tentativa - se o modelo errou o id duas
+  // vezes, insistir só queima token.
+  if (ancoragem.enabled && refsNaoResolvidas.length && temDadoDoTurno && (correctionChat || chat)) {
+    sendSSE(res, { type: 'status', stage: 'verifying', message: 'Conferindo as referências dos dados…' });
+    try {
+      const catalogo = [...citacoes.registro.entries()]
+        .slice(0, 120)
+        .map(([id, v]) => `${id} = ${v.valor}`)
+        .join('\n');
+      const pedido =
+        `[CORREÇÃO AUTOMÁTICA — não é mensagem do usuário]\n` +
+        `Você citou referências que NÃO existem: ${refsNaoResolvidas.join(', ')}.\n\n` +
+        `REFERÊNCIAS VÁLIDAS DESTE TURNO:\n${catalogo}\n\n` +
+        `Reescreva a resposta usando SOMENTE referências desta lista. ` +
+        `Se o dado que você queria citar não está aqui, ele não existe: não o mencione. ` +
+        `Responda direto, sem pedir desculpas e sem mencionar esta correção. ` +
+        `NÃO chame nenhuma ferramenta.`;
+
+      const fix = (await (correctionChat || chat).sendMessageStream([{ text: pedido }])).stream;
+      let bruto = '';
+      for await (const c of fix) {
+        for (const pt of c.candidates?.[0]?.content?.parts || []) if (pt.text) bruto += pt.text;
+      }
+      bruto = stripPseudoToolCalls(bruto).trim();
+      if (bruto) {
+        const r = resolverRefs(bruto, citacoes.registro);
+        // Só adota se melhorou: reescrita que erra os mesmos ids não é conserto.
+        if (r.naoResolvidas.length < refsNaoResolvidas.length) {
+          fullAssistantText = r.texto;
+          refsNaoResolvidas = r.naoResolvidas;
+          refResolvidas = r.resolvidas;
+          refCrus = r.crus;
+          taxaAncoragem = taxaDeAncoragem(refCrus, refResolvidas);
+          sendSSE(res, { type: 'replace', text: fullAssistantText });
+        }
+      }
+    } catch (err) {
+      console.warn('[OfficeChatService] correção de referência falhou:', err?.status || err?.message);
+    }
+  }
+
+  // ── A resposta está INTEIRAMENTE ancorada? ───────────────────────────────
+  //
+  // Se todo número veio de referência resolvida, não há o que auditar: não
+  // sobrou número digitado pelo modelo. Pular o detector aqui é o que elimina
+  // o falso positivo de vez, e de quebra poupa a varredura e as até três
+  // reescritas que ele dispara.
+  const totalmenteAncorada = ancoragem.enabled
+    && refResolvidas > 0
+    && !refsNaoResolvidas.length
+    && taxaAncoragem === 1;
+
+  let hallucinationReport = (temDadoDoTurno && !totalmenteAncorada)
     ? detectHallucinations(fullAssistantText, cadeiaDoTurno, lastBridge, userMessage)
     : { suspicious: [] };
   let selfCorrected = false;
@@ -1635,6 +1775,14 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
           }
           fixedText = stripPseudoToolCalls(fixedText).trim();
           if (!fixedText) break;
+          // A reescrita passa pelo mesmo resolvedor: ela nasce do mesmo modelo,
+          // com a mesma instrução de citação, e sem isto uma referência sairia
+          // crua justamente no texto que veio para consertar a resposta.
+          if (ancoragem.enabled) {
+            const rr = resolverRefs(fixedText, citacoes.registro);
+            fixedText = rr.texto;
+            if (rr.naoResolvidas.length) refsNaoResolvidas.push(...rr.naoResolvidas);
+          }
 
           const recheck = detectHallucinations(fixedText, cadeiaDoTurno, lastBridge, userMessage);
           // Só adota a reescrita se ela ficou melhor (menos suspeitas). Se não
@@ -1711,13 +1859,36 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
 
   // Incidente de validação: registrado para a aba Validação do Brain Studio
   // (auditoria dos comportamentos problemáticos, como a tela de like/dislike).
-  const validationIncident = (initialSuspicious.length > 0 || selfCorrected)
+  // ── Modo ESTRITO: adesão baixa também é sinal ────────────────────────────
+  //
+  // Em 'suave' a ancoragem só acrescenta. Em 'estrito', uma resposta que teve
+  // dado na mão e mesmo assim digitou os números vira incidente - não para
+  // punir a pessoa, mas para o admin VER o padrão (qual tool, qual modelo) antes
+  // de decidir apertar. É a mesma disciplina da triagem: medir antes de trocar.
+  const ancoragemBaixa = ancoragem.enabled
+    && ancoragem.modo === 'estrito'
+    && ancoragemUsada
+    && taxaAncoragem != null
+    && taxaAncoragem < ancoragem.min_taxa;
+
+  const validationIncident = (initialSuspicious.length > 0 || selfCorrected || refsNaoResolvidas.length || ancoragemBaixa)
     ? {
         outcome: blockedUnreliable ? 'blocked' : (hallucinationReport.suspicious.length ? 'warned' : 'corrected'),
         attempts: correctionAttempts,
         suspicious: blockedUnreliable || !hallucinationReport.suspicious.length
           ? initialSuspicious
           : hallucinationReport.suspicious,
+        // Diagnóstico da ancoragem junto do incidente: é o que separa "o modelo
+        // inventou" de "o modelo não citou por referência". Consertos
+        // diferentes - o primeiro é regra de prompt, o segundo é adesão.
+        ancoragem: ancoragem.enabled ? {
+          modo: ancoragem.modo,
+          taxa: taxaAncoragem,
+          resolvidas: refResolvidas,
+          crus: refCrus,
+          nao_resolvidas: refsNaoResolvidas.slice(0, 20),
+          baixa: ancoragemBaixa,
+        } : null,
       }
     : null;
 
@@ -1758,7 +1929,14 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     `~${tokensEntrada.toLocaleString()} tok de prompt · ` +
     `${(msPreparo / 1000).toFixed(1)}s de preparo · ` +
     `${toolCalls.length} tool call(s) somando ${(msEmTools / 1000).toFixed(1)}s · ` +
-    `${((totalMs - msEmTools - msPreparo) / 1000).toFixed(1)}s no modelo`);
+    `${((totalMs - msEmTools - msPreparo) / 1000).toFixed(1)}s no modelo` +
+    // Adesão à citação, no log de sempre: é o número que diz se a trava de
+    // texto ainda é necessária, e vê-lo a cada turno evita esperar a tela.
+    (ancoragem.enabled && taxaAncoragem != null
+      ? ` · ancoragem ${Math.round(taxaAncoragem * 100)}%` +
+        `${refsNaoResolvidas.length ? ` (${refsNaoResolvidas.length} ref quebrada)` : ''}` +
+        `${totalmenteAncorada ? ' · detector pulado' : ''}`
+      : ''));
 
   const savedMsg = await saveMessage(session.id, 'assistant', contentToSave, responseType, {
     model: geminiModel,
@@ -1774,6 +1952,18 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     // Nomes das tools deste turno: o próximo turno curto ("sim", "pode
     // criar") herda o conjunto em vez de cair só no núcleo (ToolPreselect).
     tools_turno: (activeDeclarations || []).map(d => d?.name).filter(Boolean),
+    // Ancoragem do turno. É a régua que decide quando a trava de texto pode
+    // sair: enquanto a taxa for baixa ela ainda é a rede de segurança; perto de
+    // 1, vira peso morto. Sem isto gravado, a decisão voltaria a ser palpite.
+    ancoragem: ancoragem.enabled ? {
+      modo: ancoragem.modo,
+      taxa: taxaAncoragem,
+      resolvidas: refResolvidas,
+      crus: refCrus,
+      nao_resolvidas: refsNaoResolvidas.length,
+      citacoes_ofertadas: citacoes.total,
+      pulou_detector: totalmenteAncorada,
+    } : null,
   });
 
   // Persiste o incidente de validação (nunca derruba o chat se falhar).
