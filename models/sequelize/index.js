@@ -19,6 +19,11 @@ import ValidatorSettingsDefine from './validatorSettings.js';
 import ValidatorHealthCheckDefine from './validatorHealthCheck.js';
 import AiProviderDefine from './ai/provider.js';
 import AiRouteDefine from './ai/route.js';
+import ProcessoDefinicaoDefine from './processos/definicao.js';
+import ProcessoObservacaoDefine from './processos/observacao.js';
+import ProcessoPropostaDefine from './processos/proposta.js';
+import ProcessoAcaoDefine from './processos/acao.js';
+import ProcessoSettingsDefine from './processos/settings.js';
 
 // Singe imports
 import SalesContractDefine from './sienge/salesContract.js';
@@ -351,6 +356,11 @@ db.ValidatorSettings = ValidatorSettingsDefine(sequelize, DataTypes);
 db.ValidatorHealthCheck = ValidatorHealthCheckDefine(sequelize, DataTypes);
 db.AiProvider = AiProviderDefine(sequelize, DataTypes);
 db.AiRoute = AiRouteDefine(sequelize, DataTypes);
+db.ProcessoDefinicao = ProcessoDefinicaoDefine(sequelize, DataTypes);
+db.ProcessoObservacao = ProcessoObservacaoDefine(sequelize, DataTypes);
+db.ProcessoProposta = ProcessoPropostaDefine(sequelize, DataTypes);
+db.ProcessoAcao = ProcessoAcaoDefine(sequelize, DataTypes);
+db.ProcessoSettings = ProcessoSettingsDefine(sequelize, DataTypes);
 
 // sienge db 
 db.SalesContract = SalesContractDefine(sequelize, DataTypes);
