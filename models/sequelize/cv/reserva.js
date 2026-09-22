@@ -12,6 +12,7 @@ export default (sequelize, DataTypes) => {
         // Denormalizações (use STRING sem length p/ evitar ALTER desnecessário)
         documento: { type: DataTypes.STRING },
         empreendimento: { type: DataTypes.STRING },
+        idempreendimento_cv: { type: DataTypes.INTEGER, allowNull: true }, // id do empreendimento no CV: a chave; o nome acima é o rótulo da época
         etapa: { type: DataTypes.STRING },
         bloco: { type: DataTypes.STRING },
         unidade: { type: DataTypes.STRING },

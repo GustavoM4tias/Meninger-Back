@@ -67,6 +67,7 @@ export async function listarPendentes(opts = {}) {
     return db.sequelize.query(`
         SELECT r.idreserva,
                r.empreendimento,
+               COALESCE(r.idempreendimento_cv, NULLIF(r.unidade_json->>'idempreendimento_cv','')::int) AS idempreendimento_cv,
                r.unidade,
                r.titular->>'nome' AS titular_nome,
                r.data_reserva,

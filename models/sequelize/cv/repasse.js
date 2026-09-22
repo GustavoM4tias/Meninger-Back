@@ -7,6 +7,7 @@ export default (sequelize, DataTypes) => {
     documento: { type: DataTypes.STRING },  // sem length
     etapa: { type: DataTypes.STRING },
     empreendimento: { type: DataTypes.STRING },
+    idempreendimento_cv: { type: DataTypes.INTEGER, allowNull: true }, // id do empreendimento no CV (herdado da reserva): a chave; o nome acima é o rótulo da época
     bloco: { type: DataTypes.STRING },
     unidade: { type: DataTypes.STRING },
 

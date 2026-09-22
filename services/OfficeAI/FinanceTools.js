@@ -18,7 +18,8 @@ import dayjs from 'dayjs';
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
-import { allowedEnterpriseNames, applyEnterpriseScope } from '../boleto/boletoScope.js';
+import { allowedEnterpriseScope, applyEnterpriseScope, enterpriseFilterFrom, applyEnterpriseFilter } from '../boleto/boletoScope.js';
+import { aplicarNomeAtual } from '../org/enterpriseNames.js';
 import { resolverPeriodo, PERIODO_PARAM } from './periodo.js';
 
 // A tela chamava /financeiro/boleto-caixa até 23/08/2026; virou Ato e Parcelas
@@ -282,10 +283,17 @@ registerTool({
             created_at: { [Op.between]: [`${start} 00:00:00`, `${end} 23:59:59`] },
             ignorado: { [Op.or]: [false, null] },
         };
-        applyEnterpriseScope(where, await allowedEnterpriseNames(user), Op);
+        applyEnterpriseScope(where, await allowedEnterpriseScope(user), Op);
         if (['success', 'error', 'processing', 'skipped'].includes(args?.status)) where.status = args.status;
         if (['paid', 'pending', 'cancelled', 'error'].includes(args?.situacao_pagamento)) where.payment_status = args.situacao_pagamento;
-        if (args?.empreendimento) where.empreendimento = { [Op.iLike]: `%${String(args.empreendimento).trim()}%` };
+        // Empreendimento por ID: o termo passa pelo resolver (nome atual, antigo
+        // ou gravado nas reservas) e vira `idempreendimento_cv IN (ids)`. Só
+        // quando nada resolve cai no ILIKE legado sobre o nome gravado.
+        if (args?.empreendimento) {
+            const filtro = await enterpriseFilterFrom(args.empreendimento);
+            if (filtro?.ids.length) applyEnterpriseFilter(where, { ids: filtro.ids, nomes: [] }, Op);
+            else where.empreendimento = { [Op.iLike]: `%${String(args.empreendimento).trim()}%` };
+        }
         const busca = String(args?.busca || '').trim();
         if (busca) {
             where[Op.or] = [
@@ -295,6 +303,9 @@ registerTool({
         }
 
         const rows = await db.BoletoHistory.findAll({ where, order: [['created_at', 'DESC']], limit: 2000, raw: true });
+        // Nome ATUAL do empreendimento em toda linha (resumo, tabela e a quebra
+        // por empreendimento passam a somar o mesmo id num nome só).
+        await aplicarNomeAtual(rows);
 
         const periodoTxt = `${fmtDate(start)} a ${fmtDate(end)}`;
         if (!rows.length) {

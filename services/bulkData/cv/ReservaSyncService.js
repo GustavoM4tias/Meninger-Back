@@ -213,6 +213,9 @@ function mapReservaToCols(idreserva, core, docs, erp, campanhas, mensagens, snap
         data_status_repasse: parseCvDate(snap.data_status_repasse),
         documento: titular?.documento ?? null,
         empreendimento: unidade?.empreendimento ?? null,
+        // A chave do empreendimento. O nome acima é o rótulo da época; quem
+        // filtra/agrupa usa este id e mostra o nome atual do catálogo.
+        idempreendimento_cv: Number(unidade?.idempreendimento_cv) || null,
         etapa: unidade?.etapa ?? null,
         bloco: unidade?.bloco ?? null,
         unidade: unidade?.unidade ?? null,

@@ -17,7 +17,12 @@
 import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
 import { Op } from 'sequelize';
-import { allowedEnterpriseNames } from './boletoScope.js';
+// Escopo e filtro de empreendimento por ID do CV (idempreendimento_cv); nome
+// gravado so como fallback para linha sem id. Nome exibido = o atual do catalogo.
+import {
+    allowedEnterpriseScope, inEnterpriseScope, enterpriseScopeCond, enterpriseFilterFrom, enterpriseFilterCond,
+} from './boletoScope.js';
+import { aplicarNomeAtual, facetasEmpreendimento } from '../org/enterpriseNames.js';
 import {
     PARCELAS_DEFAULTS, PLANO_STATUS, PARCELA_STATUS,
     derivarParcelas, chaveParcela, diffPlano, motivoEncerramento, MOTIVOS_TRANSFERENCIA, hojeYmd, diffDays, addDays, empreendimentoExcluido,
@@ -474,6 +479,9 @@ export async function aplicarExclusoes(cfg, { userId = null } = {}) {
  * MAIS RECENTE (o CV renomeia: PARK ALAMEDA -> PARK ALAMEDA - SARANDI, id 36) e
  * quantos planos ativos/pausados cada um tem - para a tela escolher quais ficam
  * fora da cobranca. `nomes_antigos` lista os outros nomes ja usados.
+ *
+ * O nome que sai e o do CATALOGO (enterpriseNames); o mais recente gravado nas
+ * reservas so vale quando o catalogo nao conhece o id. Lista ordenada por id.
  */
 export async function listarEmpreendimentos() {
     const [rows] = await db.sequelize.query(`
@@ -492,8 +500,17 @@ export async function listarEmpreendimentos() {
                (SELECT count(*) FROM ato_planos p WHERE p.idempreendimento_cv = a.id AND p.status = 'ativo')::int AS ativos,
                (SELECT count(*) FROM ato_planos p WHERE p.idempreendimento_cv = a.id AND p.status = 'pausado')::int AS pausados
           FROM atual a JOIN por_nome n ON n.id = a.id
-         GROUP BY a.id, a.nome ORDER BY ativos DESC, a.nome`);
-    return { empreendimentos: rows.map(r => ({ ...r, id: Number(r.id), nomes_antigos: r.nomes_antigos || [] })) };
+         GROUP BY a.id, a.nome ORDER BY a.id`);
+    const lista = rows.map(r => ({ ...r, id: Number(r.id), nomes_antigos: r.nomes_antigos || [] }));
+    await aplicarNomeAtual(lista, { id: 'id', nome: 'nome' });
+    for (const e of lista) {
+        // O nome gravado que perdeu para o do catalogo vira "nome antigo".
+        const antigos = new Set(e.nomes_antigos.map(n => String(n)));
+        if (e.nome_gravado && e.nome_gravado !== e.nome) antigos.add(e.nome_gravado);
+        antigos.delete(e.nome);
+        e.nomes_antigos = [...antigos];
+    }
+    return { empreendimentos: lista };
 }
 
 export async function pausarPlano(plano, userId = null) {
@@ -602,21 +619,21 @@ export async function aderirPendentes(cfg, { limite = 150, settings = null } = {
 
 // ── Leitura para a tela ───────────────────────────────────────────────────────
 
-function escopoSql(nomes, f) {
+/* Escopo do usuario (null = admin) e filtros da tela sobre `ato_planos p`.
+   Escopo e filtro de empreendimento sao por `p.idempreendimento_cv`; o nome
+   gravado so entra para plano sem id (residuo) ou termo que nao resolveu. */
+async function escopoSql(scope, f) {
     const cond = [];
     const rep = {};
-    if (nomes !== null) {
-        cond.push("lower(coalesce(p.empreendimento, '')) IN (:escopo)");
-        rep.escopo = nomes.length ? nomes : [''];
-    }
+    const COLS = { idCol: 'p.idempreendimento_cv', nomeCol: 'p.empreendimento' };
+    const esc = enterpriseScopeCond(scope, COLS);
+    if (esc.cond) { cond.push(esc.cond); Object.assign(rep, esc.replacements); }
     if (f.status) {
         const lista = String(f.status).split(',').map(s => s.trim()).filter(Boolean);
         if (lista.length) { cond.push('p.status IN (:status)'); rep.status = lista; }
     }
-    if (f.empreendimento) {
-        const lista = String(f.empreendimento).split(',').map(s => s.trim()).filter(Boolean);
-        if (lista.length) { cond.push('p.empreendimento IN (:emps)'); rep.emps = lista; }
-    }
+    const filtro = enterpriseFilterCond(await enterpriseFilterFrom(f.empreendimento), COLS);
+    if (filtro.cond) { cond.push(filtro.cond); Object.assign(rep, filtro.replacements); }
     if (f.idreserva) { cond.push('p.idreserva = :idreserva'); rep.idreserva = Number(f.idreserva); }
     if (f.q) {
         cond.push(`(unaccent(lower(coalesce(p.titular_nome, ''))) LIKE unaccent(lower(:q)) OR CAST(p.idreserva AS text) LIKE :q)`);
@@ -730,8 +747,8 @@ const ORDENAVEIS = {
 
 /** Lista de planos com agregados das parcelas (uma linha por reserva). */
 export async function listarPlanos(user, f = {}) {
-    const nomes = await allowedEnterpriseNames(user);
-    const { where, rep } = escopoSql(nomes, f);
+    const scope = await allowedEnterpriseScope(user);
+    const { where, rep } = await escopoSql(scope, f);
     const page = Math.max(1, Number(f.page) || 1);
     const limit = Math.min(200, Math.max(1, Number(f.limit) || 50));
     /* `hasOwn`: sem ele, sortBy=constructor devolveria algo herdado do
@@ -754,13 +771,14 @@ export async function listarPlanos(user, f = {}) {
     for (const r of rows) {
         if (typeof r.divergencias === 'string') { try { r.divergencias = JSON.parse(r.divergencias); } catch { r.divergencias = null; } }
     }
+    await aplicarNomeAtual(rows);
     return { total, page, limit, rows, periodo: per };
 }
 
 /** KPIs da aba, no mesmo escopo da lista. */
 export async function estatisticas(user, f = {}) {
-    const nomes = await allowedEnterpriseNames(user);
-    const { where, rep } = escopoSql(nomes, { ...f, status: undefined });
+    const scope = await allowedEnterpriseScope(user);
+    const { where, rep } = await escopoSql(scope, { ...f, status: undefined });
     const per = faixaEfetiva(f);
     const [[k]] = await db.sequelize.query(`
         WITH pl AS (SELECT p.* FROM ato_planos p ${where})
@@ -802,24 +820,27 @@ export async function estatisticas(user, f = {}) {
     };
 }
 
-/** Facetas para os filtros (empreendimentos com plano). */
+/**
+ * Facetas para os filtros (empreendimentos com plano): `[{ id, nome }]`, um
+ * por ID do CV com o nome ATUAL do catalogo, ordenados por id.
+ */
 export async function facetas(user) {
-    const nomes = await allowedEnterpriseNames(user);
-    const { where, rep } = escopoSql(nomes, {});
-    const [emps] = await db.sequelize.query(
-        `SELECT p.empreendimento AS name, count(*)::int AS qty FROM ato_planos p ${where}
-          ${where ? 'AND' : 'WHERE'} p.empreendimento IS NOT NULL GROUP BY p.empreendimento ORDER BY 1`,
+    const scope = await allowedEnterpriseScope(user);
+    const { where, rep } = await escopoSql(scope, {});
+    const [rows] = await db.sequelize.query(
+        `SELECT DISTINCT p.idempreendimento_cv, p.empreendimento FROM ato_planos p ${where}
+          ${where ? 'AND' : 'WHERE'} (p.idempreendimento_cv IS NOT NULL OR coalesce(p.empreendimento, '') <> '')`,
         { replacements: rep },
     );
-    return { empreendimentos: emps };
+    return { empreendimentos: await facetasEmpreendimento(rows) };
 }
 
 /** Plano + parcelas + boletos (para o modal). */
 export async function detalhePlano(user, idreserva) {
-    const nomes = await allowedEnterpriseNames(user);
+    const scope = await allowedEnterpriseScope(user);
     const plano = await AtoPlano.findOne({ where: { idreserva: Number(idreserva) } });
     if (!plano) return null;
-    if (nomes !== null && !nomes.includes(String(plano.empreendimento || '').toLowerCase())) return null;
+    if (!inEnterpriseScope(scope, plano.idempreendimento_cv, plano.empreendimento)) return null;
     const parcelas = await AtoParcela.findAll({ where: { plano_id: plano.id }, order: [['numero', 'ASC']] });
     const boletos = await BoletoHistory.findAll({
         where: { parcela_id: { [Op.in]: parcelas.map(p => p.id).concat([-1]) } },
@@ -856,13 +877,15 @@ export async function listarRodadas(user, { limit = 30 } = {}) {
  * dos dois, cai no formato antigo: periodo=hoje | 7d | 30d, ou dia=YYYY-MM-DD.
  */
 export async function listarBoletosParcela(user, f = {}) {
-    const nomes = await allowedEnterpriseNames(user);
+    const scope = await allowedEnterpriseScope(user);
     const cond = ["h.tipo = 'parcela'"];
     const rep = { limit: Math.min(Math.max(Number(f.limit) || 500, 1), 2000) };
-    if (nomes !== null) {
-        cond.push("lower(coalesce(p.empreendimento, h.empreendimento, '')) IN (:escopo)");
-        rep.escopo = nomes.length ? nomes : [''];
-    }
+    // Escopo pelo id do boleto ou, na falta, do plano; nome so para linha sem id.
+    const esc = enterpriseScopeCond(scope, {
+        idCol: 'coalesce(h.idempreendimento_cv, p.idempreendimento_cv)',
+        nomeCol: 'coalesce(h.empreendimento, p.empreendimento)',
+    });
+    if (esc.cond) { cond.push(esc.cond); Object.assign(rep, esc.replacements); }
     const hoje = hojeYmd();
     const ymd = YMD;
     const emitidoDe = ymd(f.dateFrom), emitidoAte = ymd(f.dateTo);
@@ -898,6 +921,7 @@ export async function listarBoletosParcela(user, f = {}) {
     }
     const [rows] = await db.sequelize.query(`
         SELECT h.id, h.idreserva, h.parcela_id, h.status, h.payment_status, h.titular_nome, h.empreendimento,
+               coalesce(h.idempreendimento_cv, p.idempreendimento_cv) AS idempreendimento_cv,
                h.valor, h.vencimento, h.nosso_numero, h.error_message, h.warnings, h.boleto_supabase_url,
                h.cliente_email_enviado, h.cliente_whatsapp_enviado, h.cv_documento_anexado,
                h.created_at, h.paid_at, h.cancelled_at,
@@ -932,6 +956,7 @@ export async function listarBoletosParcela(user, f = {}) {
     }
     resumo.sucesso_valor = Math.round(resumo.sucesso_valor * 100) / 100;
     resumo.pagos_valor = Math.round(resumo.pagos_valor * 100) / 100;
+    await aplicarNomeAtual(rows);
     return { rows, resumo, hoje };
 }
 

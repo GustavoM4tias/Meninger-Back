@@ -12,6 +12,7 @@ import WhatsAppTemplateService from '../../services/whatsapp/WhatsAppTemplateSer
 import { gerarPdfExemplo } from '../../services/boleto/boletoWhatsappTemplate.js';
 import { TODOS as TEMPLATES, LANG } from '../../services/boleto/parcelaWhatsappTemplates.js';
 import { PARCELA_STATUS } from '../../lib/atoParcelas.js';
+import { aplicarNomeAtual } from '../../services/org/enterpriseNames.js';
 
 const filtros = (q) => ({
     status: q.status, empreendimento: q.empreendimento, idreserva: q.idreserva, q: q.q,
@@ -39,7 +40,9 @@ export async function getPlano(req, res) {
     try {
         const out = await Planos.detalhePlano(req.user, req.params.idreserva);
         if (!out) return res.status(404).json({ error: 'Plano nao encontrado.' });
-        return res.json(out);
+        // O plano sai com o nome ATUAL do empreendimento (o gravado fica em empreendimento_gravado).
+        const [plano] = await aplicarNomeAtual([out.plano.toJSON()]);
+        return res.json({ ...out, plano });
     } catch (err) { console.error('[PARCELAS] getPlano:', err); return res.status(500).json({ error: `Falha ao carregar o plano: ${err.message}` }); }
 }
 

@@ -6,6 +6,9 @@
 // escrita restrita a admin, igual às demais configurações do dashboard.
 
 import db from '../models/sequelize/index.js';
+// Empreendimento é o id do CV; o nome gravado na reserva é o rótulo da época.
+// O diagnóstico agrupa por id e rotula com o nome ATUAL do catálogo.
+import { aplicarNomeAtual } from '../services/org/enterpriseNames.js';
 
 const { EnterpriseErpLink } = db;
 
@@ -161,13 +164,19 @@ export async function listUnlinkedProjections(req, res) {
         if (!situacoes.length) return res.json({ count: 0, results: [] });
 
         const sql = `
+/* Agrupa pelo ID do empreendimento (a chave), não pelo nome: o CV renomeia e
+   o nome gravado na reserva é o da época - agrupar por nome dividia um mesmo
+   empreendimento em duas linhas. O nome sai como rótulo gravado (o mais
+   recente do grupo) e o JS troca pelo nome atual do catálogo. Reserva ainda
+   sem id agrupa pelo nome gravado, como antes. */
 WITH origem AS (
   SELECT
-    COALESCE(NULLIF(trim(both from (r.unidade_json->>'empreendimento')), ''),
-             NULLIF(trim(both from r.empreendimento), ''))       AS cv_enterprise_name,
+    MAX(COALESCE(NULLIF(trim(both from (r.unidade_json->>'empreendimento')), ''),
+             NULLIF(trim(both from r.empreendimento), '')))      AS cv_enterprise_name,
     COALESCE(NULLIF(trim(both from (r.unidade_json->>'etapa')), ''),
              NULLIF(trim(both from r.etapa), ''))                AS cv_stage_name,
-    NULLIF((r.unidade_json->>'idempreendimento_cv'), '')::int    AS cv_enterprise_id,
+    COALESCE(r.idempreendimento_cv,
+             NULLIF((r.unidade_json->>'idempreendimento_cv'), '')::int) AS cv_enterprise_id,
     NULLIF((r.unidade_json->>'idempreendimento_int'), '')::int   AS cv_enterprise_int_id,
     NULLIF((r.unidade_json->>'idetapa_cv'), '')::int             AS cv_stage_id,
     NULLIF((r.unidade_json->>'idetapa_int'), '')::int            AS cv_stage_int_id,
@@ -175,7 +184,11 @@ WITH origem AS (
     MAX(r.data_reserva)                                          AS ultima_reserva
   FROM reservas r
   WHERE (r.situacao->>'idsituacao')::int IN (:ids)
-  GROUP BY 1,2,3,4,5,6
+  GROUP BY 2,3,4,5,6,
+    CASE WHEN COALESCE(r.idempreendimento_cv, NULLIF((r.unidade_json->>'idempreendimento_cv'), '')::int) IS NULL
+         THEN COALESCE(NULLIF(trim(both from (r.unidade_json->>'empreendimento')), ''),
+                       NULLIF(trim(both from r.empreendimento), ''))
+    END
 ),
 
 resolvido AS (
@@ -237,10 +250,11 @@ SELECT
      custo. Empreendimento de fase única não tem esse risco. */
   (cv_stage_int_id IS NULL AND via IS NOT NULL AND via <> 'manual'
    AND (SELECT COUNT(DISTINCT f2.cv_stage_name) FROM final f2
-         WHERE f2.cv_enterprise_name = final.cv_enterprise_name
+         WHERE COALESCE(f2.cv_enterprise_id::text, f2.cv_enterprise_name)
+               = COALESCE(final.cv_enterprise_id::text, final.cv_enterprise_name)
            AND f2.cv_stage_name IS NOT NULL) > 1) AS alerta_sem_codigo_etapa
 FROM final
-WHERE cv_enterprise_name IS NOT NULL
+WHERE (cv_enterprise_id IS NOT NULL OR cv_enterprise_name IS NOT NULL)
 ORDER BY
   (erp_enterprise_id IS NULL) DESC,
   (cv_stage_int_id IS NULL) DESC,
@@ -252,6 +266,8 @@ ORDER BY
             replacements: { ids: situacoes },
             type: db.Sequelize.QueryTypes.SELECT,
         });
+        // Rótulo de hoje, pelo id; o gravado fica em `cv_enterprise_name_gravado`.
+        await aplicarNomeAtual(rows, { id: 'cv_enterprise_id', nome: 'cv_enterprise_name' });
 
         return res.json({ count: rows.length, results: rows });
     } catch (err) {

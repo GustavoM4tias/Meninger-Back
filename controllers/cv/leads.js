@@ -5,6 +5,82 @@ import makeLogger from '../../lib/makeLogger.js';
 import { sqlEntreCv } from '../../lib/cvDate.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 import { listWithBindings, refresh as refreshQueues } from '../../services/marketing/CvLeadQueueService.js';
+// Empreendimento é o id do CV (no JSON `empreendimento[].idempreendimento`);
+// o nome no JSON é o rótulo da época. Filtro por id, rótulo pelo nome ATUAL.
+import { cvIdsDeFiltro, mapaNomeAtual, facetasEmpreendimento } from '../../services/org/enterpriseNames.js';
+
+// O id do empreendimento dentro do JSON do lead: o CV já gravou com três
+// chaves diferentes ao longo do tempo.
+const ID_EMP_JSON = (alias) => `COALESCE(
+          NULLIF(${alias}->>'id','')::int,
+          NULLIF(${alias}->>'idempreendimento','')::int,
+          NULLIF(${alias}->>'id_empreendimento','')::int
+        )`;
+
+const idEmpDoJson = (e) => {
+  const n = Number(e?.id ?? e?.idempreendimento ?? e?.id_empreendimento);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/**
+ * Troca `empreendimento[i].nome` pelo nome atual (pelo id) e remonta a string
+ * agregada `empreendimentos` com os rótulos de hoje. O nome gravado fica em
+ * `nome_gravado` para auditoria; item sem id ou fora do catálogo fica como está.
+ */
+async function aplicarNomeAtualLeads(rows) {
+  if (!rows?.length) return rows;
+  const ids = new Set();
+  for (const r of rows) for (const e of (Array.isArray(r.empreendimento) ? r.empreendimento : [])) {
+    const id = idEmpDoJson(e);
+    if (id) ids.add(id);
+  }
+  if (!ids.size) return rows;
+  const mapa = await mapaNomeAtual([...ids]);
+  for (const r of rows) {
+    if (!Array.isArray(r.empreendimento)) continue;
+    for (const e of r.empreendimento) {
+      const atual = mapa.get(idEmpDoJson(e));
+      if (!atual || !e || e.nome === atual) continue;
+      if (e.nome_gravado === undefined) e.nome_gravado = e.nome ?? null;
+      e.nome = atual;
+    }
+    const nomes = [...new Set(r.empreendimento.map(e => e?.nome).filter(Boolean))];
+    if (nomes.length) r.empreendimentos = nomes.join(', ');
+  }
+  return rows;
+}
+
+/**
+ * GET /api/cv/leads/facets
+ * Empreendimentos presentes nos leads dentro do escopo do usuário: uma entrada
+ * por id do CV, com o nome ATUAL, ordenadas por id (resíduo sem id no fim).
+ */
+export async function getLeadsFacets(req, res) {
+  try {
+    const scopeCvIds = await visibleCvIds(req.user); // null = admin
+    if (scopeCvIds !== null && !scopeCvIds.length) return res.json({ empreendimentos: [] });
+    const replacements = {};
+    let escopo = 'TRUE';
+    if (scopeCvIds !== null) {
+      escopo = `${ID_EMP_JSON('e')} IN (:scopeCvIds)`;
+      replacements.scopeCvIds = scopeCvIds;
+    }
+    const rows = await db.sequelize.query(`
+      SELECT ${ID_EMP_JSON('e')} AS idempreendimento_cv,
+             NULLIF(trim(e->>'nome'), '') AS empreendimento
+        FROM leads l
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(l.empreendimento) = 'array' THEN l.empreendimento ELSE '[]'::jsonb END
+        ) AS e
+       WHERE ${escopo}
+       GROUP BY 1, 2
+    `, { replacements, type: db.Sequelize.QueryTypes.SELECT });
+    return res.json({ empreendimentos: await facetasEmpreendimento(rows) });
+  } catch (err) {
+    console.error('Erro getLeadsFacets:', err?.message || err);
+    return res.status(500).json({ error: 'Erro ao listar empreendimentos dos leads.' });
+  }
+}
 
 /**
  * As filas de distribuição de leads.
@@ -165,19 +241,33 @@ export async function getLeads(req, res) {
     addIlikeCsv(whereClauses, replacements, 'imobiliaria', `l.imobiliaria->>'nome'`, imobiliaria);
     addIlikeCsv(whereClauses, replacements, 'corretor', `l.corretor->>'nome'`, corretor);
 
-    // filtro por empreendimento (match exato, case-insensitive)
+    // filtro por empreendimento: por id do CV dentro do JSON. Chega como CSV
+    // de ids (padrão novo) ou de nomes (link antigo); nome vira id pelo
+    // resolver e só o termo que não resolveu cai no casamento exato pelo nome
+    // gravado (resíduo sem id).
     if (empreendimento) {
-      const termos = String(empreendimento).split(',').map(s => s.trim()).filter(Boolean);
-      if (termos.length) {
-        const existsClauses = termos.map((_, i) => `
+      const { ids, nomes_sem_id } = await cvIdsDeFiltro(empreendimento);
+      const parts = [];
+      if (ids.length) {
+        parts.push(`
+          EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(l.empreendimento) AS e_f
+            WHERE ${ID_EMP_JSON('e_f')} IN (:empIds)
+          )`);
+        replacements.empIds = ids;
+      }
+      nomes_sem_id.forEach((t, i) => {
+        parts.push(`
           EXISTS (
             SELECT 1
             FROM jsonb_array_elements(l.empreendimento) AS e
             WHERE LOWER(e->>'nome') = LOWER(:emp_${i})
           )`);
-        whereClauses.push(`(${existsClauses.join(' OR ')})`);
-        termos.forEach((t, i) => (replacements[`emp_${i}`] = t));
-      }
+        replacements[`emp_${i}`] = t;
+      });
+      // Pediu algo que não existe: nada, em vez de tudo.
+      whereClauses.push(parts.length ? `(${parts.join(' OR ')})` : 'FALSE');
     }
 
     // ── Visibilidade trancada (não-admin não pode bypass via ?cidade) ──
@@ -238,7 +328,7 @@ export async function getLeads(req, res) {
         emp_names.empreendimentos,
         emp_cities.cidades_resolvidas
       FROM leads l
-      /* nomes de empreendimentos (igual você já exibia) */
+      /* nomes de empreendimentos GRAVADOS; o JS troca pelo nome atual (aplicarNomeAtualLeads) */
       LEFT JOIN LATERAL (
         SELECT STRING_AGG(DISTINCT e->>'nome', ', ') AS empreendimentos
         FROM jsonb_array_elements(l.empreendimento) AS e
@@ -276,12 +366,9 @@ export async function getLeads(req, res) {
     logger.log(`LEADS ✅ SQL executada em ${took}ms | rows=${rows.length}`);
 
     // Admin vê tudo; usuário comum já foi filtrado no SQL.
-    // Removemos apenas qualquer campo auxiliar que você não queira expor.
-    const results = rows.map(r => {
-      // mantém "empreendimentos" (string) como já existia
-      // e opcionalmente pode manter "cidades_resolvidas" se quiser debugar no front.
-      return r;
-    });
+    // `empreendimento[i].nome` e a string `empreendimentos` saem com o nome
+    // de hoje (pelo id); o gravado fica em `nome_gravado`.
+    const results = await aplicarNomeAtualLeads(rows);
 
     const payload = {
       count: results.length,

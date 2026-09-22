@@ -23,7 +23,12 @@
 // `cancelled` cobre "baixado" e "excluído" porque para a operação é a mesma
 // coisa: a cobrança deixou de valer sem ter sido paga.
 import db from '../../models/sequelize/index.js';
-import { allowedEnterpriseNames } from '../boleto/boletoScope.js';
+// Escopo e filtro de empreendimento por ID do CV (idempreendimento_cv); nome
+// só como fallback legado para linha sem id. O nome exibido é o atual do catálogo.
+import {
+    allowedEnterpriseScope, enterpriseScopeCond, enterpriseFilterFrom, enterpriseFilterCond,
+} from '../boleto/boletoScope.js';
+import { aplicarNomeAtual, facetasEmpreendimento } from '../org/enterpriseNames.js';
 import {
     fetchCvEtapaByReserva,
     fetchCvEtapaFacets,
@@ -47,7 +52,7 @@ const SELECT_BOLETO = `
         h.id,
         ('boleto:' || h.id)             AS uid,
         h.idreserva, h.idtransacao, h.idpessoa_cv,
-        h.titular_nome, h.empreendimento,
+        h.titular_nome, h.empreendimento, h.idempreendimento_cv,
         NULL::varchar                   AS unidade,
         h.valor, h.valor_original, h.comissao_percentual_aplicada,
         h.vencimento::date              AS vencimento,
@@ -79,7 +84,7 @@ const SELECT_CARTAO = `
         c.id,
         ('cartao:' || c.id)             AS uid,
         c.idreserva, c.idtransacao, c.idpessoa_cv,
-        c.titular_nome, c.empreendimento,
+        c.titular_nome, c.empreendimento, c.idempreendimento_cv,
         c.unidade,
         c.valor, c.valor_original, c.comissao_percentual_aplicada,
         c.validade::date                AS vencimento,
@@ -123,20 +128,20 @@ function listaCsv(v) {
  * Filtros de ESCOPO: escolhem QUAIS RESERVAS entram na conta. Rodam sobre
  * todas as tentativas, antes do agrupamento.
  *
- * `null` em nomesPermitidos = admin (sem recorte). Lista vazia = nenhuma linha
- * (fail-closed), nunca a base inteira.
+ * `null` em escopo = admin (sem recorte). Lista vazia = nenhuma linha
+ * (fail-closed), nunca a base inteira. Escopo e filtro de empreendimento são
+ * por `idempreendimento_cv`; o nome gravado só serve para linha sem id.
  */
-function filtrosEscopo(f, nomesPermitidos, cvIds) {
+async function filtrosEscopo(f, escopo, cvIds) {
     const cond = [];
     const rep = {};
 
-    if (nomesPermitidos !== null) {
-        cond.push("lower(coalesce(empreendimento, '')) IN (:escopo)");
-        rep.escopo = nomesPermitidos.length ? nomesPermitidos : [''];
-    }
+    const scope = enterpriseScopeCond(escopo);
+    if (scope.cond) { cond.push(scope.cond); Object.assign(rep, scope.replacements); }
 
-    const emps = listaCsv(f.empreendimento);
-    if (emps) { cond.push('empreendimento IN (:emps)'); rep.emps = emps; }
+    // Filtro da tela: CSV de ids (ou nomes legados resolvidos para id).
+    const filtro = enterpriseFilterCond(await enterpriseFilterFrom(f.empreendimento));
+    if (filtro.cond) { cond.push(filtro.cond); Object.assign(rep, filtro.replacements); }
 
     if (f.idreserva) { cond.push('idreserva = :idreserva'); rep.idreserva = Number(f.idreserva); }
 
@@ -262,9 +267,9 @@ async function enriquecer(rows) {
 
 /** Listagem paginada: uma linha por reserva, já unificada e ordenada. */
 export async function listar(user, filtros = {}) {
-    const nomes = await allowedEnterpriseNames(user);
+    const scope = await allowedEnterpriseScope(user);
     const cvIds = await resolveCvEtapaFilter(filtros);
-    const escopo = filtrosEscopo(filtros, nomes, cvIds);
+    const escopo = await filtrosEscopo(filtros, scope, cvIds);
     const estado = filtrosEstado(filtros);
     const replacements = { ...escopo.replacements, ...estado.replacements };
     const cte = sqlAtual(escopo.sql);
@@ -289,6 +294,7 @@ export async function listar(user, filtros = {}) {
     );
 
     await enriquecer(rows);
+    await aplicarNomeAtual(rows);
     return { total, page, limit, rows, grouped: true };
 }
 
@@ -298,9 +304,9 @@ export async function listar(user, filtros = {}) {
  * exatamente a conta que ele exibe.
  */
 export async function estatisticas(user, filtros = {}) {
-    const nomes = await allowedEnterpriseNames(user);
+    const scope = await allowedEnterpriseScope(user);
     const cvIds = await resolveCvEtapaFilter(filtros);
-    const escopo = filtrosEscopo(filtros, nomes, cvIds);
+    const escopo = await filtrosEscopo(filtros, scope, cvIds);
     const estado = filtrosEstado(filtros);
     const replacements = { ...escopo.replacements, ...estado.replacements };
     const cte = sqlAtual(escopo.sql);
@@ -369,18 +375,22 @@ export async function estatisticas(user, filtros = {}) {
     return acc;
 }
 
-/** Valores distintos para alimentar os selects do filtro. */
+/**
+ * Valores distintos para alimentar os selects do filtro.
+ * Empreendimentos: `[{ id, nome }]`, um por ID do CV com o nome ATUAL do
+ * catálogo, ordenados por id (linha sem id entra no fim com o nome gravado).
+ */
 export async function facetas(user) {
-    const nomes = await allowedEnterpriseNames(user);
-    const { sql: whereSql, replacements } = filtrosEscopo({}, nomes, null);
+    const scope = await allowedEnterpriseScope(user);
+    const { sql: whereSql, replacements } = await filtrosEscopo({}, scope, null);
     const base = `FROM ( ${SELECT_BOLETO} UNION ALL ${SELECT_CARTAO} ) t ${whereSql}`;
 
-    const [emps] = await db.sequelize.query(
-        `SELECT empreendimento AS name, count(DISTINCT idreserva)::int AS qty ${base}
-          ${whereSql ? 'AND' : 'WHERE'} empreendimento IS NOT NULL AND empreendimento <> ''
-       GROUP BY empreendimento ORDER BY empreendimento ASC`,
+    const [empsRaw] = await db.sequelize.query(
+        `SELECT DISTINCT idempreendimento_cv, empreendimento ${base}
+          ${whereSql ? 'AND' : 'WHERE'} (idempreendimento_cv IS NOT NULL OR coalesce(empreendimento, '') <> '')`,
         { replacements },
     );
+    const emps = await facetasEmpreendimento(empsRaw);
     const [formas] = await db.sequelize.query(
         `SELECT forma, count(DISTINCT idreserva)::int AS qty ${base} GROUP BY forma`, { replacements },
     );

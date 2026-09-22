@@ -10,6 +10,7 @@ export default (sequelize, DataTypes) => {
         idreserva: { type: DataTypes.INTEGER, allowNull: true },
         cliente: { type: DataTypes.STRING, allowNull: true },
         empreendimento: { type: DataTypes.STRING, allowNull: true },
+        idempreendimento_cv: { type: DataTypes.INTEGER, allowNull: true }, // id do empreendimento no CV: a chave; o nome acima é o rótulo da época
         // Desde quando ele está na etapa, segundo o próprio CV.
         status_since: { type: DataTypes.DATE, allowNull: true },
         last_error: { type: DataTypes.TEXT, allowNull: true },

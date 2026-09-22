@@ -25,6 +25,7 @@ import db from '../../models/sequelize/index.js';
 import { registerTool } from './ToolRegistry.js';
 import { resolverPeriodo, PERIODO_PARAM } from './periodo.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
+import { resolverLista } from '../org/enterpriseResolver.js';
 import {
     RESERVA_IMOB_NOME,
     RESERVA_CORRETOR_NOME,
@@ -113,7 +114,18 @@ registerTool({
             replacements.end = `${end} 23:59:59`;
         }
 
-        addIlikeCsv(whereClauses, replacements, 'empreendimento', `COALESCE(NULLIF(rp.empreendimento,''), r.empreendimento)`, args.empreendimento);
+        // Empreendimento por ID (o nome gravado é o da época e o CV renomeia):
+        // o termo vira id no resolvedor; o ILIKE no nome fica só para quando
+        // nada resolveu.
+        if (args.empreendimento) {
+            const { cv_ids } = await resolverLista(args.empreendimento);
+            if (cv_ids.length) {
+                whereClauses.push(`COALESCE(rp.idempreendimento_cv, r.idempreendimento_cv) IN (:empCvIds)`);
+                replacements.empCvIds = cv_ids;
+            } else {
+                addIlikeCsv(whereClauses, replacements, 'empreendimento', `COALESCE(NULLIF(rp.empreendimento,''), r.empreendimento)`, args.empreendimento);
+            }
+        }
         addIlikeCsv(whereClauses, replacements, 'etapa_rep', `COALESCE(rp.status_repasse, rp.etapa)`, args.etapa);
         addIlikeCsv(whereClauses, replacements, 'sit_contrato', `rp.situacao_contrato`, args.situacao_contrato);
         addIlikeCsv(whereClauses, replacements, 'corretor', RESERVA_CORRETOR_NOME, args.corretor);

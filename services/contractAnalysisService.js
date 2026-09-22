@@ -596,6 +596,8 @@ class ContractAnalysisService {
                 idreserva: repasse.idreserva || null,
                 cliente: repasse.nome_cliente || null,
                 empreendimento: repasse.empreendimento || null,
+                // O id é a chave; o nome acima é só o rótulo da época.
+                idempreendimento_cv: await this._idEmpreendimentoDoRepasse(repasse, db),
                 status_since: this._desdeQuando(repasse) || linha.status_since,
                 last_error: desfecho?.erro ? String(desfecho.erro).slice(0, 1000) : linha.last_error,
                 attempts: (linha.attempts || 0) + (desfecho ? 1 : 0),
@@ -605,6 +607,31 @@ class ContractAnalysisService {
         } catch (error) {
             console.warn('[validador] não consegui registrar o repasse parado:', error.message);
         }
+    }
+
+    /**
+     * Id do empreendimento no CV do repasse: herda da reserva no espelho local
+     * (`reservas.idempreendimento_cv`) e, se ela não estiver lá, resolve o nome
+     * pelo catálogo (nome atual ou antigo). Best-effort: sem certeza, null -
+     * um id errado esconderia a linha de quem deveria vê-la.
+     */
+    async _idEmpreendimentoDoRepasse(repasse, db) {
+        try {
+            const idreserva = Number(repasse?.idreserva);
+            if (Number.isFinite(idreserva) && idreserva > 0) {
+                const r = await db.Reserva.findByPk(idreserva, { attributes: ['idreserva', 'idempreendimento_cv'], raw: true });
+                const id = Number(r?.idempreendimento_cv);
+                if (Number.isFinite(id) && id > 0) return id;
+            }
+            if (repasse?.empreendimento) {
+                const { resolverEmpreendimentos } = await import('./org/enterpriseResolver.js');
+                const { cv_ids } = await resolverEmpreendimentos(repasse.empreendimento, { ativos: false });
+                if (cv_ids.length === 1) return cv_ids[0];
+            }
+        } catch (error) {
+            console.warn('[validador] não consegui resolver o id do empreendimento do repasse:', error.message);
+        }
+        return null;
     }
 
     /** Um aviso por episódio: o registro sai do quadro quando o repasse anda. */

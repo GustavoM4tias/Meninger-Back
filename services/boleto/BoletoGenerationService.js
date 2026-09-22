@@ -347,6 +347,15 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
 
         const { titular, condicoes, unidade } = reservaData;
 
+        // Identidade do empreendimento: o ID do CV (idempreendimento_cv) vai
+        // gravado junto do nome desde já, para todo desfecho (skip, erro,
+        // sucesso) sair com a chave - é por ela que escopo e filtro decidem;
+        // o nome é só o rótulo da época.
+        await history.update({
+            idempreendimento_cv: Number(unidade?.idempreendimento_cv) || null,
+            empreendimento: unidade?.empreendimento || null,
+        });
+
         // Endereço de cobrança alternativo (opcional, ver o parâmetro).
         // Vale SÓ para a validação e para o formulário do Ecobrança: nome, CPF,
         // e-mail e telefone continuam sendo os do cliente, e o cadastro no CV
@@ -1242,6 +1251,7 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 idreserva,
                 titular: { ...titular, idpessoa_cv: titular?.idpessoa_cv },
                 empreendimento: unidade?.empreendimento,
+                idempreendimento_cv: unidade?.idempreendimento_cv || null,
                 unidade: unidade?.unidade || unidade?.nome || null,
                 // `valorEmitir` ja passou pelo percentual do empreendimento e
                 // pelo teto - o cartao cobra exatamente o mesmo que o boleto

@@ -16,6 +16,10 @@
 import { registerTool } from './ToolRegistry.js';
 import db from '../../models/sequelize/index.js';
 import { listForUser, publicExposureSummary } from '../emeReports/ReportService.js';
+// Empreendimento é o id do CV (`idempreendimento_cv`); `enterpriseName` é só o
+// rótulo, gravado com o nome ATUAL do catálogo.
+import { resolverEmpreendimentos } from '../org/enterpriseResolver.js';
+import { nomeAtual } from '../org/enterpriseNames.js';
 
 const MAX_CARDS = 8;
 const normText = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
@@ -132,10 +136,27 @@ registerTool({
         if (!briefing) {
             return { result: { error: 'Briefing vazio — descreva o que o relatório deve conter.' } };
         }
+        // O termo do modelo vira id no resolvedor (nome atual, antigo ou gravado
+        // nas reservas); o rótulo gravado é o nome atual. Termo que não resolve
+        // (ou ambíguo) fica só como texto, sem id.
+        let idempreendimento_cv = null;
+        let enterpriseName = args?.empreendimento ? String(args.empreendimento).trim().slice(0, 200) : null;
+        if (enterpriseName) {
+            try {
+                const { cv_ids } = await resolverEmpreendimentos(enterpriseName, { ativos: false });
+                if (cv_ids.length === 1) {
+                    idempreendimento_cv = cv_ids[0];
+                    enterpriseName = (await nomeAtual(idempreendimento_cv)) || enterpriseName;
+                }
+            } catch (e) {
+                console.warn('[ReportsTools] resolvedor de empreendimento falhou:', e?.message);
+            }
+        }
         const report = await db.EmeGeneratedReport.create({
             ownerId: user.id,
             title: String(args?.titulo || 'Novo relatório').trim().slice(0, 200) || 'Novo relatório',
-            enterpriseName: args?.empreendimento ? String(args.empreendimento).trim().slice(0, 200) : null,
+            enterpriseName,
+            idempreendimento_cv,
             dataMode: args?.modo === 'live' ? 'live' : 'fixed',
             periodStart: cleanDate(args?.periodo_inicio),
             periodEnd: cleanDate(args?.periodo_fim),

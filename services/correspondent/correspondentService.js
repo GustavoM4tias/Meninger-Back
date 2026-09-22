@@ -594,24 +594,31 @@ export async function cidadesDeAtuacao() {
     if (atuacaoCache && (Date.now() - atuacaoCache.em) < ATUACAO_TTL_MS) return atuacaoCache.mapa;
     try {
         const linhas = await db.sequelize.query(`
+            /* Junta pelo ID do empreendimento (a chave); o nome gravado na
+               reserva é o rótulo da época e só serve de fallback para a linha
+               que ainda não tem id (o CV renomeia, e o nome antigo não casa). */
             WITH atuacao AS (
               SELECT (empresa_correspondente->>'idempresa')::int AS idempresa,
+                     idempreendimento_cv AS id_emp,
                      empreendimento AS nome_emp
                 FROM reservas
                WHERE jsonb_typeof(empresa_correspondente) = 'object'
                  AND COALESCE(empresa_correspondente->>'idempresa', '') <> ''
               UNION ALL
               SELECT idempresa_correspondente AS idempresa,
+                     idempreendimento AS id_emp,
                      empreendimento->>'nome'  AS nome_emp
                 FROM cv_precadastros
                WHERE idempresa_correspondente IS NOT NULL
-                 AND empreendimento->>'nome' IS NOT NULL
+                 AND (idempreendimento IS NOT NULL OR empreendimento->>'nome' IS NOT NULL)
             )
             SELECT a.idempresa,
                    array_agg(DISTINCT e.cidade) FILTER (WHERE e.cidade IS NOT NULL) AS cidades
               FROM atuacao a
               LEFT JOIN cv_enterprises e
-                     ON upper(unaccent(e.nome)) = upper(unaccent(a.nome_emp))
+                     ON (a.id_emp IS NOT NULL AND e.idempreendimento = a.id_emp)
+                     OR (a.id_emp IS NULL AND a.nome_emp IS NOT NULL
+                         AND upper(unaccent(e.nome)) = upper(unaccent(a.nome_emp)))
              WHERE a.idempresa IS NOT NULL
              GROUP BY a.idempresa
         `, { type: db.Sequelize.QueryTypes.SELECT });

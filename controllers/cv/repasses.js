@@ -6,6 +6,10 @@ import {
 
 import { getEmpreendimentos } from '../../services/cv/empreendimentoService.js';
 import apiCv from '../../lib/apiCv.js';
+// A API do CV só filtra repasse por NOME de empreendimento. O Office identifica
+// por id; quando o filtro chega como id, vira o nome ATUAL do catálogo antes
+// de ir para o CV (nome antigo não acha nada lá).
+import { nomeAtual } from '../../services/org/enterpriseNames.js';
 
 export const fetchRepasses = async (req, res) => {
   try {
@@ -48,7 +52,15 @@ export const fetchRepasses = async (req, res) => {
     };
 
     if (empreendimento) {
-      const listaEmpreendimentos = empreendimento.split(',').map(emp => emp.trim()).filter(Boolean);
+      const termos = String(empreendimento).split(',').map(emp => emp.trim()).filter(Boolean);
+      const listaEmpreendimentos = [];
+      for (const t of termos) {
+        if (!/^\d+$/.test(t)) { listaEmpreendimentos.push(t); continue; }
+        const nome = await nomeAtual(t);
+        // Id fora do catálogo: manda como veio (o CV devolve vazio, e o retorno
+        // `filtroAplicado` deixa claro o que foi pedido).
+        listaEmpreendimentos.push(nome || t);
+      }
       for (const emp of listaEmpreendimentos) {
         const { repasses, total } = await buscarPorEmpreendimento(emp);
         allRepasses = allRepasses.concat(repasses);

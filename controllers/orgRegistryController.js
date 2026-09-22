@@ -159,3 +159,27 @@ export const listEnterpriseLabels = async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 };
+
+// GET /api/org/enterprises/catalog - catálogo do CV com o nome ATUAL, ordenado
+// por id. Ver services/org/enterpriseNames.js: o id é a chave, o nome é rótulo.
+export const listEnterpriseCatalog = async (req, res) => {
+  try {
+    const { listarCatalogo } = await import('../services/org/enterpriseNames.js');
+    const apenasAtivos = String(req.query.ativos ?? '') === '1';
+    const items = await listarCatalogo({ apenasAtivos });
+    return res.json({
+      items: items.map(e => ({
+        id: e.cv_id,
+        nome: e.nome,
+        cidade: e.cidade,
+        uf: e.uf,
+        org_id: e.org_id,
+        erp_id: e.erp_id != null ? String(e.erp_id) : null,
+        ativo: e.ativo,
+      })),
+    });
+  } catch (e) {
+    console.error('[orgRegistry] catalog:', e);
+    return res.status(500).json({ error: e.message });
+  }
+};

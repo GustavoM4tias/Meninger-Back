@@ -19,6 +19,7 @@ export default (sequelize, DataTypes) => {
 
     // Empreendimento principal (opcional; relatório pode ser multi-empreendimento).
     enterpriseName: { type: DataTypes.STRING(200), allowNull: true },
+    idempreendimento_cv: { type: DataTypes.INTEGER, allowNull: true }, // id do empreendimento no CV: a chave; enterpriseName é o rótulo da época
 
     // Pedido original feito no chat da Eme (tool create_report). O builder envia
     // como 1ª mensagem quando o relatório abre vazio e sem conversa.

@@ -18,6 +18,8 @@ import { datasetBlock, kpisBlock, abrirTela } from './blocks.js';
 import { montarEspelho } from '../../controllers/cv/mirrorDb.js';
 import { lerTabelas } from '../../controllers/cv/priceTablesDb.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
+// Nome antigo → id (o CV renomeia; `cv_enterprises.nome` é sempre o atual).
+import { resolverEmpreendimentos } from '../org/enterpriseResolver.js';
 
 const { CvEnterprise } = db;
 const SCREEN = '/crm/buildings';
@@ -46,6 +48,16 @@ async function acharEmpreendimento(user, ref) {
     const parcial = rows.filter((r) => norm(r.nome).includes(q) || q.includes(norm(r.nome)) || norm(r.cidade).includes(q));
     if (parcial.length === 1) return { ent: parcial[0] };
     if (parcial.length > 1) return { erro: `Mais de um empreendimento casa com "${ref}": ${parcial.map((r) => `${r.nome} (${r.cidade})`).join(', ')}. Pergunte qual.` };
+    // Nome antigo (o CV renomeou): o resolvedor devolve o id, e o rótulo que
+    // segue é o nome ATUAL do espelho (`rows` vem de cv_enterprises).
+    try {
+        const { cv_ids } = await resolverEmpreendimentos(ref, { ativos: false });
+        const antigos = rows.filter((r) => cv_ids.includes(Number(r.idempreendimento)));
+        if (antigos.length === 1) return { ent: antigos[0] };
+        if (antigos.length > 1) return { erro: `Mais de um empreendimento casa com "${ref}": ${antigos.map((r) => `${r.nome} (${r.cidade})`).join(', ')}. Pergunte qual.` };
+    } catch (e) {
+        console.warn('[EnterpriseMirrorTools] resolvedor de empreendimento falhou:', e?.message);
+    }
     return { erro: `Nenhum empreendimento visível casa com "${ref}".`, opcoes: rows.slice(0, 40).map((r) => r.nome) };
 }
 

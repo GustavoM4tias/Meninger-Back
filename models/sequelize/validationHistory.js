@@ -5,6 +5,8 @@ export default (sequelize, DataTypes) => {
             type: DataTypes.STRING,
             allowNull: false
         },
+        // id do empreendimento no CV: a chave; `empreendimento` é o rótulo da época
+        idempreendimento_cv: { type: DataTypes.INTEGER, allowNull: true },
         cliente: {
             type: DataTypes.STRING,
             allowNull: false

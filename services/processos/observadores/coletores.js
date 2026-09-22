@@ -117,7 +117,7 @@ async function coletarReservas({ janela, cfg, agora }) {
         },
         attributes: [
             'idreserva', 'data_reserva', 'data_contrato', 'data_venda',
-            'status_reserva', 'empreendimento', 'etapa', 'updated_at',
+            'status_reserva', 'empreendimento', 'idempreendimento_cv', 'etapa', 'updated_at',
         ],
         limit: LIMITE,
         raw: true,
@@ -131,7 +131,8 @@ async function coletarReservas({ janela, cfg, agora }) {
         const fim = r.data_contrato || (caiu ? r.updated_at : null);
         if (!fim) continue;
 
-        const escopo = await resolverEscopo(r.empreendimento);
+        // Id antes do nome: o nome gravado é o da época e o CV renomeia.
+        const escopo = await resolverEscopo({ idempreendimento_cv: r.idempreendimento_cv, nome: r.empreendimento });
         const e = episodioDeReserva({
             id: r.idreserva,
             criada_em: r.data_reserva,
@@ -154,7 +155,7 @@ async function coletarRepasses({ janela, cfg, agora }) {
     const rows = await db.Repasse.findAll({
         where: { data_status_repasse: { [Op.gte]: desde } },
         attributes: [
-            'idrepasse', 'empreendimento', 'etapa', 'status_repasse',
+            'idrepasse', 'empreendimento', 'idempreendimento_cv', 'etapa', 'status_repasse',
             'data_status_repasse', 'data_contrato_liberado', 'sla_prazo_repasse',
             'data_assinatura', 'proxima_acao',
         ],
@@ -168,7 +169,8 @@ async function coletarRepasses({ janela, cfg, agora }) {
         const destravou = r.data_assinatura || r.data_status_repasse;
         if (!travou || !destravou) continue;
 
-        const escopo = await resolverEscopo(r.empreendimento);
+        // Id antes do nome: o nome gravado é o da época e o CV renomeia.
+        const escopo = await resolverEscopo({ idempreendimento_cv: r.idempreendimento_cv, nome: r.empreendimento });
         const e = episodioDeRepasse({
             id: r.idrepasse,
             travou_em: travou,

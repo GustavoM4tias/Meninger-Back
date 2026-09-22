@@ -127,6 +127,7 @@ import { ensureValidatorHealthSchema } from './lib/ensureValidatorHealthSchema.j
 import { ensureAiProvidersSchema } from './lib/ensureAiProvidersSchema.js';
 import { ensureProcessosSchema } from './lib/ensureProcessosSchema.js';
 import { ensureEnterpriseNameHistory } from './lib/ensureEnterpriseNameHistory.js';
+import { ensureEnterpriseIdColumns } from './lib/ensureEnterpriseIdColumns.js';
 import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
@@ -453,6 +454,15 @@ async function initBackground() {
   // mesmo motivo dos anteriores.
   await ensureLeadsFusoCv().catch(err =>
       console.warn('⚠️  ensureLeadsFusoCv falhou:', err.message));
+  // Empreendimento é chave por ID, nome é rótulo (22/09): `idempreendimento_cv`
+  // em 8 tabelas que só tinham o nome + backfill. Os models já declaram a
+  // coluna, então toda query deles quebraria até o ALTER rodar - e com o gate
+  // pulando a fase em prod ela nunca nasceria. O histórico de nomes vem antes
+  // porque o backfill por nome casa contra ele.
+  await ensureEnterpriseNameHistory().catch(err =>
+      console.warn('⚠️  ensureEnterpriseNameHistory falhou:', err.message));
+  await ensureEnterpriseIdColumns().catch(err =>
+      console.warn('⚠️  ensureEnterpriseIdColumns falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {

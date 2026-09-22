@@ -9,8 +9,18 @@
 import db from '../../models/sequelize/index.js';
 import Docusign from '../../services/comercial/DocusignService.js';
 import { linkPublico } from './assinaturaPublicaController.js';
+// Empreendimento é o id do CV (`idempreendimento_cv`); o nome gravado é o rótulo
+// da época. Filtro e agrupamento andam por id, rótulo é o nome ATUAL do catálogo.
+import { facetasEmpreendimento, cvIdsDeFiltro, aplicarNomeAtual } from '../../services/org/enterpriseNames.js';
+// Escopo de dados: admin vê tudo (null); os demais, só os empreendimentos
+// liberados nas Alçadas (sem grant = nenhuma linha).
+import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 
 const { AditivoSignature } = db;
+const { Op } = db.Sequelize;
+
+// Sentinela para "nenhum empreendimento liberado": id inexistente nunca casa.
+const NO_MATCH = [-1];
 
 // Estado de um assinante, na ordem em que o time cobra:
 // assinou > recusou > abriu o link > parado.
@@ -45,7 +55,9 @@ function montar(linha) {
     return {
         id: linha.id,
         unidade: linha.unidade,
+        idempreendimento_cv: linha.idempreendimento_cv ?? null,
         empreendimento: linha.empreendimento,
+        empreendimento_gravado: linha.empreendimento_gravado ?? null,
         envelope_id: linha.envelope_id,
         status: linha.status,
         concluida,
@@ -72,27 +84,52 @@ function resumir(unidades) {
     };
 }
 
-async function carregar(empreendimento) {
+/**
+ * `where` base da tela: recorte de escopo (admin = sem recorte) mais o filtro
+ * de empreendimento, que chega como CSV de ids (padrão novo) ou de nomes (link
+ * antigo). Nome vira id pelo resolver; só o que não resolveu casa pelo nome
+ * gravado, que é o resíduo ainda sem id.
+ */
+async function montarWhere(user, empreendimento) {
     const where = {};
-    if (empreendimento) where.empreendimento = empreendimento;
-    const linhas = await AditivoSignature.findAll({ where, order: [['unidade', 'ASC']] });
+    const scope = await visibleCvIds(user);
+    if (scope !== null) where.idempreendimento_cv = { [Op.in]: scope.length ? scope : NO_MATCH };
+    if (empreendimento) {
+        const { ids, nomes_sem_id } = await cvIdsDeFiltro(empreendimento);
+        const ou = [];
+        if (ids.length) ou.push({ idempreendimento_cv: { [Op.in]: ids } });
+        if (nomes_sem_id.length) ou.push({ empreendimento: { [Op.in]: nomes_sem_id } });
+        // AND separado para não sobrescrever o recorte de escopo acima.
+        where[Op.and] = [ou.length ? { [Op.or]: ou } : { idempreendimento_cv: { [Op.in]: NO_MATCH } }];
+    }
+    return where;
+}
+
+async function carregar(user, empreendimento) {
+    const where = await montarWhere(user, empreendimento);
+    const linhas = await AditivoSignature.findAll({ where, order: [['unidade', 'ASC']], raw: true });
+    // Nome de hoje, pelo id; o gravado na época fica em `empreendimento_gravado`.
+    await aplicarNomeAtual(linhas);
     return linhas.map(montar);
 }
 
-// GET /api/aditivos/painel?empreendimento=PARQUE DAS FLORES
+// GET /api/aditivos/painel?empreendimento=<id do CV>  (aceita nome, legado)
 export async function listar(req, res) {
     try {
-        const unidades = await carregar(req.query.empreendimento);
+        const unidades = await carregar(req.user, req.query.empreendimento);
+        // Facetas dentro do escopo, sem o filtro da tela: uma por id, com o nome
+        // ATUAL, ordenadas por id (resíduo sem id no fim, id null).
         const todas = await AditivoSignature.findAll({
-            attributes: ['empreendimento'],
-            group: ['empreendimento'],
-            order: [['empreendimento', 'ASC']],
+            attributes: ['idempreendimento_cv', 'empreendimento'],
+            where: await montarWhere(req.user, null),
+            group: ['idempreendimento_cv', 'empreendimento'],
+            raw: true,
         });
         return res.json({
             ok: true,
             unidades,
             resumo: resumir(unidades),
-            empreendimentos: todas.map((t) => t.empreendimento).filter(Boolean),
+            empreendimentos: await facetasEmpreendimento(todas),
         });
     } catch (e) {
         console.error('[aditivo/painel] listar:', e);
@@ -105,7 +142,11 @@ export async function listar(req, res) {
 // quantos foram lidos e quais falharam.
 export async function atualizar(req, res) {
     try {
-        const linhas = await AditivoSignature.findAll({ order: [['unidade', 'ASC']] });
+        // Só relê o que o usuário enxerga (mesmo recorte da listagem).
+        const linhas = await AditivoSignature.findAll({
+            where: await montarWhere(req.user, null),
+            order: [['unidade', 'ASC']],
+        });
         const falhas = [];
         let lidos = 0;
 
@@ -136,7 +177,7 @@ export async function atualizar(req, res) {
             }
         }
 
-        const unidades = await carregar(req.query.empreendimento);
+        const unidades = await carregar(req.user, req.query.empreendimento);
         return res.json({ ok: true, lidos, falhas, unidades, resumo: resumir(unidades) });
     } catch (e) {
         console.error('[aditivo/painel] atualizar:', e);

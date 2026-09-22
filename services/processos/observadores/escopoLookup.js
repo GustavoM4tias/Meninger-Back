@@ -80,7 +80,17 @@ export async function resolverEscopo(fonte) {
     }
 
     if (typeof fonte === 'object') {
-        const id = fonte.idempreendimento ?? fonte.id ?? fonte.cv_id;
+        // JSON de lead: lista de empreendimentos. Vale o primeiro que resolve.
+        if (Array.isArray(fonte)) {
+            for (const item of fonte) {
+                const e = await resolverEscopo(item);
+                if (e.cv_ids.length || e.erp_ids.length || e.cidades.length) return e;
+            }
+            return { ...VAZIO };
+        }
+        // `idempreendimento_cv` é a coluna das tabelas (reservas, repasses); as
+        // outras chaves são as formas que o JSON do CV usa. Id antes do nome.
+        const id = fonte.idempreendimento_cv ?? fonte.idempreendimento ?? fonte.id ?? fonte.cv_id;
         if (id != null && porCvId.has(String(id))) return porCvId.get(String(id));
         const nome = fonte.nome ?? fonte.name ?? fonte.empreendimento;
         if (nome) return porNome.get(chave(nome)) || { ...VAZIO };

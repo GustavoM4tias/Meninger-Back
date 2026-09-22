@@ -14,6 +14,7 @@ export default (sequelize, DataTypes) => {
 
         reserva_id:     { type: DataTypes.INTEGER, allowNull: true },   // reservas.idreserva (CV)
         empreendimento: { type: DataTypes.STRING(120), allowNull: true },
+        idempreendimento_cv: { type: DataTypes.INTEGER, allowNull: true }, // id do empreendimento no CV: a chave; o nome acima é o rótulo da época
         unidade:        { type: DataTypes.STRING(60), allowNull: true },
         arquivo:        { type: DataTypes.STRING(255), allowNull: true }, // PDF enviado
 

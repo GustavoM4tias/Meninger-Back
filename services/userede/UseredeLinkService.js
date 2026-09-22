@@ -74,6 +74,7 @@ export function validar({ valor, parcelas, validade }, settings) {
  * @param {number} dados.idreserva
  * @param {object} dados.titular       { nome, email, telefone/celular/whatsapp, idpessoa_cv }
  * @param {string} dados.empreendimento
+ * @param {number} [dados.idempreendimento_cv]  id do empreendimento no CV (a chave; o nome é o rótulo da época)
  * @param {string} dados.unidade
  * @param {number} dados.valor         soma das parcelas da série
  * @param {number} dados.parcelas      quantas parcelas a série tem = limite ofertado
@@ -84,7 +85,7 @@ export function validar({ valor, parcelas, validade }, settings) {
 export async function emitir(dados) {
     const settings = await getSettings();
     const {
-        idreserva, titular = {}, empreendimento, unidade,
+        idreserva, titular = {}, empreendimento, idempreendimento_cv = null, unidade,
         valor, parcelas, validade, enviarAoCliente = true,
         // Vindos do fluxo comum do Ato: o valor JA passou pelo desconto da
         // comissao embutida, e guardamos o original para a tela mostrar os dois.
@@ -99,6 +100,7 @@ export async function emitir(dados) {
         idpessoa_cv: titular.idpessoa_cv || null,
         titular_nome: titular.nome || null,
         empreendimento: empreendimento || null,
+        idempreendimento_cv: Number(idempreendimento_cv) || null,
         unidade: unidade || null,
         pv: settings?.pv_principal || null,
         valor,

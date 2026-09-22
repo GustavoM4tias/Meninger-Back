@@ -133,6 +133,9 @@ export async function emitirParcela(parcelaId, opts = {}) {
         idreserva, status: 'processing', tipo: 'parcela', parcela_id: parcela.id,
         idpessoa_cv: titular?.idpessoa_cv || null, titular_nome: titular?.nome || null,
         empreendimento: unidade?.empreendimento || null,
+        // Chave do empreendimento (o nome acima e so o rotulo da epoca): da
+        // reserva ao vivo ou, na falta, do plano.
+        idempreendimento_cv: Number(unidade?.idempreendimento_cv) || Number(plano.idempreendimento_cv) || null,
         valor: cond.valor, valor_original: Number(parcela.valor), vencimento: cond.vencimento,
     });
     const warnings = [];

@@ -345,8 +345,16 @@ async function executeQueryEnterprises(args, user) {
   }
 
   if (args.nome) {
-    whereClauses.push(`ce.nome ILIKE :nome`);
-    replacements.nome = `%${args.nome}%`;
+    // Primeiro o resolvedor (nome atual, antigo ou gravado nas reservas) → id;
+    // o ILIKE no nome do catálogo fica só para quando nada resolveu.
+    const { cv_ids } = await resolverLista(args.nome);
+    if (cv_ids.length) {
+      whereClauses.push(`ce.idempreendimento IN (:nomeCvIds)`);
+      replacements.nomeCvIds = cv_ids;
+    } else {
+      whereClauses.push(`ce.nome ILIKE :nome`);
+      replacements.nome = `%${args.nome}%`;
+    }
   }
   if (args.situacao_comercial) {
     whereClauses.push(`ce.situacao_comercial_nome ILIKE :sit_comercial`);
@@ -723,7 +731,20 @@ async function executeQueryPrecadastros(args, user) {
 
   addIlikeCsv(whereClauses, replacements, 'situacao_nome',          `p.situacao_nome`,                       args.situacao_nome);
   addIlikeCsv(whereClauses, replacements, 'intencao_compra',        `p.intencao_compra`,                     args.intencao_compra);
-  addIlikeCsv(whereClauses, replacements, 'empreendimento',         `p.empreendimento->>'nome'`,             args.empreendimento);
+  // Empreendimento por ID (`cv_precadastros.idempreendimento`): o nome vira id
+  // no resolvedor (nome atual, antigo ou gravado nas reservas). O ILIKE no
+  // nome gravado fica só para quando nada resolveu.
+  let empPreResolvido = null;
+  if (args.empreendimento) {
+    empPreResolvido = await resolverLista(args.empreendimento);
+    const { cv_ids } = empPreResolvido;
+    if (cv_ids.length) {
+      whereClauses.push(`p.idempreendimento IN (:empCvIds)`);
+      replacements.empCvIds = cv_ids;
+    } else {
+      addIlikeCsv(whereClauses, replacements, 'empreendimento', `p.empreendimento->>'nome'`, args.empreendimento);
+    }
+  }
   // Imobiliária: nome (sem depender de acento) ou id do CV — o mesmo par que
   // query_leads e query_reservas aceitam, para o recorte por parceira casar nas
   // três etapas do funil.
@@ -808,6 +829,8 @@ async function executeQueryPrecadastros(args, user) {
     data_inicio: hasIdFilter ? null : start,
     data_fim:    hasIdFilter ? null : end,
     empreendimento:         args.empreendimento         || null,
+    // ids resolvidos: o botão "Abrir Dashboard" do chat filtra a tela por id.
+    empreendimento_ids:     empPreResolvido?.cv_ids?.length ? empPreResolvido.cv_ids : null,
     empresa_correspondente: args.empresa_correspondente || null,
     correspondente:         args.correspondente         || null,
     imobiliaria:            args.imobiliaria            || null,

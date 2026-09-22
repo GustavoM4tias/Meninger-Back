@@ -9,6 +9,7 @@ export default (sequelize, DataTypes) => {
         idpessoa_cv: { type: DataTypes.INTEGER, allowNull: true },
         titular_nome: { type: DataTypes.STRING, allowNull: true },
         empreendimento: { type: DataTypes.STRING, allowNull: true },
+        idempreendimento_cv: { type: DataTypes.INTEGER, allowNull: true }, // id do empreendimento no CV: a chave; o nome acima é o rótulo da época
         cnpj_empresa: { type: DataTypes.STRING, allowNull: true },
 
         // ── Dados do boleto ────────────────────────────────────────────────────

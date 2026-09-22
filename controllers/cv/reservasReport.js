@@ -4,6 +4,10 @@ import dayjs from 'dayjs';
 import { RESERVA_CANCELADA_SQL, deveExcluirCanceladas } from '../../services/OfficeAI/ComercialTools.js';
 import db from '../../models/sequelize/index.js';
 import { getScope, isErpAllowed } from '../../services/permissions/accessScopeService.js';
+// Empreendimento é o id do CV (`reservas.idempreendimento_cv`); o nome gravado
+// é o rótulo da época. Filtro e escopo andam por id, a linha sai com o nome
+// ATUAL do catálogo (services/org/enterpriseNames.js).
+import { cvIdsDeFiltro, aplicarNomeAtual, facetasEmpreendimento } from '../../services/org/enterpriseNames.js';
 // A regra do triângulo (venda travada para o ERP) mora em um lugar só, para a
 // tela e o aviso nunca discordarem - ver lib/alertaEnvioErp.js.
 import {
@@ -74,6 +78,95 @@ function addIlikeCsv(whereClauses, replacements, paramName, column, rawVal) {
 }
 
 /**
+ * Filtro de empreendimento da tela. Chega como CSV de ids (padrão novo) ou de
+ * nomes (link antigo / Eme); nome vira id pelo resolver. Só o termo que não
+ * resolveu cai no ILIKE sobre o nome gravado - é o resíduo ainda sem id.
+ */
+async function addEmpreendimentoFiltro(whereClauses, replacements, rawVal) {
+    if (!rawVal) return;
+    const { ids, nomes_sem_id } = await cvIdsDeFiltro(rawVal);
+    const parts = [];
+    if (ids.length) {
+        parts.push(`r.idempreendimento_cv IN (:empIds)`);
+        replacements.empIds = ids;
+    }
+    if (nomes_sem_id.length) {
+        const sub = [];
+        addIlikeCsv(sub, replacements, 'empreendimento', 'r.empreendimento', nomes_sem_id.join(','));
+        parts.push(...sub);
+    }
+    // Pediu algo que não existe em lugar nenhum: nada, em vez de tudo.
+    whereClauses.push(parts.length ? `(${parts.join(' OR ')})` : `FALSE`);
+}
+
+/**
+ * Recorte de escopo (accessScopeService) em SQL sobre `reservas r`.
+ * Devolve null para admin (sem cláusula) e `FALSE` para escopo vazio
+ * (fail-closed). O id do CV na coluna é a chave (antes se lia do JSON da
+ * unidade); o id do ERP no JSON segue como estava. O casamento por NOME
+ * (resolvido via `enterprises`) só vale para a linha que AINDA não tem
+ * `idempreendimento_cv` - um id gravado fora do escopo não volta pela porta
+ * do nome, e o nome gravado pode ser o antigo.
+ */
+function montarEscopoSql(scope, replacements) {
+    if (scope.all) return null;
+    const scopeCvIds  = scope.cvIds  || [];
+    const scopeErpIds = scope.erpIds || [];
+    if (!scopeCvIds.length && !scopeErpIds.length) return 'FALSE';
+
+    const porId = [];
+    const semId = [];
+    const nameConds = [];
+    if (scopeCvIds.length) {
+        porId.push(`r.idempreendimento_cv IN (:scopeCvIds)`);
+        nameConds.push(`ec.cv_id IN (:scopeCvIds)`);
+        replacements.scopeCvIds = scopeCvIds;
+    }
+    if (scopeErpIds.length) {
+        porId.push(`NULLIF(regexp_replace(COALESCE(r.unidade_json->>'idempreendimento_int',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeErpIds)`);
+        nameConds.push(`ec.erp_cost_center_id IN (:scopeErpIds)`);
+        replacements.scopeErpIds = scopeErpIds;
+    }
+    semId.push(`
+        EXISTS (
+            SELECT 1 FROM enterprises ec
+            WHERE ec.active = true
+              AND (${nameConds.join(' OR ')})
+              AND COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),'')) IS NOT NULL
+              AND unaccent(upper(regexp_replace(COALESCE(ec.name,''), '[^A-Z0-9]+',' ','g'))) =
+                  unaccent(upper(regexp_replace(
+                    COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
+                    '[^A-Z0-9]+',' ','g')))
+        )`);
+    const parts = [...porId, `(r.idempreendimento_cv IS NULL AND (${semId.join(' OR ')}))`];
+    return `(${parts.join(' OR ')})`;
+}
+
+/**
+ * GET /api/cv/reservas/report/facets
+ * Empreendimentos presentes nas reservas dentro do escopo do usuário: uma
+ * entrada por id, com o nome ATUAL, ordenadas por id. Resíduo sem id (linha
+ * antiga que o backfill não casou) entra no fim com o nome gravado e id null.
+ */
+export const listReservasReportFacets = async (req, res) => {
+    try {
+        const replacements = {};
+        const escopo = montarEscopoSql(await getScope(req.user), replacements);
+        const rows = escopo === 'FALSE' ? [] : await db.sequelize.query(`
+            SELECT r.idempreendimento_cv,
+                   COALESCE(NULLIF(trim(r.empreendimento),''), NULLIF(trim(r.unidade_json->>'empreendimento'),'')) AS empreendimento
+              FROM reservas r
+             WHERE ${escopo || 'TRUE'}
+             GROUP BY 1, 2
+        `, { replacements, type: db.Sequelize.QueryTypes.SELECT });
+        return res.json({ empreendimentos: await facetasEmpreendimento(rows) });
+    } catch (e) {
+        console.error('Erro listReservasReportFacets:', e);
+        return res.status(500).json({ error: 'Erro ao listar empreendimentos das reservas' });
+    }
+};
+
+/**
  * GET /api/cv/reservas/report
  * Filtros: data_inicio, data_fim (sobre data_reserva), empreendimento, situacao,
  *   status_repasse, imobiliaria, corretor, empresa_correspondente, tipovenda,
@@ -124,7 +217,8 @@ export const listReservasReport = async (req, res) => {
             replacements.nome = `%${nome}%`;
         }
 
-        addIlikeCsv(whereClauses, replacements, 'empreendimento', 'r.empreendimento', empreendimento);
+        // Por id do CV (nome só como resíduo, ver addEmpreendimentoFiltro).
+        await addEmpreendimentoFiltro(whereClauses, replacements, empreendimento);
         addIlikeCsv(whereClauses, replacements, 'etapa',          'r.etapa',          etapa);
         addIlikeCsv(whereClauses, replacements, 'bloco',          'r.bloco',          bloco);
         addIlikeCsv(whereClauses, replacements, 'unidade',        'r.unidade',        unidade);
@@ -192,55 +286,20 @@ export const listReservasReport = async (req, res) => {
 
         // ── Filtro por escopo de acesso do usuário (accessScopeService) ──────
         // Admin vê tudo; user vê apenas reservas cujo empreendimento está no
-        // seu escopo. A reserva pode trazer o identificador como
-        // idempreendimento_int (Sienge ERP), idempreendimento_cv (CRM CV) ou
-        // apenas o nome — tentamos os três (nome resolvido via enterprises).
-        const scope = await getScope(req.user);
-        if (!scope.all) {
-            const scopeCvIds  = scope.cvIds  || [];
-            const scopeErpIds = scope.erpIds || [];
-            if (!scopeCvIds.length && !scopeErpIds.length) {
-                // fail-closed: escopo vazio → resultado vazio
-                return res.json({
-                    count: 0,
-                    periodo: { data_inicio: replacements.start, data_fim: replacements.end },
-                    cancelados_excluidos: excluirCanceladas,
-                    took_ms: 0,
-                    results: [],
-                });
-            }
-            const scopeParts = [];
-            const nameConds  = [];
-            if (scopeErpIds.length) {
-                // 1) idempreendimento_int = Sienge ERP id
-                scopeParts.push(`NULLIF(regexp_replace(COALESCE(r.unidade_json->>'idempreendimento_int',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeErpIds)`);
-                nameConds.push(`ec.erp_cost_center_id IN (:scopeErpIds)`);
-                replacements.scopeErpIds = scopeErpIds;
-            }
-            if (scopeCvIds.length) {
-                // 2) idempreendimento_int = CRM id (integração direta)
-                scopeParts.push(`NULLIF(regexp_replace(COALESCE(r.unidade_json->>'idempreendimento_int',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeCvIds)`);
-                // 3) idempreendimento_cv = CRM id explícito
-                scopeParts.push(`NULLIF(regexp_replace(COALESCE(r.unidade_json->>'idempreendimento_cv',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeCvIds)`);
-                nameConds.push(`ec.cv_id IN (:scopeCvIds)`);
-                replacements.scopeCvIds = scopeCvIds;
-            }
-            // 4) fallback por nome do empreendimento (enterprises segue
-            //    como resolvedor de nomes; o escopo continua sendo por id)
-            scopeParts.push(`
-                EXISTS (
-                    SELECT 1 FROM enterprises ec
-                    WHERE ec.active = true
-                      AND (${nameConds.join(' OR ')})
-                      AND COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),'')) IS NOT NULL
-                      AND unaccent(upper(regexp_replace(COALESCE(ec.name,''), '[^A-Z0-9]+',' ','g'))) =
-                          unaccent(upper(regexp_replace(
-                            COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
-                            '[^A-Z0-9]+',' ','g')))
-                )
-            `);
-            whereClauses.push(`(${scopeParts.join(' OR ')})`);
+        // seu escopo, pelo id do CV na coluna `idempreendimento_cv`. O id do
+        // ERP e o nome só valem para a linha que ainda não tem id (montarEscopoSql).
+        const escopoSql = montarEscopoSql(await getScope(req.user), replacements);
+        if (escopoSql === 'FALSE') {
+            // fail-closed: escopo vazio → resultado vazio
+            return res.json({
+                count: 0,
+                periodo: { data_inicio: replacements.start, data_fim: replacements.end },
+                cancelados_excluidos: excluirCanceladas,
+                took_ms: 0,
+                results: [],
+            });
         }
+        if (escopoSql) whereClauses.push(escopoSql);
 
         // A listagem nao traz os blocos que so o detalhe usa (condicoes,
         // contratos, unidade_json, ultima_mensagem): o modal busca a reserva
@@ -251,6 +310,7 @@ export const listReservasReport = async (req, res) => {
           SELECT
             r.idreserva,
             r.documento,
+            r.idempreendimento_cv,
             r.empreendimento, r.etapa, r.bloco, r.unidade,
             r.status_reserva, r.idsituacao_repasse, r.data_status_repasse,
             ${REPASSE_SQL} AS status_repasse,
@@ -306,6 +366,8 @@ ${sql}`, {
             type: db.Sequelize.QueryTypes.SELECT,
         });
         const took = Date.now() - t0;
+        // Nome de hoje, pelo id; o gravado na época fica em `empreendimento_gravado`.
+        await aplicarNomeAtual(rows);
 
         return res.json({
             count: rows.length,
@@ -330,7 +392,8 @@ export const getReservaReport = async (req, res) => {
         if (!row) return res.status(404).json({ error: 'Reserva não encontrada' });
 
         // ── Visibilidade: não-admin só vê se o empreendimento da reserva
-        //    está no seu escopo. Ids direto; nome resolvido via enterprises.
+        //    está no seu escopo. O id do CV na coluna decide; id do ERP e nome
+        //    (resolvido via enterprises) só quando a linha ainda não tem id.
         const scope = await getScope(req.user);
         if (!scope.all) {
             const scopeCvIds  = scope.cvIds  || [];
@@ -339,13 +402,14 @@ export const getReservaReport = async (req, res) => {
             // fail-closed: escopo vazio → nada visível
             if (scopeCvIds.length || scopeErpIds.length) {
                 const rawInt = String(row.unidade_json?.idempreendimento_int ?? '').replace(/[^0-9]/g, '');
-                const rawCv  = String(row.unidade_json?.idempreendimento_cv  ?? '').replace(/[^0-9]/g, '');
+                const rawCv  = String(row.idempreendimento_cv ?? row.unidade_json?.idempreendimento_cv ?? '').replace(/[^0-9]/g, '');
                 const intNum = rawInt ? Number(rawInt) : null;
                 const cvNum  = rawCv  ? Number(rawCv)  : null;
-                ok = (intNum != null && (isErpAllowed(scope, intNum) || scopeCvIds.includes(intNum)))
-                  || (cvNum  != null && scopeCvIds.includes(cvNum));
+                ok = (cvNum != null && scopeCvIds.includes(cvNum))
+                  || (intNum != null && isErpAllowed(scope, intNum));
 
-                if (!ok) {
+                // Nome só decide quando a linha ainda não tem o id do CV.
+                if (!ok && cvNum == null) {
                     // fallback por nome do empreendimento (enterprises
                     // segue como resolvedor de nomes; escopo continua por id)
                     const nomeEmp = (row.unidade_json?.empreendimento || row.empreendimento || '').trim();
@@ -376,7 +440,9 @@ export const getReservaReport = async (req, res) => {
             if (!ok) return res.status(403).json({ error: 'Reserva fora do seu escopo.' });
         }
 
-        return res.json(row);
+        // Nome de hoje, pelo id; o gravado fica em `empreendimento_gravado`.
+        const [json] = await aplicarNomeAtual([row.toJSON()]);
+        return res.json(json);
     } catch (e) {
         console.error('Erro getReservaReport:', e);
         return res.status(500).json({ error: 'Erro ao buscar reserva' });

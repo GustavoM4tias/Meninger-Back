@@ -10,6 +10,10 @@ import {
 } from '../../lib/cvEtapaLookup.js';
 // Recorte por empreendimento do usuário (a tela deixou de ser admin-only).
 import { scopeCvIdsFor, applyCvScope } from '../../services/reservaCancel/reservaCancelScope.js';
+// Empreendimento é identificado pelo id do CV; o nome é só o rótulo de hoje
+// (services/org/enterpriseNames.js). Facetas e filtro andam por id, e a linha
+// sai com o nome ATUAL do catálogo (o gravado fica em `empreendimento_gravado`).
+import { facetasEmpreendimento, cvIdsDeFiltro, aplicarNomeAtual } from '../../services/org/enterpriseNames.js';
 
 // ── Webhook (público — chamado pelo CV no cancelamento da reserva) ────────────
 
@@ -143,7 +147,7 @@ function statusArrFromQuery(query) {
     return arr.length ? arr : null;
 }
 
-function buildHistoryWhere(query, { skipStatus = false, scopeCvIds = null } = {}) {
+async function buildHistoryWhere(query, { skipStatus = false, scopeCvIds = null } = {}) {
     const { Op } = db.Sequelize;
     const { idreserva, empreendimento, dateFrom, dateTo, q } = query;
     const where = {};
@@ -159,8 +163,19 @@ function buildHistoryWhere(query, { skipStatus = false, scopeCvIds = null } = {}
     }
     if (idreserva) where.idreserva = Number(idreserva);
     if (empreendimento) {
-        const arr = String(empreendimento).split(',').map(s => s.trim()).filter(Boolean);
-        if (arr.length) where.empreendimento = { [Op.in]: arr };
+        // O filtro chega como CSV de ids (padrão novo) ou de nomes (link
+        // antigo). Nome vira id pelo resolver; só o que não resolveu cai no
+        // casamento por nome gravado, que é o resíduo ainda sem id.
+        const { ids, nomes_sem_id } = await cvIdsDeFiltro(empreendimento);
+        const ou = [];
+        if (ids.length) ou.push({ idempreendimento_cv: { [Op.in]: ids } });
+        if (nomes_sem_id.length) ou.push({ empreendimento: { [Op.in]: nomes_sem_id } });
+        // Vai em AND separado para não sobrescrever o recorte de escopo, que já
+        // ocupa `where.idempreendimento_cv`. Pediu algo que não existe: nada.
+        const filtro = ou.length === 0
+            ? { idempreendimento_cv: { [Op.in]: [-1] } }
+            : (ou.length === 1 ? ou[0] : { [Op.or]: ou });
+        where[Op.and] = [...(where[Op.and] || []), filtro];
     }
     if (dateFrom) where.created_at = { ...(where.created_at || {}), [Op.gte]: new Date(`${dateFrom}T00:00:00`) };
     if (dateTo)   where.created_at = { ...(where.created_at || {}), [Op.lte]: new Date(`${dateTo}T23:59:59`) };
@@ -226,7 +241,7 @@ function sortRows(list, { key, dir }) {
  */
 async function casosAtuaisPorReserva(query, scopeCvIds = null) {
     const { Op } = db.Sequelize;
-    const scopeWhere = buildHistoryWhere(query, { skipStatus: true, scopeCvIds });
+    const scopeWhere = await buildHistoryWhere(query, { skipStatus: true, scopeCvIds });
     const cvIds = await resolveCvEtapaFilter({ cvSituacao: query.cvSituacao, cvRepasse: query.cvRepasse });
     applyCvIdsToWhere(scopeWhere, cvIds, Op);
 
@@ -283,7 +298,7 @@ export async function listHistory(req, res) {
             rows = todos.slice(offset, offset + limit);
         } else {
             const { Op } = db.Sequelize;
-            const where = buildHistoryWhere(req.query, { scopeCvIds });
+            const where = await buildHistoryWhere(req.query, { scopeCvIds });
             const cvIds = await resolveCvEtapaFilter({ cvSituacao: req.query.cvSituacao, cvRepasse: req.query.cvRepasse });
             applyCvIdsToWhere(where, cvIds, Op);
             const order = sort.key === 'id'
@@ -297,6 +312,8 @@ export async function listHistory(req, res) {
         // Etapa ATUAL da reserva e do repasse no CV (lida do banco local).
         const etapas = await fetchCvEtapaByReserva(rows.map(r => r.idreserva));
         for (const r of rows) Object.assign(r, etapas.get(Number(r.idreserva)) || {});
+        // Nome de hoje, pelo id; o gravado na época fica em `empreendimento_gravado`.
+        await aplicarNomeAtual(rows);
 
         return res.json({ rows, total, page, limit, grouped: agrupar });
     } catch (err) {
@@ -319,7 +336,7 @@ export async function getHistoryStats(req, res) {
         }
 
         const { Op } = db.Sequelize;
-        const where = buildHistoryWhere({ ...req.query, status: '' }, { scopeCvIds });
+        const where = await buildHistoryWhere({ ...req.query, status: '' }, { scopeCvIds });
         const cvIds = await resolveCvEtapaFilter({ cvSituacao: req.query.cvSituacao, cvRepasse: req.query.cvRepasse });
         applyCvIdsToWhere(where, cvIds, Op);
         const rows = await db.ReservaCancelHistory.findAll({
@@ -339,14 +356,20 @@ export async function getHistoryFacets(req, res) {
     try {
         // Mesmo recorte da listagem: as facetas só oferecem o que o usuário pode
         // ver (senão o filtro mostraria empreendimento sem nenhuma linha).
-        const facetWhere = { empreendimento: { [db.Sequelize.Op.ne]: null } };
-        applyCvScope(facetWhere, await scopeCvIdsFor(req.user), db.Sequelize.Op);
+        const { Op } = db.Sequelize;
+        const facetWhere = {
+            [Op.or]: [{ idempreendimento_cv: { [Op.ne]: null } }, { empreendimento: { [Op.ne]: null } }],
+        };
+        applyCvScope(facetWhere, await scopeCvIdsFor(req.user), Op);
         const rows = await db.ReservaCancelHistory.findAll({
-            attributes: [[db.Sequelize.fn('DISTINCT', db.Sequelize.col('empreendimento')), 'empreendimento']],
+            attributes: ['idempreendimento_cv', 'empreendimento'],
             where: facetWhere,
+            group: ['idempreendimento_cv', 'empreendimento'],
             raw: true,
         });
-        const empreendimentos = rows.map(r => r.empreendimento).filter(Boolean).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+        // Uma entrada por ID com o nome ATUAL, ordenada por id; o resíduo sem id
+        // (backfill não casou) entra no fim com o nome gravado e id null.
+        const empreendimentos = await facetasEmpreendimento(rows);
         // Etapas do CV (reserva e repasse) presentes no histórico, com as cores
         // do workflow - alimenta os filtros de etapa.
         const { cvSituacoes, cvRepasses } = await fetchCvEtapaFacets('reserva_cancel_history');
@@ -361,7 +384,8 @@ export async function getHistoryItem(req, res) {
         const item = await db.ReservaCancelHistory.findByPk(req.params.id);
         if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
         const etapas = await fetchCvEtapaByReserva([item.idreserva]);
-        return res.json({ ...item.toJSON(), ...(etapas.get(Number(item.idreserva)) || {}) });
+        const [row] = await aplicarNomeAtual([{ ...item.toJSON(), ...(etapas.get(Number(item.idreserva)) || {}) }]);
+        return res.json(row);
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
@@ -379,7 +403,9 @@ export async function listHistoryEvents(req, res) {
         });
         const etapas = await fetchCvEtapaByReserva([item.idreserva]);
         const cv = etapas.get(Number(item.idreserva)) || {};
-        return res.json({ history: { ...item.toJSON(), ...cv }, events, attempts, cv });
+        const [history] = await aplicarNomeAtual([{ ...item.toJSON(), ...cv }]);
+        const tentativas = await aplicarNomeAtual(attempts.map(a => a.toJSON()));
+        return res.json({ history, events, attempts: tentativas, cv });
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }

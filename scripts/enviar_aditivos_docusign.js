@@ -20,8 +20,25 @@ import crypto from 'crypto';
 import db from '../models/sequelize/index.js';
 import Docusign from '../services/comercial/DocusignService.js';
 import { basePublica, linkPublico } from '../controllers/aditivos/assinaturaPublicaController.js';
+import { resolverEmpreendimentos } from '../services/org/enterpriseResolver.js';
 
 const { AditivoSignature } = db;
+
+// Empreendimento é o id do CV; o nome do manifesto é só o rótulo da época.
+// Herda da reserva (reservas.idempreendimento_cv) e, se a reserva não estiver
+// no espelho, resolve o nome pelo catálogo. Best-effort: sem id, grava null.
+async function idEmpreendimentoDe(item) {
+    try {
+        const r = await db.Reserva.findByPk(item.idreserva, { attributes: ['idreserva', 'idempreendimento_cv', 'unidade_json'], raw: true });
+        const daReserva = Number(r?.idempreendimento_cv ?? r?.unidade_json?.idempreendimento_cv);
+        if (Number.isFinite(daReserva) && daReserva > 0) return daReserva;
+        const { cv_ids } = await resolverEmpreendimentos(item.empreendimento, { ativos: false });
+        return cv_ids.length === 1 ? cv_ids[0] : null;
+    } catch (e) {
+        console.warn(`  (id do empreendimento não resolvido para ${item.unidade}: ${e.message})`);
+        return null;
+    }
+}
 
 const PASTA = process.env.ADITIVOS_DIR
     || 'C:/Users/Menin/OneDrive - MENIN/Documentos/Github/Meninger/Aditivos/Parque das Flores/_docusign';
@@ -107,6 +124,8 @@ async function main() {
         console.log(`${ENVIAR ? '>' : '·'} ${item.unidade}: ${signers.length} assinante(s) — ${signers.map((s) => s.name).join(', ')}`);
         if (!ENVIAR) { criados++; continue; }
 
+        const idempreendimento_cv = await idEmpreendimentoDe(item);
+
         try {
             const { envelopeId } = await Docusign.createEnvelope({
                 subject: item.assunto,
@@ -122,6 +141,7 @@ async function main() {
             const linha = await AditivoSignature.create({
                 reserva_id: item.idreserva,
                 empreendimento: item.empreendimento,
+                idempreendimento_cv,
                 unidade: item.unidade,
                 arquivo: item.arquivo,
                 envelope_id: envelopeId,
@@ -146,8 +166,8 @@ async function main() {
             erros++;
             console.error(`! ${item.unidade}: ${e.message}`);
             await AditivoSignature.create({
-                reserva_id: item.idreserva, empreendimento: item.empreendimento, unidade: item.unidade,
-                arquivo: item.arquivo, status: 'error', subject: item.assunto, error: e.message,
+                reserva_id: item.idreserva, empreendimento: item.empreendimento, idempreendimento_cv,
+                unidade: item.unidade, arquivo: item.arquivo, status: 'error', subject: item.assunto, error: e.message,
             }).catch(() => {});
         }
     }

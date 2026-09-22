@@ -435,7 +435,8 @@ export async function listCvEnterprises(req, res) {
                 ['cidade', 'city'],
                 ['situacao_comercial_nome', 'status'],
             ],
-            order: [['nome', 'ASC']],
+            // Empreendimento é chave por id; a lista sai na ordem do id (22/09).
+            order: [['idempreendimento', 'ASC']],
             raw: true,
         });
         return res.json({ ok: true, results: rows });

@@ -5,6 +5,9 @@ import { visibleCvIds, visibleCities } from '../permissions/accessScopeService.j
 import { describeScreenCatalog, resolveScreenRoute } from '../../lib/screenCatalog.js';
 import { resolverPeriodo, PERIODO_PARAM_GEMINI } from './periodo.js';
 import { sqlEntreCv, sqlDiaCv, sqlMesCv } from '../../lib/cvDate.js';
+// Empreendimento é o id do CV; o nome que o modelo manda vira id aqui (nome
+// atual, antigo ou gravado nas reservas). ILIKE só quando nada resolveu.
+import { resolverLista } from '../org/enterpriseResolver.js';
 
 /**
  * Monta uma linha resumo (subtitle) com período + cidade + filtros principais.
@@ -182,7 +185,27 @@ async function executeQueryLeads(args, user) {
   }
 
   // ── Filtro de empreendimento (com validação dentro do escopo) ──────────────
-  if (args.empreendimento) {
+  // Por ID dentro do JSON do lead: o nome do usuário vira id no resolvedor e
+  // o escopo recorta os ids (args nunca ampliam). O caminho por nome abaixo
+  // fica só para quando nada resolveu.
+  const empResolvido = args.empreendimento ? await resolverLista(args.empreendimento) : null;
+  if (empResolvido?.cv_ids?.length) {
+    const ids = cvIds ? empResolvido.cv_ids.filter(id => cvIds.includes(id)) : empResolvido.cv_ids;
+    if (!ids.length) {
+      return {
+        error: `Empreendimento "${args.empreendimento}" fora do escopo de acesso do usuário.`,
+      };
+    }
+    whereClauses.push(`EXISTS (
+      SELECT 1 FROM jsonb_array_elements(l.empreendimento) AS e_id
+      WHERE COALESCE(
+              NULLIF(e_id->>'id','')::int,
+              NULLIF(e_id->>'idempreendimento','')::int,
+              NULLIF(e_id->>'id_empreendimento','')::int
+            ) IN (:empCvIds)
+    )`);
+    replacements.empCvIds = ids;
+  } else if (args.empreendimento) {
     const checkSql = cvIds
       ? `SELECT COUNT(*) AS cnt FROM enterprises WHERE cv_id IS NOT NULL AND active = true AND name ILIKE :name AND cv_id IN (:scopeCvIds)`
       : `SELECT COUNT(*) AS cnt FROM enterprises WHERE cv_id IS NOT NULL AND active = true AND name ILIKE :name`;
@@ -326,6 +349,8 @@ async function executeQueryLeads(args, user) {
     data_inicio:    hasIdFilter ? null : start,
     data_fim:       hasIdFilter ? null : end,
     empreendimento: args.empreendimento || null,
+    // ids resolvidos: o botão "Abrir Dashboard" do chat filtra a tela por id.
+    empreendimento_ids: empResolvido?.cv_ids?.length ? empResolvido.cv_ids : null,
     imobiliaria:    args.imobiliaria    || null,
     corretor:       args.corretor       || null,
     midia:          args.midia          || null,
@@ -570,12 +595,19 @@ async function executeQueryEvents(args, user) {
     replacements.tag = `%${args.tag}%`;
   }
   if (args.empreendimento) {
-    // Acento-insensível ("inga" acha "Ingá") e cobre o LEGADO: eventos antigos
-    // não têm enterprise_name persistido — o vínculo aparecia só no título.
-    whereClauses.push(`(
-      unaccent(COALESCE(ev.enterprise_name, '')) ILIKE unaccent(:emp)
-      OR unaccent(ev.title) ILIKE unaccent(:emp)
-    )`);
+    // Por ID (`ev.enterprise_id`) quando o termo resolve no catálogo (nome
+    // atual ou antigo). O título continua entrando para cobrir o LEGADO:
+    // eventos antigos não têm vínculo persistido, o empreendimento aparecia
+    // só no título. Nome gravado só quando nada resolveu.
+    const { cv_ids } = await resolverLista(args.empreendimento);
+    const parts = [`unaccent(ev.title) ILIKE unaccent(:emp)`];
+    if (cv_ids.length) {
+      parts.unshift(`ev.enterprise_id IN (:empCvIds)`);
+      replacements.empCvIds = cv_ids;
+    } else {
+      parts.unshift(`unaccent(COALESCE(ev.enterprise_name, '')) ILIKE unaccent(:emp)`);
+    }
+    whereClauses.push(`(${parts.join(' OR ')})`);
     replacements.emp = `%${args.empreendimento}%`;
   }
   // Escopo trancado — o evento precisa estar em uma das cidades do escopo.

@@ -19,12 +19,18 @@ import {
     applyCvIdsToWhere,
     fetchCvEtapaFacets,
 } from '../../lib/cvEtapaLookup.js';
-// Recorte por empreendimento do usuário (a tela deixou de ser admin-only).
+// Recorte por empreendimento do usuário (a tela deixou de ser admin-only) e
+// filtro de empreendimento escolhido na tela - os dois por ID do CV
+// (idempreendimento_cv), com fallback por nome só para linha sem id.
 import {
-    allowedEnterpriseNames,
+    allowedEnterpriseScope,
     applyEnterpriseScope,
     enterpriseScopeSql,
+    enterpriseFilterFrom,
+    applyEnterpriseFilter,
 } from '../../services/boleto/boletoScope.js';
+// O nome exibido é SEMPRE o mais recente do catálogo, nunca o gravado na linha.
+import { aplicarNomeAtual, facetasEmpreendimento, nomeAtual } from '../../services/org/enterpriseNames.js';
 import { JANELA_PADRAO } from '../../lib/boletoJanela.js';
 
 // ── Webhook ───────────────────────────────────────────────────────────────────
@@ -294,7 +300,7 @@ export async function listHistory(req, res) {
             status,             // CSV: 'success,error' ou string única
             paymentStatus,      // CSV: 'paid,pending'
             idreserva,
-            empreendimento,     // texto exato (igual ao nome guardado em boleto_history)
+            empreendimento,     // CSV de ids do CV (novo) ou de nomes (legado, resolvido para id)
             dateFrom,           // ISO YYYY-MM-DD — filtra a data escolhida em dateField >=
             dateTo,             // ISO YYYY-MM-DD — filtra a data escolhida em dateField <= 23:59
             dateField,          // 'created_at' (emissão, default) | 'paid_at' (pagamento)
@@ -347,12 +353,10 @@ export async function listHistory(req, res) {
             else if (arr.length > 1) where.payment_status = { [Op.in]: arr };
         }
         if (idreserva) where.idreserva = Number(idreserva);
-        if (empreendimento) {
-            // Multi via CSV (ex.: empreendimento=A,B,C)
-            const arr = String(empreendimento).split(',').map(s => s.trim()).filter(Boolean);
-            if (arr.length === 1) where.empreendimento = arr[0];
-            else if (arr.length > 1) where.empreendimento = { [Op.in]: arr };
-        }
+        // Empreendimento: CSV de ids (ou nomes legados, resolvidos para id);
+        // `idempreendimento_cv IN (ids)`, com `empreendimento IN (nomes)` só
+        // para o termo que não resolveu.
+        applyEnterpriseFilter(where, await enterpriseFilterFrom(empreendimento), Op);
         // Faixa de datas na coluna escolhida (created_at = emissão | paid_at = pagamento)
         if (dateFrom || dateTo) {
             where[dateCol] = {};
@@ -378,7 +382,7 @@ export async function listHistory(req, res) {
         applyCvIdsToWhere(where, cvIds, Op);
         // Recorte de dados: admin vê tudo; os demais, só os empreendimentos
         // liberados nas Alçadas (sem grant = nenhuma linha).
-        applyEnterpriseScope(where, await allowedEnterpriseNames(req.user), Op);
+        applyEnterpriseScope(where, await allowedEnterpriseScope(req.user), Op);
 
         const offset = (Number(page) - 1) * Number(limit);
 
@@ -501,6 +505,7 @@ export async function listHistory(req, res) {
             // repasse, com cores do workflow) e o idrepasse pro link direto.
             const etapas = await fetchCvEtapaByReserva(rows.map(r => r.idreserva));
             for (const r of rows) Object.assign(r, etapas.get(Number(r.idreserva)) || {});
+            await aplicarNomeAtual(rows);
 
             return res.json({ total, page: Number(page), limit: Number(limit), rows, grouped: true });
         }
@@ -511,8 +516,9 @@ export async function listHistory(req, res) {
             limit: Number(limit),
             offset,
         });
+        const linhas = await aplicarNomeAtual(rows.map(r => r.toJSON()));
 
-        return res.json({ total: count, page: Number(page), limit: Number(limit), rows });
+        return res.json({ total: count, page: Number(page), limit: Number(limit), rows: linhas });
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
@@ -544,11 +550,8 @@ export async function getHistoryStats(req, res) {
             else if (arr.length > 1) where.payment_status = { [Op.in]: arr };
         }
         if (idreserva) where.idreserva = Number(idreserva);
-        if (empreendimento) {
-            const arr = String(empreendimento).split(',').map(s => s.trim()).filter(Boolean);
-            if (arr.length === 1) where.empreendimento = arr[0];
-            else if (arr.length > 1) where.empreendimento = { [Op.in]: arr };
-        }
+        // Mesmo filtro de empreendimento da listagem (ids do CV; nome só legado).
+        applyEnterpriseFilter(where, await enterpriseFilterFrom(empreendimento), Op);
         if (dateFrom || dateTo) {
             where[dateCol] = {};
             if (dateFrom) where[dateCol][Op.gte] = new Date(`${dateFrom}T00:00:00`);
@@ -571,7 +574,7 @@ export async function getHistoryStats(req, res) {
         applyCvIdsToWhere(where, cvIds, Op);
         // Recorte de dados: admin vê tudo; os demais, só os empreendimentos
         // liberados nas Alçadas (sem grant = nenhuma linha).
-        applyEnterpriseScope(where, await allowedEnterpriseNames(req.user), Op);
+        applyEnterpriseScope(where, await allowedEnterpriseScope(req.user), Op);
 
         // TODO bucket conta RESERVA, nunca tentativa.
         //
@@ -779,25 +782,27 @@ export async function getHistoryStats(req, res) {
 /**
  * Lista valores distintos pra alimentar selects do filtro (empreendimentos
  * únicos com pelo menos 1 boleto, e contagens por status).
+ *
+ * Empreendimentos saem como `[{ id, nome }]`: um por ID do CV, com o nome
+ * ATUAL do catálogo (não o gravado na linha) e ordenados por id. Linha sem id
+ * (resíduo do backfill) entra no fim com id null e o nome gravado.
  */
 export async function getHistoryFacets(req, res) {
     try {
         const { Sequelize } = db;
         // Mesmo recorte da listagem: as facetas só oferecem o que o usuário
         // pode ver (senão o filtro mostraria empreendimento sem nenhuma linha).
-        const scope = enterpriseScopeSql(await allowedEnterpriseNames(req.user));
+        const scope = enterpriseScopeSql(await allowedEnterpriseScope(req.user));
         const scoped = (sql) => db.sequelize.query(sql, {
             replacements: scope.replacements, type: Sequelize.QueryTypes.SELECT,
         });
 
-        const empreendimentos = await scoped(`
-            SELECT empreendimento AS name, COUNT(*)::int AS qty
+        const empreendimentos = await facetasEmpreendimento(await scoped(`
+            SELECT DISTINCT idempreendimento_cv, empreendimento
               FROM boleto_history
-             WHERE empreendimento IS NOT NULL AND empreendimento <> ''
+             WHERE (idempreendimento_cv IS NOT NULL OR (empreendimento IS NOT NULL AND empreendimento <> ''))
                    ${scope.sql}
-          GROUP BY empreendimento
-          ORDER BY empreendimento ASC
-        `);
+        `));
         const statusCounts = await scoped(`
             SELECT status, COUNT(*)::int AS qty FROM boleto_history
              WHERE 1 = 1 ${scope.sql}
@@ -830,7 +835,8 @@ export async function getHistoryItem(req, res) {
     try {
         const item = await db.BoletoHistory.findByPk(req.params.id);
         if (!item) return res.status(404).json({ error: 'Registro não encontrado.' });
-        return res.json(item);
+        const [linha] = await aplicarNomeAtual([item.toJSON()]);
+        return res.json(linha);
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
@@ -1034,7 +1040,8 @@ export async function resendBoletoToTitular(req, res) {
         const envio = await sendBoletoToTitular({
             titular,
             dadosBoleto: {
-                empreendimento: item.empreendimento,
+                // Nome atual do catálogo: o cliente recebe o nome de hoje, não o da época.
+                empreendimento: (await nomeAtual(item.idempreendimento_cv)) || item.empreendimento,
                 unidade: '',
                 valor: item.valor,
                 vencimento: item.vencimento,

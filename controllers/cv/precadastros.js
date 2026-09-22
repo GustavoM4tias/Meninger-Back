@@ -3,8 +3,80 @@ import dayjs from 'dayjs';
 import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { getScope, isErpAllowed } from '../../services/permissions/accessScopeService.js';
+// Empreendimento é o id do CV (`cv_precadastros.idempreendimento`); o nome no
+// JSON é o rótulo da época. Filtro por id, rótulo pelo nome ATUAL do catálogo.
+import { cvIdsDeFiltro, mapaNomeAtual, facetasEmpreendimento } from '../../services/org/enterpriseNames.js';
 
 const { CvPrecadastro, CvEnterprise, CvCorrespondent } = db;
+
+/**
+ * Troca `empreendimento.nome` pelo nome atual (pelo `idempreendimento`) e expõe
+ * `idempreendimento_cv` no topo da linha, que é a chave que o front usa. O
+ * nome gravado fica em `empreendimento.nome_gravado` para auditoria.
+ */
+async function aplicarNomeAtualPrecadastros(rows) {
+    if (!rows?.length) return rows;
+    const mapa = await mapaNomeAtual(rows.map(r => r.idempreendimento));
+    for (const r of rows) {
+        const id = Number(r.idempreendimento);
+        r.idempreendimento_cv = Number.isFinite(id) && id > 0 ? id : null;
+        const atual = mapa.get(id);
+        if (!atual) continue;
+        if (r.empreendimento && typeof r.empreendimento === 'object') {
+            if (r.empreendimento.nome !== atual) {
+                if (r.empreendimento.nome_gravado === undefined) r.empreendimento.nome_gravado = r.empreendimento.nome ?? null;
+                r.empreendimento.nome = atual;
+            }
+        } else {
+            r.empreendimento = { nome: atual };
+        }
+    }
+    return rows;
+}
+
+/**
+ * Recorte de escopo (accessScopeService) em SQL sobre `cv_precadastros p`:
+ * null para admin, `FALSE` para escopo vazio (fail-closed).
+ */
+function montarEscopoSql(scope, replacements) {
+    if (scope.all) return null;
+    const scopeCvIds  = scope.cvIds  || [];
+    const scopeErpIds = scope.erpIds || [];
+    if (!scopeCvIds.length && !scopeErpIds.length) return 'FALSE';
+    const scopeParts = [];
+    if (scopeCvIds.length) {
+        scopeParts.push(`p.idempreendimento IN (:scopeCvIds)`);
+        replacements.scopeCvIds = scopeCvIds;
+    }
+    if (scopeErpIds.length) {
+        scopeParts.push(`NULLIF(regexp_replace(COALESCE(p.empreendimento->>'idempreendimento_int',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeErpIds)`);
+        replacements.scopeErpIds = scopeErpIds;
+    }
+    return `(${scopeParts.join(' OR ')})`;
+}
+
+/**
+ * GET /api/cv/precadastros/facets
+ * Empreendimentos presentes nos pré-cadastros dentro do escopo do usuário:
+ * uma entrada por id, com o nome ATUAL, ordenadas por id.
+ */
+export const listPrecadastrosFacets = async (req, res) => {
+    try {
+        const replacements = {};
+        const escopo = montarEscopoSql(await getScope(req.user), replacements);
+        const rows = escopo === 'FALSE' ? [] : await db.sequelize.query(`
+            SELECT p.idempreendimento AS idempreendimento_cv,
+                   NULLIF(trim(p.empreendimento->>'nome'), '') AS empreendimento
+              FROM cv_precadastros p
+             WHERE ${escopo || 'TRUE'}
+             GROUP BY 1, 2
+        `, { replacements, type: db.Sequelize.QueryTypes.SELECT });
+        return res.json({ empreendimentos: await facetasEmpreendimento(rows) });
+    } catch (e) {
+        console.error('Erro listPrecadastrosFacets:', e);
+        return res.status(500).json({ error: 'Erro ao listar empreendimentos dos pré-cadastros' });
+    }
+};
 
 const toIntOrNull = (v) => {
     if (v === undefined || v === null || v === '') return null;
@@ -68,8 +140,21 @@ export const listPrecadastros = async (req, res) => {
 
         addIlikeCsv(whereClauses, replacements, 'situacao_nome', 'p.situacao_nome', situacao_nome);
         addIlikeCsv(whereClauses, replacements, 'intencao_compra', 'p.intencao_compra', intencao_compra);
-        addIlikeCsv(whereClauses, replacements, 'empreendimento',
-            `p.empreendimento->>'nome'`, empreendimento);
+        // Empreendimento por id do CV. O filtro chega como CSV de ids (padrão
+        // novo) ou de nomes (link antigo); nome vira id pelo resolver e só o
+        // termo que não resolveu cai no ILIKE sobre o nome gravado.
+        if (empreendimento) {
+            const { ids, nomes_sem_id } = await cvIdsDeFiltro(empreendimento);
+            const parts = [];
+            if (ids.length) {
+                parts.push(`p.idempreendimento IN (:empIds)`);
+                replacements.empIds = ids;
+            }
+            if (nomes_sem_id.length) {
+                addIlikeCsv(parts, replacements, 'empreendimento', `p.empreendimento->>'nome'`, nomes_sem_id.join(','));
+            }
+            whereClauses.push(parts.length ? `(${parts.join(' OR ')})` : 'FALSE');
+        }
         addIlikeCsv(whereClauses, replacements, 'imobiliaria',
             `p.imobiliaria->>'nome'`, imobiliaria);
         addIlikeCsv(whereClauses, replacements, 'corretor',
@@ -122,30 +207,17 @@ export const listPrecadastros = async (req, res) => {
         // ── Filtro por escopo de acesso do usuário (accessScopeService) ──────
         // Admin vê tudo; user vê apenas pré-cadastros cujo empreendimento está
         // no seu escopo (id CV, com fallback pelo id ERP do empreendimento).
-        const scope = await getScope(req.user);
-        if (!scope.all) {
-            const scopeCvIds  = scope.cvIds  || [];
-            const scopeErpIds = scope.erpIds || [];
-            if (!scopeCvIds.length && !scopeErpIds.length) {
-                // fail-closed: escopo vazio → resultado vazio
-                return res.json({
-                    count: 0,
-                    periodo: { data_inicio: replacements.start, data_fim: replacements.end },
-                    took_ms: 0,
-                    results: [],
-                });
-            }
-            const scopeParts = [];
-            if (scopeCvIds.length) {
-                scopeParts.push(`p.idempreendimento IN (:scopeCvIds)`);
-                replacements.scopeCvIds = scopeCvIds;
-            }
-            if (scopeErpIds.length) {
-                scopeParts.push(`NULLIF(regexp_replace(COALESCE(p.empreendimento->>'idempreendimento_int',''), '[^0-9]', '', 'g'), '')::bigint IN (:scopeErpIds)`);
-                replacements.scopeErpIds = scopeErpIds;
-            }
-            whereClauses.push(`(${scopeParts.join(' OR ')})`);
+        const escopoSql = montarEscopoSql(await getScope(req.user), replacements);
+        if (escopoSql === 'FALSE') {
+            // fail-closed: escopo vazio → resultado vazio
+            return res.json({
+                count: 0,
+                periodo: { data_inicio: replacements.start, data_fim: replacements.end },
+                took_ms: 0,
+                results: [],
+            });
         }
+        if (escopoSql) whereClauses.push(escopoSql);
 
         const sql = `
           SELECT
@@ -193,6 +265,8 @@ export const listPrecadastros = async (req, res) => {
             type: db.Sequelize.QueryTypes.SELECT,
         });
         const took = Date.now() - t0;
+        // `empreendimento.nome` de hoje, pelo id; o gravado fica em `nome_gravado`.
+        await aplicarNomeAtualPrecadastros(rows);
 
         return res.json({
             count: rows.length,
@@ -227,7 +301,8 @@ export const getPrecadastro = async (req, res) => {
             }
         }
 
-        return res.json(row);
+        const [json] = await aplicarNomeAtualPrecadastros([row.toJSON()]);
+        return res.json(json);
     } catch (e) {
         console.error('Erro getPrecadastro:', e);
         return res.status(500).json({ error: 'Erro ao buscar pré-cadastro' });

@@ -27,6 +27,9 @@ import { computeModuleCostSummary, aggregateCostSummaries } from '../comercial/c
 import { visibleCvIds } from '../permissions/accessScopeService.js';
 import { loadManagerMap, managerOf, managersOfCondition } from '../comercial/conditionManagers.js';
 import { datasetBlock, abrirTela } from './blocks.js';
+// Empreendimento é o id do CV; o termo vira id no resolvedor (nome atual ou
+// antigo). O LIKE por nome/cidade fica como complemento.
+import { resolverEmpreendimentos } from '../org/enterpriseResolver.js';
 
 const {
     EnterpriseCondition,
@@ -207,12 +210,24 @@ async function findSeries(term, scope) {
         params.ids = scope.ids;
     }
 
-    // Casa por nome OU cidade do empreendimento (ex.: "votuporanga" acha as fichas da cidade).
+    // Por ID quando o termo resolve no catálogo (nome atual ou antigo: "Park
+    // Alameda" acha o "Park Alameda - Sarandi"). O LIKE por nome OU cidade
+    // continua (ex.: "votuporanga" acha as fichas da cidade).
+    let porId = '';
+    try {
+        const { cv_ids } = await resolverEmpreendimentos(term, { ativos: false });
+        if (cv_ids.length) {
+            porId = `ec.idempreendimento IN (:termIds) OR `;
+            params.termIds = cv_ids;
+        }
+    } catch (e) {
+        console.warn('[ConditionTools] resolvedor de empreendimento falhou:', e?.message);
+    }
     const cvRows = await db.sequelize.query(
         `SELECT DISTINCT ec.idempreendimento, ce.nome
            FROM enterprise_conditions ec
            JOIN cv_enterprises ce ON ce.idempreendimento = ec.idempreendimento
-          WHERE (unaccent(lower(ce.nome)) LIKE unaccent(:t)
+          WHERE (${porId}unaccent(lower(ce.nome)) LIKE unaccent(:t)
                  OR unaccent(lower(COALESCE(ce.cidade, ''))) LIKE unaccent(:t)) ${cvVisibility}
           ORDER BY ce.nome
           LIMIT 15`,

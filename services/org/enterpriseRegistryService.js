@@ -121,6 +121,18 @@ async function upsertEnterprise(cand, { soft = false } = {}) {
     };
 
     if (row) {
+      // O CV renomeou: o nome anterior vai para `name_history` ANTES de ser
+      // sobrescrito. É esse histórico que faz "Park Alameda" continuar achando
+      // o empreendimento depois de virar "Park Alameda - Sarandi" - e que o
+      // backfill de `idempreendimento_cv` usa para casar linhas antigas.
+      const antigo = String(row.name || '').trim();
+      const novo = String(values.name || '').trim();
+      if (antigo && novo && antigo.toLowerCase() !== novo.toLowerCase()) {
+        const hist = Array.isArray(row.name_history) ? row.name_history : [];
+        if (!hist.some(n => String(n).trim().toLowerCase() === antigo.toLowerCase())) {
+          values.name_history = [...hist, antigo];
+        }
+      }
       await row.update(values, { transaction: t });
       return { created: false };
     }

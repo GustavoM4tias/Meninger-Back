@@ -10,6 +10,8 @@
 import db from '../../models/sequelize/index.js';
 import { visibleCities } from '../permissions/accessScopeService.js';
 import { onlyDigits } from './realEstateRegistrationService.js';
+// Empreendimento é o id do CV; nome é o rótulo de hoje (enterpriseNames.js).
+import { cvIdsDeFiltro } from '../org/enterpriseNames.js';
 
 // Normalização compatível com a lógica de cidade usada no resto do sistema:
 // sem acento, maiúsculas, não-alfanumérico vira espaço.
@@ -79,11 +81,14 @@ async function carregarBase() {
 
     const [imobs, links, ents, regs, assoc] = await Promise.all([
         db.CvImobiliaria.findAll({ order: [['nome', 'ASC']], raw: true }),
-        // Vínculo por atividade: reservas ligam imobiliária (cnpj) a empreendimento (nome).
+        // Vínculo por atividade: reservas ligam imobiliária (cnpj) a
+        // empreendimento pelo ID do CV (a chave). O nome gravado é o rótulo da
+        // época e só entra para a reserva que ainda não tem id.
         db.sequelize.query(`
-            SELECT DISTINCT (imobiliaria->>'cnpj') AS cnpj, empreendimento
+            SELECT DISTINCT (imobiliaria->>'cnpj') AS cnpj, idempreendimento_cv, empreendimento
             FROM reservas
-            WHERE COALESCE(imobiliaria->>'cnpj', '') <> '' AND COALESCE(empreendimento, '') <> ''
+            WHERE COALESCE(imobiliaria->>'cnpj', '') <> ''
+              AND (idempreendimento_cv IS NOT NULL OR COALESCE(empreendimento, '') <> '')
         `, { type: db.Sequelize.QueryTypes.SELECT }),
         db.sequelize.query(
             'SELECT idempreendimento, nome, cidade, foto_listagem, foto, logo, situacao_obra_nome FROM cv_enterprises',
@@ -106,7 +111,7 @@ async function carregarBase() {
  * @param {object} opts.user           req.user ({ id, role, city })
  * @param {string} [opts.q]            busca livre (nome/razão/cnpj/gerente)
  * @param {string} [opts.cidade]       filtro por cidade
- * @param {string} [opts.empreendimento] filtro por id ou nome de empreendimento
+ * @param {string} [opts.empreendimento] filtro por id (CSV) ou nome de empreendimento
  * @returns {Promise<{ total:number, last_sync:Date|null, imobiliarias:Array }>}
  */
 export async function buildImobiliariasReport({ user, q = '', cidade = '', empreendimento = '' }) {
@@ -114,7 +119,10 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
 
     const { imobs, links, ents, regs, assoc } = await carregarBase();
 
+    // `cv_enterprises.nome` é o nome ATUAL (espelho do CV): o card já sai com
+    // o rótulo de hoje para toda linha que tem id.
     const entById = new Map(ents.map(e => [Number(e.idempreendimento), e]));
+    // Só para o vínculo antigo sem id (fallback por nome gravado).
     const entByName = new Map(ents.map(e => [normCity(e.nome).trim(), e]));
 
     // Card básico do empreendimento no relatório (foto p/ o front).
@@ -149,7 +157,9 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
     }
 
     for (const l of links) {
-        const hit = entByName.get(normCity(l.empreendimento).trim());
+        const id = Number(l.idempreendimento_cv);
+        const hit = (Number.isFinite(id) && id > 0 ? entById.get(id) : null)
+            || (l.idempreendimento_cv == null ? entByName.get(normCity(l.empreendimento).trim()) : null);
         addLink(l.cnpj, entCard(hit, l.empreendimento));
     }
     // Cadastros do Office: origem (interno x link) + gerente de fallback.
@@ -166,6 +176,16 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
     const qFilter = String(q || '').trim();
     const cidadeFilter = String(cidade || '').trim();
     const entFilter = String(empreendimento || '').trim();
+    // Filtro de empreendimento por id: CSV de ids (padrão novo) ou nome (link
+    // antigo / Eme), que o resolver converte em id (nome atual ou antigo). Só
+    // o termo que não resolveu cai no casamento pelo nome do card.
+    const entFilterIds = new Set();
+    const entFilterNomes = [];
+    if (entFilter) {
+        const { ids, nomes_sem_id } = await cvIdsDeFiltro(entFilter);
+        ids.forEach(i => entFilterIds.add(i));
+        entFilterNomes.push(...nomes_sem_id);
+    }
     // Escopo de acesso (accessScopeService): null = admin (sem filtro);
     // lista de cidades dos empreendimentos liberados. Fail-closed: vazio → nada.
     const scopeCities = await visibleCities(user);
@@ -194,7 +214,8 @@ export async function buildImobiliariasReport({ user, q = '', cidade = '', empre
 
         if (cidadeFilter && !cidades.some(c => cityMatches(c, cidadeFilter))) continue;
         if (entFilter && !vinculos.some(v =>
-            String(v.id) === entFilter || cityMatches(v.nome, entFilter))) continue;
+            (v.id != null && entFilterIds.has(Number(v.id)))
+            || entFilterNomes.some(n => cityMatches(v.nome, n)))) continue;
         if (qFilter) {
             const alvo = normCity(`${i.nome} ${i.razao_social} ${i.cnpj} ${i.gerente_nome || ''}`);
             if (!alvo.includes(normCity(qFilter))) continue;

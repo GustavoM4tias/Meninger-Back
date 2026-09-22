@@ -8,15 +8,15 @@ import db from '../models/sequelize/index.js';
 import { fetchRepasses, fetchRepasseWorkflow } from '../controllers/cv/repasses.js'
 import { fetchReservas, fetchReservaPagamentos, fetchReservaWorkflow } from '../controllers/cv/reservas.js'
 import { fetchEmpreendimentos, fetchBuildings, fetchBuildingById } from '../controllers/cv/empreendimentos.js'
-import { fetchFilas, getLeads } from '../controllers/cv/leads.js'
+import { fetchFilas, getLeads, getLeadsFacets } from '../controllers/cv/leads.js'
 import { fetchBanners } from '../controllers/cv/banner.js'
 
 import bulkDataController from '../services/bulkData/cv/bulkDataController.js';
 import RepassesSyncController from '../controllers/cv/repassesSyncController.js';
 import ReservasSyncController from '../controllers/cv/reservasSyncController.js';
 import PrecadastrosSyncController from '../controllers/cv/precadastrosSyncController.js';
-import { listPrecadastros, getPrecadastro } from '../controllers/cv/precadastros.js';
-import { listReservasReport, getReservaReport } from '../controllers/cv/reservasReport.js';
+import { listPrecadastros, getPrecadastro, listPrecadastrosFacets } from '../controllers/cv/precadastros.js';
+import { listReservasReport, getReservaReport, listReservasReportFacets } from '../controllers/cv/reservasReport.js';
 
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb, fetchBuildingUnitsSummaryFromDb } from '../controllers/cv/empreendimentosDb.js';
 import { listPriceTablesByEnterprise, getPriceTableById } from '../controllers/cv/priceTablesDb.js';
@@ -74,6 +74,8 @@ router.post('/leads/sync/delta', authenticate, requireAdmin, cvLeads.deltaSync.b
 router.post('/leads/sync/cancel-reasons', authenticate, requireAdmin, cvLeads.cancelReasonSync.bind(cvLeads));
 
 router.get('/leads', authenticate, requireRoutePermission(['/marketing/leads']), getLeads);
+// Facetas de empreendimento (por id do CV, nome atual) para o filtro da tela.
+router.get('/leads/facets', authenticate, requireRoutePermission(['/marketing/leads']), getLeadsFacets);
 
 // NOVO: Repasses (backup + histórico)
 router.post('/repasses/sync/full', authenticate, requireAdmin, cvRepasses.fullSync.bind(cvRepasses));
@@ -93,10 +95,14 @@ router.post('/empreendimentos/sync/delta', authenticate, requireAdmin, cvEnterpr
 router.post('/precadastros/sync/full', authenticate, requireAdmin, cvPrecadastros.fullSync.bind(cvPrecadastros));
 router.post('/precadastros/sync/delta', authenticate, requireAdmin, cvPrecadastros.deltaSync.bind(cvPrecadastros));
 router.get('/precadastros', authenticate, requireRoutePermission(['/comercial/relatorios/precadastros']), listPrecadastros);
+// Facetas ANTES de `/:id` (senão "facets" cairia como id de pré-cadastro).
+router.get('/precadastros/facets', authenticate, requireRoutePermission(['/comercial/relatorios/precadastros']), listPrecadastrosFacets);
 router.get('/precadastros/:id', authenticate, requireRoutePermission(['/comercial/relatorios/precadastros']), getPrecadastro);
 
 // Reservas — relatório (lê do banco, não confundir com `GET /reservas` que é read-through na API CV)
 router.get('/reservas/report', authenticate, requireRoutePermission(['/comercial/relatorios/reservas']), listReservasReport);
+// Facetas ANTES de `/:id` (senão "facets" cairia como idreserva).
+router.get('/reservas/report/facets', authenticate, requireRoutePermission(['/comercial/relatorios/reservas']), listReservasReportFacets);
 router.get('/reservas/report/:id', authenticate, requireRoutePermission(['/comercial/relatorios/reservas']), getReservaReport);
 
 router.get('/empreendimentos', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), fetchBuildingsFromDb);

@@ -35,6 +35,15 @@ function snapshotsEqual(a, b) {
     );
 }
 
+async function idEmpreendimentoDaReserva(idreserva) {
+    try {
+        const r = await db.Reserva.findByPk(idreserva, { attributes: ['idempreendimento_cv', 'unidade_json'], raw: true });
+        return Number(r?.idempreendimento_cv) || Number(r?.unidade_json?.idempreendimento_cv) || null;
+    } catch {
+        return null;
+    }
+}
+
 function mapRawToCols(raw) {
     return {
         idrepasse: raw.ID,
@@ -272,6 +281,13 @@ export default class RepasseSyncService {
         const currentSnap = buildCurrentSnapshot(raw);
 
         const existing = await Repasse.findByPk(mapped.idrepasse);
+
+        // A chave do empreendimento. O payload do CV traz `idempreendimento`;
+        // quando não vier (payload antigo/parcial), herda da reserva. Sem nada,
+        // fica null e o backfill do boot (ensureEnterpriseIdColumns) completa.
+        mapped.idempreendimento_cv = Number(raw.idempreendimento)
+            || existing?.idempreendimento_cv
+            || (mapped.idreserva ? await idEmpreendimentoDaReserva(mapped.idreserva) : null);
 
         if (!existing) {
             await Repasse.create({

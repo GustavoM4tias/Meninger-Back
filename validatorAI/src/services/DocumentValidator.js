@@ -76,8 +76,31 @@ function slicePages(fullText, first = 5, last = 5) {
   return [...head, ...tail].join('\n\n--- Página ---\n\n');
 }
 
+/**
+ * Id do empreendimento no CV para o histórico: a chave é o id, o nome que sai
+ * do PDF é só o rótulo da época (e pode ser o antigo). Aceita o id quando vem
+ * no payload; senão resolve o nome pelo catálogo do Office (nome atual, antigo
+ * ou gravado nas reservas). Best-effort: em dúvida, null.
+ */
+async function resolverIdEmpreendimento(nome, idInformado) {
+  const informado = Number(idInformado);
+  if (Number.isFinite(informado) && informado > 0) return informado;
+  if (!nome || nome === 'Desconhecido') return null;
+  try {
+    const { resolverEmpreendimentos } = await import('../../../services/org/enterpriseResolver.js');
+    const { cv_ids } = await resolverEmpreendimentos(nome, { ativos: false });
+    return cv_ids.length === 1 ? cv_ids[0] : null;
+  } catch (err) {
+    console.warn('[validatorAI] não consegui resolver o id do empreendimento:', err.message);
+    return null;
+  }
+}
+
 export class DocumentValidator {
-  static async validatePair(contratoFile, confissaoFile) {
+  /**
+   * @param {object} [hints]  `idempreendimento_cv` quando quem chamou já sabe o id
+   */
+  static async validatePair(contratoFile, confissaoFile, hints = {}) {
     const [bufC, bufF] = await Promise.all([
       fs.readFile(contratoFile.path),
       fs.readFile(confissaoFile.path)
@@ -124,6 +147,7 @@ export class DocumentValidator {
       // salva no histórico antes de retornar
       await ValidationHistory.create({
         empreendimento,
+        idempreendimento_cv: await resolverIdEmpreendimento(empreendimento, hints?.idempreendimento_cv),
         cliente,
         status,
         mensagens,
