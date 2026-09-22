@@ -2002,7 +2002,7 @@ Após realizar o cancelamento no CV CRM, envie um e-mail com as informações:
         body: `# Pagamento de Comissão - Empreendimentos MCMV
 
 > **Procedimento Operacional - Departamento Comercial**
-> **Código:** COM01 · **Revisão:** 03
+> **Código:** COM01 · **Revisão:** 04
 
 **Objetivo:** padronizar a emissão da nota fiscal e do boleto e o pagamento da comissão dos prestadores nos empreendimentos do **Programa Minha Casa Minha Vida (MCMV)**.
 
@@ -2011,6 +2011,8 @@ Após realizar o cancelamento no CV CRM, envie um e-mail com as informações:
 - **Condição para emissão:** a nota fiscal deve ser emitida somente após a confirmação da **assinatura do Contrato Caixa (CEF)** e a validação pelo departamento de **Contas a Receber** da Menin Engenharia.
 - O contrato deve estar na etapa **"Faturado Sienge MCMV"** ou posterior, no ERP **Construtor de Vendas (CV CRM)**, na aba de **Repasse**.
 - A nota fiscal deve ser emitida somente após a **autorização do Gestor** responsável pelo empreendimento.
+- **Uma nota fiscal para cada comissão** (vigência: a partir de **01/10/2026**). É proibido agrupar duas ou mais comissões na mesma nota - cada venda/unidade tem a sua própria nota.
+  > Nota que agrupa mais de uma comissão gera divergência na conferência do Contas a Receber e atrasa o pagamento de todas as comissões nela incluídas.
 - **Período para emissão:** do **dia 01 ao dia 20** de cada mês.
   > Exemplo: se a assinatura do Contrato Caixa (CEF) ocorrer no dia 21, a emissão da nota fiscal deve ser feita no dia 01 do mês seguinte.
 - A nota fiscal deve conter:
@@ -2037,6 +2039,7 @@ Após realizar o cancelamento no CV CRM, envie um e-mail com as informações:
 ## 5. Envio da documentação
 
 - O Gestor responsável deverá enviar a **nota fiscal e o boleto** para o e-mail **isabela.scorsato@menin.com.br** até o **dia 20** de cada mês.
+- Como cada comissão tem a sua própria nota, envie **um boleto para cada nota fiscal**, na mesma razão social.
 
 ---
 
