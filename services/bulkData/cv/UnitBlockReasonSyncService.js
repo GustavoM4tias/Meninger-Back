@@ -102,10 +102,16 @@ async function lerEmpreendimento(idempreendimento) {
     let paginas = 0;
 
     while (url && paginas < MAX_PAGINAS) {
-        const html = await getHtml(url);
+        // O `ok` diz ao cliente HTTP se veio conteúdo: a casca do painel é
+        // idêntica logada e deslogada, então é este teste que faz a sessão
+        // expirada virar "refaz login e tenta de novo" em vez de erro de parse.
+        const html = await getHtml(url, {}, (h) => /motivo\s*bloqueio/i.test(h));
         const pagina = lerPagina(html);
         if (!pagina) {
-            throw new Error(`a página ${paginas + 1} do empreendimento ${idempreendimento} não é a listagem de unidades (layout mudou?)`);
+            const semSessao = /name="txt_usuario"/i.test(html) && !/unidades\[/i.test(html);
+            throw new Error(semSessao
+                ? `o painel do CV não abriu a listagem do empreendimento ${idempreendimento}: a sessão não foi aceita (confira a credencial em CV CRM > Configurações)`
+                : `a página ${paginas + 1} do empreendimento ${idempreendimento} não é a listagem de unidades (layout mudou?)`);
         }
         todas = todas.concat(pagina.linhas);
         paginas++;
