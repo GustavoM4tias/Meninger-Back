@@ -38,7 +38,11 @@ export default (sequelize, DataTypes) => {
 
     EnterpriseUnitAdimplencia.associate = (db) => {
         EnterpriseUnitAdimplencia.belongsTo(db.CvEnterprise, { foreignKey: 'idempreendimento' });
-        EnterpriseUnitAdimplencia.belongsTo(db.CvEnterpriseUnit, { foreignKey: 'idunidade' });
+        // Sem FK no banco: o sync de empreendimentos APAGA e recria as unidades a
+        // cada rodada, e a FK recusava o DELETE. De 15/09 a 23/09 isso congelou
+        // as unidades de todo empreendimento com adimplência cadastrada. O
+        // idunidade é estável no CV, então o vínculo sobrevive à recriação.
+        EnterpriseUnitAdimplencia.belongsTo(db.CvEnterpriseUnit, { foreignKey: 'idunidade', constraints: false });
     };
 
     return EnterpriseUnitAdimplencia;
