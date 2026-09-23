@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import db from '../../models/sequelize/index.js';
 import { summarizeUnitsFromDb } from '../../services/cv/enterpriseUnitsSummaryService.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
-import { contagemPorEmpreendimento, setEstoqueComercial } from '../../services/cv/unitStockService.js';
+import { setEstoqueComercial } from '../../services/cv/unitStockService.js';
 const {
   CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
   CvEnterpriseMaterial, CvEnterprisePlan
@@ -78,33 +78,23 @@ export const fetchBuildingsFromDb = async (req, res) => {
 
     // Bloqueadas por estrategia comercial seguem a venda: o card mostra o
     // mesmo "a venda" do espelho e da ficha (services/cv/unitStockService.js).
-    const idsLista = rows.map((r) => Number(r.idempreendimento));
-    const seguradas = await contagemPorEmpreendimento(idsLista).catch(() => new Map());
-
-    // Livres contadas nas unidades do Office: o `unidades_disponiveis` do CV vem
-    // nulo em parte dos empreendimentos (Adhara, Soul) e o card mostraria "-".
-    const livres = new Map();
-    if (idsLista.length) {
-      const [lin] = await db.sequelize.query(
-        `SELECT s.idempreendimento, COUNT(*) AS qtd
-           FROM cv_enterprise_units u
-           JOIN cv_enterprise_blocks b ON b.idbloco = u.idbloco
-           JOIN cv_enterprise_stages s ON s.idetapa = b.idetapa
-          WHERE s.idempreendimento IN (:ids)
-            AND COALESCE(u.situacao_mapa_disponibilidade, 1) NOT IN (2, 3, 4, 5)
-            AND u.data_bloqueio IS NULL
-          GROUP BY s.idempreendimento`,
-        { replacements: { ids: idsLista } },
-      ).catch(() => [[]]);
-      for (const l of lin) livres.set(Number(l.idempreendimento), Number(l.qtd) || 0);
-    }
+    // Mesmo resumo que a Projecao, a ficha e o espelho usam
+    // (services/cv/enterpriseUnitsSummaryService.js): livres e seguradas saem da
+    // mesma classificacao. O `unidades_disponiveis` do CV vem nulo em parte dos
+    // empreendimentos (Adhara, Soul) e o card mostraria "-".
+    const resumos = new Map(await Promise.all(rows.map(async (r) => [
+      Number(r.idempreendimento),
+      await summarizeUnitsFromDb(r.idempreendimento).catch(() => null),
+    ])));
 
     // ----- MONTAR PAYLOAD (leve) -----
     const payload = rows.map(r => {
       const raw = r.raw || {};
-      const segurado = seguradas.get(Number(r.idempreendimento)) || 0;
-      const livre = livres.has(Number(r.idempreendimento))
-        ? livres.get(Number(r.idempreendimento))
+      const resumo = resumos.get(Number(r.idempreendimento));
+      const temUnidades = resumo?.totalUnits > 0;
+      const segurado = temUnidades ? resumo.commercialStockUnits : 0;
+      const livre = temUnidades
+        ? resumo.availableUnits
         : (r.unidades_disponiveis != null ? Number(r.unidades_disponiveis) : null);
 
       return {
