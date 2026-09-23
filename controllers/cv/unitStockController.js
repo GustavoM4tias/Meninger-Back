@@ -19,6 +19,7 @@ import {
     contagemPorEmpreendimento, temLeitura, mapaMotivos,
 } from '../../services/cv/unitStockService.js';
 import UnitBlockReasonSyncService from '../../services/bulkData/cv/UnitBlockReasonSyncService.js';
+import { diagnosticar } from '../../lib/cvPanelWeb.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 
 const { CvEnterprise } = db;
@@ -139,6 +140,15 @@ export const syncMotivos = async (req, res) => {
     }
 };
 
+/** Onde o login do painel parou, passo a passo. A falha do CV muda com o tempo. */
+export const getDiagnostico = async (req, res) => {
+    try {
+        return res.json(await diagnosticar());
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+};
+
 export default {
-    getEstoqueBloqueado, putRegraMotivo, putExcecaoUnidade, getMotivosDoEmpreendimento, syncMotivos,
+    getEstoqueBloqueado, putRegraMotivo, putExcecaoUnidade, getMotivosDoEmpreendimento, syncMotivos, getDiagnostico,
 };
