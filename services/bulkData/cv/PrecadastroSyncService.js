@@ -16,6 +16,8 @@
 import crypto from 'crypto';
 import db from '../../../models/sequelize/index.js';
 import apiCv from '../../../lib/apiCv.js';
+import { registrar } from '../../cv/cvIntegrationLog.js';
+import { planejarRemocao } from '../../../lib/cvRepasseEspelho.js';
 
 const { CvPrecadastro } = db;
 
@@ -241,6 +243,7 @@ export default class PrecadastroSyncService {
     async _run({ forceRefresh }) {
         const t0 = Date.now();
         let total = 0, created = 0, updated = 0, unchanged = 0, failed = 0;
+        const vistos = [];
 
         // 1) Pré-carrega hashes existentes (1 query)
         const allRows = await CvPrecadastro.findAll({
@@ -267,6 +270,7 @@ export default class PrecadastroSyncService {
                 const id = raw?.idprecadastro;
                 if (!id) { failed++; continue; }
                 total++;
+                vistos.push(id);
 
                 const newHash = sha(raw);
                 const ex = existing.get(id);
@@ -339,8 +343,49 @@ export default class PrecadastroSyncService {
             await processPage(pagina, Array.isArray(page?.precadastros) ? page.precadastros : []);
         }
 
-        const stats = { total, created, updated, unchanged, failed, took_s: ((Date.now() - t0) / 1000).toFixed(1) };
-        console.log(`🎉 [Precadastros] concluído em ${stats.took_s}s — total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | falhas=${stats.failed}`);
+        // Pasta apagada no CV some da listagem, mas o upsert nunca apagava o
+        // espelho: a 14121 (Parque Norte, 05/09) seguiu contando no Office
+        // depois de excluída (CV 64, Office 65). Só remove com a varredura
+        // inteira: se o CV devolveu menos do que anunciou, nada sai.
+        const removed = total >= totalRegistros
+            ? await this.removerAusentes(vistos, { origem: forceRefresh ? 'manual' : 'cron' })
+            : 0;
+
+        const stats = { total, created, updated, unchanged, failed, removed, took_s: ((Date.now() - t0) / 1000).toFixed(1) };
+        console.log(`🎉 [Precadastros] concluído em ${stats.took_s}s — total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | removidos=${stats.removed} | falhas=${stats.failed}`);
         return stats;
+    }
+
+    /**
+     * Apaga do espelho as pastas que a varredura completa não devolveu. Mesma
+     * regra e mesmo freio dos repasses (lib/cvRepasseEspelho.js). Nunca lança:
+     * falha aqui não derruba o sync que acabou de gravar tudo.
+     */
+    async removerAusentes(vistos, { origem = 'cron' } = {}) {
+        try {
+            const locais = await CvPrecadastro.findAll({ attributes: ['idprecadastro'], raw: true });
+            const plano = planejarRemocao(locais.map(r => r.idprecadastro), vistos);
+            if (!plano.ausentes.length) return 0;
+            if (!plano.seguro) {
+                console.warn(`⚠️ [Precadastros] ${plano.ausentes.length} pasta(s) ausentes na varredura, NÃO removidas: ${plano.motivo}`);
+                await registrar({
+                    origem, funcionalidade: 'precadastros', status: 'ignorado',
+                    mensagem: `Remoção de pré-cadastros ausentes no CV suspensa: ${plano.motivo}.`,
+                    stats: { ausentes: plano.ausentes.length, amostra: plano.ausentes.slice(0, 50) },
+                });
+                return 0;
+            }
+            const n = await CvPrecadastro.destroy({ where: { idprecadastro: plano.ausentes } });
+            console.log(`🧹 [Precadastros] ${n} pasta(s) apagadas no CV removidas do espelho: ${plano.ausentes.join(', ')}`);
+            await registrar({
+                origem, funcionalidade: 'precadastros', status: 'ok',
+                mensagem: `${n} pré-cadastro(s) excluídos no CV removidos do espelho local: ${plano.ausentes.join(', ')}.`,
+                stats: { removidos: n, ids: plano.ausentes },
+            });
+            return n;
+        } catch (err) {
+            console.warn('⚠️ [Precadastros] remoção de ausentes falhou:', err?.message || err);
+            return 0;
+        }
     }
 }
