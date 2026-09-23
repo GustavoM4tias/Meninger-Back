@@ -471,6 +471,11 @@ async function initBackground() {
   // sempre, e o espelho mostraria todo estoque segurado como bloqueado.
   await ensureUnitStockSchema().catch(err =>
       console.warn('⚠️  ensureUnitStockSchema falhou:', err.message));
+  // Linha do webhook de unidades (23/09): nasce desligada, mas precisa EXISTIR
+  // para alguem poder liga-la na tela. Com o gate pulando a fase em prod ela
+  // nunca apareceria, e o teste do payload nao teria onde chegar.
+  await ensureCvWebhookSchema().catch(err =>
+      console.warn('⚠️  ensureCvWebhookSchema falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {
