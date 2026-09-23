@@ -464,6 +464,13 @@ async function initBackground() {
       console.warn('⚠️  ensureEnterpriseNameHistory falhou:', err.message));
   await ensureEnterpriseIdColumns().catch(err =>
       console.warn('⚠️  ensureEnterpriseIdColumns falhou:', err.message));
+  // Estoque comercial bloqueado (23/09): as tres tabelas nascem FORA do gate
+  // pelo mesmo motivo dos anteriores. O cron de motivos e a API de estoque
+  // sobem junto com o processo e consultam na primeira chamada - com o gate
+  // pulando a fase em prod, elas responderiam "relation does not exist" para
+  // sempre, e o espelho mostraria todo estoque segurado como bloqueado.
+  await ensureUnitStockSchema().catch(err =>
+      console.warn('⚠️  ensureUnitStockSchema falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {
