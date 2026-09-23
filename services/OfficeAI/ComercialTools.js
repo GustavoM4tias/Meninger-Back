@@ -5,6 +5,7 @@ import { QueryTypes, Op, where, fn, col } from 'sequelize';
 import fetch from 'node-fetch';
 import { buildSubtitle, LIST_HARD_CAP } from './MarketingTools.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
+import { contagemPorEmpreendimento } from '../cv/unitStockService.js';
 import { resolverPeriodo, PERIODO_PARAM_GEMINI } from './periodo.js';
 
 const MCMV_FAIXA3 = 400000;
@@ -539,6 +540,11 @@ async function executeGetEnterpriseDetail(args, user) {
     WHERE s.idempreendimento = :id
   `, { replacements: { id: ent.idempreendimento }, type: QueryTypes.SELECT });
 
+  // Bloqueada por estrategia comercial segue sendo estoque a vender: mesmo
+  // numero do espelho e da ficha (services/cv/unitStockService.js).
+  const seguradas = (await contagemPorEmpreendimento(ent.idempreendimento).catch(() => new Map()))
+    .get(Number(ent.idempreendimento)) || 0;
+
   const [etapaCount] = await db.sequelize.query(
     `SELECT COUNT(*) AS total FROM cv_enterprise_stages WHERE idempreendimento = :id`,
     { replacements: { id: ent.idempreendimento }, type: QueryTypes.SELECT }
@@ -598,9 +604,12 @@ async function executeGetEnterpriseDetail(args, user) {
     unidades: {
       total:         Number(unitSummary?.total || 0),
       disponiveis:   Number(unitSummary?.disponiveis || 0),
+      estoque_segurado: seguradas,
+      a_venda:       Number(unitSummary?.disponiveis || 0) + seguradas,
       vendidas:      Number(unitSummary?.vendidas || 0),
       reservadas:    Number(unitSummary?.reserva_inicio || 0) + Number(unitSummary?.reservas_ativas || 0),
       bloqueadas:    Number(unitSummary?.bloqueadas || 0),
+      bloqueadas_fora_de_venda: Math.max(0, Number(unitSummary?.bloqueadas || 0) - seguradas),
       etapas:        Number(etapaCount?.total || 0),
     },
     // Clima

@@ -365,6 +365,35 @@ export const listConditions = async (req, res) => {
 // ─── detalhe ─────────────────────────────────────────────────────────────────
 // Usuário comum só acessa ficha 'approved'.
 
+/**
+ * Foto de unidades capturada antes do nucleo do estoque comercial (23/09/2026)
+ * nao sabe quais bloqueadas ainda sao estoque. Completa so a unidade que a FOTO
+ * diz estar bloqueada e que ainda nao tem a marca: a situacao congelada continua
+ * sendo a da foto; o que vem do nucleo e so a leitura de "bloqueada que vende".
+ */
+async function marcarEstoqueNaFoto(modules, idempreendimento) {
+    const fotos = (modules || []).filter((m) => m?.unit_snapshot?.data?.length);
+    if (!fotos.length || !idempreendimento) return;
+
+    const motivos = await mapaMotivos(Number(idempreendimento)).catch(() => new Map());
+    if (!motivos.size) return;
+
+    for (const m of fotos) {
+        for (const b of m.unit_snapshot.data) {
+            b.unidades = (b.unidades || []).map((u) => {
+                if (u == null || 'estoque_comercial' in u) return u;
+                const bloqueada = Number(u.situacao_mapa_disponibilidade) === 4;
+                const r = motivos.get(Number(u.idunidade));
+                return {
+                    ...u,
+                    estoque_comercial: bloqueada && !!r?.conta_estoque,
+                    motivo_bloqueio: bloqueada ? (r?.motivo || null) : null,
+                };
+            });
+        }
+    }
+}
+
 export const getCondition = async (req, res) => {
     try {
         const { id } = req.params;
@@ -435,7 +464,10 @@ export const getCondition = async (req, res) => {
             order: [['idetapa', 'ASC']],
         });
 
-        return res.json({ ...condition.toJSON(), priceTables, history, stages });
+        const json = condition.toJSON();
+        await marcarEstoqueNaFoto(json.modules, condition.idempreendimento);
+
+        return res.json({ ...json, priceTables, history, stages });
     } catch (e) {
         console.error('[conditions] getCondition:', e);
         return res.status(500).json({ error: e?.message || String(e) });
@@ -1283,10 +1315,6 @@ export const getStagesForEnterprise = async (req, res) => {
         const result = stages.map(s => {
             const json = s.toJSON();
             json.total_units = (json.blocos ?? []).reduce((sum, b) => sum + (b.total_unidades ?? 0), 0);
-            json.unidades = (json.unidades || []).map((u) => {
-                const m = motivos.get(u.idunidade);
-                return { ...u, estoque_comercial: !!m?.conta_estoque, motivo_bloqueio: m?.motivo || null };
-            });
             return json;
         });
 
@@ -1299,7 +1327,7 @@ export const getStagesForEnterprise = async (req, res) => {
 
 export const getUnitsForStage = async (req, res) => {
     try {
-        const { idetapa } = req.params;
+        const { idempreendimento, idetapa } = req.params;
         const blocks = await CvEnterpriseBlock.findAll({
             where: { idetapa: Number(idetapa) },
             attributes: ['idbloco', 'nome', 'total_unidades'],
@@ -1316,7 +1344,7 @@ export const getUnitsForStage = async (req, res) => {
         // estoque a vender, e a ficha precisa pinta-la como tal. O mapa vem do
         // nucleo (services/cv/unitStockService.js); falhar aqui nao derruba a
         // ficha, so faz toda bloqueada parecer bloqueada.
-        const motivos = await mapaMotivos(null).catch(() => new Map());
+        const motivos = await mapaMotivos(Number(idempreendimento) || null).catch(() => new Map());
 
         // Fallback: se unidades não estão na tabela, usa o raw do bloco
         const result = blocks.map(b => {
@@ -1332,6 +1360,17 @@ export const getUnitsForStage = async (req, res) => {
                     valor_avaliacao: u.valor_avaliacao,
                 }));
             }
+            // A marca so vale para unidade bloqueada agora: vendida ou liberada
+            // segue a propria situacao, mesmo que a marca ainda nao tenha sido limpa.
+            json.unidades = (json.unidades || []).map((u) => {
+                const m = motivos.get(Number(u.idunidade));
+                const bloqueada = Number(u.situacao_mapa_disponibilidade) === 4;
+                return {
+                    ...u,
+                    estoque_comercial: bloqueada && !!m?.conta_estoque,
+                    motivo_bloqueio: bloqueada ? (m?.motivo || null) : null,
+                };
+            });
             return json;
         });
 

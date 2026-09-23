@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import db from '../../models/sequelize/index.js';
 import { summarizeUnitsFromDb } from '../../services/cv/enterpriseUnitsSummaryService.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
+import { contagemPorEmpreendimento, setEstoqueComercial } from '../../services/cv/unitStockService.js';
 const {
   CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
   CvEnterpriseMaterial, CvEnterprisePlan
@@ -75,9 +76,15 @@ export const fetchBuildingsFromDb = async (req, res) => {
       order: [['nome', 'ASC']]
     });
 
+    // Bloqueadas por estrategia comercial seguem a venda: o card mostra o
+    // mesmo "a venda" do espelho e da ficha (services/cv/unitStockService.js).
+    const seguradas = await contagemPorEmpreendimento(rows.map((r) => r.idempreendimento))
+      .catch(() => new Map());
+
     // ----- MONTAR PAYLOAD (leve) -----
     const payload = rows.map(r => {
       const raw = r.raw || {};
+      const segurado = seguradas.get(Number(r.idempreendimento)) || 0;
 
       return {
         idempreendimento: r.idempreendimento,
@@ -111,6 +118,8 @@ export const fetchBuildingsFromDb = async (req, res) => {
         data_entrega: r.data_entrega,
         andamento: r.andamento ? Number(r.andamento) : null,
         unidades_disponiveis: r.unidades_disponiveis,
+        estoque_segurado: segurado,
+        unidades_a_venda: r.unidades_disponiveis != null ? Number(r.unidades_disponiveis) + segurado : (segurado || null),
 
         situacao_obra: raw.situacao_obra ?? (r.situacao_obra_nome ? [{ nome: r.situacao_obra_nome }] : []),
         situacao_comercial: raw.situacao_comercial ?? (r.situacao_comercial_nome ? [{ nome: r.situacao_comercial_nome }] : []),
@@ -200,6 +209,11 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
       })
       : [];
 
+    // 4.1) Bloqueadas que seguem sendo estoque a vender (nucleo unico)
+    const estoque = await setEstoqueComercial(
+      unidades.filter((u) => Number(u.situacao_mapa_disponibilidade) === 4).map((u) => u.idunidade),
+    ).catch(() => new Set());
+
     // 5) indexações em memória (O(n)) para agrupar rápido
     const unitsByBlock = new Map();
     for (const u of unidades) {
@@ -254,6 +268,7 @@ export const fetchBuildingByIdFromDb = async (req, res) => {
           situacao: {
             situacao_mapa_disponibilidade: u.situacao_mapa_disponibilidade ?? null,
           },
+          estoque_comercial: estoque.has(Number(u.idunidade)),
           plantas: u.raw?.plantas ?? []
         })),
       });
