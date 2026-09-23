@@ -4,6 +4,7 @@ import NotificationService from '../../services/notification/NotificationService
 import { NotificationType } from '../../services/notification/notificationTypes.js';
 import { computeModuleCostSummary, aggregateCostSummaries } from '../../services/comercial/conditionCostSummary.js';
 import { loadManagerMap, managersOfCondition } from '../../services/comercial/conditionManagers.js';
+import { mapaMotivos } from '../../services/cv/unitStockService.js';
 import Docusign from '../../services/comercial/DocusignService.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 
@@ -1282,6 +1283,10 @@ export const getStagesForEnterprise = async (req, res) => {
         const result = stages.map(s => {
             const json = s.toJSON();
             json.total_units = (json.blocos ?? []).reduce((sum, b) => sum + (b.total_unidades ?? 0), 0);
+            json.unidades = (json.unidades || []).map((u) => {
+                const m = motivos.get(u.idunidade);
+                return { ...u, estoque_comercial: !!m?.conta_estoque, motivo_bloqueio: m?.motivo || null };
+            });
             return json;
         });
 
@@ -1306,6 +1311,12 @@ export const getUnitsForStage = async (req, res) => {
                 required: false,
             }],
         });
+
+        // Estoque comercial: unidade bloqueada por estrategia comercial ainda e
+        // estoque a vender, e a ficha precisa pinta-la como tal. O mapa vem do
+        // nucleo (services/cv/unitStockService.js); falhar aqui nao derruba a
+        // ficha, so faz toda bloqueada parecer bloqueada.
+        const motivos = await mapaMotivos(null).catch(() => new Map());
 
         // Fallback: se unidades não estão na tabela, usa o raw do bloco
         const result = blocks.map(b => {

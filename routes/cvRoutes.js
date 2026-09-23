@@ -21,6 +21,10 @@ import { listReservasReport, getReservaReport, listReservasReportFacets } from '
 import { fetchBuildingsFromDb, fetchBuildingByIdFromDb, fetchBuildingUnitsSummaryFromDb } from '../controllers/cv/empreendimentosDb.js';
 import { listPriceTablesByEnterprise, getPriceTableById } from '../controllers/cv/priceTablesDb.js';
 import { getMirror, saveMirrorSettings } from '../controllers/cv/mirrorDb.js';
+import {
+    getEstoqueBloqueado, putRegraMotivo, putExcecaoUnidade,
+    getMotivosDoEmpreendimento, syncMotivos,
+} from '../controllers/cv/unitStockController.js';
 import { getAdimplencia, saveAdimplencia, importAdimplencia } from '../controllers/cv/adimplenciaDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
@@ -113,6 +117,17 @@ router.get('/empreendimento/:id/tabelas', authenticate, requireRoutePermission(E
 router.get('/price-tables/:idtabela', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getPriceTableById);
 // Espelho de vendas: torres x andares x finais com preço, sol e dormitórios
 router.get('/empreendimento/:id/espelho', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getMirror);
+
+// ── Estoque comercial bloqueado ──────────────────────────────────────────────
+// Núcleo único: quais unidades estão bloqueadas no CV mas seguem sendo estoque.
+// A leitura acompanha as telas de empreendimento; mudar a regra (quais motivos
+// contam) ou abrir exceção numa unidade é a mesma alçada que edita o espelho.
+router.get('/estoque-bloqueado', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getEstoqueBloqueado);
+router.get('/empreendimento/:id/motivos-bloqueio', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getMotivosDoEmpreendimento);
+router.put('/estoque-bloqueado/regra', authenticate, configurarEspelho, putRegraMotivo);
+router.put('/estoque-bloqueado/unidade/:idunidade', authenticate, configurarEspelho, putExcecaoUnidade);
+router.post('/estoque-bloqueado/sync', authenticate, configurarEspelho, syncMotivos);
+router.post('/estoque-bloqueado/sync/:id', authenticate, configurarEspelho, syncMotivos);
 router.put('/empreendimento/:id/espelho/config', authenticate, configurarEspelho, saveMirrorSettings);
 // Adimplência premiada (Desconto Construtora) por unidade: cadastro do Office
 // com vigência; o CV não expõe o campo por API.

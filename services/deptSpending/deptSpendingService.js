@@ -225,6 +225,8 @@ export default class DeptSpendingService {
         const acc = {
             totalUnits: 0, soldUnitsStock: 0, reservedUnits: 0,
             blockedUnits: 0, availableUnits: 0,
+            // Bloqueadas que ainda são estoque comercial (motivo lido do CV).
+            commercialStockUnits: 0,
         };
         const keys = [...new Set((erpIds || []).map((e) => String(e)).filter(Boolean))];
         const summaries = await Promise.all(keys.map((k) => resolveUnitsForErp(k).catch(() => null)));
@@ -235,6 +237,7 @@ export default class DeptSpendingService {
             acc.reservedUnits += num(s.reservedUnits);
             acc.blockedUnits += num(s.blockedUnits);
             acc.availableUnits += num(s.availableUnits);
+            acc.commercialStockUnits += num(s.commercialStockUnits);
         }
         return acc;
     }
@@ -362,8 +365,15 @@ export default class DeptSpendingService {
             this.loadSalesLifetimeByMonth({ erpIds, endDate, prefetch }),
         ]);
 
-        // "bloqueadas consideradas disponíveis" vem da PROJEÇÃO (por CC, somado).
-        const blockedConsidered = Math.min(blockedConsideredRaw, units.blockedUnits);
+        // "bloqueadas que ainda são estoque" vem do NÚCLEO: o motivo lido do
+        // painel do CV diz quais são (services/cv/unitStockService.js), e o
+        // resumo de unidades já traz a contagem em `commercialStockUnits`.
+        // O número digitado na projeção continua valendo como FALLBACK para o
+        // empreendimento que ainda não tem leitura de motivo - foi assim que o
+        // Ingá viveu com "50" enquanto os bloqueios reais já eram 120.
+        const blockedConsidered = units.commercialStockUnits > 0
+            ? units.commercialStockUnits
+            : Math.min(blockedConsideredRaw, units.blockedUnits);
 
         // ----- Base de orçamento -----
         // total de unidades: total manual da projeção > snapshot do CV > soma da projeção
@@ -493,6 +503,8 @@ export default class DeptSpendingService {
                 reservedUnits: units.reservedUnits,
                 blockedUnits: units.blockedUnits,
                 availableUnits: units.availableUnits,
+                commercialStockUnits: units.commercialStockUnits || 0,
+                blockedConsideredSource: units.commercialStockUnits > 0 ? 'motivo' : (blockedConsideredRaw > 0 ? 'manual' : 'nenhum'),
                 boletagemUnits,
                 blockedConsideredAvailable: blockedConsidered,
                 availableInventory,

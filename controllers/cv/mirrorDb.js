@@ -32,6 +32,7 @@
 import db from '../../models/sequelize/index.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 import { mapaVigente, descontoDe } from './adimplenciaDb.js';
+import { mapaMotivos } from '../../services/cv/unitStockService.js';
 
 const {
   CvEnterprise, CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit,
@@ -218,12 +219,15 @@ async function loadSettings(idempreendimento) {
 
 // ── Montagem ─────────────────────────────────────────────────────────────────
 export async function montarEspelho(idempreendimento) {
-  const [{ settings, row }, ent, etapas, tabela, adimplencia] = await Promise.all([
+  const [{ settings, row }, ent, etapas, tabela, adimplencia, motivos] = await Promise.all([
     loadSettings(idempreendimento),
     CvEnterprise.findByPk(idempreendimento, { attributes: ['idempreendimento', 'tipo_empreendimento_nome'] }),
     CvEnterpriseStage.findAll({ where: { idempreendimento }, order: [['idetapa', 'ASC']] }),
     tabelaReferencia(idempreendimento),
     mapaVigente(idempreendimento).catch(() => new Map()),
+    // Motivo do bloqueio por unidade (núcleo do estoque comercial). Falhar aqui
+    // não pode derrubar o espelho: sem o mapa, toda bloqueada é só bloqueada.
+    mapaMotivos(idempreendimento).catch(() => new Map()),
   ]);
   const etapaIds = etapas.map((e) => e.idetapa);
   const blocos = etapaIds.length
@@ -314,6 +318,13 @@ export async function montarEspelho(idempreendimento) {
       final,
       status: STATUS[u.situacao_mapa_disponibilidade] || 'sem_status',
       data_bloqueio: u.data_bloqueio || null,
+      // Estoque comercial: bloqueada no CV, mas segurada de propósito. A célula
+      // continua com status 'bloqueada' (é a verdade do CV) e ganha a marca que
+      // a tela usa para pintar e os resumos usam para contar como disponível.
+      estoque_comercial: !!motivos.get(u.idunidade)?.conta_estoque,
+      motivo_bloqueio: motivos.get(u.idunidade)?.motivo || null,
+      motivo_observacao: motivos.get(u.idunidade)?.observacao || null,
+      motivo_origem: motivos.get(u.idunidade)?.origem || null,
       area,
       vagas: vagasCv ?? settings.vagas_padrao ?? null,
       vagas_fonte: vagasCv != null ? 'cv' : (settings.vagas_padrao != null ? 'padrao' : null),
@@ -349,12 +360,21 @@ export async function montarEspelho(idempreendimento) {
 
   const sortFinais = (arr) => [...arr].sort((x, y) => Number(x) - Number(y) || String(x).localeCompare(String(y)));
   const resumoDe = (arr) => {
-    const r = { unidades: arr.length, disponiveis: 0, vendidas: 0, reservadas: 0, bloqueadas: 0, vgv_disponivel: 0, area_disponivel: 0 };
+    const r = {
+      unidades: arr.length, disponiveis: 0, vendidas: 0, reservadas: 0, bloqueadas: 0,
+      // Bloqueadas que seguem sendo estoque (fazem parte de `a_venda` e do VGV).
+      estoque_comercial: 0, a_venda: 0,
+      vgv_disponivel: 0, area_disponivel: 0,
+    };
     for (const c of arr) {
-      if (c.status === 'disponivel') { r.disponiveis++; if (c.valor) { r.vgv_disponivel += c.valor; r.area_disponivel += c.area || 0; } }
+      const aVenda = c.status === 'disponivel' || (c.status === 'bloqueada' && c.estoque_comercial);
+      if (c.status === 'disponivel') r.disponiveis++;
       else if (c.status === 'vendida') r.vendidas++;
-      else if (c.status === 'bloqueada') r.bloqueadas++;
+      else if (c.status === 'bloqueada') { r.bloqueadas++; if (c.estoque_comercial) r.estoque_comercial++; }
       else if (c.status === 'reserva_inicio' || c.status === 'reserva_ativa') r.reservadas++;
+      // VGV e área do que está à venda: sem isto, bloquear 229 unidades por
+      // estratégia comercial zerava o VGV do empreendimento na tela.
+      if (aVenda) { r.a_venda++; if (c.valor) { r.vgv_disponivel += c.valor; r.area_disponivel += c.area || 0; } }
     }
     r.valor_m2_disponivel = r.area_disponivel > 0 ? r.vgv_disponivel / r.area_disponivel : null;
     return r;

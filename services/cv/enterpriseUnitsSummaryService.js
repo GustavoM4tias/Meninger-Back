@@ -1,5 +1,6 @@
 // src/services/cv/enterpriseUnitsSummaryService.js
 import db from '../../models/sequelize/index.js';
+import { setEstoqueComercial } from './unitStockService.js';
 
 const { CvEnterpriseStage, CvEnterpriseBlock, CvEnterpriseUnit } = db;
 
@@ -52,20 +53,34 @@ function zeroSummary() {
         reservedUnits: 0,
         blockedUnits: 0,
         availableUnits: 0,
+        // Bloqueadas no CV que ainda são estoque comercial (motivo "Estratégia
+        // Comercial" e afins, configurável em /crm/estoque-bloqueado).
+        commercialStockUnits: 0,
+        // O que de fato está à venda: disponível + estoque comercial bloqueado.
+        // É este o número que a diretoria chama de "disponível".
+        availableForSale: 0,
         availableInventory: 0,
     };
 }
 
-function countUnits(units) {
+/**
+ * @param {Array} units
+ * @param {Set<number>} estoque  idunidade das BLOQUEADAS que contam como estoque
+ *                               comercial (núcleo em services/cv/unitStockService.js)
+ */
+function countUnits(units, estoque = new Set()) {
     let totalUnits = 0, soldUnitsStock = 0, reservedUnits = 0, blockedUnits = 0, availableUnits = 0;
+    let commercialStockUnits = 0;
 
     for (const u of units) {
         totalUnits++;
         const st = classifyUnitStatus(u);
         if (st.isSold) soldUnitsStock++;
         else if (st.isReserved) reservedUnits++;
-        else if (st.isBlocked) blockedUnits++;
-        else availableUnits++;
+        else if (st.isBlocked) {
+            blockedUnits++;
+            if (estoque.has(Number(u.idunidade))) commercialStockUnits++;
+        } else availableUnits++;
     }
 
     const availableInventory = availableUnits + reservedUnits + blockedUnits;
@@ -77,6 +92,8 @@ function countUnits(units) {
         reservedUnits,
         blockedUnits,
         availableUnits,
+        commercialStockUnits,
+        availableForSale: availableUnits + commercialStockUnits,
         availableInventory,
     };
 }
@@ -114,7 +131,8 @@ export async function summarizeUnitsFromStageInt(idetapa_int) {
         attributes: ['idunidade', 'situacao_mapa_disponibilidade', 'data_bloqueio']
     });
 
-    return { ...countUnits(units), cvEnterpriseId };
+    const estoque = await setEstoqueComercial(units.map((u) => u.idunidade));
+    return { ...countUnits(units, estoque), cvEnterpriseId };
 }
 
 /**
@@ -173,9 +191,11 @@ export async function summarizeMasterCcFromDb(cvEnterpriseId, masterErpId) {
         attributes: ['idunidade', 'idbloco', 'situacao_mapa_disponibilidade', 'data_bloqueio']
     });
 
+    const estoque = await setEstoqueComercial(units.map((u) => u.idunidade));
+
     // Conta separado: empresa inteira e apenas os módulos
-    let totAll = 0, soldAll = 0, reservedAll = 0, blockedAll = 0, availableAll = 0;
-    let totMod = 0, soldMod = 0, reservedMod = 0, blockedMod = 0, availableMod = 0;
+    let totAll = 0, soldAll = 0, reservedAll = 0, blockedAll = 0, availableAll = 0, estoqueAll = 0;
+    let totMod = 0, soldMod = 0, reservedMod = 0, blockedMod = 0, availableMod = 0, estoqueMod = 0;
 
     for (const u of units) {
         const stageId = blockToStage.get(u.idbloco);
@@ -185,7 +205,10 @@ export async function summarizeMasterCcFromDb(cvEnterpriseId, masterErpId) {
         totAll++;
         if (st.isSold) { soldAll++; if (isMod) soldMod++; }
         else if (st.isReserved) { reservedAll++; if (isMod) reservedMod++; }
-        else if (st.isBlocked) { blockedAll++; if (isMod) blockedMod++; }
+        else if (st.isBlocked) {
+            blockedAll++; if (isMod) blockedMod++;
+            if (estoque.has(Number(u.idunidade))) { estoqueAll++; if (isMod) estoqueMod++; }
+        }
         else { availableAll++; if (isMod) availableMod++; }
         if (isMod) totMod++;
     }
@@ -195,6 +218,7 @@ export async function summarizeMasterCcFromDb(cvEnterpriseId, masterErpId) {
     const reservedUnits = reservedAll - reservedMod;
     const blockedUnits = blockedAll - blockedMod;
     const availableUnits = availableAll - availableMod;
+    const commercialStockUnits = estoqueAll - estoqueMod;
     const availableInventory = availableUnits + reservedUnits + blockedUnits;
     return {
         totalUnits,
@@ -203,6 +227,8 @@ export async function summarizeMasterCcFromDb(cvEnterpriseId, masterErpId) {
         reservedUnits,
         blockedUnits,
         availableUnits,
+        commercialStockUnits,
+        availableForSale: availableUnits + commercialStockUnits,
         availableInventory,
     };
 }
@@ -269,5 +295,6 @@ export async function summarizeUnitsFromDb(cvEnterpriseId) {
         attributes: ['idunidade', 'situacao_mapa_disponibilidade', 'data_bloqueio']
     });
 
-    return countUnits(units);
+    const estoque = await setEstoqueComercial(units.map((u) => u.idunidade));
+    return countUnits(units, estoque);
 }

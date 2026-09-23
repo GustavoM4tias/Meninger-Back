@@ -122,6 +122,7 @@ import { ensureWhatsappMessagesSchema } from './lib/ensureWhatsappMessagesSchema
 import { ensureUserPhoneBackfill } from './lib/ensureUserPhoneBackfill.js';
 import { ensurePlatformUpdatesSchema } from './lib/ensurePlatformUpdatesSchema.js';
 import { ensureCvPanelSchema } from './lib/ensureCvPanelSchema.js';
+import { ensureUnitStockSchema } from './lib/ensureUnitStockSchema.js';
 import { ensureCvWebhookSchema } from './lib/ensureCvWebhookSchema.js';
 import { ensureValidatorHealthSchema } from './lib/ensureValidatorHealthSchema.js';
 import { ensureAiProvidersSchema } from './lib/ensureAiProvidersSchema.js';
@@ -664,6 +665,9 @@ async function syncModelsAndPatches(fingerprint) {
     ['PlatformUpdates', ensurePlatformUpdatesSchema],
     ['EmeAtendeSeed', ensureEmeAtendeSeed],
     ['CvPanel', ensureCvPanelSchema],
+    // Estoque comercial bloqueado: motivo lido do painel por unidade, a regra
+    // de quais motivos contam e a excecao humana. Nucleo unico de estoque.
+    ['UnitStock', ensureUnitStockSchema],
     // Depois de CvPanel: acrescenta a coluna de retencao no mesmo singleton.
     ['CvWebhook', ensureCvWebhookSchema],
     // Regra de operacao e saude do Validador de Contratos (pool de modelos,

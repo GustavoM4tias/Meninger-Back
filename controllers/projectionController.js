@@ -112,6 +112,11 @@ async function enrichDefaultsWithUnits(defaults) {
               reservedUnits: unitsSummary.reservedUnits,
               blockedUnits: unitsSummary.blockedUnits,
               availableUnits: unitsSummary.availableUnits,
+              // Bloqueadas que ainda sao estoque comercial (motivo lido do CV).
+              // E o numero que a tela mostrava digitado a mao no campo
+              // "Bloqueadas contadas como disponiveis".
+              commercialStockUnits: unitsSummary.commercialStockUnits || 0,
+              availableForSale: unitsSummary.availableForSale ?? unitsSummary.availableUnits,
               availableInventory: unitsSummary.availableInventory,
             }
           : null,

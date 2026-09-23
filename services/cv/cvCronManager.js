@@ -38,6 +38,7 @@ import enterpriseCvScheduler from '../../scheduler/enterpriseCvScheduler.js';
 import cvExtrasScheduler from '../../scheduler/cvExtrasScheduler.js';
 import correspondentCvScheduler from '../../scheduler/correspondentCvScheduler.js';
 import imobiliariaCvScheduler from '../../scheduler/imobiliariaCvScheduler.js';
+import unitBlockReasonScheduler from '../../scheduler/unitBlockReasonScheduler.js';
 
 const TZ = 'America/Sao_Paulo';
 const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
@@ -158,6 +159,16 @@ export const CV_JOBS = [
         envCron: 'CORRESPONDENT_CV_CRON_EXPRESSION',
         envAtivo: 'ENABLE_CV_CORRESPONDENT_SCHEDULE',
         semear: () => ligadoPorPadraoEmProd('ENABLE_CV_CORRESPONDENT_SCHEDULE'),
+    },
+    {
+        key: 'motivos_bloqueio',
+        label: 'Motivo do bloqueio das unidades',
+        descricao: 'Lê no painel do CV por que cada unidade está bloqueada. É o que separa estoque comercial segurado de propósito (conta como disponível) de trava do ERP. Alimenta espelho, ficha comercial, projeção e viabilidade.',
+        modulo: unitBlockReasonScheduler,
+        padrao: '40 * * * *',
+        envCron: 'UNIT_BLOCK_REASON_CRON_EXPRESSION',
+        envAtivo: 'ENABLE_CV_UNIT_BLOCK_REASON',
+        semear: () => ligadoPorPadraoEmProd('ENABLE_CV_UNIT_BLOCK_REASON'),
     },
     {
         key: 'imobiliarias',
