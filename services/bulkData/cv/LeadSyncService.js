@@ -4,6 +4,8 @@ import db from '../../../models/sequelize/index.js';
 import { Op } from 'sequelize';
 import crypto from 'crypto';
 import { parseCvDate } from '../../../lib/cvDate.js';
+import { registrar } from '../../cv/cvIntegrationLog.js';
+import { planejarRemocao, leadApagadoNoCv } from '../../../lib/cvRepasseEspelho.js';
 
 const { Lead } = db;
 const LIMIT = 1000;
@@ -16,6 +18,11 @@ const ID_DESCARTADO = 3;
 // delta reconsulta um a um (ver `fillGaps`).
 const GAP_JANELA = parseInt(process.env.LEAD_CV_GAP_WINDOW || '2000', 10);
 const GAP_MARGEM = parseInt(process.env.LEAD_CV_GAP_TAIL || '20', 10);
+
+// Conferência de leads apagados no CV: exige a listagem completa (~38 páginas
+// em 23/09/2026), então roda uma vez por dia e não a cada delta.
+const LIMPEZA_INTERVALO_H = parseInt(process.env.LEAD_CV_LIMPEZA_INTERVALO_H || '24', 10);
+let _ultimaLimpeza = 0;
 
 function hashObj(o) {
     return crypto.createHash('sha256').update(JSON.stringify(o)).digest('hex');
@@ -108,8 +115,59 @@ export default class CvLeadSyncService {
         // 35957 estavam assim em 03/09/2026). O webhook cobre o caminho normal;
         // esta e a rede.
         const lacunas = await this.fillGaps();
+        const removidos = await this.removerApagados();
 
-        console.log(`🎉 Delta concluído: ${merge.length} leads processados | lacunas: ${JSON.stringify(lacunas)}`);
+        console.log(`🎉 Delta concluído: ${merge.length} leads processados | lacunas: ${JSON.stringify(lacunas)} | removidos: ${removidos}`);
+    }
+
+    /**
+     * Lead apagado no CV some da lista de ativos, e a regra acima o marcava
+     * "Descartado" em vez de tirá-lo do espelho: 19 leads assim em 23/09/2026,
+     * todos 400 "Lead não encontrado" no CV, contando como descartados nos
+     * relatórios. A listagem completa aponta os ausentes e cada um é
+     * confirmado por id antes de sair. Freio de volume igual ao dos repasses.
+     * Nunca lança: falha aqui não derruba o delta.
+     */
+    async removerApagados({ forcar = false } = {}) {
+        if (!forcar && Date.now() - _ultimaLimpeza < LIMPEZA_INTERVALO_H * 3600_000) return 0;
+        _ultimaLimpeza = Date.now();
+        try {
+            const todos = await fetchAll('/cvio/lead?');
+            const locais = await Lead.findAll({ attributes: ['idlead'], raw: true });
+            const plano = planejarRemocao(locais.map(l => l.idlead), todos.map(l => l?.idlead));
+            if (!plano.ausentes.length) return 0;
+            if (!plano.seguro) {
+                console.warn(`⚠️ [Leads] ${plano.ausentes.length} lead(s) ausentes na listagem, NÃO removidos: ${plano.motivo}`);
+                await registrar({
+                    origem: 'cron', funcionalidade: 'leads', status: 'ignorado',
+                    mensagem: `Remoção de leads ausentes no CV suspensa: ${plano.motivo}.`,
+                    stats: { ausentes: plano.ausentes.length, amostra: plano.ausentes.slice(0, 50) },
+                });
+                return 0;
+            }
+
+            const confirmados = [];
+            for (const id of plano.ausentes) {
+                try {
+                    await apiCv.get(`/cvio/lead?idlead=${id}&limit=1`);
+                } catch (e) {
+                    if (leadApagadoNoCv({ status: e?.response?.status, mensagem: e?.response?.data?.mensagem })) confirmados.push(id);
+                }
+            }
+            if (!confirmados.length) return 0;
+
+            const n = await Lead.destroy({ where: { idlead: confirmados } });
+            console.log(`🧹 [Leads] ${n} lead(s) apagados no CV removidos do espelho: ${confirmados.join(', ')}`);
+            await registrar({
+                origem: 'cron', funcionalidade: 'leads', status: 'ok',
+                mensagem: `${n} lead(s) excluídos no CV removidos do espelho local: ${confirmados.join(', ')}.`,
+                stats: { removidos: n, ids: confirmados, ausentes_na_listagem: plano.ausentes.length },
+            });
+            return n;
+        } catch (err) {
+            console.warn('⚠️ [Leads] remoção de apagados falhou:', err?.message || err);
+            return 0;
+        }
     }
 
     /**

@@ -22,6 +22,8 @@ import { Op } from 'sequelize';
 import db from '../../../models/sequelize/index.js';
 import apiCv from '../../../lib/apiCv.js';
 import { parseCvDate, formatCvDate } from '../../../lib/cvDate.js';
+import { registrar } from '../../cv/cvIntegrationLog.js';
+import { planejarRemocao, reservaApagadaNoCv } from '../../../lib/cvRepasseEspelho.js';
 
 const { Reserva, Repasse } = db;
 
@@ -35,6 +37,10 @@ const MAX_RETRIES         = parseInt(process.env.CVCRM_MAX_RETRIES || '5', 10);
 const BASE_BACKOFF_MS     = parseInt(process.env.CVCRM_BASE_BACKOFF_MS || '500', 10);
 const MAX_BACKOFF_MS      = parseInt(process.env.CVCRM_MAX_BACKOFF_MS || '8000', 10);
 const JITTER_MS           = parseInt(process.env.CVCRM_JITTER_MS || '250', 10);
+// Conferência de reservas apagadas no CV: uma por dia, só nas que o delta não
+// viu há mais de um dia (~1.700 consultas por id em 23/09/2026).
+const LIMPEZA_INTERVALO_H = parseInt(process.env.RESERVA_CV_LIMPEZA_INTERVALO_H || '24', 10);
+let _ultimaLimpeza = 0;
 
 // ===================== Utils =====================
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
@@ -424,8 +430,70 @@ export default class ReservaSyncService {
             console.log(`   → ${Math.min(i + RESERVA_CHUNK, list.length)}/${list.length} | criados=${created} | atualizados=${updated} | mantidos=${unchanged} | falhas=${failed} | ${elapsed}s`);
         }
 
-        const stats = { total, created, updated, unchanged, failed, took_s: ((Date.now() - t0) / 1000).toFixed(1) };
-        console.log(`🎉 [Reservas] concluído em ${stats.took_s}s — total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | falhas=${stats.failed}`);
+        const removed = await this.removerApagadas(repasseMap);
+
+        const stats = { total, created, updated, unchanged, failed, removed, took_s: ((Date.now() - t0) / 1000).toFixed(1) };
+        console.log(`🎉 [Reservas] concluído em ${stats.took_s}s — total=${stats.total} | criados=${stats.created} | atualizados=${stats.updated} | mantidos=${stats.unchanged} | removidos=${stats.removed} | falhas=${stats.failed}`);
         return stats;
+    }
+
+    /**
+     * Reserva apagada no CV nunca saía do espelho: 2199/2200/2201 (Boulevard)
+     * e 7093 (Jardim das Rosas) seguiam "Vendida" no Office, 7191 "Ato
+     * Emitido" (23/09/2026). A listagem não serve de prova (esconde
+     * Cancelada/Vencida), então só as que o delta não viu há mais de um dia são
+     * consultadas por id, e só sai quem o CV confirma como inexistente
+     * (`reservaApagadaNoCv`). Freio de volume igual ao dos repasses. Nunca
+     * lança: falha aqui não derruba o delta que acabou de gravar.
+     */
+    async removerApagadas(repasseMap, { forcar = false } = {}) {
+        if (!forcar && Date.now() - _ultimaLimpeza < LIMPEZA_INTERVALO_H * 3600_000) return 0;
+        _ultimaLimpeza = Date.now();
+        try {
+            const locais = await Reserva.findAll({ attributes: ['idreserva', 'last_seen_at'], raw: true });
+            const corte = Date.now() - 24 * 3600_000;
+            const candidatas = locais
+                .filter(r => !r.last_seen_at || new Date(r.last_seen_at).getTime() < corte)
+                .map(r => r.idreserva)
+                .filter(id => !repasseMap.has(id));
+
+            const apagadas = [];
+            await processWithLimit(candidatas, RESERVA_CONCURRENCY, async (idreserva) => {
+                let coreStatus = 200;
+                try { await fetchReservaCore(idreserva); }
+                catch (e) { coreStatus = e?.response?.status ?? 0; }
+                if (coreStatus !== 400) return;
+                let docsStatus = 200, docsMensagem = '';
+                try { await httpGet(`/v1/comercial/reservas/${idreserva}/documentos`); }
+                catch (e) { docsStatus = e?.response?.status ?? 0; docsMensagem = e?.response?.data?.error || ''; }
+                if (reservaApagadaNoCv({ coreStatus, docsStatus, docsMensagem, temRepasse: false })) apagadas.push(idreserva);
+            });
+
+            const todas = locais.map(r => r.idreserva);
+            const apagadasSet = new Set(apagadas);
+            const plano = planejarRemocao(todas, todas.filter(id => !apagadasSet.has(id)));
+            console.log(`🔎 [Reservas] conferência de apagadas: ${candidatas.length} consultadas, ${apagadas.length} inexistentes no CV`);
+            if (!plano.ausentes.length) return 0;
+            if (!plano.seguro) {
+                console.warn(`⚠️ [Reservas] ${plano.ausentes.length} reserva(s) inexistentes no CV, NÃO removidas: ${plano.motivo}`);
+                await registrar({
+                    origem: 'cron', funcionalidade: 'reservas', status: 'ignorado',
+                    mensagem: `Remoção de reservas apagadas no CV suspensa: ${plano.motivo}.`,
+                    stats: { ausentes: plano.ausentes.length, amostra: plano.ausentes.slice(0, 50) },
+                });
+                return 0;
+            }
+            const n = await Reserva.destroy({ where: { idreserva: plano.ausentes } });
+            console.log(`🧹 [Reservas] ${n} reserva(s) apagadas no CV removidas do espelho: ${plano.ausentes.join(', ')}`);
+            await registrar({
+                origem: 'cron', funcionalidade: 'reservas', status: 'ok',
+                mensagem: `${n} reserva(s) excluídas no CV removidas do espelho local: ${plano.ausentes.join(', ')}.`,
+                stats: { removidos: n, ids: plano.ausentes },
+            });
+            return n;
+        } catch (err) {
+            console.warn('⚠️ [Reservas] remoção de apagadas falhou:', err?.message || err);
+            return 0;
+        }
     }
 }

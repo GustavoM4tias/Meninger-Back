@@ -1,7 +1,7 @@
 // tests/cvRepasseEspelho.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planejarRemocao } from '../lib/cvRepasseEspelho.js';
+import { planejarRemocao, reservaApagadaNoCv, leadApagadoNoCv } from '../lib/cvRepasseEspelho.js';
 
 test('planejarRemocao: repasse apagado no CV (ausente na varredura) sai do espelho', () => {
     // Caso real de 10/09/2026: reserva 7879 com 5944 (vivo) e 6325 (apagado no CV).
@@ -37,4 +37,23 @@ test('planejarRemocao: ids vem como string do CV e como numero do banco', () => 
     const r = planejarRemocao([10, 11, ...vivos], ['10', ...vivos.map(String)]);
     assert.deepEqual(r.ausentes, [11]);
     assert.equal(r.seguro, true);
+});
+
+test('reservaApagadaNoCv: core 400 + documentos "não foi encontrada" + sem repasse (7093, 23/09/2026)', () => {
+    const base = { coreStatus: 400, docsStatus: 400, docsMensagem: 'A reserva informada não foi encontrada.', temRepasse: false };
+    assert.equal(reservaApagadaNoCv(base), true);
+    // repasse vivo prova que existe
+    assert.equal(reservaApagadaNoCv({ ...base, temRepasse: true }), false);
+    // core 400 sozinho é erro genérico do CV, não prova nada
+    assert.equal(reservaApagadaNoCv({ ...base, docsStatus: 200, docsMensagem: '' }), false);
+    assert.equal(reservaApagadaNoCv({ ...base, docsMensagem: 'Ocorreu um erro inesperado' }), false);
+    // core respondeu: viva
+    assert.equal(reservaApagadaNoCv({ ...base, coreStatus: 200 }), false);
+    assert.equal(reservaApagadaNoCv({ ...base, coreStatus: 500 }), false);
+});
+
+test('leadApagadoNoCv: só o 400 "Lead não encontrado"', () => {
+    assert.equal(leadApagadoNoCv({ status: 400, mensagem: 'Lead não encontrado' }), true);
+    assert.equal(leadApagadoNoCv({ status: 400, mensagem: 'Ocorreu um erro inesperado' }), false);
+    assert.equal(leadApagadoNoCv({ status: 500, mensagem: 'Lead não encontrado' }), false);
 });
