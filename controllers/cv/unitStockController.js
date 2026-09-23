@@ -20,6 +20,7 @@ import {
 } from '../../services/cv/unitStockService.js';
 import UnitBlockReasonSyncService from '../../services/bulkData/cv/UnitBlockReasonSyncService.js';
 import { diagnosticar } from '../../lib/cvPanelWeb.js';
+import { getV3 } from '../../lib/apiCvV3.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
 
 const { CvEnterprise } = db;
@@ -149,6 +150,43 @@ export const getDiagnostico = async (req, res) => {
     }
 };
 
+/**
+ * Sonda a API v3 atras do motivo de bloqueio. Lista branca de caminhos e so o
+ * ESQUELETO da resposta (chaves e uma amostra curta): e diagnostico de
+ * integracao, nao uma porta de saida de dados do CV.
+ */
+export const probeV3 = async (req, res) => {
+    const id = Number(req.query.id) || 10;
+    const caminhos = [
+        `/v3/cadastros/empreendimentos/${id}/unidades`,
+        `/v3/cadastros/empreendimentos/${id}/unidades/bloqueadas`,
+        `/v3/cadastros/unidades?idempreendimento=${id}`,
+        `/v3/comercial/unidades?idempreendimento=${id}`,
+        `/v3/cadastros/empreendimentos/${id}`,
+        '/v3/cadastros/motivos-bloqueio',
+        '/v3/cadastros/motivosbloqueio',
+    ];
+
+    const out = [];
+    for (const path of caminhos) {
+        try {
+            const { data, status } = await getV3(path);
+            const amostra = Array.isArray(data?.dados) ? data.dados[0] : (Array.isArray(data) ? data[0] : data);
+            const texto = JSON.stringify(amostra || {});
+            out.push({
+                path, status,
+                chaves: amostra && typeof amostra === 'object' ? Object.keys(amostra).slice(0, 40) : null,
+                tem_motivo: /motivo/i.test(texto),
+                tamanho: texto.length,
+            });
+        } catch (err) {
+            out.push({ path, status: err.response?.status || 0, erro: String(err.response?.data?.message || err.message).slice(0, 120) });
+        }
+    }
+    return res.json({ id, resultados: out });
+};
+
 export default {
+    probeV3,
     getEstoqueBloqueado, putRegraMotivo, putExcecaoUnidade, getMotivosDoEmpreendimento, syncMotivos, getDiagnostico,
 };

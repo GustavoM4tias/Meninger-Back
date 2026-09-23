@@ -23,7 +23,7 @@ import { listPriceTablesByEnterprise, getPriceTableById } from '../controllers/c
 import { getMirror, saveMirrorSettings } from '../controllers/cv/mirrorDb.js';
 import {
     getEstoqueBloqueado, putRegraMotivo, putExcecaoUnidade,
-    getMotivosDoEmpreendimento, syncMotivos, getDiagnostico,
+    getMotivosDoEmpreendimento, syncMotivos, getDiagnostico, probeV3,
 } from '../controllers/cv/unitStockController.js';
 import { getAdimplencia, saveAdimplencia, importAdimplencia } from '../controllers/cv/adimplenciaDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
@@ -130,6 +130,8 @@ router.post('/estoque-bloqueado/sync', authenticate, configurarEspelho, syncMoti
 router.post('/estoque-bloqueado/sync/:id', authenticate, configurarEspelho, syncMotivos);
 // Diagnostico do login no painel: diz em qual passo parou, sem expor a senha.
 router.get('/estoque-bloqueado/diagnostico', authenticate, configurarEspelho, getDiagnostico);
+// Sonda da API v3 atras do motivo de bloqueio (lista branca, so o esqueleto).
+router.get('/estoque-bloqueado/probe-v3', authenticate, configurarEspelho, probeV3);
 router.put('/empreendimento/:id/espelho/config', authenticate, configurarEspelho, saveMirrorSettings);
 // Adimplência premiada (Desconto Construtora) por unidade: cadastro do Office
 // com vigência; o CV não expõe o campo por API.
