@@ -24,7 +24,7 @@ const assertAdmin = (req, res) => {
 
 // Normalização de cidade
 const CITY_EQ = (col) => `
-  unaccent(upper(regexp_replace(${col}, '[^A-Z0-9]+',' ','g')))
+  regexp_replace(unaccent(upper(${col})), '[^A-Z0-9]+', ' ', 'g')
 `;
 
 const normYM = (v) => {

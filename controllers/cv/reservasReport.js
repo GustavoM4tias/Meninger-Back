@@ -133,10 +133,8 @@ function montarEscopoSql(scope, replacements) {
             WHERE ec.active = true
               AND (${nameConds.join(' OR ')})
               AND COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),'')) IS NOT NULL
-              AND unaccent(upper(regexp_replace(COALESCE(ec.name,''), '[^A-Z0-9]+',' ','g'))) =
-                  unaccent(upper(regexp_replace(
-                    COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
-                    '[^A-Z0-9]+',' ','g')))
+              AND regexp_replace(unaccent(upper(COALESCE(ec.name,''))), '[^A-Z0-9]+', ' ', 'g') =
+                  regexp_replace(unaccent(upper(COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''))), '[^A-Z0-9]+', ' ', 'g')
         )`);
     const parts = [...porId, `(r.idempreendimento_cv IS NULL AND (${semId.join(' OR ')}))`];
     return `(${parts.join(' OR ')})`;
@@ -429,8 +427,8 @@ export const getReservaReport = async (req, res) => {
                             FROM enterprises ec
                             WHERE ec.active = true
                               AND (${nameConds.join(' OR ')})
-                              AND unaccent(upper(regexp_replace(COALESCE(ec.name,''), '[^A-Z0-9]+',' ','g'))) =
-                                  unaccent(upper(regexp_replace(:nomeEmp, '[^A-Z0-9]+',' ','g')))
+                              AND regexp_replace(unaccent(upper(COALESCE(ec.name,''))), '[^A-Z0-9]+', ' ', 'g') =
+                                  regexp_replace(unaccent(upper(:nomeEmp)), '[^A-Z0-9]+', ' ', 'g')
                             LIMIT 1
                         `, { replacements: repl, type: db.Sequelize.QueryTypes.SELECT });
                         ok = !!check;

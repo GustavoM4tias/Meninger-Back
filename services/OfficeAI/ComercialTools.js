@@ -380,8 +380,8 @@ async function executeQueryEnterprises(args, user) {
   // args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia)
   if (args.cidade) {
     whereClauses.push(`
-      (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city, ce.cidade, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-      LIKE ('% ' || unaccent(upper(regexp_replace(:city, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
+      (' ' || regexp_replace(unaccent(upper(COALESCE(ec.city, ce.cidade, ''))), '[^A-Z0-9]+', ' ', 'g') || ' ')
+      LIKE ('% ' || regexp_replace(unaccent(upper(:city)), '[^A-Z0-9]+', ' ', 'g') || ' %')
     `);
     replacements.city = args.cidade;
   }
@@ -815,8 +815,8 @@ async function executeQueryPrecadastros(args, user) {
       EXISTS (
         SELECT 1 FROM enterprises ec
         WHERE ec.cv_id = p.idempreendimento AND ec.active = true
-          AND (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-              LIKE ('% ' || unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
+          AND (' ' || regexp_replace(unaccent(upper(COALESCE(ec.city, ''))), '[^A-Z0-9]+', ' ', 'g') || ' ')
+              LIKE ('% ' || regexp_replace(unaccent(upper(:targetCity)), '[^A-Z0-9]+', ' ', 'g') || ' %')
       )
     `);
   }
@@ -1178,10 +1178,8 @@ export function reservaEnterpriseExists(extraCond) {
           OR (
             COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''))
               IS NOT NULL
-            AND unaccent(upper(regexp_replace(COALESCE(ec_r.name,''), '[^A-Z0-9]+',' ','g'))) =
-                unaccent(upper(regexp_replace(
-                  COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''),
-                  '[^A-Z0-9]+',' ','g')))
+            AND regexp_replace(unaccent(upper(COALESCE(ec_r.name,''))), '[^A-Z0-9]+', ' ', 'g') =
+                regexp_replace(unaccent(upper(COALESCE(NULLIF(trim(r.unidade_json->>'empreendimento'),''), NULLIF(trim(r.empreendimento),''), ''))), '[^A-Z0-9]+', ' ', 'g')
           )
         )
         AND ${extraCond}
@@ -1344,8 +1342,8 @@ async function executeQueryReservas(args, user) {
   if (args.cidade) {
     replacements.targetCity = args.cidade;
     whereClauses.push(reservaEnterpriseExists(
-      `(' ' || unaccent(upper(regexp_replace(COALESCE(ec_r.city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-            LIKE ('% ' || unaccent(upper(regexp_replace(:targetCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')`
+      `(' ' || regexp_replace(unaccent(upper(COALESCE(ec_r.city, ''))), '[^A-Z0-9]+', ' ', 'g') || ' ')
+            LIKE ('% ' || regexp_replace(unaccent(upper(:targetCity)), '[^A-Z0-9]+', ' ', 'g') || ' %')`
     ));
   }
 

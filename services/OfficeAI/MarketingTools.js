@@ -332,8 +332,8 @@ async function executeQueryLeads(args, user) {
              NULLIF(e_city->>'idempreendimento','')::int,
              NULLIF(e_city->>'id_empreendimento','')::int
            )
-      WHERE (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-         LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
+      WHERE (' ' || regexp_replace(unaccent(upper(COALESCE(ec.city, ''))), '[^A-Z0-9]+', ' ', 'g') || ' ')
+         LIKE ('% ' || regexp_replace(unaccent(upper(:userCity)), '[^A-Z0-9]+', ' ', 'g') || ' %')
     )`);
   }
 
@@ -615,8 +615,8 @@ async function executeQueryEvents(args, user) {
   // padrão idêntico ao Faturamento — tolera "São Paulo" / "SAO PAULO" / "sao-paulo".
   if (scopeCities) {
     const parts = scopeCities.map((_, i) => `
-      (' ' || unaccent(upper(regexp_replace(COALESCE(ev.address->>'city', ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-      LIKE ('% ' || unaccent(upper(regexp_replace(:scopeCity_${i}, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
+      (' ' || regexp_replace(unaccent(upper(COALESCE(ev.address->>'city', ''))), '[^A-Z0-9]+', ' ', 'g') || ' ')
+      LIKE ('% ' || regexp_replace(unaccent(upper(:scopeCity_${i})), '[^A-Z0-9]+', ' ', 'g') || ' %')
     `);
     whereClauses.push(`(${parts.join(' OR ')})`);
     scopeCities.forEach((c, i) => { replacements[`scopeCity_${i}`] = c; });
@@ -624,8 +624,8 @@ async function executeQueryEvents(args, user) {
   // args.cidade = filtro ADICIONAL dentro do escopo (nunca amplia)
   if (args.cidade) {
     whereClauses.push(`
-      (' ' || unaccent(upper(regexp_replace(COALESCE(ev.address->>'city', ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-      LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
+      (' ' || regexp_replace(unaccent(upper(COALESCE(ev.address->>'city', ''))), '[^A-Z0-9]+', ' ', 'g') || ' ')
+      LIKE ('% ' || regexp_replace(unaccent(upper(:userCity)), '[^A-Z0-9]+', ' ', 'g') || ' %')
     `);
     replacements.userCity = args.cidade;
   }

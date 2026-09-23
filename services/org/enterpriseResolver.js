@@ -133,8 +133,8 @@ function montar(rows, via, termo) {
             nome: r.name, cidade: r.city, uf: r.uf,
             nomes_anteriores: (Array.isArray(r.name_history) ? r.name_history : []),
         })),
-        cv_ids: rows.map(r => Number(r.cv_id)).filter(Number.isFinite),
-        erp_ids: rows.map(r => Number(r.erp_cost_center_id)).filter(Number.isFinite),
+        cv_ids: rows.filter(r => r.cv_id != null).map(r => Number(r.cv_id)).filter(Number.isFinite),
+        erp_ids: rows.filter(r => r.erp_cost_center_id != null).map(r => Number(r.erp_cost_center_id)).filter(Number.isFinite),
         via,
         termo,
     };

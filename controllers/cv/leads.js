@@ -315,8 +315,8 @@ export async function getLeads(req, res) {
                 NULLIF(e_city->>'idempreendimento','')::int,
                 NULLIF(e_city->>'id_empreendimento','')::int
               )
-          WHERE (' ' || unaccent(upper(regexp_replace(COALESCE(ec.city, ''), '[^A-Z0-9]+', ' ', 'g'))) || ' ')
-                LIKE ('% ' || unaccent(upper(regexp_replace(:userCity, '[^A-Z0-9]+', ' ', 'g'))) || ' %')
+          WHERE (' ' || regexp_replace(unaccent(upper(COALESCE(ec.city, ''))), '[^A-Z0-9]+', ' ', 'g') || ' ')
+                LIKE ('% ' || regexp_replace(unaccent(upper(:userCity)), '[^A-Z0-9]+', ' ', 'g') || ' %')
         )`);
     }
     const userCity = isAdmin ? (cidade || null) : null; // mantém a variável usada no log abaixo
