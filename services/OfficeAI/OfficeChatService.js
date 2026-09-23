@@ -819,7 +819,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
   // citação entra. Indisponível (primeiro boot, banco fora) = desligada: sem a
   // instrução no prompt o modelo não escreveria referência nenhuma, e resolver
   // o que não existe só gastaria trabalho.
-  let ancoragem = { enabled: false, modo: 'suave', min_taxa: 0.8, max_citacoes: 400 };
+  let ancoragem = { enabled: false, modo: 'suave', min_taxa: 0.8, max_citacoes: 400, pular_detector_ancorada: false };
   fase('Carregando o Cérebro da Eme e suas alçadas…');
   try {
     ancoragem = await anchoringSettings();
@@ -1710,16 +1710,22 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
 
   // ── A resposta está INTEIRAMENTE ancorada? ───────────────────────────────
   //
-  // Se todo número veio de referência resolvida, não há o que auditar: não
-  // sobrou número digitado pelo modelo. Pular o detector aqui é o que elimina
-  // o falso positivo de vez, e de quebra poupa a varredura e as até três
-  // reescritas que ele dispara.
+  // Se todo número veio de referência resolvida, não sobrou número digitado
+  // pelo modelo. Pular o detector aqui elimina o falso positivo de número e
+  // poupa a varredura e as até três reescritas que ele dispara.
+  //
+  // Mas a referência só garante o NÚMERO. O detector confere também os nomes
+  // que o modelo digitou (empreendimento, pessoa, etapa), e pular a validação
+  // inteira por causa dos números deixa esse pedaço sem rede. Por isso o pulo
+  // é um interruptor (Cérebro da Eme > Ancoragem), desligado por padrão: a
+  // validação roda SEMPRE, e só sai quando alguém medir que virou peso morto.
   const totalmenteAncorada = ancoragem.enabled
     && refResolvidas > 0
     && !refsNaoResolvidas.length
     && taxaAncoragem === 1;
+  const pularDetector = totalmenteAncorada && ancoragem.pular_detector_ancorada === true;
 
-  let hallucinationReport = (temDadoDoTurno && !totalmenteAncorada)
+  let hallucinationReport = (temDadoDoTurno && !pularDetector)
     ? detectHallucinations(fullAssistantText, cadeiaDoTurno, lastBridge, userMessage)
     : { suspicious: [] };
   let selfCorrected = false;
@@ -1926,7 +1932,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
     (ancoragem.enabled && taxaAncoragem != null
       ? ` · ancoragem ${Math.round(taxaAncoragem * 100)}%` +
         `${refsNaoResolvidas.length ? ` (${refsNaoResolvidas.length} ref quebrada)` : ''}` +
-        `${totalmenteAncorada ? ' · detector pulado' : ''}`
+        `${pularDetector ? ' · detector pulado' : ''}`
       : ''));
 
   const savedMsg = await saveMessage(session.id, 'assistant', contentToSave, responseType, {
@@ -1953,7 +1959,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
       crus: refCrus,
       nao_resolvidas: refsNaoResolvidas.length,
       citacoes_ofertadas: citacoes.total,
-      pulou_detector: totalmenteAncorada,
+      pulou_detector: pularDetector,
     } : null,
   });
 

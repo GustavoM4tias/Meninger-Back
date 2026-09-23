@@ -38,6 +38,14 @@ export const ANCHORING_DEFAULTS = {
     // Teto de itens citáveis que entram no prompt. Acima disso o custo de
     // contexto passa a pesar mais que o ganho, e o modelo começa a errar o id.
     max_citacoes: 400,
+
+    // Pular a trava de texto (detector de número/nome inventado) quando TODO
+    // número da resposta veio por referência resolvida. Nasce DESLIGADO: o
+    // detector confere também os NOMES que o modelo digitou (empreendimento,
+    // pessoa, etapa), e a referência só garante o número. Em 23/09/2026 uma
+    // resposta "totalmente ancorada" saiu com dado errado e a validação não
+    // tinha nem rodado. Ligar só depois de medir que a trava virou peso morto.
+    pular_detector_ancorada: false,
 };
 
 const MODOS = ['suave', 'estrito'];
@@ -75,6 +83,8 @@ export function sanitizeAnchoringSettings(input = {}) {
         modo: MODOS.includes(input.modo) ? input.modo : D.modo,
         min_taxa: num(input.min_taxa, D.min_taxa, 0, 1),
         max_citacoes: num(input.max_citacoes, D.max_citacoes, 20, 2000),
+        pular_detector_ancorada: typeof input.pular_detector_ancorada === 'boolean'
+            ? input.pular_detector_ancorada : D.pular_detector_ancorada,
     };
 }
 
