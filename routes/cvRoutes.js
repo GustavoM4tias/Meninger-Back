@@ -23,7 +23,7 @@ import { listPriceTablesByEnterprise, getPriceTableById } from '../controllers/c
 import { getMirror, saveMirrorSettings } from '../controllers/cv/mirrorDb.js';
 import {
     getEstoqueBloqueado, putRegraMotivo, putExcecaoUnidade,
-    getMotivosDoEmpreendimento, syncMotivos, getDiagnostico, probeV3,
+    getMotivosDoEmpreendimento, syncMotivos, getDiagnostico, probeV3, marcarLote,
 } from '../controllers/cv/unitStockController.js';
 import { getAdimplencia, saveAdimplencia, importAdimplencia } from '../controllers/cv/adimplenciaDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
@@ -126,6 +126,8 @@ router.get('/estoque-bloqueado', authenticate, requireRoutePermission(ENTERPRISE
 router.get('/empreendimento/:id/motivos-bloqueio', authenticate, requireRoutePermission(ENTERPRISE_SCREENS), getMotivosDoEmpreendimento);
 router.put('/estoque-bloqueado/regra', authenticate, configurarEspelho, putRegraMotivo);
 router.put('/estoque-bloqueado/unidade/:idunidade', authenticate, configurarEspelho, putExcecaoUnidade);
+// Marcacao em lote: carga inicial, importacao e selecao em massa na tela.
+router.post('/estoque-bloqueado/lote', authenticate, configurarEspelho, marcarLote);
 router.post('/estoque-bloqueado/sync', authenticate, configurarEspelho, syncMotivos);
 router.post('/estoque-bloqueado/sync/:id', authenticate, configurarEspelho, syncMotivos);
 // Diagnostico do login no painel: diz em qual passo parou, sem expor a senha.

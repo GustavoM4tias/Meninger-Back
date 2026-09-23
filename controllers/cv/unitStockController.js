@@ -16,7 +16,7 @@
 import db from '../../models/sequelize/index.js';
 import {
     listarRegras, salvarRegra, salvarExcecao,
-    contagemPorEmpreendimento, temLeitura, mapaMotivos,
+    contagemPorEmpreendimento, temLeitura, mapaMotivos, marcarEmLote,
 } from '../../services/cv/unitStockService.js';
 import UnitBlockReasonSyncService from '../../services/bulkData/cv/UnitBlockReasonSyncService.js';
 import { diagnosticar } from '../../lib/cvPanelWeb.js';
@@ -186,7 +186,34 @@ export const probeV3 = async (req, res) => {
     return res.json({ id, resultados: out });
 };
 
+/**
+ * Marcacao em lote. Recebe `unidades` como lista de idunidade (ou de
+ * { idunidade, idempreendimento }). E o caminho da carga inicial, da
+ * importacao da exportacao do CV e da selecao em massa na tela.
+ */
+export const marcarLote = async (req, res) => {
+    try {
+        const { unidades = [], conta_estoque = true, observacao = null } = req.body || {};
+        if (!Array.isArray(unidades) || !unidades.length) {
+            return res.status(400).json({ error: 'Envie a lista de unidades.' });
+        }
+        if (unidades.length > 5000) {
+            return res.status(400).json({ error: 'Muitas unidades de uma vez (limite 5000).' });
+        }
+        const r = await marcarEmLote(unidades, {
+            conta_estoque: !!conta_estoque,
+            observacao,
+            quem: quem(req),
+        });
+        return res.json({ ok: true, ...r });
+    } catch (err) {
+        console.error('[estoque-bloqueado] lote:', err);
+        return res.status(500).json({ error: 'Erro ao marcar as unidades.' });
+    }
+};
+
 export default {
+    marcarLote,
     probeV3,
     getEstoqueBloqueado, putRegraMotivo, putExcecaoUnidade, getMotivosDoEmpreendimento, syncMotivos, getDiagnostico,
 };
