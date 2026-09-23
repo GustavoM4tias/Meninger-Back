@@ -68,6 +68,7 @@ router.post('/:id(\\d+)/authorize', ctrl.authorizeCondition);     // pending_app
 router.post('/:id(\\d+)/cancel-approval', ctrl.cancelApproval);   // pending_approval → draft (editor/autorizador)
 router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved/closed → draft (autorizador)
 router.post('/:id(\\d+)/link-to-cv', ctrl.linkSeriesToCv);        // avulsa → CV (promove a série inteira)
+router.post('/:id(\\d+)/modules/:moduleId(\\d+)/unit-snapshot', ctrl.refreshUnitSnapshot); // regrava só a foto de unidades, sem mexer no status
 
 // ── Assinatura (DocuSign) da ficha autorizada ─────────────────────────────────
 router.get('/:id(\\d+)/signature', ds.getConditionSignature);

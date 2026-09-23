@@ -1325,58 +1325,138 @@ export const getStagesForEnterprise = async (req, res) => {
     }
 };
 
+/**
+ * Unidades de uma etapa, agrupadas por bloco, com a marca do estoque comercial.
+ * E o que a ficha mostra ao vivo e o que a foto de unidades congela.
+ */
+async function unidadesDaEtapa(idempreendimento, idetapa) {
+    const blocks = await CvEnterpriseBlock.findAll({
+        where: { idetapa: Number(idetapa) },
+        attributes: ['idbloco', 'nome', 'total_unidades'],
+        order: [['idbloco', 'ASC']],
+        include: [{
+            model: CvEnterpriseUnit,
+            as: 'unidades',
+            attributes: ['idunidade', 'nome', 'area_privativa', 'tipologia', 'situacao_mapa_disponibilidade', 'valor', 'valor_avaliacao'],
+            required: false,
+        }],
+    });
+
+    // Estoque comercial: unidade bloqueada por estrategia comercial ainda e
+    // estoque a vender, e a ficha precisa pinta-la como tal. O mapa vem do
+    // nucleo (services/cv/unitStockService.js); falhar aqui nao derruba a
+    // ficha, so faz toda bloqueada parecer bloqueada.
+    const motivos = await mapaMotivos(Number(idempreendimento) || null).catch(() => new Map());
+
+    return blocks.map(b => {
+        const json = b.toJSON();
+        // Fallback: se unidades não estão na tabela, usa o raw do bloco
+        if (!json.unidades?.length && b.raw?.unidades?.length) {
+            json.unidades = b.raw.unidades.map(u => ({
+                idunidade: u.idunidade,
+                nome: u.nome,
+                area_privativa: u.area_privativa,
+                tipologia: u.tipologia,
+                situacao_mapa_disponibilidade: u.situacao?.situacao_mapa_disponibilidade ?? 1,
+                valor: u.valor,
+                valor_avaliacao: u.valor_avaliacao,
+            }));
+        }
+        // A marca so vale para unidade bloqueada agora: vendida ou liberada
+        // segue a propria situacao, mesmo que a marca ainda nao tenha sido limpa.
+        json.unidades = (json.unidades || []).map((u) => {
+            const m = motivos.get(Number(u.idunidade));
+            const bloqueada = Number(u.situacao_mapa_disponibilidade) === 4;
+            return {
+                ...u,
+                estoque_comercial: bloqueada && !!m?.conta_estoque,
+                motivo_bloqueio: bloqueada ? (m?.motivo || null) : null,
+            };
+        });
+        return json;
+    });
+}
+
 export const getUnitsForStage = async (req, res) => {
     try {
         const { idempreendimento, idetapa } = req.params;
-        const blocks = await CvEnterpriseBlock.findAll({
-            where: { idetapa: Number(idetapa) },
-            attributes: ['idbloco', 'nome', 'total_unidades'],
-            order: [['idbloco', 'ASC']],
-            include: [{
-                model: CvEnterpriseUnit,
-                as: 'unidades',
-                attributes: ['idunidade', 'nome', 'area_privativa', 'tipologia', 'situacao_mapa_disponibilidade', 'valor', 'valor_avaliacao'],
-                required: false,
-            }],
-        });
-
-        // Estoque comercial: unidade bloqueada por estrategia comercial ainda e
-        // estoque a vender, e a ficha precisa pinta-la como tal. O mapa vem do
-        // nucleo (services/cv/unitStockService.js); falhar aqui nao derruba a
-        // ficha, so faz toda bloqueada parecer bloqueada.
-        const motivos = await mapaMotivos(Number(idempreendimento) || null).catch(() => new Map());
-
-        // Fallback: se unidades não estão na tabela, usa o raw do bloco
-        const result = blocks.map(b => {
-            const json = b.toJSON();
-            if (!json.unidades?.length && b.raw?.unidades?.length) {
-                json.unidades = b.raw.unidades.map(u => ({
-                    idunidade: u.idunidade,
-                    nome: u.nome,
-                    area_privativa: u.area_privativa,
-                    tipologia: u.tipologia,
-                    situacao_mapa_disponibilidade: u.situacao?.situacao_mapa_disponibilidade ?? 1,
-                    valor: u.valor,
-                    valor_avaliacao: u.valor_avaliacao,
-                }));
-            }
-            // A marca so vale para unidade bloqueada agora: vendida ou liberada
-            // segue a propria situacao, mesmo que a marca ainda nao tenha sido limpa.
-            json.unidades = (json.unidades || []).map((u) => {
-                const m = motivos.get(Number(u.idunidade));
-                const bloqueada = Number(u.situacao_mapa_disponibilidade) === 4;
-                return {
-                    ...u,
-                    estoque_comercial: bloqueada && !!m?.conta_estoque,
-                    motivo_bloqueio: bloqueada ? (m?.motivo || null) : null,
-                };
-            });
-            return json;
-        });
-
-        return res.json(result);
+        return res.json(await unidadesDaEtapa(idempreendimento, idetapa));
     } catch (e) {
         console.error('[conditions] getUnitsForStage:', e);
+        return res.status(500).json({ error: e?.message || String(e) });
+    }
+};
+
+/**
+ * Regrava a FOTO de unidades de um modulo (unit_snapshot) com a situacao de agora.
+ *
+ * E a mesma montagem que a tela faz ao enviar para autorizacao
+ * (Detail.vue › captureAllUnitSnapshots): unidades da etapa + preco das tabelas
+ * do modulo, a vigente primeiro. Existe separada do salvar porque a foto nao e
+ * condicao comercial: regrava-la numa ficha EM AUTORIZACAO nao pode exigir
+ * cancelar a autorizacao, que anula o envelope do DocuSign e reavisa os
+ * autorizadores. Status e assinatura ficam intactos; o historico registra.
+ */
+export const refreshUnitSnapshot = async (req, res) => {
+    try {
+        if (!(await canEditConditions(req))) return res.status(403).json({ error: EDIT_DENIED });
+
+        const { id, moduleId } = req.params;
+        const condition = await EnterpriseCondition.findByPk(id);
+        if (!condition) return res.status(404).json({ error: 'Ficha não encontrada.' });
+        if (condition.status === 'closed') {
+            return res.status(409).json({ error: 'Ficha encerrada não pode ser alterada. Reabra antes.' });
+        }
+
+        const mod = await EnterpriseConditionModule.findByPk(moduleId);
+        if (!mod || String(mod.condition_id) !== String(id)) {
+            return res.status(404).json({ error: 'Módulo não encontrado nesta ficha.' });
+        }
+        if (!mod.idetapa || !condition.idempreendimento) {
+            return res.status(422).json({ error: 'Módulo sem etapa do CV: não há unidades para fotografar.' });
+        }
+
+        const blocos = await unidadesDaEtapa(condition.idempreendimento, mod.idetapa);
+
+        // Preco por unidade: tabelas do modulo, a vigente primeiro (igual a tela).
+        const hoje = new Date();
+        const tabelas = mod.price_table_ids?.length
+            ? await CvEnterprisePriceTable.findAll({
+                where: { idtabela: mod.price_table_ids },
+                attributes: ['idtabela', 'data_vigencia_de', 'data_vigencia_ate', 'raw'],
+            })
+            : [];
+        const vigente = (t) => (!t.data_vigencia_de || new Date(t.data_vigencia_de) <= hoje)
+            && (!t.data_vigencia_ate || new Date(t.data_vigencia_ate) >= hoje);
+        const ordem = [...tabelas].sort((a, b) => (vigente(b) ? 1 : 0) - (vigente(a) ? 1 : 0));
+        const precos = new Map();
+        for (const t of ordem) {
+            for (const u of (t.raw?.unidades ?? [])) {
+                if (u.idunidade != null && !precos.has(String(u.idunidade))) {
+                    precos.set(String(u.idunidade), u.valor_total ?? null);
+                }
+            }
+        }
+
+        const data = blocos.map((b) => ({
+            ...b,
+            unidades: (b.unidades ?? []).map((u) => ({ ...u, valor_total: precos.get(String(u.idunidade)) ?? null })),
+        }));
+        const antes = mod.unit_snapshot?.capturedAt || null;
+        const snapshot = { capturedAt: new Date().toISOString(), data };
+        await mod.update({ unit_snapshot: snapshot });
+
+        const total = data.reduce((s, b) => s + (b.unidades?.length || 0), 0);
+        const nota = `Foto de unidades do módulo "${mod.module_name}" regravada (${total} unidades)`
+            + (antes ? `; a anterior era de ${new Date(antes).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}` : '');
+        await condition.update({
+            approval_history: addHistory(condition.approval_history, 'unit_snapshot_refreshed', req, nota),
+            updated_by: req.user?.id,
+        });
+
+        return res.json({ ok: true, module_id: mod.id, unit_snapshot: snapshot });
+    } catch (e) {
+        console.error('[conditions] refreshUnitSnapshot:', e);
         return res.status(500).json({ error: e?.message || String(e) });
     }
 };
