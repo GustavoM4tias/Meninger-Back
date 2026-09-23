@@ -145,14 +145,24 @@ export async function contagemPorEmpreendimento(idempreendimento = null) {
 
     if (ids && !ids.length) return new Map();
 
+    // A marca só vale enquanto a unidade estiver BLOQUEADA no CV. Sem esta
+    // conferência, uma unidade liberada ou vendida continuaria contando como
+    // "estoque segurado" e o número cresceria sozinho - foi o que aconteceu com
+    // a 507 do Soul no teste do webhook (liberada no CV e ainda marcada aqui).
+    // `situacao_mapa_disponibilidade = 4` é bloqueada; data_bloqueio preenchida
+    // em unidade não vendida/reservada também conta, igual ao classifyUnitStatus.
     const [rows] = await sequelize.query(
         `SELECT COALESCE(r.idempreendimento, o.idempreendimento) AS idempreendimento,
                 COUNT(*) FILTER (
                   WHERE COALESCE(o.conta_estoque, rr.conta_estoque, false)
+                    AND (u.situacao_mapa_disponibilidade = 4
+                         OR (u.data_bloqueio IS NOT NULL
+                             AND COALESCE(u.situacao_mapa_disponibilidade, 0) NOT IN (2, 3, 5)))
                 ) AS qtd
            FROM cv_unit_block_reasons r
            FULL OUTER JOIN cv_unit_stock_overrides o ON o.idunidade = r.idunidade
            LEFT JOIN cv_block_reason_rules rr ON rr.motivo = r.motivo
+           LEFT JOIN cv_enterprise_units u ON u.idunidade = COALESCE(r.idunidade, o.idunidade)
           ${ids ? 'WHERE COALESCE(r.idempreendimento, o.idempreendimento) IN (:ids)' : ''}
           GROUP BY COALESCE(r.idempreendimento, o.idempreendimento)`,
         { replacements: ids ? { ids } : {} },
@@ -278,7 +288,31 @@ export async function marcarEmLote(itens = [], { conta_estoque = true, observaca
     return { gravadas };
 }
 
+/**
+ * Apaga a marca de quem não está mais bloqueado no CV. A decisão de segurar uma
+ * unidade morre junto com o bloqueio: ela foi vendida, reservada ou liberada, e
+ * manter a marca só faria o estoque crescer sozinho.
+ *
+ * Roda depois do sync de empreendimentos, que é quem traz a situação nova.
+ */
+export async function limparMarcasSoltas() {
+    const [res] = await sequelize.query(
+        `DELETE FROM cv_unit_stock_overrides o
+          USING cv_enterprise_units u
+          WHERE u.idunidade = o.idunidade
+            AND o.conta_estoque = true
+            AND u.situacao_mapa_disponibilidade IS DISTINCT FROM 4
+            AND (u.data_bloqueio IS NULL
+                 OR COALESCE(u.situacao_mapa_disponibilidade, 0) IN (2, 3, 5))
+          RETURNING o.idunidade`,
+    );
+    const n = Array.isArray(res) ? res.length : 0;
+    if (n) console.log(`[Estoque bloqueado] ${n} marca(s) removida(s): unidade deixou de estar bloqueada no CV`);
+    return n;
+}
+
 export default {
+    limparMarcasSoltas,
     marcarEmLote,
     mapaEstoqueComercial,
     setEstoqueComercial,

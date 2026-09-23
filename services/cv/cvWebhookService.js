@@ -63,6 +63,10 @@ const CHAVES_POR_FUNCIONALIDADE = {
     repasses: ['idrepasse', 'id_repasse', 'repasse_id', 'idRepasse', 'ID', 'idreserva', 'id'],
     leads: ['idlead', 'id_lead', 'lead_id', 'idLead', 'id'],
     precadastros: ['idprecadastro', 'id_precadastro', 'precadastro_id', 'idPrecadastro', 'id'],
+    // Medido em 23/09/2026: o aviso de unidade vem como
+    // { "idunidade": 3833, "idtransacao": 4312809 } - e so isso. Nao ha motivo
+    // de bloqueio no corpo, so o id de quem mudou.
+    unidades: ['idunidade', 'id_unidade', 'unidade_id', 'idUnidade', 'id'],
 };
 
 export function extrairId(corpo, funcionalidade) {
