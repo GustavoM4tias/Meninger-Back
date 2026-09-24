@@ -30,6 +30,12 @@ export default (sequelize, DataTypes) => {
     cv_origem:             { type: DataTypes.STRING(4), allowNull: false, defaultValue: 'SI' }, // WebSite
     tags:                  { type: DataTypes.JSONB },          // [string]
 
+    // Só cadastro (sorteio, presença, inscrição): o envio fica no Office como
+    // `ignored` e nunca vai ao CV. public_feed libera nome + imobiliária dos
+    // inscritos (sem contato) em GET /public/forms/:slug/entries, para telão.
+    cv_skip:     { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    public_feed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+
     // ── LGPD ─────────────────────────────────────────────────────────────────
     consent_required:     { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     consent_text:         { type: DataTypes.TEXT },

@@ -8,13 +8,13 @@
 import express from 'express';
 import cors from 'cors';
 import { submitLeadForm } from '../controllers/marketing/leadFormController.js';
-import { getPublicLeadForm } from '../controllers/marketing/publicLeadFormController.js';
+import { getPublicLeadForm, getPublicFormEntries } from '../controllers/marketing/publicLeadFormController.js';
 import MarketingConfigService from '../services/marketing/MarketingConfigService.js';
 
 const router = express.Router();
 
 // CORS aberto: endpoint de captação é público por natureza.
-router.use(cors({ origin: true, methods: ['POST', 'OPTIONS'], credentials: false }));
+router.use(cors({ origin: true, methods: ['GET', 'POST', 'OPTIONS'], credentials: false }));
 router.use(express.json({ limit: '256kb' }));
 router.use(express.urlencoded({ extended: true, limit: '256kb' }));
 
@@ -56,6 +56,9 @@ async function rateLimit(req, res, next) {
 
 // GET /api/marketing/public/forms/:slug/page — config para o renderer da LP
 router.get('/forms/:slug/page', getPublicLeadForm);
+
+// GET /api/marketing/public/forms/:slug/entries — lista do telão (form só cadastro + lista pública)
+router.get('/forms/:slug/entries', getPublicFormEntries);
 
 // POST /api/marketing/public/forms/:slug/submit
 router.post('/forms/:slug/submit', rateLimit, submitLeadForm);

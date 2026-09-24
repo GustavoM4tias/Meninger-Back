@@ -98,6 +98,8 @@ export async function submitLeadForm(req, res) {
             midia_slug: form.midia_slug,
             cv_origem: form.cv_origem,
             tags: form.tags,
+            // Form "só cadastro": fica no Office como ignored, não vai ao CV.
+            skip: form.cv_skip === true,
         };
 
         // ── Honeypot: bot. Registra como spam, devolve sucesso neutro ───────

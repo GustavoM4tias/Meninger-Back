@@ -15,7 +15,7 @@ const EDITABLE = [
     // Form / página
     'fields', 'fields_config', 'page_config',
     // Vínculo CV
-    'bound_empreendimentos', 'midia_slug', 'cv_origem', 'tags',
+    'bound_empreendimentos', 'midia_slug', 'cv_origem', 'tags', 'cv_skip', 'public_feed',
     // LGPD
     'consent_required', 'consent_text', 'consent_text_version',
     // Outros
