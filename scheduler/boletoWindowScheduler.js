@@ -49,7 +49,7 @@ async function retomarUm(item) {
     await EventLogger.log({
         historyId: item.id, idreserva: item.idreserva,
         type: 'emission_window_released', severity: 'info',
-        message: `Janela aberta - retomando emissão agendada para ${formatarAgendamento(item.emissao_agendada_para)}.`,
+        message: `Retomando emissão agendada para ${formatarAgendamento(item.emissao_agendada_para)}.`,
         data: { agendadoPara: item.emissao_agendada_para },
     });
 
