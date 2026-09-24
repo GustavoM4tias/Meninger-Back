@@ -97,7 +97,7 @@ export async function avaliarBaixaAmbigua(history, r, settings = null) {
     if (!r?.ok || r.found === false || r.baixaConfirmada) return { aguardar: false };
     if (history.payment_status !== 'pending' || !RE_BAIXADO_POR_DEVOLUCAO.test(sit)) return { aguardar: false };
     settings = settings || await BoletoSettings.findByPk(1);
-    const diasUteis = Math.max(0, Number(settings?.baixa_devolucao_confirmar_dias_uteis ?? 3) || 0);
+    const diasUteis = Math.max(0, Number(settings?.baixa_devolucao_confirmar_dias_uteis ?? 0) || 0);
     if (!diasUteis) return { aguardar: false, diasUteis };
     const primeira = history.baixa_devolucao_vista_em ? new Date(history.baixa_devolucao_vista_em) : new Date();
     const limite = addBusinessDays(primeira, diasUteis);
@@ -519,15 +519,23 @@ async function aplicarResultado(r, opts = {}) {
             cancelled_at: new Date(),
             last_check_situation: sit,
         });
+        // Baixa por devolução não é baixa manual: é o banco devolvendo o título
+        // sem pagamento. A janela de revalidação segue lendo e, se o pagamento
+        // aparecer, a rodada promove para pago com mensagem de correção.
+        const porDevolucao = RE_BAIXADO_POR_DEVOLUCAO.test(sit);
+        const settingsMsg = opts.settings || await BoletoSettings.findByPk(1);
+        const revalidacaoDias = Math.max(0, Number(settingsMsg?.revalidacao_baixado_dias ?? 0) || 0);
         const msg = [
-            '⚠️ Boleto baixado externamente',
+            porDevolucao ? '❌ Boleto baixado por devolução' : '⚠️ Boleto baixado externamente',
             '',
             `🔢 Nosso Número: ${history.nosso_numero}`,
             `🏦 Situação no Ecobrança: ${sit}`,
             `💰 Valor: R$ ${Number(history.valor || 0).toFixed(2).replace('.', ',')}`,
             history.vencimento ? `📅 Vencimento: ${formatDateBr(history.vencimento)}` : null,
             '',
-            'Detectamos que o boleto foi baixado/cancelado diretamente no Ecobrança, fora deste sistema. Marcamos como cancelado no histórico.',
+            porDevolucao
+                ? `O banco devolveu o boleto sem pagamento identificado. Marcamos como baixado no histórico.${revalidacaoDias ? ` O boleto segue sendo consultado por ${revalidacaoDias} dia(s): se o pagamento aparecer, o status é corrigido automaticamente aqui e no Office.` : ''}`
+                : 'Detectamos que o boleto foi baixado/cancelado diretamente no Ecobrança, fora deste sistema. Marcamos como cancelado no histórico.',
         ].filter(Boolean).join('\n');
         await sendCvMessageSafe(history.idreserva, msg, history.id, 'baixado externamente', ATO_STATUS.BAIXADO);
         return;

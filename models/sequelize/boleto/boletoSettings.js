@@ -105,7 +105,7 @@ export default (sequelize, DataTypes) => {
         baixa_devolucao_confirmar_dias_uteis: {
             type: DataTypes.INTEGER,
             allowNull: true,
-            defaultValue: 3,
+            defaultValue: 0,
             comment: '"BAIXADO POR DEVOLUÇÃO" sem baixa pedida pelo Office fica pendente por estes dias úteis antes de virar cancelado (pode ser pagamento em compensação). 0 cancela na primeira leitura.',
         },
 
