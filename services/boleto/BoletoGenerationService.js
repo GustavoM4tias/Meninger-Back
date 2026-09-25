@@ -527,10 +527,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                     status: 'queued',
                     emissao_agendada_processada: false,
                     id: { [Op.ne]: history.id },
-                    // Só conta o que sai até esta abertura. Agendamento por
-                    // vencimento acima do limite (dias à frente) não segura um
-                    // acionamento novo: na abertura ele é substituído (passo 1.8).
-                    emissao_agendada_para: { [Op.lte]: agendadoPara },
                 },
                 order: [['id', 'DESC']],
             });
@@ -586,33 +582,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
                 data: { agendadoPara, janela: janelaLabel },
             });
             return;
-        }
-
-        // ── 1.8. Acionamento novo substitui emissão agendada da mesma reserva ─
-        // Vencimento acima do limite fica agendado (passo 3). Se o CV acionar de
-        // novo nesse meio tempo, este acionamento é que vale (dados frescos), e o
-        // agendamento antigo sai da fila para não emitir em duplicidade.
-        {
-            const [substituidos] = await db.BoletoHistory.update({
-                status: 'skipped',
-                ignorado: true,
-                emissao_agendada_processada: true,
-                error_message: `Emissão agendada substituída por um acionamento novo (registro #${history.id}).`,
-            }, {
-                where: {
-                    idreserva,
-                    status: 'queued',
-                    emissao_agendada_processada: false,
-                    id: { [Op.ne]: history.id },
-                },
-            });
-            if (substituidos) {
-                await EventLogger.log({
-                    historyId: history.id, idreserva,
-                    type: 'ignored_duplicate', severity: 'info',
-                    message: `${substituidos} emissão(ões) agendada(s) desta reserva substituída(s) por este acionamento.`,
-                });
-            }
         }
 
         // ── 2. Localiza séries de entrada configuradas ────────────────────────
@@ -1179,52 +1148,6 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
             const origemConfig = empreendimentoRule?.max_dias_vencimento != null
                 ? `regra do empreendimento (${empreendimentoRule.max_dias_vencimento} dias)`
                 : `padrão do sistema (${maxDias} dias)`;
-
-            // Vencimento longe demais não é erro, é cedo demais (reserva 8294,
-            // 24/08/2026: recusada com vencimento 03/09 e nunca mais olhada).
-            // Agenda para o dia em que o vencimento entra no limite, na abertura
-            // da janela; o boletoWindowScheduler retoma ESTE registro e refaz
-            // todas as validações com os dados do CV daquele dia.
-            if (settings.agendar_vencimento_acima_limite !== false) {
-                const entra = new Date(vencDate);
-                entra.setDate(entra.getDate() - maxDias);
-                const ymd = entra.toISOString().slice(0, 10);
-                const agendadoPara = ajustarParaJanela(settings, new Date(`${ymd}T00:00:00-03:00`));
-                const quandoLabel = formatarAgendamento(agendadoPara);
-                const msg = [
-                    `🕒 Boleto do ato agendado - vencimento ${formatDate(vencimento)} ainda está acima do limite de ${maxDias} dias.`,
-                    '',
-                    `Hoje o vencimento aceito vai até ${limiteStr} (limite vindo de: ${origemConfig}).`,
-                    `O boleto será emitido automaticamente em ${quandoLabel}, quando o vencimento entra no prazo.`,
-                    '',
-                    'A reserva PERMANECE na situação atual - nenhuma mudança de etapa foi feita.',
-                    'Não é preciso reenviar. Se as condições mudarem no CV, a emissão usa os dados do dia.',
-                ].join('\n');
-                const msgOk = pushWarn(await sendCvMessage(idreserva, msg), 'cv_mensagem');
-                await history.update({
-                    status: 'queued',
-                    emissao_agendada_para: agendadoPara,
-                    emissao_agendada_processada: false,
-                    error_message: `Vencimento ${formatDate(vencimento)} acima do limite D+${maxDias} (máx. hoje ${limiteStr}) - emissão agendada para ${quandoLabel}.`,
-                    titular_nome: titular?.nome,
-                    empreendimento: unidade?.empreendimento,
-                    idpessoa_cv: titular?.idpessoa_cv,
-                    valor: valorEmitir,
-                    valor_original: valorOriginal,
-                    comissao_percentual_aplicada: comissaoPercentualAplicada,
-                    comissao_valor_deduzida: comissaoValorDeduzida,
-                    vencimento,
-                    cv_mensagem_enviada: msgOk,
-                    warnings: warnings.length ? warnings : null,
-                });
-                await EventLogger.log({
-                    historyId: history.id, idreserva,
-                    type: 'emission_deferred', severity: 'info',
-                    message: `Vencimento ${formatDate(vencimento)} acima do limite de ${maxDias} dias - emissão agendada para ${quandoLabel}.`,
-                    data: { agendadoPara, vencimento, maxDias, motivo: 'vencimento_acima_limite' },
-                });
-                return;
-            }
             const msg = `❌ Boleto não emitido: data de vencimento ${formatDate(vencimento)} excede o limite máximo de ${maxDias} dias.\nO vencimento deve ser entre hoje e ${limiteStr}.\n(Limite vindo de: ${origemConfig})`
                ;
             const msgOk = pushWarn(await sendCvMessage(idreserva, msg, ATO_STATUS.DIVERGENTE), 'cv_mensagem');
