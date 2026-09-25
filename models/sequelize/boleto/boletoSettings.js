@@ -116,6 +116,13 @@ export default (sequelize, DataTypes) => {
             comment: 'Antes de emitir cobrança nova do ato, reconsulta no Ecobrança o último boleto cancelado por "BAIXADO POR DEVOLUÇÃO": o banco devolve essa situação também para título pago no dia anterior. Se constar pago, o ato vira pago e nada é emitido.',
         },
 
+        agendar_vencimento_acima_limite: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: true,
+            comment: 'Vencimento acima de max_dias_vencimento fica agendado para o dia em que entra no limite (retomado pelo boletoWindowScheduler) em vez de virar erro. Desligado, rejeita como antes.',
+        },
+
         max_dias_vencimento: {
             type: DataTypes.INTEGER,
             allowNull: true,

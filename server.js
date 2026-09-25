@@ -476,6 +476,12 @@ async function initBackground() {
   // nunca apareceria, e o teste do payload nao teria onde chegar.
   await ensureCvWebhookSchema().catch(err =>
       console.warn('⚠️  ensureCvWebhookSchema falhou:', err.message));
+  // Cobrança do Ato (25/09): boleto_settings.agendar_vencimento_acima_limite
+  // entrou no model e a coluna nunca nasceu em prod porque o gate pulava a
+  // fase - toda leitura de BoletoSettings quebrou e o módulo parou de 24/09
+  // ~15h até o revert. O patch é idempotente e barato; roda em todo boot.
+  await ensureBoletoSchema().catch(err =>
+      console.warn('⚠️  ensureBoletoSchema falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {
