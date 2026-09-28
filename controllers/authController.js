@@ -10,6 +10,7 @@ import { sendEmail } from '../email/email.service.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 import { issueRefreshToken, rotateRefreshToken, revokeRefreshToken } from '../services/auth/refreshTokenService.js';
 import { normalizeEmail, findUserByEmailCI } from '../utils/userEmail.js';
+import NotificationService from '../services/notification/NotificationService.js';
 
 const { User, Position, UserCity } = db;
 const { Op } = db.Sequelize;
@@ -568,6 +569,7 @@ export const updateUser = async (req, res) => {
     show_in_organogram,
     phone,
     daily_alert_limit,
+    system_notifications,
   } = req.body;
 
   if (!id) {
@@ -657,14 +659,25 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    if (Object.keys(payload).length === 0) {
+    // Avisos do sistema: não é coluna de users, é a sentinela do
+    // NotificationService (false = só recebe os próprios alertas).
+    const mudaAvisos = typeof system_notifications === 'boolean';
+
+    if (Object.keys(payload).length === 0 && !mudaAvisos) {
       return responseHandler.error(res, 'Nenhum campo informado para atualização');
     }
 
-    const [affectedRows] = await User.update(payload, { where: { id } });
-
-    if (affectedRows === 0) {
+    if (Object.keys(payload).length) {
+      const [affectedRows] = await User.update(payload, { where: { id } });
+      if (affectedRows === 0) {
+        return responseHandler.error(res, 'Usuário não encontrado');
+      }
+    } else if (!(await User.findByPk(id, { attributes: ['id'] }))) {
       return responseHandler.error(res, 'Usuário não encontrado');
+    }
+
+    if (mudaAvisos) {
+      await NotificationService.setSystemMuted(Number(id), !system_notifications);
     }
 
     return responseHandler.success(res, {
@@ -698,7 +711,9 @@ export const getAllUsers = async (req, res) => {
     if (users.length === 0) {
       return responseHandler.error(res, 'Nenhum usuário encontrado');
     }
-    return responseHandler.success(res, users);
+    const silenciados = await NotificationService.loadSystemMuted(users.map(u => u.id));
+    const lista = users.map(u => ({ ...u.get({ plain: true }), system_notifications: !silenciados.has(u.id) }));
+    return responseHandler.success(res, lista);
   } catch (error) {
     return responseHandler.error(res, error);
   }

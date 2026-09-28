@@ -1,5 +1,5 @@
 // api/controllers/notificationController.js
-import NotificationService from '../services/notification/NotificationService.js';
+import NotificationService, { SYSTEM_MUTE_TYPE } from '../services/notification/NotificationService.js';
 import { listCatalog, isTypeVisibleTo } from '../services/notification/notificationTypes.js';
 import { getEffectiveRoutes } from '../services/permissions/permissionAccessService.js';
 
@@ -129,6 +129,8 @@ export const setPreference = async (req, res) => {
     try {
         const { type, inapp, email, whatsapp } = req.body || {};
         if (!type) return res.status(400).json({ error: 'type é obrigatório.' });
+        // Silêncio de sistema é decisão do admin, no cadastro do usuário.
+        if (type === SYSTEM_MUTE_TYPE) return res.status(403).json({ error: 'Avisos do sistema são definidos pelo administrador em Usuários.' });
         const updated = await NotificationService.setPreference(req.user.id, type, { inapp, email, whatsapp });
         return res.json({ preference: updated });
     } catch (err) {

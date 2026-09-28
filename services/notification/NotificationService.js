@@ -105,6 +105,33 @@ function effectivePref(stored, defaults, channels) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// Silêncio de sistema (por usuário)
+// ───────────────────────────────────────────────────────────────────────────────
+
+// Usuário marcado aqui NÃO recebe aviso do sistema em canal nenhum (sino, push,
+// e-mail, WhatsApp) - só os disparos dos alertas dele (data.source === 'alert',
+// que o AlertEngine manda apenas para o dono da regra). Vale também para admin,
+// que é quem mais cai em lista de destinatário ("avisar os admins").
+//
+// Guardado como linha-sentinela em notification_preferences (inapp=false =
+// silenciado) para não mexer no model de users. Quem liga/desliga é o admin, no
+// modal do usuário (/settings/users).
+export const SYSTEM_MUTE_TYPE = 'system.muted';
+
+async function loadSystemMuted(userIds) {
+    if (!userIds.length) return new Set();
+    const rows = await NotificationPreference.findAll({
+        where: { user_id: userIds, type: SYSTEM_MUTE_TYPE, inapp: false },
+        attributes: ['user_id'],
+    });
+    return new Set(rows.map(r => r.user_id));
+}
+
+async function setSystemMuted(userId, muted) {
+    return setPreference(userId, SYSTEM_MUTE_TYPE, { inapp: !muted, email: !muted, whatsapp: !muted });
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // WhatsApp
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -249,7 +276,19 @@ async function notify({
     const emailType = catalog?.emailType || null;
     const whatsappSpec = catalog?.whatsapp || null;
 
-    const { internalUsers, externalEmails } = await resolveRecipients(recipients);
+    const resolved = await resolveRecipients(recipients);
+    const { externalEmails } = resolved;
+    let { internalUsers } = resolved;
+
+    if (internalUsers.length && data?.source !== 'alert') {
+        const muted = await loadSystemMuted(internalUsers.map(u => u.id));
+        if (muted.size) {
+            internalUsers.forEach(u => {
+                if (muted.has(u.id)) console.log(`[notify ${type}] pulado pra user ${u.id} ("${u.username}") - avisos do sistema silenciados`);
+            });
+            internalUsers = internalUsers.filter(u => !muted.has(u.id));
+        }
+    }
 
     let inappCreated = 0;
     let whatsappQueued = 0;
@@ -481,5 +520,7 @@ export default {
     removeOne,
     getPreferences,
     setPreference,
+    loadSystemMuted,
+    setSystemMuted,
     NotificationType,
 };
