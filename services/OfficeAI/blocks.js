@@ -100,7 +100,31 @@ export function emailBlock({ id, to, cc, bcc, subject, body, note, replyTo }) {
     });
 }
 
+/**
+ * Lançamento de pagamento para a pessoa CONFERIR e confirmar no cartão. A tool
+ * que devolve isto NÃO lança nada: quem cria é o clique em "Confirmar", pela
+ * rota /sienge/payment-flow/eme/confirm, que roda o portão de novo no servidor.
+ * `draft` = campos do lançamento; `preview` = retorno de paymentFlow/preview.js.
+ */
+export function paymentLaunchBlock({ id, draft, preview }) {
+    return limpar({
+        id: id || `payment_${Date.now().toString(36)}`,
+        kind: 'payment_launch',
+        payment: limpar({
+            draft,
+            ok: !!preview?.ok,
+            motivos: preview?.motivos || [],
+            avisos: preview?.avisos || [],
+            passos: preview?.passos || [],
+            tipo: preview?.tipo ? { name: preview.tipo.name, documento: preview.tipo.documento } : undefined,
+            credor: preview?.credor || undefined,
+            contrato: preview?.contrato || undefined,
+            item: preview?.item || undefined,
+        }),
+    });
+}
+
 /** Ação de abrir tela, para `actions` de qualquer bloco. */
 export const abrirTela = (route, label = 'Abrir tela', filters) => limpar({ kind: 'navigate', label, payload: limpar({ route, filters }) });
 
-export default { VISUALS, VISUAL_PARAM, VISUAL_PARAM_GEMINI, visualPedido, datasetBlock, kpisBlock, cardsBlock, detailBlock, choiceBlock, navBlock, emailBlock, abrirTela };
+export default { VISUALS, VISUAL_PARAM, VISUAL_PARAM_GEMINI, visualPedido, datasetBlock, kpisBlock, cardsBlock, detailBlock, choiceBlock, navBlock, emailBlock, paymentLaunchBlock, abrirTela };

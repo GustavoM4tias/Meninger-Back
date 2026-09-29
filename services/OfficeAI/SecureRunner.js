@@ -73,7 +73,7 @@ async function writeAuditLog({
  *
  * @returns {Promise<object>} resultado da tool (ou { error })
  */
-export async function runTool({ user, toolName, args = {}, context = 'OFFICE', sessionId = null, messageId = null, ip = null, userAgent = null }) {
+export async function runTool({ user, toolName, args = {}, context = 'OFFICE', sessionId = null, messageId = null, ip = null, userAgent = null, attachments = [] }) {
     const startedAt = Date.now();
     const ctxUpper = String(context || 'OFFICE').toUpperCase();
     const argsSnap = sanitizeArgsForLogging(args);
@@ -119,7 +119,9 @@ export async function runTool({ user, toolName, args = {}, context = 'OFFICE', s
     // 5) Executa o handler em try/catch.
     let result, error = null, resultIds = null, resultCount = null, filtersApplied = null;
     try {
-        const ret = await tool.handler(user, args, { context: ctxUpper, sessionId });
+        // `attachments`: anexos do turno já validados pelo streamChat (pasta do
+        // próprio usuário). Só tool que precisa lê; nunca vêm dos args do modelo.
+        const ret = await tool.handler(user, args, { context: ctxUpper, sessionId, attachments });
         result = ret?.result !== undefined ? ret.result : ret;
         resultIds = ret?.resultIds || null;
         resultCount = ret?.resultCount != null ? ret.resultCount : (Array.isArray(result) ? result.length : null);

@@ -73,6 +73,10 @@ const PISTAS = [
     { quando: /lead|m[ií]dia|campanha|meta|marketing|an[úu]ncio/i, tools: /(lead|marketing|campaign|meta)/i },
     { quando: /boleto|t[íi]tulo|custo|pagamento|financeiro|inadimpl|receber/i,
       tools: /(boleto|custo|payment|financ|title|titulo)/i },
+    // Lançar no Sienge a partir de NF/boleto anexados (Fluxo de Pagamento).
+    // "Anexos enviados" é o marcador que o streamChat põe quando vem PDF.
+    { quando: /sienge|sal[áa]rio|nota fiscal|\bnfs?e?\b|medi[çc][ãa]o|lan[çc]ar|subir|suba|sobe|pagamento|boleto|anexos enviados/i,
+      tools: /^lancamento_pagamento_/ },
     // "gestores comerciais" nao tinha pista nenhuma: a palavra que sobrava era
     // "comerciais", que pontua alto na descricao das tools de FICHA comercial -
     // e foi exatamente a tela que a Eme abriu quando pediram para convidar os

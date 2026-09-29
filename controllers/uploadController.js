@@ -22,6 +22,8 @@ const CONTEXTS = {
     TODO_ATTACHMENT: 'todo_attachment',           // Anexos de tarefa do To Do
     // ── Eme Atende ───────────────────────────────────────────────────────────────
     EME_ATENDE_IMAGE: 'eme_atende_image',         // Imagens que a Eme envia ao lead (públicas)
+    // ── Chat da Eme ──────────────────────────────────────────────────────────────
+    EME_CHAT_ATTACHMENT: 'eme_chat_attachment',   // NF/boleto que a pessoa manda para a Eme lançar
 };
 
 function sanitizeFileName(name = '') {
@@ -197,6 +199,21 @@ function buildUploadConfig({ context, file, userId, referenceId, resourceType })
             return {
                 bucket: STORAGE_BUCKET,
                 path: `office/eme-atende/flows/${referenceId || 'draft'}/images/${timestamp}-${originalName}`,
+                isPublic: true,
+            };
+
+        // ── Chat da Eme: documento para a Eme ler (NF, boleto) ─────────────────
+        // A pasta leva o id de quem enviou: a tool de lançamento só aceita anexo
+        // da pasta do PRÓPRIO usuário (ver PaymentLaunchTools.js).
+        case CONTEXTS.EME_CHAT_ATTACHMENT:
+            if (!userId) throw new Error('Usuário não autenticado');
+            // Só PDF: é o que o extrator de NF/boleto lê.
+            if (file.mimetype !== 'application/pdf') {
+                throw new Error('Anexo para a Eme aceita apenas PDF');
+            }
+            return {
+                bucket: STORAGE_BUCKET,
+                path: `office/eme-chat/${userId}/${timestamp}-${originalName}`,
                 isPublic: true,
             };
 

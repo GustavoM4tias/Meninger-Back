@@ -22,6 +22,7 @@ import './EnterpriseMirrorTools.js';
 // Idem: Financeiro (Custos c/ alçada da tela + Boletos admin), Pessoas/Organograma,
 // Validador de Contratos e Perfil (notificações + share de alertas).
 import './FinanceTools.js';
+import './PaymentLaunchTools.js';
 import './PeopleTools.js';
 import './ContractTools.js';
 import './RepasseTools.js';
@@ -752,12 +753,25 @@ async function getLastBridgeContext(sessionId) {
  *   nisso seria olhar para o lado errado: "o que está no ar vai bem" não diz
  *   nada sobre o que vai entrar.
  */
-export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE', viaVoice = false, screen = null, brainOverride = null }) {
+export async function streamChat({ req, res, userId, sessionId, userMessage, context = 'OFFICE', viaVoice = false, screen = null, brainOverride = null, attachments = [] }) {
   // O relógio do turno começa AQUI, não depois do preparo. Medir a partir do
   // momento em que o modelo entra em cena escondia o que a pessoa mais sente:
   // sessão, histórico, cérebro e alçadas rodam antes, e num banco remoto
   // ocupado isso sozinho passava de 20 segundos.
   const turnoT0 = Date.now();
+
+  // Anexos do turno (NF/boleto para a Eme lançar). Só vale o que subiu pela
+  // rota de upload na pasta DO PRÓPRIO usuário - o cliente não aponta para
+  // arquivo de ninguém. Não vão para o modelo como arquivo: só as tools que
+  // precisam (lançamento de pagamento) leem, pelo runtime. O modelo fica
+  // sabendo pelo nome, anexado ao texto da mensagem.
+  const turnAttachments = (Array.isArray(attachments) ? attachments : [])
+    .filter(a => a && typeof a.path === 'string' && a.path.startsWith(`office/eme-chat/${userId}/`) && !a.path.includes('..'))
+    .slice(0, 5)
+    .map(a => ({ path: a.path, url: typeof a.url === 'string' ? a.url : null, fileName: String(a.fileName || a.path.split('/').pop()).slice(0, 120), mimeType: 'application/pdf' }));
+  if (turnAttachments.length) {
+    userMessage = `${userMessage}\n\n[Anexos enviados neste turno: ${turnAttachments.map(a => a.fileName).join(', ')}]`;
+  }
 
   // Fase REAL do turno, para o front não ficar em "Pensando…" mudo: cada
   // etapa do preparo (cérebro, memórias, histórico, ferramentas), qual modelo
@@ -1080,6 +1094,7 @@ export async function streamChat({ req, res, userId, sessionId, userMessage, con
         sessionId: session.id,
         ip: req?.ip || null,
         userAgent: req?.headers?.['user-agent'] || null,
+        attachments: turnAttachments,
       });
       // Tool que devolveu nada: sem isto o functionResponse ia com `null`, o
       // Gemini recusava o follow-up e a pessoa recebia "não consegui gerar uma
@@ -2287,6 +2302,19 @@ function summarizeForGemini(result) {
       // Cartão de e-mail: o modelo vê para quem e o assunto, para comentar.
       // O envio é um clique da pessoa - ele nunca pode dizer que "enviou".
       if (b.kind === 'email') return { kind: b.kind, para: (b.email?.to || []).map(p => p.email), assunto: b.email?.subject, responde_a: b.email?.replyTo?.subject, status: 'aguardando o usuário clicar em Enviar no cartão; NADA foi enviado' };
+      // Cartão de lançamento: o modelo vê o que o portão disse. Lançar é o
+      // clique em Confirmar - ele nunca pode dizer que "lançou" ou "subiu".
+      if (b.kind === 'payment_launch') {
+        const p = b.payment || {};
+        return {
+          kind: b.kind, tipo: p.tipo?.name, fornecedor: p.draft?.providerName, valor: p.draft?.unitPrice,
+          nf: p.draft?.nfNumber, contrato: p.contrato?.label, pode_confirmar: !!p.ok,
+          motivos: p.motivos, avisos: p.avisos, passos: (p.passos || []).map(s => s.label),
+          status: p.ok
+            ? 'aguardando o usuário clicar em Confirmar no cartão; NADA foi lançado no Sienge'
+            : 'RECUSADO pelo portão de regras; nada foi lançado - explique os motivos',
+        };
+      }
       return { kind: b.kind, title: b.title };
     });
     const RENDER_KEYS = new Set(['type', 'title', 'subtitle', 'blocks', 'message', 'context']);

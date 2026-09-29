@@ -69,9 +69,12 @@ setInterval(() => {
 // ── POST /api/office-chat/stream ──────────────────────────────────────────────
 // SSE: envia a mensagem e recebe a resposta em streaming
 router.post('/stream', authenticate, rateLimitChat, async (req, res) => {
-  const { message, session_id, via_voice, screen } = req.body;
+  const { session_id, via_voice, screen, attachments } = req.body;
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  // Só anexo, sem texto: vira um pedido explícito para a Eme ler.
+  const message = req.body.message?.trim() || (hasAttachments ? 'Segue anexo.' : '');
 
-  if (!message?.trim()) {
+  if (!message) {
     return res.status(400).json({ error: 'Mensagem obrigatória.' });
   }
 
@@ -95,9 +98,10 @@ router.post('/stream', authenticate, rateLimitChat, async (req, res) => {
       res,
       userId: req.user.id,
       sessionId: session_id || null,
-      userMessage: message.trim(),
+      userMessage: message,
       viaVoice: !!via_voice,
       screen,
+      attachments: hasAttachments ? attachments : [],
     });
   } catch (err) {
     // Headers SSE já foram enviados — não dá para responder status HTTP; emite
