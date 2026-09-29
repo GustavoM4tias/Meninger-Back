@@ -333,6 +333,9 @@ export async function estatisticas(user, filtros = {}) {
         cancelados: vazio(), expirados: vazio(), negados: vazio(),
         estornados: vazio(), erros: vazio(), agendados: vazio(),
         ignorados: vazio(), processando: vazio(), mortas: vazio(),
+        // Parte de `mortas` que FOI emitida: entra em `emitidos` mas em nenhum
+        // cartão de desfecho. A tela usa para fechar a conta dos Emitidos.
+        encerrados: vazio(),
         porForma: { boleto: vazio(), cartao: vazio() },
     };
     const soma = (alvo, valor) => { alvo.qty += 1; alvo.valor += valor; };
@@ -353,6 +356,7 @@ export async function estatisticas(user, filtros = {}) {
         // Baixado/expirado de reserva morta também não é evasão.
         if ((l.payment_status === 'cancelled' || l.payment_status === 'expired') && morta) {
             soma(acc.mortas, valor);
+            soma(acc.encerrados, valor);
             continue;
         }
         const destino = {
