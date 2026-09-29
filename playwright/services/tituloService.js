@@ -54,7 +54,7 @@ export async function runPlaywrightTitulo(params = {}) {
     try {
         const result = await createTitulo(page, params);
         success("SERVICE", `Fluxo de título concluído. Nº: ${result.tituloNumber ?? "?"}`);
-        return { success: true, tituloNumber: result.tituloNumber };
+        return { success: true, tituloNumber: result.tituloNumber, avisos: result.avisos || [] };
     } catch (error) {
         log("SERVICE", `Falha no fluxo de título: ${error.message}`);
         throw error;

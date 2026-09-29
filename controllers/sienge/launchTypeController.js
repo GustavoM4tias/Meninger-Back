@@ -1,5 +1,8 @@
 // controllers/sienge/launchTypeController.js
 import db from '../../models/sequelize/index.js';
+import {
+    recipeOf, stepsOf, normalizeReceita, normalizeRegras, validateReceita, validateRegras,
+} from '../../services/sienge/paymentFlow/recipe.js';
 
 const Model = () => db.LaunchTypeConfig;
 
@@ -117,7 +120,12 @@ export async function listLaunchTypes(req, res, next) {
             where,
             order: [['name', 'ASC']],
         });
-        return res.json(types);
+        // Receita/regras já normalizadas + os passos que a esteira vai rodar:
+        // a tela e a Eme mostram o mesmo "vai acontecer".
+        return res.json(types.map(t => {
+            const { receita, regras } = recipeOf(t);
+            return { ...t.toJSON(), receitaEfetiva: receita, regrasEfetivas: regras, passos: stepsOf(receita) };
+        }));
     } catch (err) { next(err); }
 }
 
@@ -127,10 +135,12 @@ export async function createLaunchType(req, res, next) {
         if (req.user?.role !== 'admin') {
             return res.status(403).json({ error: 'Apenas administradores podem criar tipos de lançamento.' });
         }
-        const { name, documento, budgetItem, budgetItemCode, financialAccountNumber, budgetIndex, accountIndex, departamentoId } = req.body;
+        const { name, documento, budgetItem, budgetItemCode, financialAccountNumber, budgetIndex, accountIndex, departamentoId, receita, regras } = req.body;
         if (!name || !documento || !budgetItem || !financialAccountNumber) {
             return res.status(422).json({ error: 'Campos obrigatórios: name, documento, budgetItem, financialAccountNumber' });
         }
+        const erros = [...validateReceita(receita), ...validateRegras(regras)];
+        if (erros.length) return res.status(422).json({ error: erros.join(' ') });
         const existing = await Model().findOne({ where: { name } });
         if (existing) {
             return res.status(409).json({ error: `Tipo "${name}" já existe.` });
@@ -144,6 +154,8 @@ export async function createLaunchType(req, res, next) {
             budgetIndex: budgetIndex || null,
             accountIndex: accountIndex || null,
             departamentoId: departamentoId || null,
+            receita: receita ? normalizeReceita(receita, { documentoTipo: documento }) : null,
+            regras: regras ? normalizeRegras(regras) : null,
             active: true,
             createdBy: req.user?.id || null,
         });
@@ -162,6 +174,18 @@ export async function updateLaunchType(req, res, next) {
         const allowed = ['documento', 'budgetItem', 'budgetItemCode', 'financialAccountNumber', 'budgetIndex', 'accountIndex', 'departamentoId', 'active'];
         const patch = {};
         allowed.forEach(k => { if (req.body[k] !== undefined) patch[k] = req.body[k]; });
+
+        // Receita/regras: null volta o tipo ao modo "auto" (comportamento de sempre).
+        const erros = [...validateReceita(req.body.receita), ...validateRegras(req.body.regras)];
+        if (erros.length) return res.status(422).json({ error: erros.join(' ') });
+        if (req.body.receita !== undefined) {
+            patch.receita = req.body.receita
+                ? normalizeReceita(req.body.receita, { documentoTipo: patch.documento || type.documento })
+                : null;
+        }
+        if (req.body.regras !== undefined) {
+            patch.regras = req.body.regras ? normalizeRegras(req.body.regras) : null;
+        }
         await type.update(patch);
         return res.json(type);
     } catch (err) { next(err); }

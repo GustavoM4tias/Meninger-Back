@@ -127,10 +127,12 @@ export async function createTitulo(page, params = {}) {
         nfType = "NFS",
         nfNumber = "",
         nfIssueDate = "",
+        nfAccessKey = "",
         boletoDueDate = "",
         departamento = "24",
         unitPrice = "",
     } = params;
+    const avisos = [];
 
     const contratoLabel = `${documentType}/${contractNumber}`;
     const dtVencimento = calcVencimento(boletoDueDate);
@@ -206,6 +208,37 @@ export async function createTitulo(page, params = {}) {
         await page.waitForTimeout(300);
     }
 
+    // 5b'. Chave de acesso da NF-e (só quando o título é NFE e a chave veio).
+    // O campo não foi mapeado numa tela real ainda: procura pelos nomes que o
+    // Sienge usa para a chave; sem achar, segue sem ela e avisa no log.
+    if (nfAccessKey) {
+        const keySelectors = [
+            "#nuChaveAcesso",
+            'input[name*="chaveAcesso" i]',
+            'input[id*="chaveAcesso" i]',
+            'input[name*="chaveNfe" i]',
+            'input[id*="chaveNfe" i]',
+        ];
+        let filled = false;
+        for (const sel of keySelectors) {
+            const loc = frame.locator(sel).first();
+            if (await loc.isVisible({ timeout: 800 }).catch(() => false)) {
+                log("TITULO", `Preenchendo chave de acesso da NF-e (${sel})`);
+                await loc.fill("");
+                await loc.fill(String(nfAccessKey));
+                await loc.press("Tab").catch(() => {});
+                await page.waitForTimeout(300);
+                filled = true;
+                break;
+            }
+        }
+        if (!filled) {
+            const msg = "Campo da chave de acesso da NF-e não encontrado na tela do título; título salvo sem a chave.";
+            log("TITULO", msg);
+            avisos.push(msg);
+        }
+    }
+
     // 5c. Data de emissão
     if (dtEmissao) {
         log("TITULO", `Preenchendo data de emissão: ${dtEmissao}`);
@@ -273,5 +306,5 @@ export async function createTitulo(page, params = {}) {
     await waitForPageSettled(page);
 
     success("TITULO", `Título #${tituloNumber} criado com sucesso para ${contratoLabel} medição #${measurementNumber}`);
-    return { tituloNumber };
+    return { tituloNumber, avisos };
 }

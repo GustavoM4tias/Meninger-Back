@@ -114,6 +114,13 @@ export default (sequelize, DataTypes) => {
                 type: DataTypes.DATEONLY,
                 comment: "Data de emissão da NF extraída pela IA",
             },
+            // Chave de acesso da NF-e (44 dígitos). Coluna garantida por
+            // lib/ensurePaymentFlowRecipeSchema.js (fora do gate de schema).
+            nfAccessKey: {
+                field: "nf_access_key",
+                type: DataTypes.STRING(60),
+                allowNull: true,
+            },
 
             // ── Boleto ────────────────────────────────────────────────────────
             boletoUrl: { field: "boleto_url", type: DataTypes.TEXT },
@@ -254,6 +261,14 @@ export default (sequelize, DataTypes) => {
                 type: DataTypes.BOOLEAN,
                 defaultValue: false,
                 comment: "True quando o Playwright falhou por senha/email errados no Sienge",
+            },
+
+            // De onde o lançamento veio: 'tela' (modal do Fluxo de Pagamento) ou
+            // 'eme' (cartão confirmado no chat). Só auditoria.
+            origin: {
+                field: "origin",
+                type: DataTypes.STRING(20),
+                allowNull: true,
             },
 
             rejectionReason: { field: "rejection_reason", type: DataTypes.TEXT },

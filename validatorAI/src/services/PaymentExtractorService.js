@@ -23,6 +23,7 @@ Retorne APENAS JSON (sem markdown):
   "documentType": "NFe|NFS|NF|Recibo|Fatura|Outro",
   "documentNumber": "<número>",
   "documentDate": "YYYY-MM-DD|null",
+  "accessKey": "<chave de acesso da NF-e, 44 dígitos sem espaço|null>",
   "providerName": "<razão social emitente>",
   "providerCnpj": "<14 dígitos sem pontuação>",
   "recipientName": "<razão social destinatário>",
@@ -178,6 +179,8 @@ export class PaymentExtractorService {
             // Documento
             nfType: extracted.documentType || null,
             nfNumber: extracted.documentNumber || null,
+            nfAccessKey: String(extracted.accessKey || '').replace(/\D/g, '').length === 44
+                ? String(extracted.accessKey).replace(/\D/g, '') : null,
             documentDate: extracted.documentDate || null,
             // Valor
             unitPrice: extracted.totalAmount || null,

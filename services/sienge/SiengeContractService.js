@@ -209,6 +209,32 @@ export class SiengeContractService {
         }
     }
 
+    /**
+     * TODOS os contratos do fornecedor na empresa (sem escolher o "melhor").
+     * Usado pelo módulo Contrato Existente, que decide pela receita do tipo
+     * (documento, autorização, vigência, obra) - ver paymentFlow/gate.js.
+     */
+    static async findAllBySupplierId(supplierId, companyId = null) {
+        if (!supplierId) return [];
+        const { contractStartDate, contractEndDate } = searchDateRange();
+        const params = { contractStartDate, contractEndDate, limit: API_PAGE_LIMIT };
+        if (companyId) params.companyId = Number(companyId);
+
+        const matching = [];
+        let offset = 0;
+        while (true) {
+            const { data } = await apiSienge.get('/v1/supply-contracts/all', { params: { ...params, offset } });
+            const results = data?.results || [];
+            const total = data?.resultSetMetadata?.count ?? results.length;
+            for (const c of results) {
+                if (Number(c.supplierId) === Number(supplierId)) matching.push(c);
+            }
+            offset += results.length;
+            if (offset >= total || results.length === 0) break;
+        }
+        return matching;
+    }
+
     /** Busca contrato por documentId + contractNumber (para polling) */
     static async getByIds(documentId, contractNumber) {
         if (!documentId || !contractNumber) return null;

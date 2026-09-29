@@ -59,6 +59,19 @@ export default (sequelize, DataTypes) => {
                 comment: 'ID do departamento no Sienge (ex: 24, 25, 16). Quando preenchido, sobrescreve o mapa legado.',
             },
 
+            // Receita da esteira (quais módulos e como) e regras do portão -
+            // ver services/sienge/paymentFlow/recipe.js. NULL = modo "auto", o
+            // comportamento de sempre. Colunas garantidas por
+            // lib/ensurePaymentFlowRecipeSchema.js (fora do gate de schema).
+            receita: {
+                type: DataTypes.JSONB,
+                allowNull: true,
+            },
+            regras: {
+                type: DataTypes.JSONB,
+                allowNull: true,
+            },
+
             active: {
                 type: DataTypes.BOOLEAN,
                 defaultValue: true,

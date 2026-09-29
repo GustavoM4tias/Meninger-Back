@@ -133,6 +133,7 @@ import { ensureAlertSharesSchema } from './lib/ensureAlertSharesSchema.js';
 import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
+import { ensurePaymentFlowRecipeSchema } from './lib/ensurePaymentFlowRecipeSchema.js';
 import { ensureUseredeSchema } from './lib/ensureUseredeSchema.js';
 import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
 import ensureEnvioSiengeWatchSchema from './lib/ensureEnvioSiengeWatchSchema.js';
@@ -482,6 +483,10 @@ async function initBackground() {
   // ~15h até o revert. O patch é idempotente e barato; roda em todo boot.
   await ensureBoletoSchema().catch(err =>
       console.warn('⚠️  ensureBoletoSchema falhou:', err.message));
+  // Esteira modular do Fluxo de Pagamento (29/09): receita/regras por tipo e
+  // chave da NF-e entraram nos models. Fora do gate pelo mesmo motivo do Boleto.
+  await ensurePaymentFlowRecipeSchema().catch(err =>
+      console.warn('⚠️  ensurePaymentFlowRecipeSchema falhou:', err.message));
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {

@@ -16,7 +16,12 @@ import {
     stepUpdateBoleto,
     continueExistingContractPipeline,
     abortPipeline,
+    stepAttachDocument,
 } from '../../services/sienge/PaymentFlowPipelineService.js';
+import { recipeOf } from '../../services/sienge/paymentFlow/recipe.js';
+import { checkLaunchInput } from '../../services/sienge/paymentFlow/gate.js';
+import { previewLaunch } from '../../services/sienge/paymentFlow/preview.js';
+import { runSiengeWatch } from '../../services/sienge/paymentFlow/siengeWatch.js';
 import { sendEmail } from '../../email/email.service.js';
 import { generateRidDocx } from '../../services/sienge/RidDocumentService.js';
 import { visibleErpIds } from '../../services/permissions/accessScopeService.js';
@@ -62,42 +67,58 @@ async function ownedLaunch(req, id) {
 }
 
 // ── CREATE ────────────────────────────────────────────────────────────────────
-export async function createLaunch(req, res, next) {
-    try {
-        const u = actor(req);
-        const b = req.body;
-        const td = b.launchType ? await typeDefaults(b.launchType) : {};
-        const today = new Date().toISOString().slice(0, 10);
-        const endOfYear = `${today.slice(0, 4)}-12-31`;
+/**
+ * Cria o lançamento - caminho ÚNICO da tela e da Eme.
+ * @returns {{ status: number, body: object, launch?: object }}
+ */
+async function createLaunchRecord(b, u, { origin = 'tela' } = {}) {
+    const td = b.launchType ? await typeDefaults(b.launchType) : {};
+    const today = new Date().toISOString().slice(0, 10);
+    const endOfYear = `${today.slice(0, 4)}-12-31`;
 
-        // ── Verificação de duplicidade: mesmo nfNumber + providerCnpj (exceto cancelados) ──
-        if (b.nfNumber && b.providerCnpj && !b.cancelExisting) {
-            const existing = await Model().findOne({
-                where: {
-                    nfNumber: b.nfNumber,
-                    providerCnpj: b.providerCnpj,
-                    status: { [db.Sequelize.Op.ne]: 'cancelado' },
-                },
-                attributes: ['id', 'status', 'launchType', 'createdByName', 'createdAt', 'providerName', 'nfNumber'],
-            });
-            if (existing) {
-                return res.status(409).json({
+    // ── Portão: tipo com receita configurada não nasce fora das regras ────────
+    const typeRow = b.launchType ? await TypeModel().findOne({ where: { name: b.launchType, active: true } }) : null;
+    if (typeRow) {
+        const { receita, regras } = recipeOf(typeRow);
+        if (receita.configurada) {
+            const gate = checkLaunchInput({ ...td, ...b }, receita, regras);
+            if (!gate.ok) {
+                return { status: 422, body: { gate: true, error: gate.motivos.join(' '), motivos: gate.motivos } };
+            }
+        }
+    }
+
+    // ── Verificação de duplicidade: mesmo nfNumber + providerCnpj (exceto cancelados) ──
+    if (b.nfNumber && b.providerCnpj && !b.cancelExisting) {
+        const existing = await Model().findOne({
+            where: {
+                nfNumber: b.nfNumber,
+                providerCnpj: b.providerCnpj,
+                status: { [db.Sequelize.Op.ne]: 'cancelado' },
+            },
+            attributes: ['id', 'status', 'launchType', 'createdByName', 'createdAt', 'providerName', 'nfNumber'],
+        });
+        if (existing) {
+            return {
+                status: 409,
+                body: {
                     duplicate: true,
                     error: `Já existe um lançamento ativo com NF "${b.nfNumber}" para este fornecedor.`,
                     existing: existing.toJSON(),
-                });
-            }
+                },
+            };
         }
+    }
 
-        // ── Cancelar lançamento anterior (se usuário confirmou) ───────────────
-        if (b.cancelExisting) {
-            const toCancel = await Model().findByPk(b.cancelExisting);
-            if (toCancel && toCancel.status !== 'cancelado') {
-                await toCancel.update({ status: 'cancelado', updatedBy: u.id, updatedByName: u.name });
-            }
+    // ── Cancelar lançamento anterior (se usuário confirmou) ───────────────
+    if (b.cancelExisting) {
+        const toCancel = await Model().findByPk(b.cancelExisting);
+        if (toCancel && toCancel.status !== 'cancelado') {
+            await toCancel.update({ status: 'cancelado', updatedBy: u.id, updatedByName: u.name });
         }
+    }
 
-        const launch = await Model().create({
+    const launch = await Model().create({
             companyName: b.companyName || null,
             companyId: b.companyId || null,
             enterpriseName: b.enterpriseName || null,
@@ -123,6 +144,7 @@ export async function createLaunch(req, res, next) {
             nfNumber: b.nfNumber || null,
             nfType: b.nfType || null,
             nfIssueDate: b.nfIssueDate || null,
+            nfAccessKey: b.nfAccessKey ? String(b.nfAccessKey).replace(/\D/g, '') : null,
             // Boleto
             boletoUrl: b.boletoUrl || null,
             boletoPath: b.boletoPath || null,
@@ -139,11 +161,66 @@ export async function createLaunch(req, res, next) {
             // Meta
             status: 'fornecedor',
             notes: b.notes || null,
+            origin,
             createdBy: u.id,
             createdByName: u.name,
         });
 
-        return res.status(201).json(launch);
+    return { status: 201, body: launch, launch };
+}
+
+export async function createLaunch(req, res, next) {
+    try {
+        const r = await createLaunchRecord(req.body, actor(req), { origin: 'tela' });
+        return res.status(r.status).json(r.body);
+    } catch (err) { next(err); }
+}
+
+// ── PRÉVIA (portão completo, só leitura no Sienge) ────────────────────────────
+export async function previewLaunchController(req, res, next) {
+    try {
+        return res.json(await previewLaunch(req.body || {}, req.user));
+    } catch (err) { next(err); }
+}
+
+// ── CONFIRMAÇÃO DA EME ────────────────────────────────────────────────────────
+// O cartão da Eme só MONTA o rascunho; quem cria é este clique do usuário.
+// Roda a prévia de novo (o Sienge pode ter mudado desde o cartão), cria pelo
+// mesmo caminho da tela e dispara a esteira.
+export async function confirmEmeLaunch(req, res, next) {
+    try {
+        const draft = { ...(req.body?.draft || {}) };
+        delete draft.cancelExisting; // a Eme nunca cancela lançamento de ninguém
+        const preview = await previewLaunch(draft, req.user);
+        if (!preview.ok) {
+            return res.status(422).json({ gate: true, error: preview.motivos.join(' '), motivos: preview.motivos, preview });
+        }
+        const r = await createLaunchRecord(preview.draft, actor(req), { origin: 'eme' });
+        if (r.status !== 201) return res.status(r.status).json(r.body);
+
+        const launchId = r.launch.id;
+        runFullPipeline(launchId, req.user?.id || null).catch(err =>
+            console.error(`[Pipeline] Erro inesperado no lançamento ${launchId} (Eme):`, err.message),
+        );
+        return res.status(201).json({ launch: r.launch, passos: preview.passos });
+    } catch (err) { next(err); }
+}
+
+// ── DOCUMENTO DEPOIS DA MEDIÇÃO ───────────────────────────────────────────────
+export async function attachDocumentController(req, res, next) {
+    try {
+        const { launch, status, error } = await ownedLaunch(req);
+        if (!launch) return res.status(status).json({ error });
+        const result = await stepAttachDocument(launch.id, req.body || {}, req.user?.id || null);
+        if (!result.ok) return res.status(422).json({ gate: true, error: result.motivos.join(' '), motivos: result.motivos });
+        return res.json(result);
+    } catch (err) { next(err); }
+}
+
+// ── VIGIA DAS TELAS DO SIENGE ─────────────────────────────────────────────────
+export async function siengeWatchController(req, res, next) {
+    try {
+        return res.json(await runSiengeWatch(req.user?.id || null));
     } catch (err) { next(err); }
 }
 
@@ -264,7 +341,7 @@ export async function updateLaunch(req, res, next) {
             'providerName', 'providerCnpj',
             'contractStartDate', 'contractEndDate',
             'launchType', 'unitPrice', 'notes',
-            'nfUrl', 'nfPath', 'nfFilename', 'nfNumber', 'nfType', 'nfIssueDate',
+            'nfUrl', 'nfPath', 'nfFilename', 'nfNumber', 'nfType', 'nfIssueDate', 'nfAccessKey',
             'boletoUrl', 'boletoPath', 'boletoFilename', 'boletoBarcode', 'boletoIssueDate', 'boletoDueDate', 'boletoAmount',
             'budgetItemCode',
         ];

@@ -15,7 +15,8 @@ import {
     runPipeline, findCreditor, findContract, createContract,
     validateItems, pollContract, createTituloController, registerBoletoController,
     pollNowController, updateBoletoController, abortPipelineController,
-    downloadRidTemplate, sendRidEmail, sendRidForm, continueExistingContract
+    downloadRidTemplate, sendRidEmail, sendRidForm, continueExistingContract,
+    previewLaunchController, confirmEmeLaunch, attachDocumentController, siengeWatchController,
 } from '../controllers/sienge/paymentFlowController.js';
 import {
     listFlowEnterprises,
@@ -166,6 +167,16 @@ router.post('/backups/:id/cancel', authenticate, requireAdmin, cancelBackup);
 // ── Empreendimentos (registro unificado — enterprises) ────────────────────────
 router.get('/payment-flow/enterprises', authenticate, listFlowEnterprises);   // ?q=termo
 router.get('/payment-flow/enterprises/resolve', authenticate, resolveEnterprise); // ?name=MARILIA/SP...
+
+// ── Esteira modular (29/09) ───────────────────────────────────────────────────
+// Prévia = portão completo com leitura no Sienge, sem gravar nada.
+router.post('/payment-flow/preview', authenticate, previewLaunchController);
+// Cartão da Eme: o clique do usuário cria o lançamento (mesmo caminho da tela).
+router.post('/payment-flow/eme/confirm', authenticate, confirmEmeLaunch);
+// Vigia: abre as telas do Sienge com a credencial de quem clicou, sem salvar.
+router.post('/payment-flow/sienge-watch', authenticate, configurarPaymentFlow, siengeWatchController);
+// Documento fiscal depois da medição (receita "medição antes do documento").
+router.post('/payment-flow/:id/document', authenticate, attachDocumentController);
 
 // ── CRUD lançamentos ──────────────────────────────────────────────────────────
 router.get('/payment-flow/', authenticate, listLaunches);

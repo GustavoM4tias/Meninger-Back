@@ -2,6 +2,7 @@
 import { log, success } from "../../core/logger.js";
 import { dismissCommonPopups } from "../../core/popups.js";
 import { unlockPlanilha } from "./unlockPlanilha.js";
+import { assertEnabledOrExplain } from "../../core/formDiagnostics.js";
 
 const MEASUREMENTS_PAGE_URL =
     "https://menin.sienge.com.br/sienge/8/index.html#/suprimentos/contratos-e-medicoes/medicoes/cadastros";
@@ -175,7 +176,7 @@ async function safeFillMoney2(page, target, selector, value) {
  * Preenche um MUI Autocomplete, aguarda as opções e seleciona a melhor correspondência.
  * matchText é uma string ou RegExp usada para filtrar as opções.
  */
-async function fillAutocomplete(page, fieldName, searchText, matchText, container = null) {
+async function fillAutocomplete(page, fieldName, searchText, matchText, container = null, { strict = false } = {}) {
     const root = container ?? page;
     const input = root.locator(`[name="${fieldName}"] input[type="text"]`);
     await input.waitFor({ state: "visible", timeout: 20000 });
@@ -197,6 +198,24 @@ async function fillAutocomplete(page, fieldName, searchText, matchText, containe
             await option.click();
             selected = true;
         }
+    }
+
+    // Estrito: sem a opção certa, NÃO cai na primeira da lista (medir no
+    // contrato errado) nem segue com o campo vazio (Salvar fica desabilitado
+    // e o erro vira um timeout sem explicação - lançamentos 70 e 71).
+    if (!selected && strict) {
+        const opts = await page.locator('[role="option"]').allInnerTexts().catch(() => []);
+        // Uma única opção para a busca exata não é ambígua (o texto pode vir
+        // num formato que o padrão não previu, ex.: "32 - CTPJ").
+        if (opts.length === 1) {
+            await page.locator('[role="option"]').first().click();
+            log("AUTOCOMPLETE", `${fieldName}: opção única aceita - "${opts[0].replace(/\s+/g, ' ').trim()}"`);
+            await page.waitForTimeout(400).catch(() => {});
+            return true;
+        }
+        const vistas = opts.slice(0, 5).map(s => s.replace(/\s+/g, ' ').trim()).join(' | ') || 'nenhuma';
+        await page.keyboard.press("Escape").catch(() => {});
+        throw new Error(`"${searchText}" não apareceu na busca do campo ${fieldName} da medição. Opções vistas: ${vistas}.`);
     }
 
     if (!selected) {
@@ -288,7 +307,7 @@ export async function createMeasurement(page, params = {}) {
     log("MEASUREMENT", `Preenchendo Contrato: ${documentType}/${contractNumber}`);
     const contratoSearch = `${documentType}/${contractNumber}`;
     const contratoPattern = new RegExp(`${documentType}.*${contractNumber}`, "i");
-    await fillAutocomplete(page, "contrato", contratoSearch, contratoPattern, modalDialog);
+    await fillAutocomplete(page, "contrato", contratoSearch, contratoPattern, modalDialog, { strict: true });
 
     // 3b. Obra — escopa ao modalDialog também
     log("MEASUREMENT", `Preenchendo Obra: ${obraCod}`);
@@ -310,6 +329,9 @@ export async function createMeasurement(page, params = {}) {
     log("MEASUREMENT", "Clicando em Salvar Medição...");
     const salvarMedicaoBtn = modalDialog.locator('button:has-text("Salvar Medição")');
     await salvarMedicaoBtn.waitFor({ state: "visible", timeout: 15000 });
+    // Desabilitado = campo obrigatório vazio: o erro diz qual, em vez de
+    // estourar 30 s de timeout no clique.
+    await assertEnabledOrExplain(salvarMedicaoBtn, modalDialog, "Salvar Medição");
 
     // Registra handler para alert nativo que pode surgir após o redirect
     let dialogDismissed = false;
