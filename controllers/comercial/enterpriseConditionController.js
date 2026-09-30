@@ -7,6 +7,8 @@ import { loadManagerMap, managersOfCondition } from '../../services/comercial/co
 import { mapaMotivos } from '../../services/cv/unitStockService.js';
 import Docusign from '../../services/comercial/DocusignService.js';
 import { visibleCvIds } from '../../services/permissions/accessScopeService.js';
+import { adimplenciaDaTabela } from '../cv/priceTablesDb.js';
+import { carregarRegistro, descontoDe } from '../cv/adimplenciaDb.js';
 
 const {
     EnterpriseCondition,
@@ -1432,7 +1434,8 @@ export const refreshUnitSnapshot = async (req, res) => {
         const precos = new Map();
         for (const t of ordem) {
             for (const u of (t.raw?.unidades ?? [])) {
-                if (u.idunidade != null && !precos.has(String(u.idunidade))) {
+                // Tabela de outro módulo lista a unidade com 0: só preço de verdade conta.
+                if (u.idunidade != null && Number(u.valor_total) > 0 && !precos.has(String(u.idunidade))) {
                     precos.set(String(u.idunidade), u.valor_total ?? null);
                 }
             }
@@ -1583,9 +1586,23 @@ export const getPriceTablesForEnterprise = async (req, res) => {
 
         const tables = await CvEnterprisePriceTable.findAll({
             where: { idempreendimento: eid, ativo_painel: true },
-            attributes: ['idtabela', 'nome', 'ativo_painel', 'aprovado', 'data_vigencia_de', 'data_vigencia_ate', 'porcentagem_comissao', 'maximo_parcelas', 'quantidade_parcelas_min', 'quantidade_parcelas_max', 'forma', 'juros_mes', 'raw'],
+            attributes: ['idtabela', 'nome', 'ativo_painel', 'aprovado', 'data_vigencia_de', 'data_vigencia_ate', 'porcentagem_comissao', 'maximo_parcelas', 'quantidade_parcelas_min', 'quantidade_parcelas_max', 'forma', 'juros_mes', 'raw', 'adimplencia'],
             order: [['data_vigencia_de', 'DESC']],
         });
+
+        // A tabela do CV lista TODAS as unidades do empreendimento; a ficha
+        // recorta por módulo, então cada unidade leva a etapa dela. E a
+        // adimplência premiada (Desconto Construtora) que vale para a tabela.
+        const etapaDe = new Map();
+        const linhasEtapa = await db.sequelize.query(
+            `SELECT u.idunidade, b.idetapa FROM cv_enterprise_units u
+               JOIN cv_enterprise_blocks b ON b.idbloco = u.idbloco
+               JOIN cv_enterprise_stages s ON s.idetapa = b.idetapa
+              WHERE s.idempreendimento = :eid`,
+            { replacements: { eid }, type: db.Sequelize.QueryTypes.SELECT },
+        );
+        for (const r of linhasEtapa) etapaDe.set(Number(r.idunidade), r.idetapa);
+        const registro = await carregarRegistro(eid);
 
         const result = tables.map(t => {
             const json = t.toJSON();
@@ -1593,7 +1610,12 @@ export const getPriceTablesForEnterprise = async (req, res) => {
                 (!t.data_vigencia_de || new Date(t.data_vigencia_de) <= today) &&
                 (!t.data_vigencia_ate || new Date(t.data_vigencia_ate) >= today)
             );
-            const unidades = json.raw?.unidades ?? [];
+            const adimpl = adimplenciaDaTabela(t, registro);
+            const unidades = (json.raw?.unidades ?? []).map(u => ({
+                ...u,
+                idetapa: etapaDe.get(Number(u.idunidade)) ?? null,
+                adimplencia: descontoDe(u.valor_total ?? null, adimpl.mapa.get(Number(u.idunidade))),
+            }));
             const prices = unidades.map(u => u.valor_total).filter(v => v != null && v > 0);
             return {
                 ...json,

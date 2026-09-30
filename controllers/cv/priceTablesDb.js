@@ -61,7 +61,7 @@ const areaOf = (u, original) => {
 // Adimplência premiada que vale para ESTA tabela (ver cabeçalho do arquivo).
 // `registro` = linhas de carregarRegistro(idempreendimento); sem ele, só a
 // cópia congelada conta.
-const adimplenciaDaTabela = (t, registro) => {
+export const adimplenciaDaTabela = (t, registro) => {
   const situacao = situacaoOf(t.data_vigencia_de, t.data_vigencia_ate);
   const congelada = t.adimplencia?.unidades ? mapaDoSnapshot(t.adimplencia) : null;
   if (situacao === 'encerrada') {
