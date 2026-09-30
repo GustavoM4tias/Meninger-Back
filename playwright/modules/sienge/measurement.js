@@ -234,6 +234,198 @@ async function fillAutocomplete(page, fieldName, searchText, matchText, containe
     return selected;
 }
 
+// ── Tela NOVA de edição da medição (set/2026) ─────────────────────────────────
+//
+// Desde set/2026 o Sienge abre a medição salva na tela nova
+// (#/suprimentos/contratos-e-medicoes/medicoes/editar/DOC/NUM/OBRA/MED), com os
+// itens numa grade MUI na própria página - sem o iframe legado nem o link
+// "Itens". O robô esperava o iframe e caía com "Frame was detached" DEPOIS de a
+// medição já existir, deixando-a com R$ 0 (CT/5082 #11, 30/09/2026).
+
+const EDIT_URL_RE = /\/medicoes\/editar\/([^/]+)\/([^/]+)\/(\d+)\/(\d+)/;
+
+function parseMoneyBR(txt) {
+    const s = String(txt || "").replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+}
+
+// Os avisos da tela nova chegam DEPOIS do carregamento (vídeo "Conheça a nova
+// tela", pedido de notificação push, dica "Entendi", Beamer) e cobrem os
+// botões. Fecha em rodadas até uma rodada não achar mais nada.
+async function removeOverlays(page, { rounds = 4 } = {}) {
+    for (let r = 0; r < rounds; r++) {
+        await page.evaluate(() => {
+            for (const s of ["#beamerOverlay", "#beamerAnnouncementPopup", ".beamerAnnouncementPopupContainer", "#beamerNews"]) {
+                document.querySelectorAll(s).forEach((e) => e.remove());
+            }
+        }).catch(() => {});
+        let fechou = false;
+        for (const txt of ["FECHAR", "NÃO, OBRIGADO", "ENTENDI"]) {
+            const b = page.locator(`button:has-text("${txt}")`).filter({ visible: true }).first();
+            if (await b.isVisible({ timeout: r === 0 ? 2500 : 1200 }).catch(() => false)) {
+                await b.click({ timeout: 3000 }).catch(() => {});
+                fechou = true;
+                await page.waitForTimeout(500);
+            }
+        }
+        if (!fechou && r > 0) break;
+    }
+}
+
+/**
+ * Passo "Anexos" da tela nova (tem de estar visível): escolhe os PDFs, clica em
+ * "Adicionar arquivos" e confere cada nome na tabela de anexos. Escolher sem
+ * adicionar só deixa o arquivo num chip - o Sienge não grava.
+ * @returns {number} quantos apareceram na tabela
+ */
+export async function attachFilesNewUi(page, files = []) {
+    if (!files.length) return 0;
+    await removeOverlays(page);
+    const fileInput = page.locator('input[type="file"]').first();
+    await fileInput.waitFor({ state: "attached", timeout: 15000 });
+    await fileInput.setInputFiles(files);
+    await page.waitForTimeout(1000);
+    const adicionar = page.getByRole("button", { name: "ADICIONAR ARQUIVOS" }).first();
+    await adicionar.waitFor({ state: "visible", timeout: 10000 });
+    await adicionar.click();
+    await waitForPageSettled(page);
+    await page.waitForTimeout(2500);
+    await removeOverlays(page);
+
+    let ok = 0;
+    for (const f of files) {
+        const nome = String(f).split(/[\\/]/).pop().replace(/\.pdf$/i, "");
+        const naTabela = await page.locator('[role="row"]').filter({ hasText: nome }).count().catch(() => 0);
+        if (naTabela) ok++;
+        else log("MEASUREMENT", `Anexo "${nome}" não apareceu na tabela de anexos.`);
+    }
+    log("MEASUREMENT", `${ok}/${files.length} anexo(s) gravados na medição.`);
+    return ok;
+}
+
+/** Número da medição a partir da URL da tela nova (null se não estiver nela). */
+export function measurementNumberFromUrl(url) {
+    const m = EDIT_URL_RE.exec(String(url || ""));
+    return m ? Number(m[4]) : null;
+}
+
+/** Abre direto a tela nova de edição de uma medição existente. */
+export async function openMeasurementEditor(page, { documentType, contractNumber, obraCod, measurementNumber }) {
+    const url = `https://menin.sienge.com.br/sienge/8/index.html#/suprimentos/contratos-e-medicoes/medicoes/editar/${documentType}/${contractNumber}/${obraCod}/${measurementNumber}`;
+    log("MEASUREMENT", `Abrindo medição ${documentType}/${contractNumber} #${measurementNumber} na tela nova...`);
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await waitForPageSettled(page);
+    await page.waitForTimeout(2500);
+    await removeOverlays(page);
+}
+
+/**
+ * Preenche o valor da medição na tela NOVA e salva o passo "Itens do contrato".
+ * Confere o valor na célula ANTES de salvar: se não bater, lança sem salvar.
+ *
+ * @param {object} params
+ * @param {string|number} params.value      - valor a medir
+ * @param {string}        [params.itemRef]  - código de referência da linha (ex.: "01.001.001.001")
+ * @param {string[]}      [params.files]    - caminhos de PDFs para o passo "Anexos"
+ * @returns {{ measurementNumber: number|null, attached: number }}
+ */
+export async function fillMeasurementNewUi(page, { value, itemRef = null, files = [] } = {}) {
+    const alvo = Number(String(value).replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(alvo) || alvo <= 0) throw new Error(`Valor da medição inválido: "${value}"`);
+
+    // A grade e os avisos chegam depois da URL: espera a grade, fecha os avisos e
+    // tenta o clique de novo se algum aviso ainda cobrir o botão.
+    await page.locator('[role="grid"]').first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+    await removeOverlays(page);
+    log("MEASUREMENT", "Tela nova: selecionando Valores monetários...");
+    const valoresBtn = page.getByRole("button", { name: "Valores monetários" }).first();
+    for (let t = 1; ; t++) {
+        try {
+            await valoresBtn.click({ timeout: 8000 });
+            break;
+        } catch (err) {
+            if (t >= 4) throw err;
+            log("MEASUREMENT", `Valores monetários coberto (tentativa ${t}); fechando avisos...`);
+            await removeOverlays(page);
+            await page.keyboard.press("Escape").catch(() => {});
+        }
+    }
+    await page.waitForTimeout(2000);
+    await removeOverlays(page);
+
+    // Linhas folha (com preço unitário) e o saldo de cada uma.
+    const linhas = await page.locator('[role="row"]').evaluateAll((rows) => rows.map((r, idx) => {
+        const cel = (f) => r.querySelector(`[data-field="${f}"]`)?.innerText?.trim() || "";
+        return { idx, ref: cel("codigoReferencia"), label: cel("labelItem"), preco: cel("precoUnitarioTotal"),
+            contratado: cel("valorContratado"), acumulado: cel("valorMedidoAcumuladoAnterior") };
+    }).filter((l) => l.ref && l.preco));
+    const folhas = linhas.map((l) => ({ ...l, saldo: (parseMoneyBR(l.contratado) || 0) - (parseMoneyBR(l.acumulado) || 0) }));
+    if (!folhas.length) throw new Error("Tela nova da medição: nenhuma linha de item encontrada na grade.");
+
+    let escolhida = itemRef ? folhas.find((l) => l.ref === itemRef) : null;
+    if (itemRef && !escolhida) throw new Error(`Item ${itemRef} não está na grade da medição (há: ${folhas.map((l) => l.ref).join(", ")}).`);
+    if (!escolhida) {
+        const suficientes = folhas.filter((l) => l.saldo + 0.005 >= alvo).sort((a, b) => a.saldo - b.saldo);
+        if (!suficientes.length) throw new Error(`Nenhum item com saldo para R$ ${alvo.toFixed(2)} (saldos: ${folhas.map((l) => `${l.ref} R$ ${l.saldo.toFixed(2)}`).join("; ")}).`);
+        if (suficientes.length > 1) {
+            throw new Error(`Mais de um item com saldo para R$ ${alvo.toFixed(2)} (${suficientes.map((l) => l.ref).join(", ")}): informe o item.`);
+        }
+        escolhida = suficientes[0];
+    }
+    log("MEASUREMENT", `Item: ${escolhida.ref} - ${escolhida.label.slice(0, 60)} | saldo R$ ${escolhida.saldo.toFixed(2)}`);
+
+    const row = page.locator('[role="row"]').filter({ has: page.locator(`[data-field="codigoReferencia"]`, { hasText: new RegExp(`^${escolhida.ref.replace(/\./g, "\\.")}$`) }) }).first();
+    const cell = row.locator('[data-field="valorMedido"]');
+    await cell.scrollIntoViewIfNeeded().catch(() => {});
+    const formatted = alvo.toFixed(2).replace(".", ",");
+
+    const tentar = async (modo) => {
+        await cell.dblclick();
+        const input = cell.locator("input");
+        await input.waitFor({ state: "visible", timeout: 8000 });
+        if (modo === "fill") {
+            await input.fill(formatted);
+        } else {
+            await input.press("Control+A");
+            await input.pressSequentially(alvo.toFixed(2).replace(/\D/g, ""), { delay: 60 });
+        }
+        await input.press("Enter");
+        await page.waitForTimeout(900);
+        return parseMoneyBR(await cell.innerText().catch(() => ""));
+    };
+    let lido = await tentar("fill");
+    if (lido == null || Math.abs(lido - alvo) > 0.009) {
+        log("MEASUREMENT", `Valor lido R$ ${lido} após preencher; tentando digitação...`);
+        lido = await tentar("digitos");
+    }
+    if (lido == null || Math.abs(lido - alvo) > 0.009) {
+        throw new Error(`O valor não entrou na grade da medição (esperado R$ ${formatted}, ficou R$ ${lido}). Nada foi salvo.`);
+    }
+    log("MEASUREMENT", `Valor conferido na grade: R$ ${formatted}`);
+
+    const salvarContinuar = page.getByRole("button", { name: "SALVAR E CONTINUAR" }).first();
+    await assertEnabledOrExplain(salvarContinuar, page.locator("main, body").first(), "Salvar e continuar");
+    await salvarContinuar.click();
+    await waitForPageSettled(page);
+    await page.waitForTimeout(2500);
+    await removeOverlays(page);
+    log("MEASUREMENT", "Itens salvos.");
+
+    // Passo "Anexos": sobe os PDFs pela própria tela (a API de anexo do Sienge
+    // recusa com 403 para o usuário da integração).
+    let attached = 0;
+    if (files.length) {
+        attached = await attachFilesNewUi(page, files).catch((err) => {
+            log("MEASUREMENT", `Passo Anexos falhou (a medição já está salva): ${err.message.split("\n")[0]}`);
+            return 0;
+        });
+    }
+
+    return { measurementNumber: measurementNumberFromUrl(page.url()), attached };
+}
+
 // ── main export ────────────────────────────────────────────────────────────────
 
 /**
@@ -257,6 +449,9 @@ export async function createMeasurement(page, params = {}) {
         dataVencimento = "",
         value = "",
         targetRowIndex = 1,
+        // Tela nova: código da linha a medir (opcional) e PDFs para o passo Anexos.
+        itemRef = null,
+        files = [],
     } = params;
 
     // ── PRÉ-FASE: libera qualquer alocação prévia da planilha ────────────────
@@ -354,6 +549,17 @@ export async function createMeasurement(page, params = {}) {
         }
     } finally {
         page.off('dialog', dialogHandlerModal);
+    }
+
+    // ── FASE 3d': Tela NOVA de edição (padrão do Sienge desde set/2026) ───────
+    // Se o Sienge levou para .../medicoes/editar/..., preenche por lá. A tela
+    // antiga (abaixo) fica como caminho de reserva.
+    await page.waitForURL(EDIT_URL_RE, { timeout: 20000 }).catch(() => {});
+    if (EDIT_URL_RE.test(page.url())) {
+        log("MEASUREMENT", `Medição salva; tela nova aberta (${page.url().split("#")[1]}).`);
+        const r = await fillMeasurementNewUi(page, { value, itemRef, files });
+        success("MEASUREMENT", `Medição ${documentType}/${contractNumber} #${r.measurementNumber ?? "?"} preenchida pela tela nova.`);
+        return { measurementNumber: r.measurementNumber, attached: r.attached };
     }
 
     // ── FASE 3e: Desativar "Nova tela" se o Sienge abriu a nova UI ───────────

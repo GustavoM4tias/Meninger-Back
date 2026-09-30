@@ -1,6 +1,6 @@
 // playwright/services/measurementService.js
 import { siengeLogin } from "../modules/sienge/login.js";
-import { createMeasurement } from "../modules/sienge/measurement.js";
+import { createMeasurement, openMeasurementEditor, fillMeasurementNewUi } from "../modules/sienge/measurement.js";
 import { log, success } from "../core/logger.js";
 import { dismissCommonPopups } from "../core/popups.js";
 
@@ -51,10 +51,34 @@ export async function runPlaywrightMeasurement(params = {}) {
     try {
         const result = await createMeasurement(page, params);
         success("SERVICE", `Fluxo automático da medição concluído. Nº: ${result.measurementNumber ?? "?"}`);
-        return { success: true, measurementNumber: result.measurementNumber };
+        return { success: true, measurementNumber: result.measurementNumber, attached: result.attached || 0 };
     } catch (error) {
         log("SERVICE", `Falha no fluxo automático da medição: ${error.message}`);
         throw error;
+    } finally {
+        await browser.close().catch(() => {});
+    }
+}
+
+/**
+ * Completa uma medição que JÁ EXISTE (ex.: criada sem valor quando o robô caiu
+ * no passo dos itens): abre a tela nova de edição, preenche o valor, salva e
+ * anexa os PDFs. Não cria medição nova.
+ *
+ * @param {object} params - { documentType, contractNumber, obraCod, measurementNumber,
+ *                            value, itemRef?, files?, credentials }
+ */
+export async function runPlaywrightCompleteMeasurement(params = {}) {
+    log("SERVICE", `Completando medição ${params.documentType}/${params.contractNumber} #${params.measurementNumber}...`);
+    const { browser, page } = await siengeLogin(params.credentials || {});
+    registerGlobalDialogHandler(page);
+    await waitForPageReady(page);
+    await dismissCommonPopups(page, 3000).catch(() => {});
+    try {
+        await openMeasurementEditor(page, params);
+        const r = await fillMeasurementNewUi(page, params);
+        success("SERVICE", `Medição #${params.measurementNumber} completada.`);
+        return { success: true, measurementNumber: params.measurementNumber, attached: r.attached };
     } finally {
         await browser.close().catch(() => {});
     }
