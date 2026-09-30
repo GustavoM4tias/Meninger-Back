@@ -90,6 +90,13 @@ const cleanValue = (v) => {
     return s;
 };
 
+// O CV procura a cidade pelo NOME. Código de município (ex.: "6469") não
+// serve: melhor deixar vazio e a pessoa digitar do que o CV recusar depois.
+const cityName = (v) => {
+    const s = cleanValue(v);
+    return /\p{L}/u.test(s) ? s : '';
+};
+
 // ── Fallback: cartão escaneado → visão do Gemini ─────────────────────────────
 
 const VISION_PROMPT = `Extraia os dados deste Comprovante de Inscrição e de Situação Cadastral (cartão CNPJ) da Receita Federal do Brasil.
@@ -106,7 +113,7 @@ Retorne APENAS JSON (sem markdown):
   "numero": "<NUMERO>",
   "complemento": "<COMPLEMENTO ou vazio>",
   "bairro": "<BAIRRO/DISTRITO>",
-  "cidade": "<MUNICIPIO>",
+  "cidade": "<MUNICIPIO por extenso, nunca o código>",
   "estado": "<UF>",
   "cep": "<CEP>",
   "situacao_cadastral": "<ATIVA|BAIXADA|...>"
@@ -141,7 +148,7 @@ async function parseViaVision(buffer) {
         numero: cleanValue(data.numero),
         complemento: cleanValue(data.complemento),
         bairro: cleanValue(data.bairro),
-        cidade: cleanValue(data.cidade),
+        cidade: cityName(data.cidade),
         estado: cleanValue(data.estado).toUpperCase(),
         cep: cleanValue(data.cep),
         situacao_cadastral: cleanValue(data.situacao_cadastral).split(' ')[0],
@@ -185,7 +192,7 @@ export async function parseCnpjCard(buffer) {
         numero: cleanValue(sections['NUMERO']),
         complemento: cleanValue(sections['COMPLEMENTO']),
         bairro: cleanValue(sections['BAIRRO/DISTRITO']),
-        cidade: cleanValue(sections['MUNICIPIO']),
+        cidade: cityName(sections['MUNICIPIO']),
         estado: cleanValue(sections['UF']).toUpperCase(),
         cep: cleanValue(sections['CEP']),
         situacao_cadastral: cleanValue(sections['SITUACAO CADASTRAL']).split(' ')[0],

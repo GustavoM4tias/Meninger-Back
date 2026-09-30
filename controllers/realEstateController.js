@@ -230,6 +230,23 @@ export async function createInternalRegistration(req, res) {
     }
 }
 
+// Submissão de link multi-uso: o convite guarda uma foto do status de cada
+// filho (`submissions[].status`). Sem isso, o filho reprocessado com sucesso
+// seguia "Pendente" na tela do convite.
+async function syncParentSubmission(child) {
+    if (!child?.parent_id) return;
+    try {
+        const parent = await RealEstateRegistration.findByPk(child.parent_id);
+        const subs = Array.isArray(parent?.submissions) ? parent.submissions : [];
+        if (!subs.some(s => s.registration_id === child.id)) return;
+        await parent.update({
+            submissions: subs.map(s => (s.registration_id === child.id ? { ...s, status: child.status } : s)),
+        });
+    } catch (err) {
+        console.error('[realestate] falha ao atualizar a submissão no convite:', err?.message);
+    }
+}
+
 export async function retryRegistration(req, res) {
     try {
         const reg = await RealEstateRegistration.findByPk(req.params.id);
@@ -241,11 +258,14 @@ export async function retryRegistration(req, res) {
             return res.status(400).json({ ok: false, error: 'Só cadastros com erro podem ser reprocessados.' });
         }
 
+        let failure = null;
         try {
             await processRegistration(reg);
         } catch (err) {
-            return res.status(502).json({ ok: false, error: err.message, registration: toListItem(reg) });
+            failure = err;
         }
+        await syncParentSubmission(reg);
+        if (failure) return res.status(502).json({ ok: false, error: failure.message, registration: toListItem(reg) });
         return res.json({ ok: true, registration: toListItem(reg) });
     } catch (err) {
         console.error('[realestate] retryRegistration:', err);

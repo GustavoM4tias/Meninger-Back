@@ -71,6 +71,8 @@ export function normalizeDate(value) {
 
 // ── Validação do formulário ──────────────────────────────────────────────────
 
+const hasLetter = (s) => /\p{L}/u.test(String(s || ''));
+
 export function validateSubmission(form) {
     const errors = [];
     const imob = form?.imobiliaria || {};
@@ -81,6 +83,10 @@ export function validateSubmission(form) {
     if (!String(imob.creci || '').trim()) errors.push('CRECI da imobiliária é obrigatório.');
     if (!isValidCnpj(imob.cnpj)) errors.push('CNPJ da imobiliária é inválido.');
     if (imob.email && !/^\S+@\S+\.\S+$/.test(String(imob.email).trim())) errors.push('E-mail da imobiliária é inválido.');
+    // O CV procura a cidade pelo NOME: código de município ("6469") volta
+    // "Cidade não encontrada" e o cadastro para na primeira etapa.
+    if (String(imob.cidade || '').trim() && !hasLetter(imob.cidade)) errors.push('Cidade da imobiliária deve ser o nome da cidade, não o código.');
+    if (String(ger.cidade || '').trim() && !hasLetter(ger.cidade)) errors.push('Cidade do gerente deve ser o nome da cidade, não o código.');
 
     if (!String(ger.nome || '').trim()) errors.push('Nome do gerente é obrigatório.');
     if (!isValidCpf(ger.documento)) errors.push('CPF do gerente é inválido.');
