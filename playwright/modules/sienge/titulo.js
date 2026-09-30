@@ -153,6 +153,13 @@ export async function createTitulo(page, params = {}) {
     log("TITULO", `Preenchendo filtro de contrato: ${contratoLabel}`);
     await fillField(frame, "#labelContrato", contratoLabel);
 
+    // O período padrão da tela é só o último mês: medição mais antiga (ex.: a
+    // nº 7 do CT/5344, de junho) nem aparece. Abre o período para trás.
+    if (await frame.locator("#dtInicioPeriodo").count()) {
+        await fillField(frame, "#dtInicioPeriodo", "01/01/2020");
+        await frame.locator("#dtInicioPeriodo").press("Tab").catch(() => {});
+    }
+
     const btFiltrar = frame.locator('input[name="btFiltrar"]');
     await btFiltrar.waitFor({ state: "visible", timeout: 15000 });
     await btFiltrar.click();
@@ -163,20 +170,22 @@ export async function createTitulo(page, params = {}) {
     log("TITULO", `Localizando medição #${measurementNumber} na tabela...`);
     await frame.waitForSelector('tr[id^="linhaRow_"]', { state: "attached", timeout: 30000 });
 
-    const targetRowId = await frame.evaluate((nuMedicao) => {
+    // Só a medição pedida. Antes havia "fallback: primeira linha" - com a
+    // medição fora do período, o título saía em OUTRA medição (outro valor).
+    const { targetRowId, vistas } = await frame.evaluate((nuMedicao) => {
         const rows = document.querySelectorAll('tr[id^="linhaRow_"]:not([id$="-1"])');
+        const vistas = [];
         for (const row of rows) {
             const numSpan = row.querySelector('span[tipo="NUMBER"]');
-            if (numSpan && parseInt(numSpan.innerText.trim(), 10) === nuMedicao) {
-                return row.id;
-            }
+            const n = numSpan ? parseInt(numSpan.innerText.trim(), 10) : null;
+            if (n != null) vistas.push(n);
+            if (n === nuMedicao) return { targetRowId: row.id, vistas };
         }
-        // Fallback: primeira linha disponível
-        return rows[0]?.id || null;
+        return { targetRowId: null, vistas };
     }, Number(measurementNumber));
 
     if (!targetRowId) {
-        throw new Error(`Medição #${measurementNumber} não encontrada na tabela de liberações do contrato ${contratoLabel}.`);
+        throw new Error(`Medição #${measurementNumber} não está entre as não liberadas do contrato ${contratoLabel} (aparecem: ${vistas.join(", ") || "nenhuma"}). Nada foi lançado.`);
     }
 
     log("TITULO", `Linha encontrada: ${targetRowId} — clicando no lápis...`);
