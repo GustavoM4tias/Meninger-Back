@@ -88,6 +88,24 @@ async function fetchAllTableIds(idempreendimento) {
     return known;
 }
 
+function mapUnidade(u) {
+    return {
+        etapa:          u.etapa ?? null,
+        bloco:          u.bloco ?? null,
+        unidade:        u.unidade ?? null,
+        idunidade:      u.idunidade ?? null,
+        area_privativa: parseArea(u.area_privativa),
+        situacao:       u.situacao ?? null,
+        valor_total:    parseBrNumber(u.valor_total),
+        series: (u.series ?? []).map(s => ({
+            nome:            s.nome,
+            qtd_parcelas:    s.qtd_parcelas,
+            data_vencimento: s.data_vencimento,
+            valor:           parseBrNumber(s.valor),
+        })),
+    };
+}
+
 // ─── Etapa 1: busca tabelas ativas com dados de unidades inline ──────────────
 // Retorna Map<idtabela, { nome, unidades[] }>
 
@@ -128,21 +146,7 @@ async function fetchDetailedTables(idempreendimento) {
             const idtabela = t.idtabela ?? t.id;
             if (!idtabela || detailed.has(idtabela)) continue;
 
-            const unidades = (t.dados ?? t.unidades ?? []).map(u => ({
-                etapa:          u.etapa ?? null,
-                bloco:          u.bloco ?? null,
-                unidade:        u.unidade ?? null,
-                idunidade:      u.idunidade ?? null,
-                area_privativa: parseArea(u.area_privativa),
-                situacao:       u.situacao ?? null,
-                valor_total:    parseBrNumber(u.valor_total),
-                series: (u.series ?? []).map(s => ({
-                    nome:            s.nome,
-                    qtd_parcelas:    s.qtd_parcelas,
-                    data_vencimento: s.data_vencimento,
-                    valor:           parseBrNumber(s.valor),
-                })),
-            }));
+            const unidades = (t.dados ?? t.unidades ?? []).map(mapUnidade);
 
             detailed.set(idtabela, {
                 nome: t.tabela ?? t.nome ?? `Tabela #${idtabela}`,
@@ -286,11 +290,24 @@ export default class PriceTableSyncService {
         let synced = 0;
 
         for (const table of tables) {
-            const { idtabela, unidades } = table;
+            const { idtabela } = table;
+            let { unidades } = table;
             log(eid, `Processando tabela ${idtabela} "${table.nome}"...`);
 
             // 2. Busca metadados completos (vigência, forma, juros, parcelas)
             const meta = await fetchTableMetadata(idempreendimento, idtabela);
+
+            // A /detalhada só traz tabela já vigente: a de lançamento (vigência
+            // futura) chegava sem unidade e a ficha do mês seguinte ficava sem
+            // preço. O metadado da tabela traz as unidades com valor.
+            // Tabela encerrada também vem com unidades, mas sem valor: essa fica vazia.
+            if (!unidades.length && Array.isArray(meta?.unidades)) {
+                const doMeta = meta.unidades.map(mapUnidade);
+                if (doMeta.some(u => u.valor_total > 0)) {
+                    unidades = doMeta;
+                    log(eid, `  unidades lidas do metadado da tabela (${unidades.length})`);
+                }
+            }
             if (meta) {
                 log(eid, `  metadados: vigência ${meta.data_vigencia_de ?? '?'} → ${meta.data_vigencia_ate ?? '?'} | forma: ${meta.forma ?? '?'}`);
             } else {
