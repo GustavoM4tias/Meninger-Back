@@ -586,6 +586,7 @@ export async function updateBoletoController(req, res, next) {
         if (!boletoUrl)     return res.status(422).json({ error: 'URL do boleto é obrigatória.' });
 
         const result = await stepUpdateBoleto(id, { boletoUrl, boletoPath, boletoFilename, boletoBarcode, boletoDueDate, boletoAmount });
+        if (result?.success === false && result.error) return res.status(502).json(result);
         return res.json(result);
     } catch (err) { next(err); }
 }

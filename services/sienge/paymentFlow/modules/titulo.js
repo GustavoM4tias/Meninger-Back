@@ -244,7 +244,12 @@ export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boleto
         console.log(`✅ [Pipeline] #${launchId}: barcode atualizado na parcela #${installmentId} do título #${launch.siengeTituloNumber}`);
     } catch (err) {
         console.error(`❌ [Pipeline] #${launchId}: falha ao atualizar barcode no Sienge: ${err.message}`);
-        throw err; // propaga para o controller retornar 500 ao frontend
+        // Volta legível para a tela (antes era um 500 com HTML cru) e fica no lançamento.
+        const msg = /403/.test(err.message)
+            ? 'O Sienge recusou gravar o boleto pela integração (403 - sem permissão). Os dados do boleto ficaram salvos no Office; registre o boleto na parcela pelo Sienge.'
+            : `O Sienge recusou o boleto: ${err.message}`;
+        await launch.update({ siengeTituloError: msg });
+        return { success: false, error: msg };
     }
 
     // 3. Anexa o novo arquivo de boleto ao título no Sienge (não-bloqueante)
