@@ -32,6 +32,7 @@ import db from '../../models/sequelize/index.js';
 import apiSienge from '../../lib/apiSienge.js';
 import { getScope } from '../permissions/accessScopeService.js';
 import { nomeAtual } from '../org/enterpriseNames.js';
+import { summarizeUnitsFromDb } from '../cv/enterpriseUnitsSummaryService.js';
 
 const sequelize = db.sequelize;
 const Q = { type: db.Sequelize.QueryTypes.SELECT };
@@ -210,6 +211,8 @@ export function lerCondicao(condicoes, seriesCfg) {
 
     const soma = Object.fromEntries(GRUPOS_SERIE.map((g) => [g, 0]));
     const naoClassificadas = [];
+    // As linhas do financeiro como estão no CV, para o detalhe da reserva.
+    const linhas = [];
     let nMensais = 0;
     let parcelaMensal = 0;
     let maiorQtd = -1;
@@ -222,6 +225,10 @@ export function lerCondicao(condicoes, seriesCfg) {
         // (Edifício Soul, 2022), e aí vale valor x quantidade.
         const total = num(s.valor_serie) > 0 ? num(s.valor_serie) : valor * qtd;
         const g = grupoDe.get(id);
+        linhas.push({
+            idserie: id, serie: s.serie || null, sigla: s.sigla || null, grupo: g || null,
+            quantidade: qtd, valor: cents(valor), total: cents(total), vencimento: s.vencimento || null,
+        });
         if (!g) {
             naoClassificadas.push({ idserie: id, serie: s.serie || null, total: cents(total) });
             continue;
@@ -250,6 +257,7 @@ export function lerCondicao(condicoes, seriesCfg) {
         nMensais,
         parcelaMensal: cents(parcelaMensal),
         naoClassificadas,
+        linhas,
     };
 }
 
@@ -464,6 +472,12 @@ function separarAto(itens) {
     for (const i of ord) porCondicao[i.condicao || '?'] = cents((porCondicao[i.condicao || '?'] || 0) + i.valor);
     return {
         porCondicao,
+        // Lista do detalhe (mais nova primeiro). Teto de 240 para o payload do
+        // Terras V (724 reservas) não estourar com cliente de 20 anos de carnê.
+        itens: [...ord].reverse().slice(0, 240).map((i) => ({
+            data: i.data, valor: cents(i.valor), condicao: i.condicao, titulo: i.titulo,
+            parcela: i.parcela, ato: set.has(i),
+        })),
         ato: cents(atos.reduce((s, i) => s + i.valor, 0)),
         mensais: cents(mensais.reduce((s, i) => s + i.valor, 0)),
         nMensais: mensais.length,
@@ -513,6 +527,9 @@ export async function getRelatorio(user, idempRaw) {
                 COALESCE(NULLIF(r.corretor->>'corretor',''), NULLIF(r.corretor->>'nome','')) AS corretor,
                 COALESCE(NULLIF(r.imobiliaria->>'nome',''), NULLIF(r.corretor->>'imobiliaria','')) AS imobiliaria,
                 p.renda_total AS renda_precadastro,
+                (SELECT jsonb_agg(jsonb_build_object('nome', a->>'nome', 'tipo', a->>'tipo_associado'))
+                   FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.associados) = 'array' THEN r.associados ELSE '[]'::jsonb END) a
+                  WHERE a->>'tipo_associado' ILIKE 'Fiador%') AS fiadores,
                 n.texto AS nota_texto, n.tom AS nota_tom, n.updated_by_name AS nota_por, n.updated_at AS nota_em
            FROM reservas r
            LEFT JOIN cv_precadastros p ON p.idprecadastro = r.idprecadastro
@@ -675,6 +692,9 @@ export async function getRelatorio(user, idempRaw) {
             casouPor: variasUnidades && casouPor ? `${casouPor}+unidade` : casouPor,
             pendencias: pend,
             seriesNaoClassificadas: c.naoClassificadas,
+            series: c.linhas,
+            fiadores: Array.isArray(r.fiadores) ? r.fiadores : [],
+            recebimentos: rec.itens || [],
             modulo: regra?.modulo?.nome || null,
             fichaUsada: regra?.ficha || null,
             foraDaRegra: regra ? conferir(c, regra) : [],
@@ -695,7 +715,12 @@ export async function getRelatorio(user, idempRaw) {
         // mesmo que pouco (a tolerância só decide amarelo x vermelho). Ficava
         // só no cartão "Acima de 30%" e a Viviane, com 63%, saía "dentro da
         // regra" (01/10/2026). Sem ficha, o limite configurado não acusa regra.
-        if (daFicha && l.nivelRenda !== 'ok') {
+        // A ficha costuma permitir passar do limite COM FIADOR ("acima disso com
+        // fiador limitando a renda do fiador a 30%", Ingá). O CV registra quem é
+        // o fiador (associado "Fiador 1/2") mas não a renda dele: com fiador a
+        // reserva sai de "fora da regra" e fica marcada para conferir a renda.
+        l.rendaComFiador = l.nivelRenda !== 'ok' && l.fiadores.length > 0;
+        if (daFicha && l.nivelRenda !== 'ok' && !l.rendaComFiador) {
             const p = (l.pctRenda * 100).toFixed(1).replace('.', ',');
             l.foraDaRegra.push({
                 codigo: 'renda',
@@ -712,7 +737,23 @@ export async function getRelatorio(user, idempRaw) {
     const modulosAtual = (atual?.modulos || []).map((m) => regrasDoModulo(atual, m));
     const limiteFicha = regraBase?.limiteRendaPct ?? modulosAtual.map((m) => m.limiteRendaPct).find((v) => v != null) ?? null;
     const nome = await nomeAtual(idemp).catch(() => null);
+    // Estoque pelo MESMO núcleo do espelho, da ficha e da projeção: bloqueada
+    // por estratégia comercial conta como à venda (unitStockService).
+    const u = await summarizeUnitsFromDb(idemp).catch((e) => {
+        console.warn('[recurso-proprio] estoque:', e.message);
+        return null;
+    });
+    const estoque = u && u.totalUnits ? {
+        total: u.totalUnits,
+        vendidas: u.soldUnits,
+        reservadas: u.reservedUnits,
+        disponiveis: u.availableUnits,
+        bloqueadasComercial: u.commercialStockUnits,
+        bloqueadasOutras: Math.max(0, u.blockedUnits - u.commercialStockUnits),
+        aVenda: u.availableForSale,
+    } : null;
     return {
+        estoque,
         empreendimento: { id: idemp, nome: nome || `Empreendimento ${idemp}` },
         geradoEm: new Date().toISOString(),
         ficha: atual ? {
