@@ -145,10 +145,19 @@ async function upsertEnterpriseFromDetail(detail) {
 /**
  * Apaga TUDO (materiais, plantas, etapas, blocos e unidades) do empreendimento
  * e recria a partir do detalhe atual do CV.
+ *
+ * Numa transação só: se a recriação falhar no meio, o Office fica com o espelho
+ * anterior em vez de um empreendimento sem unidade (aconteceu com o Terras V em
+ * 01/10/2026 - a ficha comercial perdeu o espelho ao vivo). E detalhe sem
+ * etapas para empreendimento que tem etapas é resposta capenga do CV: não apaga.
  */
 async function replaceChildren(detail) {
     const id = detail.idempreendimento ?? detail.id;
     if (!id) return;
+    await db.sequelize.transaction((transaction) => replaceChildrenTx(detail, id, transaction));
+}
+
+async function replaceChildrenTx(detail, id, transaction) {
 
     //
     // 1) Descobre etapas existentes desse empreendimento
@@ -156,7 +165,14 @@ async function replaceChildren(detail) {
     const oldStages = await CvEnterpriseStage.findAll({
         where: { idempreendimento: id },
         attributes: ['idetapa'],
+        transaction,
     });
+
+    const novas = Array.isArray(detail.etapas) ? detail.etapas.length : 0;
+    if (oldStages.length > 0 && novas === 0) {
+        console.warn(`   ! empreendimento ${id}: o CV devolveu o detalhe sem etapas; espelho mantido`);
+        return;
+    }
 
     const stageIds = oldStages.map(s => s.idetapa);
 
@@ -168,6 +184,7 @@ async function replaceChildren(detail) {
         oldBlocks = await CvEnterpriseBlock.findAll({
             where: { idetapa: stageIds },
             attributes: ['idbloco'],
+            transaction,
         });
     }
 
@@ -179,25 +196,19 @@ async function replaceChildren(detail) {
     if (oldBlockIds.length > 0) {
         await CvEnterpriseUnit.destroy({
             where: { idbloco: oldBlockIds },
+            transaction,
         });
     }
 
     //
     // 4) Apaga materiais, plantas, blocos e etapas do empreendimento
     //
-    const destroyPromises = [
-        CvEnterpriseMaterial.destroy({ where: { idempreendimento: id } }),
-        CvEnterprisePlan.destroy({ where: { idempreendimento: id } }),
-        CvEnterpriseStage.destroy({ where: { idempreendimento: id } }),
-    ];
-
+    await CvEnterpriseMaterial.destroy({ where: { idempreendimento: id }, transaction });
+    await CvEnterprisePlan.destroy({ where: { idempreendimento: id }, transaction });
     if (oldBlockIds.length > 0) {
-        destroyPromises.push(
-            CvEnterpriseBlock.destroy({ where: { idbloco: oldBlockIds } })
-        );
+        await CvEnterpriseBlock.destroy({ where: { idbloco: oldBlockIds }, transaction });
     }
-
-    await Promise.all(destroyPromises);
+    await CvEnterpriseStage.destroy({ where: { idempreendimento: id }, transaction });
 
     //
     // 5) Recria materiais
@@ -213,7 +224,8 @@ async function replaceChildren(detail) {
                 arquivo: m.arquivo ?? null,
                 servidor: m.servidor ?? null,
                 raw: m
-            }))
+            })),
+            { transaction }
         );
     }
 
@@ -228,7 +240,8 @@ async function replaceChildren(detail) {
                 nome: p.nome ?? null,
                 link: p.link ?? null,
                 raw: p
-            }))
+            })),
+            { transaction }
         );
     }
 
@@ -245,7 +258,7 @@ async function replaceChildren(detail) {
                 nome: e.nome ?? null,
                 data_cad: e.data_cad ?? null,
                 raw: e
-            });
+            }, { transaction });
 
             // blocos da etapa
             if (Array.isArray(e.blocos)) {
@@ -266,7 +279,7 @@ async function replaceChildren(detail) {
                         paginas_total: p.paginas_total ?? null,
 
                         raw: b
-                    });
+                    }, { transaction });
 
                     // unidades desse bloco
                     if (Array.isArray(b.unidades) && b.unidades.length > 0) {
@@ -310,7 +323,7 @@ async function replaceChildren(detail) {
 
                         const CHUNK = 1000;
                         for (let i = 0; i < units.length; i += CHUNK) {
-                            await CvEnterpriseUnit.bulkCreate(units.slice(i, i + CHUNK));
+                            await CvEnterpriseUnit.bulkCreate(units.slice(i, i + CHUNK), { transaction });
                         }
                     }
                 }
