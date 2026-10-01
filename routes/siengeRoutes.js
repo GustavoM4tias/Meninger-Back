@@ -17,6 +17,7 @@ import {
     pollNowController, updateBoletoController, abortPipelineController,
     downloadRidTemplate, sendRidEmail, sendRidForm, continueExistingContract,
     previewLaunchController, confirmEmeLaunch, attachDocumentController, siengeWatchController,
+    siengeImportScanStart, siengeImportScanStatus, siengeImportApplyController, siengeImportSettingsGet, siengeImportSettingsPut,
 } from '../controllers/sienge/paymentFlowController.js';
 import {
     listFlowEnterprises,
@@ -175,6 +176,13 @@ router.post('/payment-flow/preview', authenticate, previewLaunchController);
 router.post('/payment-flow/eme/confirm', authenticate, confirmEmeLaunch);
 // Vigia: abre as telas do Sienge com a credencial de quem clicou, sem salvar.
 router.post('/payment-flow/sienge-watch', authenticate, configurarPaymentFlow, siengeWatchController);
+// Importar do Sienge: só lê o Sienge e cria lançamentos no Office (escopo de quem importa).
+const importarPaymentFlow = requireCapability('/financeiro/paymentflow', 'import');
+router.post('/payment-flow/sienge-import/scan', authenticate, importarPaymentFlow, siengeImportScanStart);
+router.get('/payment-flow/sienge-import/scan', authenticate, importarPaymentFlow, siengeImportScanStatus);
+router.post('/payment-flow/sienge-import', authenticate, importarPaymentFlow, siengeImportApplyController);
+router.get('/payment-flow/sienge-import/settings', authenticate, importarPaymentFlow, siengeImportSettingsGet);
+router.put('/payment-flow/sienge-import/settings', authenticate, configurarPaymentFlow, siengeImportSettingsPut);
 // Documento fiscal depois da medição (receita "medição antes do documento").
 router.post('/payment-flow/:id/document', authenticate, attachDocumentController);
 

@@ -188,10 +188,11 @@ export async function pollMeasurementStatus(launchId) {
     console.log(`🔍 [Pipeline] #${launchId}: medição #${launch.siengeMeasurementNumber} | authorized=${isAuthorized}`);
 
     if (isAuthorized && launch.pipelineStage === 'awaiting_measurement_authorization') {
-        // Medição antes do documento: sem nota ainda, o título espera.
-        const { receita } = await recipeOfLaunch(launch);
+        // Sem número de nota o título NUNCA sai: espera o documento. Vale para a
+        // receita "medição antes do documento" e para medição importada do
+        // Sienge (que chega sem nota) - antes o robô liberava título vazio.
         const semDocumento = !launch.nfNumber;
-        const nextStage = receita.medicaoAntesDoDocumento && semDocumento ? 'awaiting_document' : 'creating_titulo';
+        const nextStage = semDocumento ? 'awaiting_document' : 'creating_titulo';
 
         // Update atômico: apenas 1 chamada concurrent (scheduler vs pollNow) avança o stage
         const [changed] = await Model().update(

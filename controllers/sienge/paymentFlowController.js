@@ -22,6 +22,9 @@ import { recipeOf } from '../../services/sienge/paymentFlow/recipe.js';
 import { checkLaunchInput } from '../../services/sienge/paymentFlow/gate.js';
 import { previewLaunch } from '../../services/sienge/paymentFlow/preview.js';
 import { runSiengeWatch } from '../../services/sienge/paymentFlow/siengeWatch.js';
+import {
+    startImportScan, getImportScan, applySiengeImport, getImportSettings, saveImportSettings, validateImportSettings,
+} from '../../services/sienge/paymentFlow/siengeImport.js';
 import { sendEmail } from '../../email/email.service.js';
 import { generateRidDocx } from '../../services/sienge/RidDocumentService.js';
 import { visibleErpIds } from '../../services/permissions/accessScopeService.js';
@@ -214,6 +217,42 @@ export async function attachDocumentController(req, res, next) {
         const result = await stepAttachDocument(launch.id, req.body || {}, req.user?.id || null);
         if (!result.ok) return res.status(422).json({ gate: true, error: result.motivos.join(' '), motivos: result.motivos });
         return res.json(result);
+    } catch (err) { next(err); }
+}
+
+// ── IMPORTAR DO SIENGE ────────────────────────────────────────────────────────
+// Só lê o Sienge; cria lançamentos no Office já na etapa em que estão.
+// A busca roda em segundo plano (pode levar minutos): POST dispara, GET acompanha.
+export async function siengeImportScanStart(req, res, next) {
+    try {
+        startImportScan(req.user);
+        return res.status(202).json(getImportScan(req.user));
+    } catch (err) { next(err); }
+}
+
+export async function siengeImportScanStatus(req, res, next) {
+    try { return res.json(getImportScan(req.user)); } catch (err) { next(err); }
+}
+
+export async function siengeImportApplyController(req, res, next) {
+    try {
+        const keys = Array.isArray(req.body?.keys) ? req.body.keys.map(String) : null;
+        return res.json(await applySiengeImport(req.user, keys));
+    } catch (err) {
+        if (err.status === 409) return res.status(409).json({ error: err.message });
+        next(err);
+    }
+}
+
+export async function siengeImportSettingsGet(req, res, next) {
+    try { return res.json(await getImportSettings()); } catch (err) { next(err); }
+}
+
+export async function siengeImportSettingsPut(req, res, next) {
+    try {
+        const { erros, values } = validateImportSettings(req.body || {});
+        if (erros.length) return res.status(422).json({ error: erros.join(' ') });
+        return res.json(await saveImportSettings(values));
     } catch (err) { next(err); }
 }
 
