@@ -107,21 +107,64 @@ export async function stepCreateTitulo(launchId, userId = null) {
 // 01/10/2026): boleto e PIX entram pela tela do título, aba Inf. Pagamento.
 // Depois a API (leitura) confere se a parcela ficou com a forma certa.
 const TIPO_PAGTO = { boleto: 2, pix: 11 };
-export async function gravarFormaPagamento(launch, { tipo, linhaDigitavel = '', descricao = '', userId = null }) {
+/** Baixa os arquivos (Supabase) para anexar pela tela. [{ url, nome, descricao }] */
+async function baixarAnexos(lista = []) {
+    const out = [];
+    for (const a of lista.filter(x => x?.url)) {
+        const { data } = await axios.get(a.url, { responseType: 'arraybuffer', timeout: 30000 });
+        out.push({ nome: a.nome || 'anexo.pdf', descricao: a.descricao || a.nome, buffer: Buffer.from(data), mimeType: 'application/pdf' });
+    }
+    return out;
+}
+
+/** Nota/documento do lançamento como anexo do título (o Sienge exige ao menos um anexo). */
+export function anexoDoDocumento(l) {
+    if (!l.nfUrl) return [];
+    const doc = [l.nfType, l.nfNumber].filter(Boolean).join(' ').trim();
+    return [{ url: l.nfUrl, nome: l.nfFilename || 'documento.pdf', descricao: doc || 'Documento' }];
+}
+
+/** Boleto do lançamento como anexo do título. */
+export function anexoDoBoleto(l, dueDate = null) {
+    if (!l.boletoUrl) return [];
+    const venc = dueDate || l.boletoDueDate;
+    return [{ url: l.boletoUrl, nome: l.boletoFilename || 'boleto.pdf', descricao: `Boleto${venc ? ` - vence ${venc}` : ''}` }];
+}
+
+/**
+ * Forma de pagamento (tipo), anexos e finalização da liberação, num login só.
+ * Falha da forma de pagamento lança; anexo e liberação voltam em `avisoAnexo`.
+ */
+export async function gravarFormaPagamento(launch, { tipo = null, linhaDigitavel = '', descricao = '', userId = null, anexos = [] }) {
     const titulo = launch.siengeTituloNumber;
     const bill = await SiengeBillsService.getBill(titulo).catch(() => null);
     const parcela = (await SiengeBillsService.getInstallments(titulo))[0];
-    if (!parcela) throw new Error(`Nenhuma parcela encontrada no título ${titulo}.`);
+    if (tipo && !parcela) throw new Error(`Nenhuma parcela encontrada no título ${titulo}.`);
     const credentials = await getUserSiengeCredentials(userId || launch.createdBy);
-    await runPlaywrightPaymentInfo({
-        credentials, titulo, parcela: parcela.installmentNumber ?? 1,
-        origem: String(bill?.originId || 'ME').trim(), tipo, linhaDigitavel, descricao,
+    const arquivos = await baixarAnexos(anexos).catch(err => { throw new Error(`não consegui baixar o anexo do Office (${err.message})`); });
+    const r = await runPlaywrightPaymentInfo({
+        credentials, titulo, parcela: parcela?.installmentNumber ?? 1,
+        origem: String(bill?.originId || 'ME').trim(), tipo, linhaDigitavel, descricao, anexos: arquivos,
+        finalizar: launch.siengeMeasurementNumber ? {
+            documentType: launch.siengeDocumentId, contractNumber: launch.siengeContractNumber,
+            measurementNumber: Number(launch.siengeMeasurementNumber),
+        } : null,
     });
-    const depois = (await SiengeBillsService.getInstallments(titulo))[0];
-    if (Number(depois?.paymentTypeId) !== TIPO_PAGTO[tipo]) {
-        throw new Error(`a tela foi salva, mas a parcela do título ${titulo} está como "${depois?.paymentType || 'sem forma de pagamento'}"`);
+    let paymentType = null;
+    if (tipo) {
+        const depois = (await SiengeBillsService.getInstallments(titulo))[0];
+        if (Number(depois?.paymentTypeId) !== TIPO_PAGTO[tipo]) {
+            throw new Error(`a tela foi salva, mas a parcela do título ${titulo} está como "${depois?.paymentType || 'sem forma de pagamento'}"`);
+        }
+        paymentType = depois.paymentType;
     }
-    return { ok: true, paymentType: depois.paymentType };
+    const avisos = [
+        r.anexoErro && `Anexo não enviado ao título ${titulo}: ${r.anexoErro}`,
+        r.liberacaoErro && `Liberação da medição não finalizada: ${r.liberacaoErro}`,
+    ].filter(Boolean);
+    const avisoAnexo = avisos.length ? avisos.join(' ') : null;
+    if (avisoAnexo) console.warn(`⚠️  [Pipeline] #${launch.id}: ${avisoAnexo}`);
+    return { ok: true, paymentType, anexados: r.anexos?.anexados || 0, liberacaoFinalizada: !!r.liberacao?.finalizada, avisoAnexo };
 }
 
 // ── PIX na parcela (EXCLUSIVO do RB) ──────────────────────────────────────────
@@ -135,7 +178,9 @@ export async function stepRegisterPix(launchId, { titulo, documento }) {
     });
     if (String(documento || '').toUpperCase() !== 'RB') return manual('PIX automático só para RB');
     try {
-        await gravarFormaPagamento(launch, { tipo: 'pix' });
+        const gp = await gravarFormaPagamento(launch, { tipo: 'pix', anexos: anexoDoDocumento(launch) });
+        // Anexo/liberação pendentes: fica em titulo_created para o scheduler completar.
+        if (gp.avisoAnexo) { await patch(launch, { siengeTituloError: gp.avisoAnexo }); return { ok: false, pendente: true }; }
         await patch(launch, { pipelineStage: 'awaiting_titulo_authorization', siengeTituloError: null });
         console.log(`✅ [Pipeline] #${launchId}: PIX registrado no título ${titulo}`);
         return { ok: true };
@@ -166,9 +211,15 @@ export async function stepRegisterBoleto(launchId) {
         }
 
         const installment = installments[0]; // título único → 1 parcela
-        await gravarFormaPagamento(launch, { tipo: 'boleto', linhaDigitavel: launch.boletoBarcode });
+        const gp = await gravarFormaPagamento(launch, { tipo: 'boleto', linhaDigitavel: launch.boletoBarcode, anexos: [...anexoDoDocumento(launch), ...anexoDoBoleto(launch)] });
+        if (gp.avisoAnexo) {
+            // Boleto gravado, mas anexo/liberação ficaram: continua em titulo_created
+            // para o scheduler (20 min) completar sozinho. Refazer o boleto é idempotente.
+            await launch.update({ siengeTituloError: gp.avisoAnexo });
+            return { success: false, reason: 'pendente', error: gp.avisoAnexo };
+        }
 
-        await launch.update({ pipelineStage: 'awaiting_titulo_authorization' });
+        await launch.update({ pipelineStage: 'awaiting_titulo_authorization', siengeTituloError: null });
         console.log(`✅ [Pipeline] #${launchId}: boleto registrado na parcela #${installment.installmentNumber} do título #${launch.siengeTituloNumber}`);
         return { success: true, installmentNumber: installment.installmentNumber };
     } catch (err) {
@@ -244,7 +295,16 @@ export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boleto
 
     // 2. Atualiza o código de barras na parcela do Sienge
     try {
-        await gravarFormaPagamento(launch, { tipo: 'boleto', linhaDigitavel: boletoBarcode, userId });
+        const gp = await gravarFormaPagamento(launch, {
+            tipo: 'boleto', linhaDigitavel: boletoBarcode, userId,
+            anexos: [...anexoDoDocumento(launch), ...anexoDoBoleto({ boletoUrl, boletoFilename }, boletoDueDate)],
+        });
+        if (gp.avisoAnexo) {
+            // Boleto gravado; anexo/liberação pendentes: fica em titulo_created e o
+            // scheduler (20 min) completa sozinho.
+            await launch.update({ siengeTituloError: gp.avisoAnexo, pipelineStage: 'titulo_created' });
+            return { success: true, pendente: gp.avisoAnexo };
+        }
         console.log(`✅ [Pipeline] #${launchId}: boleto gravado no título #${launch.siengeTituloNumber}`);
     } catch (err) {
         console.error(`❌ [Pipeline] #${launchId}: falha ao atualizar barcode no Sienge: ${err.message}`);
@@ -252,22 +312,6 @@ export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boleto
         const msg = `Boleto não gravado no Sienge: ${err.message}. Os dados do boleto ficaram salvos no Office.`;
         await launch.update({ siengeTituloError: msg });
         return { success: false, error: msg };
-    }
-
-    // 3. Anexa o novo arquivo de boleto ao título no Sienge (não-bloqueante)
-    try {
-        const { data: buffer } = await axios.get(boletoUrl, { responseType: 'arraybuffer', timeout: 30000 });
-        const desc = `Boleto${boletoDueDate ? ` — Vence ${boletoDueDate}` : ''}`;
-        await SiengeBillsService.attachBillFile(
-            launch.siengeTituloNumber,
-            desc,
-            Buffer.from(buffer),
-            boletoFilename || 'boleto.pdf'
-        );
-        console.log(`📎 [Pipeline] #${launchId}: novo boleto anexado ao título #${launch.siengeTituloNumber}`);
-    } catch (err) {
-        // Falha no anexo não deve travar o fluxo — barcode já foi atualizado
-        console.warn(`⚠️  [Pipeline] #${launchId}: falha ao anexar boleto ao título (continuando): ${err.message}`);
     }
 
     // 4. Avança para aguardando pagamento (ou mantém se já estava lá)

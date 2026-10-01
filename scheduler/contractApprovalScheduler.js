@@ -5,6 +5,8 @@
 import cron from 'node-cron';
 import db from '../models/sequelize/index.js';
 import { pollContractStatus, pollMeasurementStatus, pollTituloStatus, stepRegisterBoleto, isPermanentBoletoError } from '../services/sienge/PaymentFlowPipelineService.js';
+import { stepRegisterPix } from '../services/sienge/paymentFlow/modules/titulo.js';
+import { recipeOfLaunch } from '../services/sienge/paymentFlow/shared.js';
 
 const CRON_EXP = process.env.CONTRACT_APPROVAL_CRON || '*/20 * * * *';
 
@@ -100,6 +102,26 @@ async function checkContractApprovals() {
         }
     }
 
+    // ── Título do RB sem PIX (ou com anexo/liberação pendente) - retry automático ──
+    const pendingPix = await db.PaymentLaunch.findAll({
+        where: {
+            pipelineStage: 'titulo_created',
+            status: skipStatuses,
+            siengeTituloNumber: { [Op.not]: null },
+            boletoBarcode: null,
+        },
+    });
+    for (const launch of pendingPix) {
+        try {
+            const { receita } = await recipeOfLaunch(launch);
+            if (receita.titulo.pagamento !== 'pix') continue;
+            const r = await stepRegisterPix(launch.id, { titulo: launch.siengeTituloNumber, documento: receita.titulo.documento || launch.nfType });
+            console.log(`${r?.ok ? '✅' : '⚠️ '} [ContractApproval] #${launch.id}: PIX do RB ${r?.ok ? 'concluído' : 'ainda pendente'}.`);
+        } catch (err) {
+            console.error(`❌ [ContractApproval] Erro no PIX #${launch.id}:`, err.message);
+        }
+    }
+
     // ── Título aguardando pagamento ────────────────────────────────────────────
     const pendingTitulos = await db.PaymentLaunch.findAll({
         where: {
@@ -127,6 +149,16 @@ async function checkContractApprovals() {
     }
 }
 
+// Uma rodada por vez: boleto, PIX, anexo e liberação abrem o robô (minutos por
+// lançamento); duas rodadas juntas gravariam o mesmo título em paralelo.
+let rodando = false;
+async function rodadaUnica() {
+    if (rodando) { console.log('⏭️  [ContractApproval] rodada anterior ainda em andamento; pulando.'); return; }
+    rodando = true;
+    try { await checkContractApprovals(); }
+    finally { rodando = false; }
+}
+
 class ContractApprovalScheduler {
     constructor() {
         this.task = null;
@@ -135,12 +167,12 @@ class ContractApprovalScheduler {
     start() {
         if (this.task) this.task.stop();
         this.task = cron.schedule(CRON_EXP, async () => {
-            await checkContractApprovals();
+            await rodadaUnica();
         });
         console.log(`✅ ContractApprovalScheduler configurado: ${CRON_EXP}`);
 
         // Roda imediatamente ao iniciar
-        checkContractApprovals().catch(console.error);
+        rodadaUnica().catch(console.error);
     }
 
     stop() {

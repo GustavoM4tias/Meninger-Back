@@ -30,7 +30,7 @@ import { recipeOf } from './recipe.js';
 import { patch } from './shared.js';
 import { candidateForMeasurement, createLaunchFromCandidate } from './siengeImport.js';
 import { stepCreateMeasurement } from './modules/medicao.js';
-import { stepCreateTitulo, gravarFormaPagamento } from './modules/titulo.js';
+import { stepCreateTitulo, gravarFormaPagamento, anexoDoBoleto, anexoDoDocumento } from './modules/titulo.js';
 
 export const ACOES = ['importar_medicao', 'medir_no_saldo', 'gerar_titulo', 'registrar_boleto'];
 
@@ -418,18 +418,15 @@ export async function executeAction(user, pedido) {
     if (pedido.acao === 'registrar_boleto') {
         const launchId = Number(pedido.launchId || novoId);
         const l = await db.PaymentLaunch.findByPk(launchId);
-        await gravarFormaPagamento(l, { tipo: 'boleto', linhaDigitavel: _boleto.boletoBarcode, userId: user.id });
-        if (_boleto.boletoUrl) {
-            try {
-                const { data: buf } = await axios.get(_boleto.boletoUrl, { responseType: 'arraybuffer', timeout: 30000 });
-                await SiengeBillsService.attachBillFile(l.siengeTituloNumber, 'Boleto', Buffer.from(buf), _boleto.boletoFilename || 'boleto.pdf');
-            } catch (err) { console.warn(`[Ação] anexo do boleto #${launchId}: ${err.message}`); }
-        }
+        const gp = await gravarFormaPagamento(l, {
+            tipo: 'boleto', linhaDigitavel: _boleto.boletoBarcode, userId: user.id,
+            anexos: [...anexoDoDocumento(l), ...anexoDoBoleto(_boleto, _boleto.boletoDueDate)],
+        });
         await patch(l, {
             boletoBarcode: _boleto.boletoBarcode, boletoDueDate: _boleto.boletoDueDate || l.boletoDueDate,
             boletoAmount: _boleto.boletoAmount ?? l.boletoAmount,
             ...(_boleto.boletoUrl && { boletoUrl: _boleto.boletoUrl, boletoPath: _boleto.boletoPath, boletoFilename: _boleto.boletoFilename }),
-            pipelineStage: 'awaiting_titulo_authorization', status: 'titulo', siengeTituloError: null,
+            pipelineStage: 'awaiting_titulo_authorization', status: 'titulo', siengeTituloError: gp.avisoAnexo || null,
             updatedBy: user.id, updatedByName: user.username,
         });
         // Conferência: a parcela tem forma de pagamento agora?

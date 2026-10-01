@@ -7,8 +7,10 @@
 //   boleto: código 2 + linha digitável (+ descrição)
 //   pix:    código 11 + "Utilizar dados do credor para favorecido" + chave CNPJ/CPF
 //
-// Substitui o PATCH payment-information da API, que passou a responder 403
-// para a integração em 01/10/2026 (a API do Sienge é só consulta).
+// Anexos do título: aba "Anexos" -> Adicionar -> Descrição + Arquivo -> Salvar.
+//
+// Substitui o PATCH payment-information e o POST attachments da API, que
+// respondem 403 para a integração desde 01/10/2026 (a API do Sienge é só consulta).
 
 import { log, success } from "../../core/logger.js";
 import { dismissCommonPopups } from "../../core/popups.js";
@@ -48,6 +50,12 @@ export async function setPaymentInfo(page, { titulo, parcela = 1, origem = "ME",
     const linha = String(linhaDigitavel || "").replace(/\D/g, "");
     if (tipo === "boleto" && linha.length < 44) throw new Error("Boleto sem linha digitável válida.");
 
+    let f = await abrirTitulo(page, titulo, origem);
+    return preencherPagamento(page, f, { titulo, parcela, tipo, linha, descricao });
+}
+
+/** Abre o Cadastro de Títulos a Pagar (page 1607) no título e confere o número. */
+export async function abrirTitulo(page, titulo, origem = "ME") {
     const param = Buffer.from(`entity.cdOrigem=${origem}&entity.tituloPK.nuTitulo=${titulo}`).toString("base64");
     log("PAGTO", `Abrindo o título ${titulo} (origem ${origem})...`);
     await page.goto(`${BASE}#/common/page/1607/${param}`, { waitUntil: "domcontentloaded" });
@@ -62,6 +70,10 @@ export async function setPaymentInfo(page, { titulo, parcela = 1, origem = "ME",
     }
     const nu = await f.locator(byId("entity.tituloPK.nuTitulo")).inputValue().catch(() => "");
     if (String(nu).trim() !== String(titulo)) throw new Error(`O Sienge abriu o título "${nu}" em vez do ${titulo}.`);
+    return f;
+}
+
+async function preencherPagamento(page, f, { titulo, parcela, tipo, linha, descricao }) {
 
     log("PAGTO", "Aba Inf. Pagamento...");
     await f.locator("a").filter({ hasText: /^\s*Inf\. Pagamento\s*$/ }).first().click({ force: true });
@@ -122,4 +134,121 @@ export async function setPaymentInfo(page, { titulo, parcela = 1, origem = "ME",
 
     success("PAGTO", `Forma de pagamento ${tipo} salva no título ${titulo}, parcela ${parcela}.`);
     return { ok: true };
+}
+
+/**
+ * Anexa arquivos ao título (aba Anexos). Pula o que já estiver anexado com o
+ * mesmo nome de arquivo, para reprocessar sem duplicar.
+ * @param {object[]} anexos - [{ descricao, nome, buffer, mimeType }]
+ */
+export async function anexarNoTitulo(page, { titulo, origem = "ME", anexos = [] }) {
+    if (!anexos.length) return { anexados: 0 };
+    let f = await abrirTitulo(page, titulo, origem);
+    log("ANEXO", "Aba Anexos...");
+    await f.getByText("Anexos", { exact: true }).first().click({ force: true });
+    await settle(page, 2500);
+    // A aba recarrega o iframe: espera o "Adicionar" existir no frame NOVO.
+    for (let i = 0; i < 30; i++) {
+        f = await frameOf(page);
+        if (await f.locator("#btNovaLinhaAnexos").count().catch(() => 0)) break;
+        await page.waitForTimeout(1500);
+    }
+    if (!(await f.locator("#btNovaLinhaAnexos").count().catch(() => 0))) throw new Error('A aba Anexos do título não abriu (botão "Adicionar" ausente).');
+
+    const jaTem = await f.locator('input[type="hidden"][name$=".nmAnexo"]').evaluateAll(els => els.map(e => (e.value || "").toLowerCase()));
+    const novos = anexos.filter(a => !jaTem.includes(String(a.nome || "").toLowerCase()));
+    if (!novos.length) { success("ANEXO", "Arquivos já estavam anexados."); return { anexados: 0 }; }
+
+    for (const a of novos) {
+        await f.locator("#btNovaLinhaAnexos").click();
+        await page.waitForTimeout(800);
+        const idx = await f.locator('input[type="file"][name^="anexos["]').evaluateAll(els =>
+            Math.max(...els.map(e => Number((e.name.match(/anexos\[(\d+)\]/) || [])[1] ?? -1))));
+        log("ANEXO", `Linha ${idx}: ${a.nome}`);
+        await f.locator(`[id="anexos[${idx}].deAnexo_${idx}"]`).fill(String(a.descricao || a.nome).slice(0, 100));
+        await f.locator(`[id="anexos[${idx}].file_${idx}"]`).setInputFiles({
+            name: String(a.nome || "anexo.pdf").slice(0, 100), mimeType: a.mimeType || "application/pdf", buffer: a.buffer,
+        });
+    }
+
+    log("ANEXO", "Salvando...");
+    await f.locator('input[name="pbEnviar"]').click();
+    await settle(page, 4000);
+
+    // Conferência: os nomes aparecem na lista depois de salvar.
+    f = await frameOf(page);
+    const depois = await f.locator('input[type="hidden"][name$=".nmAnexo"]').evaluateAll(els => els.map(e => (e.value || "").toLowerCase())).catch(() => []);
+    const faltando = novos.filter(a => !depois.some(n => n.includes(String(a.nome || "").toLowerCase().replace(/\.pdf$/, ""))));
+    if (faltando.length) throw new Error(`Anexo não apareceu no título depois de salvar: ${faltando.map(a => a.nome).join(", ")}.`);
+    success("ANEXO", `${novos.length} arquivo(s) anexado(s) ao título ${titulo}.`);
+    return { anexados: novos.length };
+}
+
+/**
+ * Finaliza a liberação da medição (Liberações de Medições, page 1961). O robô
+ * do título clica em Finalizar logo depois de salvar, mas o Sienge só finaliza
+ * quando o título está completo (forma de pagamento + anexo) - então a
+ * liberação ficava "em andamento". Roda DEPOIS de pagamento e anexos.
+ * @returns {{ finalizada: boolean, jaEstava?: boolean }}
+ */
+export async function finalizarLiberacao(page, { documentType, contractNumber, measurementNumber }) {
+    const contrato = `${documentType}/${contractNumber}`;
+    const dialogos = [];
+    const onDialog = d => dialogos.push(d.message());
+    page.on("dialog", onDialog);
+    try {
+        const listar = async (situacao) => {
+            await page.goto(`${BASE}#/common/page/1961`, { waitUntil: "domcontentloaded" });
+            await settle(page, 2500);
+            // Mesma URL não remonta a página: sem o filtro na tela, recarrega.
+            let f = await frameOf(page, 25000).catch(() => null);
+            if (!f || !(await f.locator("#labelContrato").count().catch(() => 0))) {
+                await page.reload({ waitUntil: "domcontentloaded" });
+                await settle(page, 4000);
+                f = await frameOf(page);
+                await f.locator("#labelContrato").waitFor({ state: "visible", timeout: 30000 });
+            }
+            await f.locator("#labelContrato").fill(contrato);
+            await f.locator("#dtInicioPeriodo").fill("01/01/2020");
+            await f.locator("#flSitMedicoes").selectOption(situacao);
+            await f.locator('input[name="btFiltrar"]').click();
+            await settle(page, 2500);
+            f = await frameOf(page);
+            const rowId = await f.evaluate((n) => {
+                for (const r of document.querySelectorAll('tr[id^="linhaRow_"]:not([id$="-1"])')) {
+                    const s = r.querySelector('span[tipo="NUMBER"]');
+                    if (s && parseInt(s.innerText, 10) === n) return r.id;
+                }
+                return null;
+            }, Number(measurementNumber));
+            return { f, rowId };
+        };
+
+        log("LIBERACAO", `Procurando ${contrato} medição ${measurementNumber} com liberação em andamento...`);
+        let { f, rowId } = await listar("A");
+        if (!rowId) {
+            const fin = await listar("F");
+            if (fin.rowId) { success("LIBERACAO", "Liberação já estava finalizada."); return { finalizada: true, jaEstava: true }; }
+            throw new Error(`Medição ${measurementNumber} do ${contrato} não está com liberação em andamento nem finalizada.`);
+        }
+        await f.locator(`tr#${rowId} img[name_="editar"]`).first().click({ force: true });
+        await settle(page, 2500);
+        f = await frameOf(page);
+
+        log("LIBERACAO", "Finalizando...");
+        const bt = f.locator("#btFinalizar");
+        await bt.waitFor({ state: "visible", timeout: 30000 });
+        await bt.click();
+        await settle(page, 4000);
+
+        const conferido = await listar("F");
+        if (!conferido.rowId) {
+            const motivo = dialogos.filter(Boolean).pop();
+            throw new Error(`O Sienge não finalizou a liberação${motivo ? `: ${motivo}` : ""}.`);
+        }
+        success("LIBERACAO", `Liberação do ${contrato} medição ${measurementNumber} finalizada.`);
+        return { finalizada: true };
+    } finally {
+        page.off("dialog", onDialog);
+    }
 }
