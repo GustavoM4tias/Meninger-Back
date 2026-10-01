@@ -35,7 +35,7 @@ test('contrato existente sem lista aceita só o documento do próprio tipo', () 
 });
 
 test('normalização descarta lixo e mantém o válido', () => {
-    const r = normalizeReceita({ contrato: 'xpto', documentosContrato: 'ctpj, rb ,', titulo: { documento: 'nfe', pagamento: 'pix' } });
+    const r = normalizeReceita({ contrato: 'xpto', documentosContrato: 'ctpj, rb ,', titulo: { documento: 'nfe', pagamento: 'cheque' } });
     assert.equal(r.contrato, 'auto');
     assert.deepEqual(r.documentosContrato, ['CTPJ', 'RB']);
     assert.equal(r.titulo.documento, 'NFE');
@@ -47,7 +47,7 @@ test('normalização descarta lixo e mantém o válido', () => {
 test('validação da tela recusa valores que não existem', () => {
     assert.equal(validateReceita({ contrato: 'existente' }).length, 0);
     assert.ok(validateReceita({ contrato: 'sempre' })[0].includes('não existe'));
-    assert.ok(validateReceita({ titulo: { pagamento: 'pix' } }).length);
+    assert.ok(validateReceita({ titulo: { pagamento: 'cheque' } }).length);
     assert.ok(validateRegras({ credorTipo: 'MEI' }).length);
     assert.ok(validateRegras({ valorMaximo: 0 }).length);
 });

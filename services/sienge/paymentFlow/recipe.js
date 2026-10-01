@@ -11,9 +11,13 @@
 // `contrato: 'auto'` é o comportamento de sempre (acha contrato -> aditivo;
 // não acha -> cria). Tipo sem receita gravada cai nele, então os tipos que já
 // existiam seguem exatamente como estavam.
+//
+// `contrato: 'nenhum'` = título direto pela API do Sienge, sem contrato nem
+// medição (o RB de reembolso: credor PF, pago por PIX).
 
-export const CONTRATO_MODOS = ['auto', 'existente', 'criar'];
-export const PAGAMENTO_MODOS = ['boleto', 'transferencia'];
+export const CONTRATO_MODOS = ['auto', 'existente', 'criar', 'nenhum'];
+export const PAGAMENTO_MODOS = ['boleto', 'transferencia', 'pix'];
+export const PAGAMENTO_LABEL = { boleto: 'boleto', transferencia: 'transferência', pix: 'PIX' };
 export const CREDOR_TIPOS = ['qualquer', 'PJ', 'PF'];
 
 export const DEFAULT_RECEITA = Object.freeze({
@@ -150,13 +154,17 @@ export function stepsOf(receita) {
         steps.push({ key: 'contrato_existente', label: `Contrato existente${docs}` });
     } else if (r.contrato === 'criar') {
         steps.push({ key: 'contrato_criacao', label: 'Contrato - criação' });
+    } else if (r.contrato === 'nenhum') {
+        const doc = r.titulo.documento || 'documento do lançamento';
+        steps.push({ key: 'titulo_direto', label: `Título ${doc} direto, sem contrato - ${PAGAMENTO_LABEL[r.titulo.pagamento]}` });
+        return steps;
     } else {
         steps.push({ key: 'contrato_auto', label: 'Contrato - aditivo ou criação' });
     }
     steps.push({ key: 'medicao', label: 'Medição' });
     if (r.medicaoAntesDoDocumento) steps.push({ key: 'aguarda_documento', label: 'Aguarda documento' });
     const doc = r.titulo.documento || 'documento do lançamento';
-    const pag = r.titulo.pagamento === 'transferencia' ? 'transferência' : 'boleto';
+    const pag = PAGAMENTO_LABEL[r.titulo.pagamento];
     steps.push({ key: 'titulo', label: `Título ${doc} - ${pag}` });
     return steps;
 }

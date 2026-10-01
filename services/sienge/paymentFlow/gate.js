@@ -82,7 +82,8 @@ export function checkDocument(launch, receita) {
     // documento esperado). Nota e boleto seguem opcionais como sempre foram.
     if (!receita.configurada) return motivos;
 
-    if (!launch.nfNumber) motivos.push('Número do documento fiscal não informado.');
+    // Título direto (RB): sem número, o módulo numera pela data (ddmmaaaa), como no Sienge.
+    if (!launch.nfNumber && receita.contrato !== 'nenhum') motivos.push('Número do documento fiscal não informado.');
     const docEfetivo = esperado || informado;
     if (docEfetivo === 'NFE' && onlyDigits(launch.nfAccessKey).length !== 44) {
         motivos.push('NF-e precisa da chave de acesso com 44 dígitos.');
