@@ -585,7 +585,7 @@ export async function updateBoletoController(req, res, next) {
         if (!boletoBarcode) return res.status(422).json({ error: 'Código de barras é obrigatório.' });
         if (!boletoUrl)     return res.status(422).json({ error: 'URL do boleto é obrigatória.' });
 
-        const result = await stepUpdateBoleto(id, { boletoUrl, boletoPath, boletoFilename, boletoBarcode, boletoDueDate, boletoAmount });
+        const result = await stepUpdateBoleto(id, { boletoUrl, boletoPath, boletoFilename, boletoBarcode, boletoDueDate, boletoAmount }, actor(req).id);
         if (result?.success === false && result.error) return res.status(502).json(result);
         return res.json(result);
     } catch (err) { next(err); }

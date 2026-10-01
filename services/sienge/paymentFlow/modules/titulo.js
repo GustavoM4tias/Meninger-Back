@@ -11,6 +11,7 @@
 import axios from 'axios';
 import { SiengeBillsService } from '../../SiengeBillsService.js';
 import { runPlaywrightTitulo } from '../../../../playwright/services/tituloService.js';
+import { runPlaywrightPaymentInfo } from '../../../../playwright/services/paymentInfoService.js';
 import { checkDocument } from '../gate.js';
 import {
     Model, loadLaunch, patch, getUserSiengeCredentials, recipeOfLaunch, gateMessage,
@@ -101,10 +102,31 @@ export async function stepCreateTitulo(launchId, userId = null) {
     }
 }
 
+// ── Forma de pagamento da parcela (Playwright) ───────────────────────────────
+// A API do Sienge é só consulta (o PATCH payment-information dá 403 desde
+// 01/10/2026): boleto e PIX entram pela tela do título, aba Inf. Pagamento.
+// Depois a API (leitura) confere se a parcela ficou com a forma certa.
+const TIPO_PAGTO = { boleto: 2, pix: 11 };
+export async function gravarFormaPagamento(launch, { tipo, linhaDigitavel = '', descricao = '', userId = null }) {
+    const titulo = launch.siengeTituloNumber;
+    const bill = await SiengeBillsService.getBill(titulo).catch(() => null);
+    const parcela = (await SiengeBillsService.getInstallments(titulo))[0];
+    if (!parcela) throw new Error(`Nenhuma parcela encontrada no título ${titulo}.`);
+    const credentials = await getUserSiengeCredentials(userId || launch.createdBy);
+    await runPlaywrightPaymentInfo({
+        credentials, titulo, parcela: parcela.installmentNumber ?? 1,
+        origem: String(bill?.originId || 'ME').trim(), tipo, linhaDigitavel, descricao,
+    });
+    const depois = (await SiengeBillsService.getInstallments(titulo))[0];
+    if (Number(depois?.paymentTypeId) !== TIPO_PAGTO[tipo]) {
+        throw new Error(`a tela foi salva, mas a parcela do título ${titulo} está como "${depois?.paymentType || 'sem forma de pagamento'}"`);
+    }
+    return { ok: true, paymentType: depois.paymentType };
+}
+
 // ── PIX na parcela (EXCLUSIVO do RB) ──────────────────────────────────────────
-// O robô do título não grava forma de pagamento. Para o RB o PIX vai pela API,
-// na chave do credor, como o boleto (decisão de 01/10/2026). Outro documento
-// com pagamento PIX não usa a API: fica o aviso para escolher no Sienge.
+// Na chave CNPJ/CPF do credor ("utilizar dados do credor"), pela tela do título.
+// Outro documento com pagamento PIX fica com o aviso para escolher no Sienge.
 export async function stepRegisterPix(launchId, { titulo, documento }) {
     const launch = await loadLaunch(launchId);
     const chave = String(launch.providerCnpj || '').trim();
@@ -113,13 +135,7 @@ export async function stepRegisterPix(launchId, { titulo, documento }) {
     });
     if (String(documento || '').toUpperCase() !== 'RB') return manual('PIX automático só para RB');
     try {
-        const parcela = (await SiengeBillsService.getInstallments(titulo))[0];
-        if (!parcela) return manual('parcela não encontrada');
-        await SiengeBillsService.registerPixPayment(titulo, parcela.installmentNumber ?? 1, {
-            nome: launch.siengeCreditorName || launch.providerName, documento: launch.providerCnpj,
-        });
-        const depois = (await SiengeBillsService.getInstallments(titulo))[0];
-        if (Number(depois?.paymentTypeId) !== 11) return manual(`o Sienge aceitou, mas a parcela está como ${depois?.paymentType || 'sem forma'}`);
+        await gravarFormaPagamento(launch, { tipo: 'pix' });
         await patch(launch, { pipelineStage: 'awaiting_titulo_authorization', siengeTituloError: null });
         console.log(`✅ [Pipeline] #${launchId}: PIX registrado no título ${titulo}`);
         return { ok: true };
@@ -150,15 +166,7 @@ export async function stepRegisterBoleto(launchId) {
         }
 
         const installment = installments[0]; // título único → 1 parcela
-        console.log(`[Pipeline] #${launchId}: parcela encontrada → ${JSON.stringify(installment)}`);
-
-        // Sienge usa installmentNumber como id da parcela no path
-        const installmentId = installment.installmentNumber ?? installment.indexId ?? 1;
-        await SiengeBillsService.registerBoletoPayment(
-            launch.siengeTituloNumber,
-            installmentId,
-            launch.boletoBarcode
-        );
+        await gravarFormaPagamento(launch, { tipo: 'boleto', linhaDigitavel: launch.boletoBarcode });
 
         await launch.update({ pipelineStage: 'awaiting_titulo_authorization' });
         console.log(`✅ [Pipeline] #${launchId}: boleto registrado na parcela #${installment.installmentNumber} do título #${launch.siengeTituloNumber}`);
@@ -217,7 +225,7 @@ export async function pollTituloStatus(launchId) {
 }
 
 // ── Atualizar boleto de um título já existente ────────────────────────────────
-export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boletoFilename, boletoBarcode, boletoDueDate, boletoAmount }) {
+export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boletoFilename, boletoBarcode, boletoDueDate, boletoAmount }, userId = null) {
     const launch = await loadLaunch(launchId);
     if (!launch.siengeTituloNumber) return { success: false, reason: 'sem_titulo' };
     if (!boletoBarcode) return { success: false, reason: 'sem_barcode' };
@@ -236,18 +244,12 @@ export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boleto
 
     // 2. Atualiza o código de barras na parcela do Sienge
     try {
-        const installments = await SiengeBillsService.getInstallments(launch.siengeTituloNumber);
-        if (!installments.length) throw new Error('Nenhuma parcela encontrada para o título');
-        const installment = installments[0];
-        const installmentId = installment.installmentNumber ?? installment.indexId ?? 1;
-        await SiengeBillsService.registerBoletoPayment(launch.siengeTituloNumber, installmentId, boletoBarcode);
-        console.log(`✅ [Pipeline] #${launchId}: barcode atualizado na parcela #${installmentId} do título #${launch.siengeTituloNumber}`);
+        await gravarFormaPagamento(launch, { tipo: 'boleto', linhaDigitavel: boletoBarcode, userId });
+        console.log(`✅ [Pipeline] #${launchId}: boleto gravado no título #${launch.siengeTituloNumber}`);
     } catch (err) {
         console.error(`❌ [Pipeline] #${launchId}: falha ao atualizar barcode no Sienge: ${err.message}`);
         // Volta legível para a tela (antes era um 500 com HTML cru) e fica no lançamento.
-        const msg = /403/.test(err.message)
-            ? 'O Sienge recusou gravar o boleto pela integração (403 - sem permissão). Os dados do boleto ficaram salvos no Office; registre o boleto na parcela pelo Sienge.'
-            : `O Sienge recusou o boleto: ${err.message}`;
+        const msg = `Boleto não gravado no Sienge: ${err.message}. Os dados do boleto ficaram salvos no Office.`;
         await launch.update({ siengeTituloError: msg });
         return { success: false, error: msg };
     }

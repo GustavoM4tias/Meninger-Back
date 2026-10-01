@@ -30,7 +30,7 @@ import { recipeOf } from './recipe.js';
 import { patch } from './shared.js';
 import { candidateForMeasurement, createLaunchFromCandidate } from './siengeImport.js';
 import { stepCreateMeasurement } from './modules/medicao.js';
-import { stepCreateTitulo } from './modules/titulo.js';
+import { stepCreateTitulo, gravarFormaPagamento } from './modules/titulo.js';
 
 export const ACOES = ['importar_medicao', 'medir_no_saldo', 'gerar_titulo', 'registrar_boleto'];
 
@@ -418,9 +418,7 @@ export async function executeAction(user, pedido) {
     if (pedido.acao === 'registrar_boleto') {
         const launchId = Number(pedido.launchId || novoId);
         const l = await db.PaymentLaunch.findByPk(launchId);
-        const parcelas = await SiengeBillsService.getInstallments(l.siengeTituloNumber);
-        const parc = parcelas[0];
-        await SiengeBillsService.registerBoletoPayment(l.siengeTituloNumber, parc.installmentNumber ?? parc.indexId ?? 1, _boleto.boletoBarcode);
+        await gravarFormaPagamento(l, { tipo: 'boleto', linhaDigitavel: _boleto.boletoBarcode, userId: user.id });
         if (_boleto.boletoUrl) {
             try {
                 const { data: buf } = await axios.get(_boleto.boletoUrl, { responseType: 'arraybuffer', timeout: 30000 });
