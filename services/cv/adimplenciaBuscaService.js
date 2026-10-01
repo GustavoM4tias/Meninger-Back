@@ -35,7 +35,7 @@ const q = (sql, replacements = {}) => db.sequelize.query(sql, { replacements, ty
 
 async function painel() {
     const s = await db.CvPanelSettings?.findByPk(1).catch(() => null);
-    return { path: s?.painel || 'gestor', email: s?.email || null };
+    return { path: s?.painel || 'gestor' };
 }
 
 /** Empreendimentos que têm unidade no espelho do Office. */
@@ -63,10 +63,11 @@ export async function criarBusca(user, ids = null) {
     if (!CV_SITE) throw new Error('CV_API_BASE_URL não configurado.');
     const lista = await empreendimentosComUnidades(ids?.length ? ids.map(Number) : null);
     if (!lista.length) throw new Error('Nenhum empreendimento com unidades para buscar.');
-    const { path, email: emailCv } = await painel();
+    const { path } = await painel();
     // A exportação vai para o e-mail de quem está logado no CV naquele
-    // navegador: normalmente a própria pessoa; às vezes o usuário do Office.
-    const caixas = [...new Set([user?.email, emailCv].filter(Boolean).map((e) => String(e).toLowerCase()))];
+    // navegador, que é a própria pessoa. (O usuário do Office no CV,
+    // sistema@menin.com.br, não é caixa no Microsoft 365 - medido em 01/10.)
+    const caixas = user?.email ? [String(user.email).toLowerCase()] : [];
     if (!caixas.length) throw new Error('Seu usuário não tem e-mail: não há onde receber a exportação do CV.');
 
     const progresso = Object.fromEntries(lista.map((id) => [id, { status: 'aguardando' }]));
@@ -104,8 +105,6 @@ export async function ultimaBuscaDe(userId) {
     return b ? lerBusca(b.id) : null;
 }
 
-const textoDe = (html) => String(html || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#8204;|‌/g, ' ').replace(/\s+/g, ' ');
-
 /** Link de download do CV dentro do e-mail; null se não houver um confiável. */
 function linkDownload(html) {
     for (const m of String(html || '').matchAll(/href="([^"]+)"/gi)) {
@@ -115,6 +114,20 @@ function linkDownload(html) {
         if (u.protocol === 'https:' && u.host === CV_HOST && u.pathname.startsWith('/api/get/download/')) return href;
     }
     return null;
+}
+
+/** O empreendimento dono da maioria das unidades da planilha (null se nenhuma é conhecida). */
+async function empreendimentoDasUnidades(ids) {
+    const amostra = ids.filter((n) => Number.isFinite(n)).slice(0, 200);
+    if (!amostra.length) return null;
+    const [r] = await q(
+        `SELECT s.idempreendimento id, COUNT(*) n FROM cv_enterprise_units u
+           JOIN cv_enterprise_blocks b ON b.idbloco = u.idbloco
+           JOIN cv_enterprise_stages s ON s.idetapa = b.idetapa
+          WHERE u.idunidade IN (:ids) GROUP BY 1 ORDER BY 2 DESC LIMIT 1`,
+        { ids: amostra },
+    );
+    return r ? Number(r.id) : null;
 }
 
 async function emailsDoCv(caixa, desde) {
@@ -151,17 +164,26 @@ async function processarBusca(b) {
         }
         // Mais recente primeiro: se o mesmo empreendimento veio 2x, vale a última planilha.
         for (const m of msgs) {
+            if (!pendentes.size) break;
             if (lidas.has(m.id)) continue;
-            const emp = Number(textoDe(m.body?.content).match(/empreendimento\s+(\d+)\s*-/i)?.[1]);
-            if (!pendentes.has(emp)) continue;
             lidas.add(m.id);
+            // O e-mail não serve para saber o empreendimento: o CV escreve ali o
+            // código interno, que vem vazio em vários ("empreendimento -SANTA
+            // STELLA"). Quem diz é a planilha, pelas unidades que traz.
             const link = linkDownload(m.body?.content);
-            if (!link) { b.progresso[emp] = { status: 'erro', msg: 'O e-mail do CV veio sem o link da planilha.', em: new Date() }; pendentes.delete(emp); continue; }
+            if (!link) continue;
+            let linhas, emp;
             try {
                 const res = await fetch(link, { headers: { 'User-Agent': UA } });
-                const texto = await res.text();
-                const linhas = parseExportacaoCv(texto);
-                if (!linhas) throw new Error('o arquivo do CV não tem a coluna "Adimplência Premiada"');
+                linhas = parseExportacaoCv(await res.text());
+                if (!linhas?.length) continue;
+                emp = await empreendimentoDasUnidades(linhas.map((l) => l.idunidade));
+            } catch (err) {
+                console.warn(`[AdimplenciaCV] busca ${b.id}: planilha do e-mail ${m.id.slice(-12)} ilegível: ${err?.message || err}`);
+                continue;
+            }
+            if (!pendentes.has(emp)) continue;
+            try {
                 const r = await aplicarExportacao(emp, linhas, {
                     observacao: `Busca automática no CV (${caixa}) em ${new Date().toISOString().slice(0, 10)}`,
                     userId: b.solicitado_por,
@@ -170,7 +192,7 @@ async function processarBusca(b) {
                     ? { status: 'atualizado', gravadas: r.gravadas, encerradas: r.encerradas, com_valor: r.importacao.com_valor, unidades: r.importacao.do_empreendimento, em: new Date() }
                     : { status: 'erro', msg: 'A planilha do CV não tem unidade deste empreendimento.', em: new Date() };
             } catch (err) {
-                b.progresso[emp] = { status: 'erro', msg: `Não consegui ler a planilha do CV: ${err?.message || err}`, em: new Date() };
+                b.progresso[emp] = { status: 'erro', msg: `Não consegui aplicar a planilha do CV: ${err?.message || err}`, em: new Date() };
             }
             pendentes.delete(emp);
         }
