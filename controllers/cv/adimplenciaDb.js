@@ -289,6 +289,28 @@ export function parseExportacaoCv(texto) {
 }
 
 /**
+ * Aplica a exportação de unidades do CV (linhas de parseExportacaoCv) num
+ * empreendimento. Usada pela importação manual e pela busca automática
+ * (services/cv/adimplenciaBuscaService.js). Devolve null quando nenhuma
+ * unidade do arquivo é do empreendimento.
+ */
+export async function aplicarExportacao(id, linhas, { vigenciaDe = hojeYmd(), observacao = null, userId = null } = {}) {
+  const validas = new Set((await unidadesDo(id)).map((u) => u.idunidade));
+  const doEmp = linhas.filter((l) => validas.has(l.idunidade));
+  if (!doEmp.length) return null;
+  const itens = doEmp.map((l) => ({ idunidade: l.idunidade, tipo: 'valor', valor: l.valor > 0 ? l.valor : 0 }));
+  const r = await aplicarItens(id, itens, {
+    vigenciaDe,
+    observacao: observacao || `Importado da exportação do CV em ${hojeYmd()}`,
+    userId,
+  });
+  return {
+    ...(r || { gravadas: 0, encerradas: 0 }),
+    importacao: { lidas: linhas.length, do_empreendimento: doEmp.length, com_valor: doEmp.filter((l) => l.valor > 0).length, fora: linhas.length - doEmp.length },
+  };
+}
+
+/**
  * Body: { csv: string, vigencia_de?, observacao? }. Unidade com valor > 0 no
  * arquivo recebe esse valor (tipo 'valor'); unidade do arquivo sem valor que
  * tinha adimplência vigente é encerrada. Unidade fora do arquivo não muda.
@@ -304,22 +326,52 @@ export const importAdimplencia = async (req, res) => {
   try {
     const ent = await CvEnterprise.findByPk(id, { attributes: ['idempreendimento'] });
     if (!ent) return res.status(404).json({ error: 'Empreendimento não encontrado.' });
-    const validas = new Set((await unidadesDo(id)).map((u) => u.idunidade));
-    const doEmp = linhas.filter((l) => validas.has(l.idunidade));
-    if (!doEmp.length) return res.status(400).json({ error: 'Nenhuma unidade do arquivo pertence a este empreendimento: confira se exportou o empreendimento certo.' });
-    const itens = doEmp.map((l) => ({ idunidade: l.idunidade, tipo: 'valor', valor: l.valor > 0 ? l.valor : 0 }));
-    const r = await aplicarItens(id, itens, {
+    const r = await aplicarExportacao(id, linhas, {
       vigenciaDe: vigenciaDoBody(body),
-      observacao: body.observacao ? String(body.observacao).slice(0, 255) : `Importado da exportação do CV em ${hojeYmd()}`,
+      observacao: body.observacao ? String(body.observacao).slice(0, 255) : null,
       userId: req.user.id,
     });
-    return res.json({
-      ...(await montarResposta(id)),
-      ...(r || { gravadas: 0, encerradas: 0 }),
-      importacao: { lidas: linhas.length, do_empreendimento: doEmp.length, com_valor: doEmp.filter((l) => l.valor > 0).length, fora: linhas.length - doEmp.length },
-    });
+    if (!r) return res.status(400).json({ error: 'Nenhuma unidade do arquivo pertence a este empreendimento: confira se exportou o empreendimento certo.' });
+    return res.json({ ...(await montarResposta(id)), ...r });
   } catch (err) {
     console.error('Erro ao importar adimplência premiada:', err);
     return res.status(500).json({ error: 'Erro ao importar a adimplência premiada.' });
+  }
+};
+
+// ── Busca automática no CV (botão "Atualizar do CV") ─────────────────────────
+// O servidor não loga no painel (CAPTCHA): o front abre as URLs devolvidas aqui
+// no navegador de quem clicou, e o cron lê o e-mail do CV. Ver
+// services/cv/adimplenciaBuscaService.js.
+export const criarBuscaCv = async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+  try {
+    const { criarBusca } = await import('../../services/cv/adimplenciaBuscaService.js');
+    const todos = req.body?.todos === true;
+    const ids = todos ? null : (Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => n > 0) : []);
+    if (!todos && !ids.length) return res.status(400).json({ error: 'Informe o empreendimento ou peça todos.' });
+    if (ids?.length) {
+      const allowed = await visibleCvIds(req.user);
+      if (allowed !== null && ids.some((i) => !allowed.includes(i))) return res.status(403).json({ error: 'Empreendimento fora do seu escopo.' });
+    } else {
+      const allowed = await visibleCvIds(req.user);
+      if (allowed !== null) return res.status(403).json({ error: 'Buscar em todos os empreendimentos é só para quem vê todos.' });
+    }
+    return res.json(await criarBusca(req.user, ids));
+  } catch (err) {
+    console.error('Erro ao criar busca de adimplência no CV:', err);
+    return res.status(500).json({ error: err?.message || 'Erro ao iniciar a busca no CV.' });
+  }
+};
+
+export const statusBuscaCv = async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Usuário não autenticado.' });
+  try {
+    const { lerBusca, ultimaBuscaDe } = await import('../../services/cv/adimplenciaBuscaService.js');
+    const b = req.params.buscaId === 'ultima' ? await ultimaBuscaDe(req.user.id) : await lerBusca(Number(req.params.buscaId));
+    return res.json(b);
+  } catch (err) {
+    console.error('Erro ao ler busca de adimplência no CV:', err);
+    return res.status(500).json({ error: 'Erro ao ler o andamento da busca.' });
   }
 };

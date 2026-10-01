@@ -91,6 +91,7 @@ import landScheduler from './scheduler/landScheduler.js';
 import creditorPollingScheduler from './scheduler/creditorPollingScheduler.js';
 import contractApprovalScheduler from './scheduler/contractApprovalScheduler.js';
 import supabaseKeepAliveScheduler from './scheduler/supabaseKeepAliveScheduler.js';
+import adimplenciaBuscaScheduler from './scheduler/adimplenciaBuscaScheduler.js';
 import conditionAutoGenerateScheduler from './scheduler/conditionAutoGenerateScheduler.js';
 import eventPlanCycleScheduler from './scheduler/eventPlanCycleScheduler.js';
 import envioSiengeWatchScheduler from './scheduler/envioSiengeWatchScheduler.js';
@@ -123,6 +124,7 @@ import { ensureUserPhoneBackfill } from './lib/ensureUserPhoneBackfill.js';
 import { ensurePlatformUpdatesSchema } from './lib/ensurePlatformUpdatesSchema.js';
 import { ensureCvPanelSchema } from './lib/ensureCvPanelSchema.js';
 import { ensureUnitStockSchema } from './lib/ensureUnitStockSchema.js';
+import { ensureAdimplenciaBuscaSchema } from './lib/ensureAdimplenciaBuscaSchema.js';
 import { ensureCvWebhookSchema } from './lib/ensureCvWebhookSchema.js';
 import { ensureValidatorHealthSchema } from './lib/ensureValidatorHealthSchema.js';
 import { ensureAiProvidersSchema } from './lib/ensureAiProvidersSchema.js';
@@ -472,6 +474,10 @@ async function initBackground() {
   // sempre, e o espelho mostraria todo estoque segurado como bloqueado.
   await ensureUnitStockSchema().catch(err =>
       console.warn('⚠️  ensureUnitStockSchema falhou:', err.message));
+  // Busca de adimplência no CV (01/10): o botão e o cron consultam a tabela
+  // na primeira chamada; com o gate pulando a fase ela nunca nasceria.
+  await ensureAdimplenciaBuscaSchema().catch(err =>
+      console.warn('⚠️  ensureAdimplenciaBuscaSchema falhou:', err.message));
   // Linha do webhook de unidades (23/09): nasce desligada, mas precisa EXISTIR
   // para alguem poder liga-la na tela. Com o gate pulando a fase em prod ela
   // nunca apareceria, e o teste do payload nao teria onde chegar.
@@ -891,6 +897,7 @@ async function startBackgroundServices() {
   if (schedulerOn('ENABLE_CREDITOR_POLLING')) creditorPollingScheduler.start();
   if (schedulerOn('ENABLE_CONTRACT_APPROVAL')) contractApprovalScheduler.start();
   if (schedulerOn('ENABLE_SUPABASE_KEEPALIVE')) supabaseKeepAliveScheduler.start();
+  if (schedulerOn('ENABLE_ADIMPLENCIA_BUSCA')) adimplenciaBuscaScheduler.start(); // 1min: aplica a exportação do CV pedida pelo botão "Atualizar do CV"
   if (schedulerOn('ENABLE_CONDITION_AUTOGEN')) conditionAutoGenerateScheduler.start(); // auto-geração mensal de fichas (com e sem CV)
   if (schedulerOn('ENABLE_EVENT_PLAN_CYCLE')) eventPlanCycleScheduler.start(); // Plano de Eventos: abre o mês seguinte + cobra o prazo
   if (schedulerOn('ENABLE_BOLETO_CLEANUP')) boletoCleanupScheduler.start(); // remove boletos expirados do Supabase

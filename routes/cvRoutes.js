@@ -25,7 +25,7 @@ import {
     getEstoqueBloqueado, putRegraMotivo, putExcecaoUnidade,
     getMotivosDoEmpreendimento, syncMotivos, getDiagnostico, probeV3, marcarLote,
 } from '../controllers/cv/unitStockController.js';
-import { getAdimplencia, saveAdimplencia, importAdimplencia } from '../controllers/cv/adimplenciaDb.js';
+import { getAdimplencia, saveAdimplencia, importAdimplencia, criarBuscaCv, statusBuscaCv } from '../controllers/cv/adimplenciaDb.js';
 import EnterprisesSyncController from '../controllers/cv/enterprisesSyncController.js';
 
 import { fetchWorkflowGroups, createOrUpdateWorkflowGroup, removeWorkflowGroup, fetchListSegments  } from '../controllers/cv/workflowGroups.js';
@@ -141,6 +141,10 @@ router.get('/empreendimento/:id/adimplencia', authenticate, requireRoutePermissi
 router.put('/empreendimento/:id/adimplencia', authenticate, configurarEspelho, saveAdimplencia);
 // Importa a exportação de unidades do painel Gestor (CSV com "Adimplência Premiada")
 router.post('/empreendimento/:id/adimplencia/importar', authenticate, configurarEspelho, importAdimplencia);
+// Busca no CV pelo botão: abre a exportação no navegador de quem clicou e o
+// cron aplica quando o e-mail do CV chega (sem importar arquivo).
+router.post('/adimplencia/buscas', authenticate, configurarEspelho, criarBuscaCv);
+router.get('/adimplencia/buscas/:buscaId', authenticate, configurarEspelho, statusBuscaCv);
 
 router.get('/workflow-grupos', authenticate, requireRoutePermission(WORKFLOW_SCREENS), fetchWorkflowGroups);
 // ?tipo=repasses
