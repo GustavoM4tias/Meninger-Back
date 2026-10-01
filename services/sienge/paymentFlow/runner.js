@@ -6,7 +6,6 @@
 //   auto       Fornecedor -> Contrato (acha: aditivo | não acha: criação) -> [autorização] -> Medição -> Título
 //   existente  Fornecedor -> Contrato existente (portão) -> Medição -> Título
 //   criar      Fornecedor -> Contrato criação -> [autorização] -> Medição -> Título
-//   nenhum     Fornecedor -> Título direto pela API (RB: sem contrato, PIX)
 //
 // Medição -> Título continua pelos pollers (scheduler), como sempre: a medição
 // precisa ser autorizada no Sienge antes do título. Com "medição antes do
@@ -24,7 +23,6 @@ import { stepCreateAdditive } from './modules/contratoAditivo.js';
 import { stepUseExistingContract } from './modules/contratoExistente.js';
 import { stepCreateMeasurement } from './modules/medicao.js';
 import { stepCreateTitulo } from './modules/titulo.js';
-import { stepCreateDirectTitulo } from './modules/tituloDireto.js';
 
 /** O item do tipo no contrato do lançamento cobre o valor? (estrito pelo item, quando o tipo tem item) */
 async function saldoDoItem(launch) {
@@ -77,10 +75,7 @@ export async function runFullPipeline(launchId, userId = null) {
     }
     if (currentStage === 'titulo_error') {
         console.log(`⏩ [Pipeline] #${launchId}: retomando do título (stage: titulo_error)`);
-        const { receita: r } = await recipeOfLaunch(await loadLaunch(launchId));
-        const result = r.contrato === 'nenhum'
-            ? await stepCreateDirectTitulo(launchId)
-            : await stepCreateTitulo(launchId, userId);
+        const result = await stepCreateTitulo(launchId, userId);
         return { stage: result.success ? 'titulo_created' : 'titulo_error', ...result };
     }
     if (currentStage === 'awaiting_document') {
@@ -120,10 +115,6 @@ export async function runFullPipeline(launchId, userId = null) {
         if (!cred.ok) return blockByGate(await loadLaunch(launchId), cred.motivos);
     }
 
-    if (receita.contrato === 'nenhum') {
-        const result = await stepCreateDirectTitulo(launchId);
-        return { stage: result.success ? 'titulo_created' : 'titulo_error', ...result };
-    }
     if (receita.contrato === 'existente') return runExisting(launchId, userId, { receita, regras });
     if (receita.contrato === 'criar') return runCreate(launchId, userId);
     return runAuto(launchId, userId, { bypassAutoCheck });

@@ -134,3 +134,28 @@ test('saldo insuficiente pede aditivo', () => {
     assert.equal(checkBalance(36802.5, 5257.5).ok, true);
     assert.match(checkBalance(100, 5257.5).motivos[0], /aditivo/);
 });
+
+test('RB: auto só considera contrato RB da obra, nunca o CTPJ do salário', async () => {
+    const { pickByDocuments } = await import('../services/sienge/paymentFlow/gate.js');
+    const contratos = [
+        { documentId: 'CTPJ', contractNumber: '32', statusApproval: 'APPROVED', isAuthorized: true, endDate: '2026-12-31', buildings: [{ buildingId: 63001 }] },
+        { documentId: 'RB', contractNumber: '10', status: 'COMPLETED', statusApproval: 'APPROVED', isAuthorized: true, endDate: '2026-12-31', buildings: [{ buildingId: 63001 }] },
+        { documentId: 'RB', contractNumber: '11', statusApproval: 'APPROVED', isAuthorized: true, endDate: '2026-12-31', buildings: [{ buildingId: 72001 }] },
+        { documentId: 'RB', contractNumber: '12', statusApproval: 'APPROVED', isAuthorized: true, endDate: '2026-12-31', buildings: [{ buildingId: 63001 }] },
+    ];
+    assert.equal(pickByDocuments(contratos, ['RB'], 63001)?.contractNumber, '12');
+    assert.equal(pickByDocuments(contratos.slice(0, 3), ['RB'], 63001), null);
+});
+
+test('RB: pagamento PIX é aceito e não exige boleto', () => {
+    const rb = recipeOf({
+        documento: 'RB',
+        receita: { contrato: 'auto', documentosContrato: ['RB'], titulo: { documento: 'RB', pagamento: 'pix' } },
+        regras: { credorTipo: 'PF' },
+    });
+    assert.equal(rb.receita.titulo.pagamento, 'pix');
+    assert.deepEqual(rb.receita.documentosContrato, ['RB']);
+    const motivos = checkDocument({ nfNumber: '24092026', nfType: 'RB' }, rb.receita);
+    assert.deepEqual(motivos, []);
+    assert.match(stepsOf(rb.receita).at(-1).label, /PIX/);
+});

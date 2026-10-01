@@ -13,10 +13,9 @@ import { SiengeCreditorService } from '../SiengeCreditorService.js';
 import { SiengeContractService, DEFAULT_BUILDING_UNIT } from '../SiengeContractService.js';
 import { getScope, isErpAllowed } from '../../permissions/accessScopeService.js';
 import { recipeOf, stepsOf } from './recipe.js';
-import { checkLaunchInput, checkCreditor, pickExistingContract, mergeResults } from './gate.js';
+import { checkLaunchInput, checkCreditor, pickExistingContract, pickByDocuments, mergeResults } from './gate.js';
 import { pickMeasurementItem } from './measurementItem.js';
 import { resolveEnterpriseIds } from './shared.js';
-import { resolverItemOrcamento, procurarDuplicado, numeroPorData } from './modules/tituloDireto.js';
 
 const onlyDigits = s => String(s || '').replace(/\D/g, '');
 
@@ -98,24 +97,7 @@ export async function previewLaunch(draft, user) {
             if (receita.configurada) motivos.push(...c.motivos); else avisos.push(...c.motivos);
 
             // ── Contrato ──────────────────────────────────────────────────────
-            if (receita.contrato === 'nenhum' && erpId) {
-                // Título direto: sem contrato. Confere item de orçamento e duplicidade.
-                try {
-                    const it = await resolverItemOrcamento({ buildingId: erpId, nome: d.budgetItem, codigo: d.budgetItemCode });
-                    if (!it) motivos.push(`Não achei o item de orçamento "${d.budgetItem}" na obra ${erpId}. Informe o código do item.`);
-                    else out.item = { descricao: it.nome || d.budgetItem, codigo: it.codigo };
-                    const emissao = String(d.nfIssueDate || new Date().toISOString()).slice(0, 10);
-                    const documento = receita.titulo.documento || String(d.nfType || '').toUpperCase();
-                    const dup = await procurarDuplicado({
-                        creditorId: creditor.id, companyId, documento,
-                        numero: d.nfNumber || numeroPorData(emissao), valor: d.unitPrice, emissao,
-                    });
-                    if (dup) motivos.push(`Possível duplicidade: ${dup.motivo}.`);
-                    out.contrato = { label: null, acao: 'sem contrato (título direto)' };
-                } catch (err) {
-                    avisos.push(`Não consegui conferir o título no Sienge agora (${err.message}).`);
-                }
-            } else if (receita.contrato === 'existente' && erpId) {
+            if (receita.contrato === 'existente' && erpId) {
                 try {
                     const all = await SiengeContractService.findAllBySupplierId(creditor.id, companyId);
                     const pick = pickExistingContract(all, { receita, regras, buildingId: erpId });
@@ -140,9 +122,11 @@ export async function previewLaunch(draft, user) {
                 } catch (err) {
                     avisos.push(`Não consegui consultar os contratos no Sienge agora (${err.message}).`);
                 }
-            } else if (receita.contrato !== 'existente' && receita.contrato !== 'nenhum' && erpId) {
+            } else if (receita.contrato !== 'existente' && erpId) {
                 try {
-                    const c3 = await SiengeContractService.findBySupplierId(creditor.id, companyId, erpId);
+                    const c3 = receita.documentosContrato.length
+                        ? pickByDocuments(await SiengeContractService.findAllBySupplierId(creditor.id, companyId), receita.documentosContrato, erpId)
+                        : await SiengeContractService.findBySupplierId(creditor.id, companyId, erpId);
                     if (!c3 || receita.contrato === 'criar') {
                         out.contrato = { label: c3 ? `${c3.documentId}/${c3.contractNumber}` : null, acao: 'criar novo' };
                     } else {

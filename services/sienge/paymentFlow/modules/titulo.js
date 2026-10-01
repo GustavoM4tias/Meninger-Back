@@ -77,6 +77,13 @@ export async function stepCreateTitulo(launchId, userId = null) {
             if (receita.titulo.pagamento === 'transferencia') {
                 // Sem boleto para registrar: o título já espera o pagamento.
                 await patch(launch, { pipelineStage: 'awaiting_titulo_authorization' });
+            } else if (receita.titulo.pagamento === 'pix') {
+                // O robô do título não grava forma de pagamento, e a API é só
+                // consulta: o PIX é escolhido no Sienge. O lançamento avisa.
+                const doc = String(launch.providerCnpj || '').trim();
+                await patch(launch, {
+                    siengeTituloError: `Título ${result.tituloNumber} lançado sem forma de pagamento: selecione PIX na parcela, chave ${doc} (${launch.siengeCreditorName || launch.providerName}).`,
+                });
             } else {
                 // Registra boleto automaticamente em background
                 stepRegisterBoleto(launchId).catch(err =>

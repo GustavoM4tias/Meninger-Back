@@ -6,7 +6,8 @@
 
 import { SiengeContractService, DEFAULT_BUILDING_UNIT } from '../../SiengeContractService.js';
 import { SiengeBillsService } from '../../SiengeBillsService.js';
-import { Model, loadLaunch, patch, resolveEnterpriseIds } from '../shared.js';
+import { Model, loadLaunch, patch, resolveEnterpriseIds, recipeOfLaunch } from '../shared.js';
+import { pickByDocuments } from '../gate.js';
 import { stepCreateMeasurement } from './medicao.js';
 
 export async function stepFindContract(launchId) {
@@ -17,13 +18,21 @@ export async function stepFindContract(launchId) {
 
     const { erpId, companyId } = await resolveEnterpriseIds(launch);
 
+    // Receita com documentos de contrato (ex.: RB): só contrato desses
+    // documentos conta. Sem isso o reembolso de um gestor cairia no CTPJ do
+    // salário dele na mesma empresa.
+    const { receita } = await recipeOfLaunch(launch);
+    const docs = receita.documentosContrato || [];
+
     let contract;
     try {
-        contract = await SiengeContractService.findBySupplierId(
-            launch.siengeCreditorId,
-            companyId,
-            erpId   // buildingId — filtra por obra no servidor
-        );
+        contract = docs.length
+            ? pickByDocuments(await SiengeContractService.findAllBySupplierId(launch.siengeCreditorId, companyId), docs, erpId)
+            : await SiengeContractService.findBySupplierId(
+                launch.siengeCreditorId,
+                companyId,
+                erpId   // buildingId — filtra por obra no servidor
+            );
     } catch (err) {
         await patch(launch, {
             pipelineStage: 'contract_not_found',

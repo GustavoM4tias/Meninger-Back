@@ -82,8 +82,7 @@ export function checkDocument(launch, receita) {
     // documento esperado). Nota e boleto seguem opcionais como sempre foram.
     if (!receita.configurada) return motivos;
 
-    // Título direto (RB): sem número, o módulo numera pela data (ddmmaaaa), como no Sienge.
-    if (!launch.nfNumber && receita.contrato !== 'nenhum') motivos.push('Número do documento fiscal não informado.');
+    if (!launch.nfNumber) motivos.push('Número do documento fiscal não informado.');
     const docEfetivo = esperado || informado;
     if (docEfetivo === 'NFE' && onlyDigits(launch.nfAccessKey).length !== 44) {
         motivos.push('NF-e precisa da chave de acesso com 44 dígitos.');
@@ -156,6 +155,22 @@ export function pickExistingContract(contracts, { receita, regras, buildingId = 
         }
     }
     return { contract: aceitos[0], motivos: [], descartados };
+}
+
+const ENCERRADOS_AUTO = ['COMPLETED', 'CANCELED', 'CANCELLED', 'RESCINDED'];
+
+/**
+ * Modo "auto" com documentos na receita (ex.: só RB).
+ * Melhor contrato entre os documentos aceitos, na obra do lançamento (aprovado/autorizado e término mais distante primeiro). */
+export function pickByDocuments(contracts, docs, buildingId) {
+    const aceitos = (contracts || []).filter(c =>
+        docs.includes(String(c.documentId || '').trim().toUpperCase())
+        && !ENCERRADOS_AUTO.includes(String(c.status || '').toUpperCase())
+        && (!buildingId || !Array.isArray(c.buildings) || !c.buildings.length
+            || c.buildings.some(b => Number(b.buildingId) === Number(buildingId))));
+    const score = c => (c.statusApproval === 'APPROVED' ? 2 : 0) + (c.isAuthorized ? 1 : 0);
+    aceitos.sort((a, b) => score(b) - score(a) || String(b.endDate || '').localeCompare(String(a.endDate || '')));
+    return aceitos[0] || null;
 }
 
 /** Saldo do contrato para a medição (itens de /supply-contracts/items). */
