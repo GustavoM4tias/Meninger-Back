@@ -140,6 +140,7 @@ export async function stepCreateContract(launchId, userId = null) {
             siengeContractNumber: result.contractNumber || null,
             siengeContractApproval: 'PENDING',
             siengeContractAuthorized: false,
+            siengeContractError: result.avisos?.length ? result.avisos.join(' ') : null,
         });
 
         return { success: true, ...result };

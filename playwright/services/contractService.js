@@ -4,6 +4,7 @@ import { createInitialContract } from "../modules/sienge/createContract.js";
 import { itemsContract } from "../modules/sienge/itemsContract.js";
 import { financialForecastContract } from "../modules/sienge/financialForecastContract.js";
 import { deleteContract } from "../modules/sienge/deleteContract.js";
+import { cautionContract } from "../modules/sienge/cautionContract.js";
 import { log, success } from "../core/logger.js";
 import { dismissCommonPopups } from "../core/popups.js";
 
@@ -41,6 +42,9 @@ export async function processInitialContract() {
 
         log("SERVICE", "Iniciando Etapa 3: Previsões Financeiras...");
         await financialForecastContract(page);
+
+        log("SERVICE", "Iniciando Etapa 4: Caução conferida...");
+        await cautionContract(page);
 
         success("SERVICE", "Todas as etapas finalizadas.");
         return contractInfo;
@@ -153,8 +157,19 @@ async function _runWithRetry(page, params, attempt = 1) {
             percentualParcela: params.percentualParcela ?? "100",
         });
 
+        // Etapa 4: sem "Caução conferida" o contrato fica incompleto e não vai
+        // para autorização (01/10/2026). Falhar aqui NÃO exclui o contrato
+        // (ele está certo); o lançamento avisa para conferir à mão.
+        const avisos = [];
+        try {
+            await cautionContract(page);
+        } catch (cauErr) {
+            log("SERVICE", `Etapa 4 (caução) falhou: ${cauErr.message}`);
+            avisos.push(`Contrato criado, mas a caução não foi marcada como conferida (${cauErr.message}). No Sienge: aba Caução, marque "Caução conferida" e salve, senão o contrato não vai para autorização.`);
+        }
+
         success("SERVICE", `Fluxo automático concluído (tentativa ${attempt}).`);
-        return contractInfo;
+        return { ...contractInfo, avisos };
     } catch (flowErr) {
         log("SERVICE", `Etapa 2/3 falhou (tentativa ${attempt}/${MAX_FULL_RETRIES}): ${flowErr.message}`);
 
