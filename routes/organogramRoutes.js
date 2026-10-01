@@ -7,6 +7,7 @@ import {
     listOverrides,
     upsertOverride,
     deleteOverride,
+    resetPositions,
 } from '../controllers/organogramController.js';
 
 const router = express.Router();
@@ -20,6 +21,8 @@ const ORGANOGRAMA = '/settings/organograma';
 router.get('/meta', authMiddleware, requireCapability(ORGANOGRAMA, 'view'), getMeta);
 router.get('/overrides', authMiddleware, requireCapability(ORGANOGRAMA, 'view'), listOverrides);
 
+// Antes de /overrides/:userId para "positions" não virar userId.
+router.delete('/overrides/positions', authMiddleware, requireCapability(ORGANOGRAMA, 'edit'), resetPositions);
 router.put('/overrides/:userId', authMiddleware, requireCapability(ORGANOGRAMA, 'edit'), upsertOverride);
 router.delete('/overrides/:userId', authMiddleware, requireCapability(ORGANOGRAMA, 'edit'), deleteOverride);
 

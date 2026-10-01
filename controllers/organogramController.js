@@ -124,3 +124,28 @@ export const deleteOverride = async (req, res) => {
         return responseHandler.error(res, error);
     }
 };
+
+// DELETE /api/organogram/overrides/positions  (reorganizar — admin)
+//
+// Solta TODAS as posições de arrasto (pos_x/pos_y, inclusive a do nó-raiz) e
+// devolve o desenho ao layout automático. Mantém grupo (display_parent_id) e
+// ordem (display_order), que continuam valendo no layout automático. Linhas que
+// ficam sem nenhum ajuste são apagadas.
+//
+// Existe porque card fixado à mão não acompanha a árvore: quem entra depois é
+// posto pelo layout automático por cima dos fixados, e quem muda de gestor
+// continua parado no lugar antigo.
+export const resetPositions = async (req, res) => {
+    try {
+        const [released] = await OrganogramOverride.update(
+            { pos_x: null, pos_y: null },
+            { where: { [db.Sequelize.Op.or]: [{ pos_x: { [db.Sequelize.Op.ne]: null } }, { pos_y: { [db.Sequelize.Op.ne]: null } }] } },
+        );
+        const removed = await OrganogramOverride.destroy({
+            where: { display_parent_id: null, display_order: null, pos_x: null, pos_y: null },
+        });
+        return responseHandler.success(res, { released, removed });
+    } catch (error) {
+        return responseHandler.error(res, error);
+    }
+};
