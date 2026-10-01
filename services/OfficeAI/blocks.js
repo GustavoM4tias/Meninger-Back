@@ -124,7 +124,25 @@ export function paymentLaunchBlock({ id, draft, preview }) {
     });
 }
 
+/**
+ * Ação sobre um pagamento existente (importar, medir no saldo, gerar título,
+ * registrar boleto) para a pessoa CONFERIR e confirmar. A tool só monta o
+ * plano (paymentFlow/actions.js planAction); quem executa é o clique, pela rota
+ * /sienge/payment-flow/action, que valida tudo de novo no servidor.
+ */
+export function paymentActionBlock({ id, plano }) {
+    return limpar({
+        id: id || `payaction_${Date.now().toString(36)}`,
+        kind: 'payment_action',
+        action: limpar({
+            acao: plano.acao, titulo: plano.titulo, alvo: plano.alvo,
+            ok: !!plano.ok, validacoes: plano.validacoes || [], efeitos: plano.efeitos || [],
+            pedido: plano.pedido,
+        }),
+    });
+}
+
 /** Ação de abrir tela, para `actions` de qualquer bloco. */
 export const abrirTela = (route, label = 'Abrir tela', filters) => limpar({ kind: 'navigate', label, payload: limpar({ route, filters }) });
 
-export default { VISUALS, VISUAL_PARAM, VISUAL_PARAM_GEMINI, visualPedido, datasetBlock, kpisBlock, cardsBlock, detailBlock, choiceBlock, navBlock, emailBlock, paymentLaunchBlock, abrirTela };
+export default { VISUALS, VISUAL_PARAM, VISUAL_PARAM_GEMINI, visualPedido, datasetBlock, kpisBlock, cardsBlock, detailBlock, choiceBlock, navBlock, emailBlock, paymentLaunchBlock, paymentActionBlock, abrirTela };

@@ -22,6 +22,7 @@ import { recipeOf } from '../../services/sienge/paymentFlow/recipe.js';
 import { checkLaunchInput } from '../../services/sienge/paymentFlow/gate.js';
 import { previewLaunch } from '../../services/sienge/paymentFlow/preview.js';
 import { runSiengeWatch } from '../../services/sienge/paymentFlow/siengeWatch.js';
+import { planAction, executeAction } from '../../services/sienge/paymentFlow/actions.js';
 import {
     startImportScan, getImportScan, applySiengeImport, getImportSettings, saveImportSettings, validateImportSettings,
 } from '../../services/sienge/paymentFlow/siengeImport.js';
@@ -254,6 +255,33 @@ export async function siengeImportSettingsPut(req, res, next) {
         if (erros.length) return res.status(422).json({ error: erros.join(' ') });
         return res.json(await saveImportSettings(values));
     } catch (err) { next(err); }
+}
+
+// ── AÇÕES SOBRE PROCESSOS EXISTENTES (tela e cartão da Eme) ───────────────────
+// plan = só lê e valida; execute = refaz o plano no servidor e só age se passar.
+const pedidoDe = (b = {}) => ({
+    acao: b.acao, launchId: b.launchId,
+    documentId: b.documentId, contractNumber: b.contractNumber, buildingId: b.buildingId, measurementNumber: b.measurementNumber,
+    nf: b.nf || null, boleto: b.boleto || null,
+});
+
+export async function actionPlanController(req, res, next) {
+    try {
+        const { _interno, ...plano } = await planAction(req.user, pedidoDe(req.body));
+        return res.json(plano);
+    } catch (err) { next(err); }
+}
+
+export async function actionExecuteController(req, res, next) {
+    try {
+        return res.json(await executeAction(req.user, pedidoDe(req.body)));
+    } catch (err) {
+        if (err.status === 422) {
+            const { _interno, ...plano } = err.plano || {};
+            return res.status(422).json({ gate: true, error: err.message, plano });
+        }
+        next(err);
+    }
 }
 
 // ── VIGIA DAS TELAS DO SIENGE ─────────────────────────────────────────────────

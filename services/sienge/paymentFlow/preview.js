@@ -125,9 +125,28 @@ export async function previewLaunch(draft, user) {
             } else if (receita.contrato !== 'existente' && erpId) {
                 try {
                     const c3 = await SiengeContractService.findBySupplierId(creditor.id, companyId, erpId);
-                    out.contrato = c3
-                        ? { label: `${c3.documentId}/${c3.contractNumber}`, acao: receita.contrato === 'criar' ? 'criar novo' : 'aditivo' }
-                        : { label: null, acao: 'criar novo' };
+                    if (!c3 || receita.contrato === 'criar') {
+                        out.contrato = { label: c3 ? `${c3.documentId}/${c3.contractNumber}` : null, acao: 'criar novo' };
+                    } else {
+                        // Contrato existente: o item do tipo já tem saldo? Então a
+                        // esteira para e pergunta antes de qualquer aditivo.
+                        const { items } = await SiengeContractService.validateItems(
+                            c3.documentId, c3.contractNumber, erpId, DEFAULT_BUILDING_UNIT, d.unitPrice,
+                        );
+                        const it = pickMeasurementItem(items, {
+                            budgetItem: d.budgetItem, budgetItemCode: d.budgetItemCode, value: d.unitPrice,
+                            strict: !!(d.budgetItem || d.budgetItemCode),
+                        });
+                        const cobre = it.item && it.balance + 0.005 >= Number(d.unitPrice || 0);
+                        out.contrato = {
+                            label: `${c3.documentId}/${c3.contractNumber}`,
+                            acao: cobre ? 'medir no saldo (pede sua confirmação)' : 'aditivo',
+                        };
+                        if (cobre) {
+                            out.item = { descricao: it.item.description, saldo: it.balance };
+                            avisos.push(`O contrato ${out.contrato.label} já tem saldo (R$ ${it.balance.toFixed(2)}) no item "${it.item.description}": a esteira vai parar e perguntar se mede no saldo em vez de fazer aditivo.`);
+                        }
+                    }
                 } catch (err) {
                     avisos.push(`Não consegui consultar os contratos no Sienge agora (${err.message}).`);
                 }

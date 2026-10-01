@@ -18,6 +18,7 @@ import {
     downloadRidTemplate, sendRidEmail, sendRidForm, continueExistingContract,
     previewLaunchController, confirmEmeLaunch, attachDocumentController, siengeWatchController,
     siengeImportScanStart, siengeImportScanStatus, siengeImportApplyController, siengeImportSettingsGet, siengeImportSettingsPut,
+    actionPlanController, actionExecuteController,
 } from '../controllers/sienge/paymentFlowController.js';
 import {
     listFlowEnterprises,
@@ -183,6 +184,11 @@ router.get('/payment-flow/sienge-import/scan', authenticate, importarPaymentFlow
 router.post('/payment-flow/sienge-import', authenticate, importarPaymentFlow, siengeImportApplyController);
 router.get('/payment-flow/sienge-import/settings', authenticate, importarPaymentFlow, siengeImportSettingsGet);
 router.put('/payment-flow/sienge-import/settings', authenticate, configurarPaymentFlow, siengeImportSettingsPut);
+// Ações sobre processos que já existem (importar medição, medir no saldo, gerar
+// título, registrar boleto). plan só lê; execute revalida e age. O acesso a
+// cada lançamento é conferido no serviço (dono, admin ou escopo).
+router.post('/payment-flow/action/plan', authenticate, actionPlanController);
+router.post('/payment-flow/action', authenticate, actionExecuteController);
 // Documento fiscal depois da medição (receita "medição antes do documento").
 router.post('/payment-flow/:id/document', authenticate, attachDocumentController);
 

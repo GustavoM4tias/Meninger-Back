@@ -144,10 +144,17 @@ const ETAPAS = {
     medicao_pendente: { label: 'Medição aguardando autorização', status: 'medicao', stage: 'awaiting_measurement_authorization' },
     // Autorizada sem título: o cartão oferece 'Anexar nota fiscal', que gera o título.
     medicao_autorizada: { label: 'Medição autorizada, falta o título', status: 'medicao', stage: 'awaiting_document' },
+    // Liberada no Sienge, mas o título não foi achado para o fornecedor: não é
+    // caso de gerar título de novo (a ação gerar_titulo recusa) - conferir no Sienge.
+    liberada_sem_titulo: { label: 'Medição liberada, título não encontrado (conferir no Sienge)', status: 'medicao', stage: 'measurement_created' },
     titulo_sem_boleto: { label: 'Título lançado, sem forma de pagamento', status: 'titulo', stage: 'titulo_created' },
     titulo_aberto: { label: 'Título lançado, aguardando pagamento', status: 'titulo', stage: 'awaiting_titulo_authorization' },
     pago: { label: 'Pago', status: 'titulo_pago', stage: 'titulo_pago' },
 };
+
+// PCT é a PREVISÃO financeira do contrato, não título: o Sienge grava a
+// previsão com origem ME e número de medição, e ela passava por título.
+export const ehPrevisao = (b) => String(b?.documentIdentificationId || '').trim().toUpperCase() === 'PCT';
 
 const keyOf = (doc, num, building, med) => `${String(doc).toUpperCase()}|${num}|${building}|${med}`;
 
@@ -220,7 +227,7 @@ export async function previewSiengeImport(user, progresso = () => {}) {
             const bills = await getAll('/v1/bills', {
                 creditorId: id, startDate: iso(desde), endDate: iso(new Date(hoje.getTime() + 365 * 86400000)),
             }).catch(() => { falhas++; return null; });
-            titulosPorCredor.set(id, bills ? bills.filter(b => b.originId === 'ME' && b.contractNumber && b.measurementNumber) : null);
+            titulosPorCredor.set(id, bills ? bills.filter(b => b.originId === 'ME' && b.contractNumber && b.measurementNumber && !ehPrevisao(b)) : null);
         }
         progresso({ etapa: 'Lendo fornecedores e títulos', feito: ++feito, total: credorIds.length });
     });
@@ -276,7 +283,7 @@ export async function previewSiengeImport(user, progresso = () => {}) {
             etapa = ps.some(p => !p.forma) ? 'titulo_sem_boleto' : 'titulo_aberto';
             c.vencimento = (ps.find(p => p.situacao !== 'Totalmente paga') || ps[0])?.venc || null;
         } else {
-            etapa = c.autorizada ? 'medicao_autorizada' : 'medicao_pendente';
+            etapa = c.liberada ? 'liberada_sem_titulo' : c.autorizada ? 'medicao_autorizada' : 'medicao_pendente';
             c.vencimento = c.medicaoVenc || null;
             if (c.liberada) c.observacao = 'O Sienge diz que a medição está liberada, mas o título não foi achado para este fornecedor.';
         }
@@ -379,15 +386,26 @@ export async function applySiengeImport(user, keys = null) {
     );
     const acompanhadas = new Set(ja.map(r => keyOf(r.d, r.c, r.b, r.m)));
 
-    const hoje = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const types = new Map((await db.LaunchTypeConfig.findAll()).map(t => [t.name, t]));
     const criados = [];
     for (const c of escolhidos) {
         if (acompanhadas.has(c.key)) continue;
+        const launch = await createLaunchFromCandidate(user, c, types);
+        acompanhadas.add(c.key);
+        criados.push({ id: launch.id, key: c.key, contrato: c.contrato, medicao: c.measurementNumber, etapa: c.etapaLabel });
+    }
+    return { importados: criados.length, criados, ignorados: escolhidos.length - criados.length };
+}
+
+/** Grava no Office o lançamento de um candidato (busca geral ou medição específica). */
+export async function createLaunchFromCandidate(user, c, types = null) {
+    const tipos = types || new Map((await db.LaunchTypeConfig.findAll()).map(t => [t.name, t]));
+    const hoje = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    {
         const e = ETAPAS[c.etapa];
-        const tipo = c.tipo ? types.get(c.tipo) : null;
+        const tipo = c.tipo ? tipos.get(c.tipo) : null;
         const semBoleto = c.etapa === 'titulo_sem_boleto';
-        const launch = await db.PaymentLaunch.create({
+        return db.PaymentLaunch.create({
             companyName: c.companyName || null, companyId: c.companyId || null,
             enterpriseName: c.obra, enterpriseId: c.buildingId,
             providerName: c.fornecedor, providerCnpj: c.fornecedorDoc ? String(c.fornecedorDoc).replace(/\D/g, '') : null,
@@ -411,8 +429,90 @@ export async function applySiengeImport(user, keys = null) {
             notes: `Importado do Sienge em ${hoje} (${c.etapaLabel}).${c.observacao ? ` ${c.observacao}` : ''}`,
             createdBy: user.id, createdByName: user.username || user.name || 'Sistema',
         });
-        acompanhadas.add(c.key);
-        criados.push({ id: launch.id, key: c.key, contrato: c.contrato, medicao: c.measurementNumber, etapa: c.etapaLabel });
     }
-    return { importados: criados.length, criados, ignorados: escolhidos.length - criados.length };
+}
+
+/**
+ * Candidato de UMA medição do Sienge (importação pontual - a Eme usa para
+ * "pegar" um processo que já existe). Só as consultas daquele contrato.
+ * @returns {{ candidato: object|null, motivos: string[] }}
+ */
+export async function candidateForMeasurement(user, { documentId, contractNumber, buildingId, measurementNumber }) {
+    const motivos = [];
+    const doc = String(documentId || '').toUpperCase();
+    const num = String(contractNumber || '');
+    const obraId = Number(buildingId);
+    const med = Number(measurementNumber);
+    if (!doc || !num || !obraId || !med) return { candidato: null, motivos: ['Informe documento, contrato, obra e número da medição.'] };
+
+    const scope = await getScope(user);
+    if (!isErpAllowed(scope, obraId)) return { candidato: null, motivos: [`A obra ${obraId} não está no seu acesso.`] };
+    const [[ent]] = await db.sequelize.query(
+        'SELECT name, company_id FROM enterprises WHERE erp_cost_center_id = :o AND active = true ORDER BY cv_id NULLS LAST LIMIT 1',
+        { replacements: { o: obraId } },
+    );
+
+    const [ja] = await db.sequelize.query(
+        `SELECT id FROM payment_launches
+          WHERE upper(sienge_document_id) = :d AND sienge_contract_number = :c AND enterprise_id = :b AND sienge_measurement_number = :m LIMIT 1`,
+        { replacements: { d: doc, c: num, b: obraId, m: med } },
+    );
+    if (ja.length) return { candidato: null, motivos: [`Esta medição já é acompanhada pelo Office (lançamento #${ja[0].id}).`], launchId: ja[0].id };
+
+    const lista = await getAll('/v1/supply-contracts/measurements/all', { documentId: doc, contractNumber: num });
+    const m = lista.find(x => Number(x.buildingId) === obraId && Number(x.measurementNumber) === med);
+    if (!m) return { candidato: null, motivos: [`A medição ${doc}/${num} nº ${med} da obra ${obraId} não existe no Sienge.`] };
+
+    const credorId = Number(m.contractSupplierId);
+    const credor = await sget(`/v1/creditors/${credorId}`, {});
+    if (!credor) return { candidato: null, motivos: ['Não consegui ler o fornecedor no Sienge.'] };
+
+    let titulo = null;
+    if (m.released) {
+        const hoje = new Date();
+        const bills = await getAll('/v1/bills', {
+            creditorId: credorId,
+            startDate: iso(new Date(hoje.getTime() - 730 * 86400000)), endDate: iso(new Date(hoje.getTime() + 365 * 86400000)),
+        });
+        const b = bills.find(x => x.originId === 'ME' && !ehPrevisao(x) && String(x.contractNumber) === num && Number(x.measurementNumber) === med);
+        if (b) {
+            const ps = await getAll(`/v1/bills/${b.id}/installments`, {});
+            titulo = {
+                id: b.id, documento: String(b.documentIdentificationId || '').trim(), numero: b.documentNumber, emissao: b.issueDate, status: b.status,
+                parcelas: ps.map(p => ({ venc: p.dueDate, valor: p.amount, situacao: p.situation, forma: p.paymentType || null })),
+            };
+        }
+    }
+
+    const ct = await sget('/v1/supply-contracts', { documentId: doc, contractNumber: num });
+    const it = await sget('/v1/supply-contracts/items', { documentId: doc, contractNumber: num, buildingId: obraId, buildingUnitId: 1, limit: 200 });
+    const types = (await db.LaunchTypeConfig.findAll({ where: { active: true }, order: [['name', 'ASC']] })).map(t => t.toJSON());
+    const tipo = inferType(types, doc, (it?.results || []).filter(i => i.workItemId || i.laborPrice));
+
+    const c = {
+        key: keyOf(doc, num, obraId, med), contrato: `${doc}/${num}`,
+        documentId: doc, contractNumber: num, buildingId: obraId, measurementNumber: med,
+        obra: ent?.name || String(obraId), companyId: ct?.companyId || (ent?.company_id ? Number(ent.company_id) : null),
+        companyName: ct?.companyName || null,
+        fornecedor: credor.name, fornecedorDoc: credor.cnpj || credor.cpf || null, creditorId: credorId,
+        medicaoData: m.measurementDate, medicaoVenc: m.dueDate,
+        valor: Number(m.totalLaborValue || 0) + Number(m.totalMaterialValue || 0), valorLiquido: Number(m.netValue ?? 0),
+        autorizada: m.authorized === true, aprovacao: m.statusApproval || null, liberada: m.released === true,
+        contratoInicio: ct?.startDate || null, contratoFim: ct?.endDate || null,
+        contratoAprov: ct?.statusApproval || null, contratoAutorizado: ct?.isAuthorized === true,
+        tipo: tipo.name, tipoAlternativas: tipo.alternativas, titulo,
+    };
+    if (titulo) {
+        const ps = titulo.parcelas;
+        if (ps.length && ps.every(p => p.situacao === 'Totalmente paga')) c.etapa = 'pago';
+        else c.etapa = ps.some(p => !p.forma) ? 'titulo_sem_boleto' : 'titulo_aberto';
+        c.vencimento = (ps.find(p => p.situacao !== 'Totalmente paga') || ps[0])?.venc || null;
+    } else {
+        c.etapa = c.liberada ? 'liberada_sem_titulo' : c.autorizada ? 'medicao_autorizada' : 'medicao_pendente';
+        c.vencimento = c.medicaoVenc || null;
+        if (c.liberada) c.observacao = 'O Sienge diz que a medição está liberada, mas o título não foi achado para este fornecedor.';
+    }
+    c.etapaLabel = ETAPAS[c.etapa].label;
+    if (c.etapa === 'pago') motivos.push('Esta medição já está paga: não há o que acompanhar.');
+    return { candidato: c, motivos };
 }

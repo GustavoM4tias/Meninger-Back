@@ -12,6 +12,8 @@
 // documento", o poller para em `awaiting_document` até a nota chegar.
 
 import db from '../../../models/sequelize/index.js';
+import { SiengeContractService, DEFAULT_BUILDING_UNIT } from '../SiengeContractService.js';
+import { pickMeasurementItem } from './measurementItem.js';
 import { checkLaunchInput, checkCreditor } from './gate.js';
 import { Model, loadLaunch, patch, recipeOfLaunch, gateMessage } from './shared.js';
 import { stepFindCreditor } from './modules/fornecedor.js';
@@ -22,11 +24,28 @@ import { stepUseExistingContract } from './modules/contratoExistente.js';
 import { stepCreateMeasurement } from './modules/medicao.js';
 import { stepCreateTitulo } from './modules/titulo.js';
 
+/** O item do tipo no contrato do lançamento cobre o valor? (estrito pelo item, quando o tipo tem item) */
+async function saldoDoItem(launch) {
+    const valor = Number(launch.unitPrice) || 0;
+    if (!(valor > 0) || !launch.siengeDocumentId) return null;
+    const { items } = await SiengeContractService.validateItems(
+        launch.siengeDocumentId, launch.siengeContractNumber, launch.enterpriseId, DEFAULT_BUILDING_UNIT, valor,
+    );
+    const pick = pickMeasurementItem(items, {
+        budgetItem: launch.budgetItem, budgetItemCode: launch.budgetItemCode, value: valor,
+        strict: !!(launch.budgetItem || launch.budgetItemCode),
+    });
+    if (!pick.item) return { cobre: false, motivo: pick.motivo };
+    return { cobre: pick.balance + 0.005 >= valor, balance: pick.balance, item: pick.item.description };
+}
+
 // Estágios onde o Playwright pode ter travado (ou o portão recusou) — permite reprocessar
 const STUCK_STAGES = [
     'creating_contract', 'creating_additive', 'creating_measurement', 'creating_titulo',
     'contract_manual_block', 'aborted', 'gate_blocked', 'contract_rejected',
 ];
+// awaiting_balance_confirmation NÃO entra acima: "Processar" de novo não
+// pode pular a pergunta. A resposta é a ação medir_no_saldo ou o aditivo.
 
 async function aborted(launchId) {
     const l = await Model().findByPk(launchId, { attributes: ['pipelineStage'] });
@@ -61,6 +80,9 @@ export async function runFullPipeline(launchId, userId = null) {
     }
     if (currentStage === 'awaiting_document') {
         return { stage: 'awaiting_document', awaitingDocument: true };
+    }
+    if (currentStage === 'awaiting_balance_confirmation') {
+        return { stage: 'awaiting_balance_confirmation', awaitingDecision: true };
     }
 
     // Captura se estava bloqueado manualmente ANTES de resetar o stage
@@ -128,6 +150,24 @@ async function runAuto(launchId, userId, { bypassAutoCheck }) {
 
     // Contrato existente: valida se foi criado pela automação antes de criar aditivo
     const launch = await loadLaunch(launchId);
+
+    // Saldo antes de aditivo: se o item do tipo no contrato já cobre o valor,
+    // aditivo é desnecessário (e inchava o contrato). A esteira NÃO decide
+    // sozinha: para e pergunta - "medir no saldo" ou "aditivo mesmo assim".
+    const saldo = await saldoDoItem(launch).catch(() => null);
+    if (saldo?.cobre) {
+        const label = `${launch.siengeDocumentId}/${launch.siengeContractNumber}`;
+        const msg = `O contrato ${label} já tem saldo de R$ ${saldo.balance.toFixed(2)} no item "${saldo.item}", que cobre este lançamento. Escolha: medir no saldo (sem aditivo) ou fazer aditivo mesmo assim.`;
+        await patch(launch, {
+            pipelineStage: 'awaiting_balance_confirmation',
+            status: 'contrato',
+            siengeContractError: msg,
+            siengeItemBalanceOk: true,
+            siengeItemBalanceAvailable: saldo.balance,
+        });
+        console.log(`⏸️  [Pipeline] #${launchId}: ${msg}`);
+        return { stage: 'awaiting_balance_confirmation', saldo };
+    }
 
     // 1️⃣ O próprio lançamento teve o contrato criado pela automação (flag imutável)?
     // 2️⃣ Fallback: outro lançamento no banco criou o mesmo contrato anteriormente.

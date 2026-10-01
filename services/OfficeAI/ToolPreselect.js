@@ -75,8 +75,11 @@ const PISTAS = [
       tools: /(boleto|custo|payment|financ|title|titulo)/i },
     // Lançar no Sienge a partir de NF/boleto anexados (Fluxo de Pagamento).
     // "Anexos enviados" é o marcador que o streamChat põe quando vem PDF.
-    { quando: /sienge|sal[áa]rio|nota fiscal|\bnfs?e?\b|medi[çc][ãa]o|lan[çc]ar|subir|suba|sobe|pagamento|boleto|anexos enviados/i,
-      tools: /^lancamento_pagamento_/ },
+    // Peso alto: tool nova ainda sem vetor semântico (indexa em segundo plano)
+    // perdia o teto para as genéricas de financeiro, e a Eme respondia
+    // INVENTANDO situação de pagamento sem consultar nada (teste de 01/10).
+    { quando: /sienge|sal[áa]rio|nota fiscal|\bnfs?e?\b|medi[çc][ãa]o|t[íi]tulo|libera[çc][ãa]o|lan[çc]ar|subir|suba|sobe|pagamento|boleto|fornecedor|anexos enviados/i,
+      tools: /^lancamento_pagamento_/, peso: 350 },
     // "gestores comerciais" nao tinha pista nenhuma: a palavra que sobrava era
     // "comerciais", que pontua alto na descricao das tools de FICHA comercial -
     // e foi exatamente a tela que a Eme abriu quando pediram para convidar os
@@ -217,7 +220,7 @@ export function escolherTools(declaracoes = [], mensagem = '', recentes = new Se
 
         // 2. Assunto: a pista casou com a pergunta E com esta tool.
         for (const p of PISTAS) {
-            if (p.quando.test(texto) && p.tools.test(d.name)) pontos += 100;
+            if (p.quando.test(texto) && p.tools.test(d.name)) pontos += p.peso || 100;
         }
 
         // 3. Afinidade crua com nome e descrição.

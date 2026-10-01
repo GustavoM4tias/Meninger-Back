@@ -53,7 +53,7 @@ function desligado() {
 }
 
 /** Anexos do turno; sem eles, os PDFs que a pessoa mandou na última hora. */
-async function anexosDaPessoa(user, runtime) {
+export async function anexosDaPessoa(user, runtime) {
     const prefixo = `office/eme-chat/${user.id}/`;
     const doTurno = (runtime?.attachments || []).filter(a => a.path?.startsWith(prefixo));
     if (doTurno.length) return doTurno;
@@ -74,7 +74,7 @@ async function anexosDaPessoa(user, runtime) {
 }
 
 /** Baixa pelo storage (não por URL) e roda o mesmo extrator da tela. */
-async function extrair(anexo) {
+export async function extrair(anexo) {
     const { data, error } = await (await storage()).download(anexo.path);
     if (error || !data) return { anexo, erro: `Não consegui abrir ${anexo.fileName}.` };
     const tmp = path.join(os.tmpdir(), `eme-pf-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
@@ -280,7 +280,7 @@ registerTool({
         return {
             result: rows.map(r => ({
                 id: r.id, tipo: r.launchType, fornecedor: r.providerName, empreendimento: r.enterpriseName,
-                valor: r.unitPrice, nf: r.nfNumber, etapa: ETAPAS[r.pipelineStage] || r.pipelineStage, status: r.status,
+                valor: r.unitPrice, nf: r.nfNumber != null && /^\d{1,15}$/.test(String(r.nfNumber).trim()) ? Number(r.nfNumber) : r.nfNumber, etapa: ETAPAS[r.pipelineStage] || r.pipelineStage, status: r.status,
                 contrato: r.siengeContractNumber ? `${r.siengeDocumentId}/${r.siengeContractNumber}` : null,
                 medicao: r.siengeMeasurementNumber, titulo: r.siengeTituloNumber,
                 erro: r.siengeTituloError || r.siengeMeasurementError || r.siengeContractError || null,

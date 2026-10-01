@@ -21,7 +21,12 @@ function addDays(days) {
     return d.toISOString().slice(0, 10);
 }
 
-export async function stepCreateMeasurement(launchId, userId = null) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.strict] - só mede no item do tipo com saldo (padrão: receita "existente").
+ *   A ação "medir no saldo" (Eme/tela) força true em qualquer receita.
+ */
+export async function stepCreateMeasurement(launchId, userId = null, opts = {}) {
     const launch = await loadLaunch(launchId);
     if (!launch.siengeDocumentId || !launch.siengeContractNumber) {
         throw new Error('Execute stepFindContract primeiro.');
@@ -56,7 +61,7 @@ export async function stepCreateMeasurement(launchId, userId = null) {
     // O item de orçamento do tipo manda; o saldo só desempata. No modo
     // "existente" é estrito: sem o item do tipo com saldo, NÃO mede (mediria
     // em outra verba do contrato, como a premiação no CTPJ do salário).
-    const strict = receita.contrato === 'existente';
+    const strict = opts.strict ?? receita.contrato === 'existente';
     let targetRowIndex = 1;
     try {
         const targetValue = Number(launch.unitPrice) || 0;

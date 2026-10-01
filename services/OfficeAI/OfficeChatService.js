@@ -23,6 +23,7 @@ import './EnterpriseMirrorTools.js';
 // Validador de Contratos e Perfil (notificações + share de alertas).
 import './FinanceTools.js';
 import './PaymentLaunchTools.js';
+import './PaymentFlowActionTools.js';
 import './PeopleTools.js';
 import './ContractTools.js';
 import './RepasseTools.js';
@@ -2313,6 +2314,18 @@ function summarizeForGemini(result) {
           status: p.ok
             ? 'aguardando o usuário clicar em Confirmar no cartão; NADA foi lançado no Sienge'
             : 'RECUSADO pelo portão de regras; nada foi lançado - explique os motivos',
+        };
+      }
+      // Cartão de ação sobre pagamento existente: o modelo vê validações e
+      // consequências. Executar é o clique em Confirmar - nunca "eu fiz".
+      if (b.kind === 'payment_action') {
+        const a = b.action || {};
+        return {
+          kind: b.kind, acao: a.acao, alvo: a.alvo, pode_confirmar: !!a.ok,
+          validacoes: (a.validacoes || []).map(v => `${v.nivel}: ${v.texto}`), vai_acontecer: a.efeitos,
+          status: a.ok
+            ? 'aguardando o usuário clicar em Confirmar no cartão; NADA foi feito no Sienge'
+            : 'BARRADO pelas validações; nada foi feito - explique as falhas',
         };
       }
       return { kind: b.kind, title: b.title };
