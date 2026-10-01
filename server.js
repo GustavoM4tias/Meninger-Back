@@ -136,6 +136,7 @@ import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensurePaymentFlowRecipeSchema } from './lib/ensurePaymentFlowRecipeSchema.js';
+import { recoverInterruptedPaymentFlow } from './lib/recoverInterruptedPaymentFlow.js';
 import { ensureUseredeSchema } from './lib/ensureUseredeSchema.js';
 import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
 import ensureEnvioSiengeWatchSchema from './lib/ensureEnvioSiengeWatchSchema.js';
@@ -493,6 +494,8 @@ async function initBackground() {
   // chave da NF-e entraram nos models. Fora do gate pelo mesmo motivo do Boleto.
   await ensurePaymentFlowRecipeSchema().catch(err =>
       console.warn('⚠️  ensurePaymentFlowRecipeSchema falhou:', err.message));
+  // Robô morto por reinício (deploy) deixava o lançamento preso em "Criando contrato...".
+  await recoverInterruptedPaymentFlow();
   try {
     await withTimeout(runSchemaPhase(), SCHEMA_PHASE_TIMEOUT_MS, 'fase de schema');
   } catch (err) {
