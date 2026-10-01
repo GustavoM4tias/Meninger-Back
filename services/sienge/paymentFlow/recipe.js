@@ -13,7 +13,7 @@
 // existiam seguem exatamente como estavam.
 
 export const CONTRATO_MODOS = ['auto', 'existente', 'criar'];
-// pix: o título sai sem boleto e o PIX vai para a chave do credor (RB de reembolso).
+// pix: EXCLUSIVO do RB - o PIX vai pela API na chave do credor, como o boleto.
 export const PAGAMENTO_MODOS = ['boleto', 'transferencia', 'pix'];
 export const PAGAMENTO_LABEL = { boleto: 'boleto', transferencia: 'transferência', pix: 'PIX' };
 export const CREDOR_TIPOS = ['qualquer', 'PJ', 'PF'];
@@ -111,6 +111,11 @@ export function validateReceita(raw) {
     const pag = raw.titulo?.pagamento;
     if (pag != null && !PAGAMENTO_MODOS.includes(pag)) {
         erros.push(`Forma de pagamento "${pag}" não existe (use: ${PAGAMENTO_MODOS.join(', ')}).`);
+    }
+    // PIX automático é exclusivo do RB (reembolso): é o único documento em que
+    // a esteira grava a forma de pagamento PIX pela API.
+    if (pag === 'pix' && String(raw.titulo?.documento || '').trim().toUpperCase() !== 'RB') {
+        erros.push('Pagamento PIX é exclusivo do RB: defina o documento do título como RB.');
     }
     const docT = String(raw.titulo?.documento || '').trim();
     if (docT && !DOC_RE.test(docT.toUpperCase())) erros.push(`Documento do título "${docT}" inválido.`);

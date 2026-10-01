@@ -170,4 +170,39 @@ export class SiengeBillsService {
             );
         }
     }
+
+    /**
+     * Registra PIX na parcela, na chave CPF/CNPJ do próprio credor ("usar
+     * dados do credor"), como os RBs lançados à mão no Sienge.
+     * EXCLUSIVO DO RB (reembolso): decisão de 01/10/2026 - a API do Sienge é
+     * só consulta, com duas exceções na esteira: boleto e o PIX do RB.
+     * paymentTypeId 11 = PIX.
+     */
+    static async registerPixPayment(billId, installmentId, { nome, documento }) {
+        const url = `/v1/bills/${Number(billId)}/installments/${Number(installmentId)}/payment-information/pix`;
+        const d = String(documento || '').replace(/D/g, '');
+        const cpf = d.length === 11 ? `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}` : null;
+        const cnpj = d.length === 14 ? `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}` : null;
+        if (!cpf && !cnpj) throw new Error('PIX: credor sem CPF/CNPJ válido para a chave.');
+        const chave = cpf || cnpj;
+        const body = {
+            paymentTypeId: 11,
+            isUsingCreditorData: 'S',
+            keyPixType: 'C',
+            keyPix: chave,
+            beneficiaryName: String(nome || '').slice(0, 80),
+            ...(cpf ? { beneficiaryCPFNumber: cpf } : { beneficiaryCNPJNumber: cnpj }),
+            notes: `Pagamento via PIX: ${chave}
+Favorecido: ${nome}
+CPF/CNPJ Favorecido: ${chave}`,
+        };
+        try {
+            await apiSienge.patch(url, body);
+        } catch (err) {
+            const detail = err.response?.data;
+            const status = err.response?.status;
+            console.error(`[SiengeBillsService] registerPixPayment ${status} | url=${url} | response=${JSON.stringify(detail)}`);
+            throw new Error(`Sienge ${status}: ${detail?.clientMessage || detail?.developerMessage || detail?.message || err.message}`);
+        }
+    }
 }

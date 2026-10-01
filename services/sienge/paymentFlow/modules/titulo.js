@@ -78,12 +78,7 @@ export async function stepCreateTitulo(launchId, userId = null) {
                 // Sem boleto para registrar: o título já espera o pagamento.
                 await patch(launch, { pipelineStage: 'awaiting_titulo_authorization' });
             } else if (receita.titulo.pagamento === 'pix') {
-                // O robô do título não grava forma de pagamento, e a API é só
-                // consulta: o PIX é escolhido no Sienge. O lançamento avisa.
-                const doc = String(launch.providerCnpj || '').trim();
-                await patch(launch, {
-                    siengeTituloError: `Título ${result.tituloNumber} lançado sem forma de pagamento: selecione PIX na parcela, chave ${doc} (${launch.siengeCreditorName || launch.providerName}).`,
-                });
+                await stepRegisterPix(launchId, { titulo: result.tituloNumber, documento: nfType });
             } else {
                 // Registra boleto automaticamente em background
                 stepRegisterBoleto(launchId).catch(err =>
@@ -103,6 +98,34 @@ export async function stepCreateTitulo(launchId, userId = null) {
             ...(isCredentialsError && { siengeCredentialsInvalid: true }),
         });
         return { success: false, error: msg };
+    }
+}
+
+// ── PIX na parcela (EXCLUSIVO do RB) ──────────────────────────────────────────
+// O robô do título não grava forma de pagamento. Para o RB o PIX vai pela API,
+// na chave do credor, como o boleto (decisão de 01/10/2026). Outro documento
+// com pagamento PIX não usa a API: fica o aviso para escolher no Sienge.
+export async function stepRegisterPix(launchId, { titulo, documento }) {
+    const launch = await loadLaunch(launchId);
+    const chave = String(launch.providerCnpj || '').trim();
+    const manual = motivo => patch(launch, {
+        siengeTituloError: `Título ${titulo} lançado sem forma de pagamento (${motivo}): selecione PIX na parcela, chave ${chave} (${launch.siengeCreditorName || launch.providerName}).`,
+    });
+    if (String(documento || '').toUpperCase() !== 'RB') return manual('PIX automático só para RB');
+    try {
+        const parcela = (await SiengeBillsService.getInstallments(titulo))[0];
+        if (!parcela) return manual('parcela não encontrada');
+        await SiengeBillsService.registerPixPayment(titulo, parcela.installmentNumber ?? 1, {
+            nome: launch.siengeCreditorName || launch.providerName, documento: launch.providerCnpj,
+        });
+        const depois = (await SiengeBillsService.getInstallments(titulo))[0];
+        if (Number(depois?.paymentTypeId) !== 11) return manual(`o Sienge aceitou, mas a parcela está como ${depois?.paymentType || 'sem forma'}`);
+        await patch(launch, { pipelineStage: 'awaiting_titulo_authorization', siengeTituloError: null });
+        console.log(`✅ [Pipeline] #${launchId}: PIX registrado no título ${titulo}`);
+        return { ok: true };
+    } catch (err) {
+        console.error(`❌ [Pipeline] #${launchId}: PIX não registrado: ${err.message}`);
+        return manual(`falha ao registrar o PIX: ${err.message}`);
     }
 }
 

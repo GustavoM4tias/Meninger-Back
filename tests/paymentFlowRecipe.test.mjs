@@ -159,3 +159,9 @@ test('RB: pagamento PIX é aceito e não exige boleto', () => {
     assert.deepEqual(motivos, []);
     assert.match(stepsOf(rb.receita).at(-1).label, /PIX/);
 });
+
+test('PIX automático é exclusivo do RB', () => {
+    assert.deepEqual(validateReceita({ titulo: { documento: 'RB', pagamento: 'pix' } }), []);
+    assert.match(validateReceita({ titulo: { documento: 'NFS', pagamento: 'pix' } }).join(' '), /exclusivo do RB/);
+    assert.match(validateReceita({ titulo: { pagamento: 'pix' } }).join(' '), /exclusivo do RB/);
+});
