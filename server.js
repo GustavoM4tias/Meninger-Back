@@ -31,6 +31,7 @@ import orgRoutes from './routes/orgRoutes.js';
 import orgRegistryScheduler from './scheduler/orgRegistryScheduler.js';
 import reportExportLogRoutes from './routes/reportExportLogRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
+import recursoProprioRoutes from './routes/recursoProprioRoutes.js';
 import eventPlanRoutes from './routes/eventPlanRoutes.js';
 import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
@@ -125,6 +126,7 @@ import { ensurePlatformUpdatesSchema } from './lib/ensurePlatformUpdatesSchema.j
 import { ensureCvPanelSchema } from './lib/ensureCvPanelSchema.js';
 import { ensureUnitStockSchema } from './lib/ensureUnitStockSchema.js';
 import { ensureAdimplenciaBuscaSchema } from './lib/ensureAdimplenciaBuscaSchema.js';
+import { ensureRecursoProprioSchema } from './lib/ensureRecursoProprioSchema.js';
 import { ensureCvWebhookSchema } from './lib/ensureCvWebhookSchema.js';
 import { ensureValidatorHealthSchema } from './lib/ensureValidatorHealthSchema.js';
 import { ensureAiProvidersSchema } from './lib/ensureAiProvidersSchema.js';
@@ -333,6 +335,7 @@ app.use('/api/report-exports', reportExportLogRoutes);   // trilha de exportaç�
 app.use('/api/realestate', realEstateRoutes); // cadastro de imobiliárias (CV)
 app.use('/api/correspondents', correspondentRoutes); // correspondentes (CV)
 app.use('/api/conditions', conditionsRoutes);
+app.use('/api/recurso-proprio', recursoProprioRoutes);
 app.use('/api/event-plans', eventPlanRoutes); // Plano de Eventos (comercial)
 app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/api/envio-sienge-watch', envioSiengeWatchRoutes);
@@ -479,6 +482,10 @@ async function initBackground() {
   // na primeira chamada; com o gate pulando a fase ela nunca nasceria.
   await ensureAdimplenciaBuscaSchema().catch(err =>
       console.warn('⚠️  ensureAdimplenciaBuscaSchema falhou:', err.message));
+  // Relatório de Recurso Próprio (01/10): a tela lê a configuração e as
+  // observações na primeira chamada; com o gate pulando a fase, nunca nasceriam.
+  await ensureRecursoProprioSchema().catch(err =>
+      console.warn('⚠️  ensureRecursoProprioSchema falhou:', err.message));
   // Linha do webhook de unidades (23/09): nasce desligada, mas precisa EXISTIR
   // para alguem poder liga-la na tela. Com o gate pulando a fase em prod ela
   // nunca apareceria, e o teste do payload nao teria onde chegar.
