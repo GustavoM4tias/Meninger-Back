@@ -684,11 +684,24 @@ export async function getRelatorio(user, idempRaw) {
     });
 
     // Limite da renda: o da ficha (por módulo) ganha; sem ficha, o configurado.
+    const brlR = (v) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     for (const l of linhas) {
+        const daFicha = l.fichaUsada && l.limiteRendaPct != null;
         const lim = (l.limiteRendaPct ?? config.limite_renda_pct) / 100;
         const tol = config.tolerancia_renda_pct / 100;
         l.limiteRendaPct = Math.round(lim * 10000) / 100;
         l.nivelRenda = l.pctRenda > lim + tol ? 'alto' : l.pctRenda > lim ? 'atencao' : 'ok';
+        // O limite da renda É regra da ficha: passou dele, está fora da regra,
+        // mesmo que pouco (a tolerância só decide amarelo x vermelho). Ficava
+        // só no cartão "Acima de 30%" e a Viviane, com 63%, saía "dentro da
+        // regra" (01/10/2026). Sem ficha, o limite configurado não acusa regra.
+        if (daFicha && l.nivelRenda !== 'ok') {
+            const p = (l.pctRenda * 100).toFixed(1).replace('.', ',');
+            l.foraDaRegra.push({
+                codigo: 'renda',
+                texto: `Parcela de ${brlR(l.parcela)} é ${p}% da renda (${brlR(l.renda)}), a ficha permite até ${String(l.limiteRendaPct).replace('.', ',')}%`,
+            });
+        }
     }
 
     // Quadro do topo: a ficha mais recente (as regras de hoje). O limite da
