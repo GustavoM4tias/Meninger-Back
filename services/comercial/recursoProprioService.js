@@ -32,7 +32,8 @@ import db from '../../models/sequelize/index.js';
 import apiSienge from '../../lib/apiSienge.js';
 import { getScope } from '../permissions/accessScopeService.js';
 import { nomeAtual } from '../org/enterpriseNames.js';
-import { summarizeUnitsFromDb } from '../cv/enterpriseUnitsSummaryService.js';
+import { summarizeUnitsFromDb, classifyUnitStatus } from '../cv/enterpriseUnitsSummaryService.js';
+import { setEstoqueComercial } from '../cv/unitStockService.js';
 
 const sequelize = db.sequelize;
 const Q = { type: db.Sequelize.QueryTypes.SELECT };
@@ -56,8 +57,9 @@ export const DEFAULTS = {
         desconto: [22],               // Desconto Construtora
     },
     situacoes_excluidas: ['Cancelada', 'Distrato', 'Vencida'],
-    // Fallback do limite da parcela sobre a renda quando a ficha não diz.
-    limite_renda_pct: 30,
+    // O limite da parcela sobre a renda vem SÓ da ficha (texto da Regra do RP).
+    // Já houve um padrão de 30% aqui: o Adhara (30/70) não tem regra de renda e
+    // o relatório acusava 8 clientes "acima de 30%" (02/10/2026).
     // Acima do limite até limite + tolerância = amarelo ("saiu bem pouco da
     // regra", Ingá); passou disso = vermelho.
     tolerancia_renda_pct: 5,
@@ -108,10 +110,6 @@ function sanitizarConfig(raw = {}) {
         if (raw[k] !== undefined) out[k] = strList(raw[k]).map((s) => s.toUpperCase());
     }
     if (raw.sienge_operacoes_contam !== undefined) out.sienge_operacoes_contam = intList(raw.sienge_operacoes_contam);
-    if (raw.limite_renda_pct !== undefined) {
-        const n = numIn(raw.limite_renda_pct, 1, 100);
-        if (n == null) erros.push('Limite da renda deve ficar entre 1% e 100%.'); else out.limite_renda_pct = n;
-    }
     if (raw.tolerancia_renda_pct !== undefined) {
         const n = numIn(raw.tolerancia_renda_pct, 0, 50);
         if (n == null) erros.push('Tolerância deve ficar entre 0 e 50 pontos.'); else out.tolerancia_renda_pct = n;
@@ -508,8 +506,36 @@ async function pagoNoOffice(ids) {
 
 // ── Relatório ────────────────────────────────────────────────────────────────
 
-export async function getRelatorio(user, idempRaw) {
+/** Estoque de UMA etapa (módulo), pelo mesmo critério do resumo do empreendimento. */
+async function estoqueDaEtapa(idetapa) {
+    const blocos = await sequelize.query(
+        `SELECT idbloco FROM cv_enterprise_blocks WHERE idetapa = :idetapa`,
+        { ...Q, replacements: { idetapa } });
+    if (!blocos.length) return null;
+    const unidades = await sequelize.query(
+        `SELECT idunidade, situacao_mapa_disponibilidade, data_bloqueio
+           FROM cv_enterprise_units WHERE idbloco IN (:ids)`,
+        { ...Q, replacements: { ids: blocos.map((b) => b.idbloco) } });
+    if (!unidades.length) return null;
+    const segurado = await setEstoqueComercial(unidades.map((u) => u.idunidade));
+    const e = { totalUnits: 0, soldUnits: 0, reservedUnits: 0, blockedUnits: 0, availableUnits: 0, commercialStockUnits: 0 };
+    for (const u of unidades) {
+        e.totalUnits++;
+        const st = classifyUnitStatus(u);
+        if (st.isSold) e.soldUnits++;
+        else if (st.isReserved) e.reservedUnits++;
+        else if (st.isBlocked) {
+            e.blockedUnits++;
+            if (segurado.has(Number(u.idunidade))) e.commercialStockUnits++;
+        } else e.availableUnits++;
+    }
+    e.availableForSale = e.availableUnits + e.commercialStockUnits;
+    return e;
+}
+
+export async function getRelatorio(user, idempRaw, idetapaRaw = null) {
     const idemp = await exigirEmpreendimento(user, idempRaw);
+    const idetapaPedida = parseInt(idetapaRaw, 10);
     const { config } = await getConfig();
 
     const reservas = await sequelize.query(
@@ -538,9 +564,23 @@ export async function getRelatorio(user, idempRaw) {
         { ...Q, replacements: { idemp } });
 
     const excl = new Set(config.situacoes_excluidas);
+    // Módulos (etapas do CV) com reserva ativa: é o seletor ao lado do
+    // empreendimento. Contado ANTES do recorte, para o seletor não encolher.
+    const porEtapa = new Map();
+    for (const r of reservas) {
+        if (excl.has(r.situacao) || !r.idetapa) continue;
+        const k = Number(r.idetapa);
+        const m = porEtapa.get(k) || { idetapa: k, nome: r.etapa || `Etapa ${k}`, reservas: 0 };
+        m.reservas++;
+        porEtapa.set(k, m);
+    }
+    const modulos = [...porEtapa.values()].sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR', { numeric: true }));
+    const idetapa = Number.isFinite(idetapaPedida) && porEtapa.has(idetapaPedida) ? idetapaPedida : null;
+
     const excluidas = {};
     const ativas = [];
     for (const r of reservas) {
+        if (idetapa && Number(r.idetapa) !== idetapa) continue;
         if (excl.has(r.situacao)) excluidas[r.situacao] = (excluidas[r.situacao] || 0) + 1;
         else ativas.push(r);
     }
@@ -698,18 +738,25 @@ export async function getRelatorio(user, idempRaw) {
             modulo: regra?.modulo?.nome || null,
             fichaUsada: regra?.ficha || null,
             foraDaRegra: regra ? conferir(c, regra) : [],
-            limiteRendaPct: regra?.limiteRendaPct ?? null,
+            // Limite da renda pela ficha ATUAL do módulo, mesmo em reserva antiga
+            // (só pinta a coluna; acusar regra continua só para quem é conferido).
+            limiteRendaPct: (fr ? regraDaFicha(fr.maisRecente, r.idetapa)?.limiteRendaPct : null) ?? null,
             nota: r.nota_texto ? { texto: r.nota_texto, tom: r.nota_tom, por: r.nota_por, em: r.nota_em } : null,
         };
     });
 
-    // Limite da renda: o da ficha (por módulo) ganha; sem ficha, o configurado.
+    // Limite da renda: só o da ficha (por módulo). Sem limite na ficha, não há
+    // régua: a % aparece neutra, sem cor e sem acusar regra.
     const brlR = (v) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     for (const l of linhas) {
-        const daFicha = l.fichaUsada && l.limiteRendaPct != null;
-        const lim = (l.limiteRendaPct ?? config.limite_renda_pct) / 100;
+        if (l.limiteRendaPct == null) {
+            l.nivelRenda = 'ok';
+            l.rendaComFiador = false;
+            continue;
+        }
+        const daFicha = !!l.fichaUsada;
+        const lim = l.limiteRendaPct / 100;
         const tol = config.tolerancia_renda_pct / 100;
-        l.limiteRendaPct = Math.round(lim * 10000) / 100;
         l.nivelRenda = l.pctRenda > lim + tol ? 'alto' : l.pctRenda > lim ? 'atencao' : 'ok';
         // O limite da renda É regra da ficha: passou dele, está fora da regra,
         // mesmo que pouco (a tolerância só decide amarelo x vermelho). Ficava
@@ -734,12 +781,20 @@ export async function getRelatorio(user, idempRaw) {
     const atual = fr?.maisRecente || null;
     const autorizada = fr?.fichas.find((f) => f.status === 'approved' || f.status === 'closed') || null;
     const regraBase = atual ? regrasDoModulo(atual, null) : null;
-    const modulosAtual = (atual?.modulos || []).map((m) => regrasDoModulo(atual, m));
-    const limiteFicha = regraBase?.limiteRendaPct ?? modulosAtual.map((m) => m.limiteRendaPct).find((v) => v != null) ?? null;
+    let modulosAtual = (atual?.modulos || []).map((m) => regrasDoModulo(atual, m));
+    // Com módulo escolhido, o quadro de regras mostra só ele (com vários
+    // módulos o quadro ficava enorme - Adhara, 02/10/2026).
+    if (idetapa && modulosAtual.length) {
+        const so = modulosAtual.filter((m) => Number(m.modulo?.idetapa) === idetapa);
+        modulosAtual = so.length ? so : (modulosAtual.length === 1 ? modulosAtual : []);
+    }
+    const limiteFicha = idetapa
+        ? (modulosAtual[0]?.limiteRendaPct ?? regraBase?.limiteRendaPct ?? null)
+        : (regraBase?.limiteRendaPct ?? modulosAtual.map((m) => m.limiteRendaPct).find((v) => v != null) ?? null);
     const nome = await nomeAtual(idemp).catch(() => null);
     // Estoque pelo MESMO núcleo do espelho, da ficha e da projeção: bloqueada
     // por estratégia comercial conta como à venda (unitStockService).
-    const u = await summarizeUnitsFromDb(idemp).catch((e) => {
+    const u = await (idetapa ? estoqueDaEtapa(idetapa) : summarizeUnitsFromDb(idemp)).catch((e) => {
         console.warn('[recurso-proprio] estoque:', e.message);
         return null;
     });
@@ -753,6 +808,8 @@ export async function getRelatorio(user, idempRaw) {
         aVenda: u.availableForSale,
     } : null;
     return {
+        modulos,
+        idetapa,
         estoque,
         empreendimento: { id: idemp, nome: nome || `Empreendimento ${idemp}` },
         geradoEm: new Date().toISOString(),
@@ -766,8 +823,8 @@ export async function getRelatorio(user, idempRaw) {
             modulos: modulosAtual,
         } : null,
         limites: {
-            rendaPct: limiteFicha ?? config.limite_renda_pct,
-            rendaOrigem: limiteFicha != null ? 'ficha' : 'configuracao',
+            rendaPct: limiteFicha,
+            rendaOrigem: limiteFicha != null ? 'ficha' : null,
             toleranciaPct: config.tolerancia_renda_pct,
         },
         recebido,

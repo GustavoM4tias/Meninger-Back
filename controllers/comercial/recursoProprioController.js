@@ -19,7 +19,7 @@ async function empreendimentos(req, res) {
 
 async function relatorio(req, res) {
     try {
-        res.json(await Svc.getRelatorio(req.user, req.query.idempreendimento));
+        res.json(await Svc.getRelatorio(req.user, req.query.idempreendimento, req.query.idetapa));
     } catch (e) { responderErro(res, e, 'relatorio'); }
 }
 
