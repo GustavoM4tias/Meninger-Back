@@ -167,6 +167,23 @@ export async function gravarFormaPagamento(launch, { tipo = null, linhaDigitavel
     return { ok: true, paymentType, anexados: r.anexos?.anexados || 0, liberacaoFinalizada: !!r.liberacao?.finalizada, avisoAnexo };
 }
 
+/**
+ * Título lançado sem anexo no Sienge (o Sienge exige ao menos um, e sem ele a
+ * liberação da medição não finaliza): anexa nota/boleto do Office e finaliza.
+ * Usado pelo agendador para fechar sozinho o que ficou pela metade.
+ */
+export async function completarAnexos(launchId) {
+    const launch = await loadLaunch(launchId);
+    if (!launch.siengeTituloNumber) return { ok: false, motivo: 'sem título' };
+    const anexos = [...anexoDoDocumento(launch), ...anexoDoBoleto(launch)];
+    if (!anexos.length) return { ok: false, motivo: 'sem arquivo no Office' };
+    const ja = await SiengeBillsService.getAttachments(launch.siengeTituloNumber);
+    if (ja.length) return { ok: true, jaTinha: true };
+    const gp = await gravarFormaPagamento(launch, { anexos });
+    await patch(launch, { siengeTituloError: gp.avisoAnexo || null });
+    return { ok: !gp.avisoAnexo, anexados: gp.anexados, aviso: gp.avisoAnexo };
+}
+
 // ── PIX na parcela (EXCLUSIVO do RB) ──────────────────────────────────────────
 // Na chave CNPJ/CPF do credor ("utilizar dados do credor"), pela tela do título.
 // Outro documento com pagamento PIX fica com o aviso para escolher no Sienge.

@@ -5,7 +5,7 @@
 import cron from 'node-cron';
 import db from '../models/sequelize/index.js';
 import { pollContractStatus, pollMeasurementStatus, pollTituloStatus, stepRegisterBoleto, isPermanentBoletoError } from '../services/sienge/PaymentFlowPipelineService.js';
-import { stepRegisterPix } from '../services/sienge/paymentFlow/modules/titulo.js';
+import { stepRegisterPix, completarAnexos } from '../services/sienge/paymentFlow/modules/titulo.js';
 import { recipeOfLaunch } from '../services/sienge/paymentFlow/shared.js';
 
 const CRON_EXP = process.env.CONTRACT_APPROVAL_CRON || '*/20 * * * *';
@@ -119,6 +119,25 @@ async function checkContractApprovals() {
             console.log(`${r?.ok ? '✅' : '⚠️ '} [ContractApproval] #${launch.id}: PIX do RB ${r?.ok ? 'concluído' : 'ainda pendente'}.`);
         } catch (err) {
             console.error(`❌ [ContractApproval] Erro no PIX #${launch.id}:`, err.message);
+        }
+    }
+
+    // ── Título com pagamento mas sem anexo no Sienge: anexa e finaliza a liberação ──
+    const semAnexo = await db.PaymentLaunch.findAll({
+        where: {
+            pipelineStage: 'awaiting_titulo_authorization',
+            status: skipStatuses,
+            siengeTituloNumber: { [Op.not]: null },
+            [Op.or]: [{ nfUrl: { [Op.not]: null } }, { boletoUrl: { [Op.not]: null } }],
+        },
+        attributes: ['id'],
+    });
+    for (const launch of semAnexo) {
+        try {
+            const r = await completarAnexos(launch.id);
+            if (!r.jaTinha) console.log(`${r.ok ? '✅' : '⚠️ '} [ContractApproval] #${launch.id}: anexo ${r.ok ? `enviado (${r.anexados})` : `pendente: ${r.aviso || r.motivo}`}.`);
+        } catch (err) {
+            console.error(`❌ [ContractApproval] Erro no anexo #${launch.id}:`, err.message);
         }
     }
 

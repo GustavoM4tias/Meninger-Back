@@ -35,6 +35,21 @@ async function settle(page, ms = 1500) {
 const byId = id => `[id="${id}"]`;
 
 /**
+ * Espera o seletor existir no iframe ATUAL e devolve esse frame. Trocar de aba
+ * ou abrir um registro recarrega o iframe; procurar no frame antigo dava
+ * timeout (título "", "Adicionar" ausente, lápis da parcela).
+ */
+async function noFrame(page, selector, { timeout = 60000, oque = selector } = {}) {
+    const fim = Date.now() + timeout;
+    while (Date.now() < fim) {
+        const f = await frameOf(page, 15000).catch(() => null);
+        if (f && await f.locator(selector).count().catch(() => 0)) return f;
+        await page.waitForTimeout(1000);
+    }
+    throw new Error(`A tela do Sienge não mostrou ${oque} a tempo.`);
+}
+
+/**
  * @param {import('playwright').Page} page - já logada
  * @param {object} p
  * @param {number|string} p.titulo
@@ -57,35 +72,43 @@ export async function setPaymentInfo(page, { titulo, parcela = 1, origem = "ME",
 /** Abre o Cadastro de Títulos a Pagar (page 1607) no título e confere o número. */
 export async function abrirTitulo(page, titulo, origem = "ME") {
     const param = Buffer.from(`entity.cdOrigem=${origem}&entity.tituloPK.nuTitulo=${titulo}`).toString("base64");
+    const alvo = `${BASE}#/common/page/1607/${param}`;
     log("PAGTO", `Abrindo o título ${titulo} (origem ${origem})...`);
-    await page.goto(`${BASE}#/common/page/1607/${param}`, { waitUntil: "domcontentloaded" });
-    await settle(page, 4000);
-    // Troca só do hash às vezes não monta a página legada: recarrega uma vez.
-    let f = await frameOf(page, 25000).catch(() => null);
-    if (!f) {
-        log("PAGTO", "Tela do título não montou; recarregando...");
-        await page.reload({ waitUntil: "domcontentloaded" });
-        await settle(page, 5000);
-        f = await frameOf(page);
+    // Mesmo endereço já aberto (pagamento -> anexo) NÃO remonta a página: o
+    // robô lia a aba anterior e via título "". Cada tentativa força a carga:
+    // 1ª goto; depois reload; e confere o número do título na tela.
+    let nu = "";
+    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+        if (tentativa === 1 && page.url() !== alvo) await page.goto(alvo, { waitUntil: "domcontentloaded" });
+        else {
+            if (page.url() !== alvo) await page.goto(alvo, { waitUntil: "domcontentloaded" });
+            await page.reload({ waitUntil: "domcontentloaded" });
+        }
+        await settle(page, 4000);
+        const f = await frameOf(page, 30000).catch(() => null);
+        if (f) {
+            const campo = f.locator(byId("entity.tituloPK.nuTitulo"));
+            await campo.waitFor({ state: "attached", timeout: 20000 }).catch(() => { });
+            nu = String(await campo.inputValue().catch(() => "")).trim();
+            if (nu === String(titulo)) return f;
+        }
+        log("PAGTO", `Tela do título não carregou certo (tentativa ${tentativa}, título "${nu}"); recarregando...`);
     }
-    const nu = await f.locator(byId("entity.tituloPK.nuTitulo")).inputValue().catch(() => "");
-    if (String(nu).trim() !== String(titulo)) throw new Error(`O Sienge abriu o título "${nu}" em vez do ${titulo}.`);
-    return f;
+    throw new Error(`O Sienge abriu o título "${nu}" em vez do ${titulo}.`);
 }
 
 async function preencherPagamento(page, f, { titulo, parcela, tipo, linha, descricao }) {
 
     log("PAGTO", "Aba Inf. Pagamento...");
-    await f.locator("a").filter({ hasText: /^\s*Inf\. Pagamento\s*$/ }).first().click({ force: true });
-    await settle(page, 2500);
-    f = await frameOf(page);
+    await f.getByText("Inf. Pagamento", { exact: true }).first().click({ force: true });
+    await settle(page, 2000);
+    const lapis = `img[title="Abre a edição do registro"][onclick*="nuParcela=${parcela}"]`;
+    f = await noFrame(page, lapis, { oque: `a parcela ${parcela} na aba Inf. Pagamento` });
 
     log("PAGTO", `Editando a parcela ${parcela}...`);
-    const editar = f.locator(`img[title="Abre a edição do registro"][onclick*="nuParcela=${parcela}"]`).first();
-    await editar.waitFor({ state: "attached", timeout: 30000 });
-    await editar.click({ force: true });
-    await settle(page, 2500);
-    f = await frameOf(page);
+    await f.locator(lapis).first().click({ force: true });
+    await settle(page, 2000);
+    f = await noFrame(page, byId("entity.cdTipoPagamento"), { oque: "o campo Forma de pagamento" });
 
     const codigo = tipo === "boleto" ? "2" : "11";
     const campoForma = f.locator(byId("entity.cdTipoPagamento"));
@@ -93,8 +116,9 @@ async function preencherPagamento(page, f, { titulo, parcela, tipo, linha, descr
     await campoForma.fill("");
     await campoForma.fill(codigo);
     await campoForma.press("Tab");
-    await settle(page, 2500);
-    f = await frameOf(page);
+    await settle(page, 2000);
+    f = await noFrame(page, tipo === "boleto" ? byId("entity.deLinhaDigPEMask") : "#usoDadosCredorFavorecido",
+        { oque: tipo === "boleto" ? "o campo Linha digitável" : "as opções do PIX" });
 
     if (descricao) await f.locator(byId("entity.dePagamento")).fill(String(descricao).slice(0, 250)).catch(() => { });
 
@@ -146,14 +170,8 @@ export async function anexarNoTitulo(page, { titulo, origem = "ME", anexos = [] 
     let f = await abrirTitulo(page, titulo, origem);
     log("ANEXO", "Aba Anexos...");
     await f.getByText("Anexos", { exact: true }).first().click({ force: true });
-    await settle(page, 2500);
-    // A aba recarrega o iframe: espera o "Adicionar" existir no frame NOVO.
-    for (let i = 0; i < 30; i++) {
-        f = await frameOf(page);
-        if (await f.locator("#btNovaLinhaAnexos").count().catch(() => 0)) break;
-        await page.waitForTimeout(1500);
-    }
-    if (!(await f.locator("#btNovaLinhaAnexos").count().catch(() => 0))) throw new Error('A aba Anexos do título não abriu (botão "Adicionar" ausente).');
+    await settle(page, 2000);
+    f = await noFrame(page, "#btNovaLinhaAnexos", { oque: 'o botão "Adicionar" da aba Anexos' });
 
     const jaTem = await f.locator('input[type="hidden"][name$=".nmAnexo"]').evaluateAll(els => els.map(e => (e.value || "").toLowerCase()));
     const novos = anexos.filter(a => !jaTem.includes(String(a.nome || "").toLowerCase()));

@@ -99,6 +99,18 @@ export class SiengeBillsService {
      * Busca as parcelas de um título.
      * @returns {Array}
      */
+    /** Anexos do título (leitura). O Sienge responde 404 quando não há nenhum. */
+    static async getAttachments(billId) {
+        if (!billId) return [];
+        try {
+            const { data } = await apiSienge.get(`/v1/bills/${Number(billId)}/attachments`);
+            return data?.results || (Array.isArray(data) ? data : []);
+        } catch (err) {
+            if (err.response?.status === 404) return [];
+            throw err;
+        }
+    }
+
     static async getInstallments(billId) {
         if (!billId) return [];
         try {
