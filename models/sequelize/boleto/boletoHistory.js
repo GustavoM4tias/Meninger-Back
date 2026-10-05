@@ -131,6 +131,11 @@ export default (sequelize, DataTypes) => {
             allowNull: false,
             comment: 'True depois que o scheduler retomou este registro (idempotência).',
         },
+        vencimento_override: {
+            type: DataTypes.DATEONLY,
+            allowNull: true,
+            comment: 'Vencimento definido manualmente; substitui o da série do CV na emissão.',
+        },
         emissao_tentativas: {
             type: DataTypes.INTEGER,
             defaultValue: 0,

@@ -21,7 +21,7 @@ import cron from 'node-cron';
 import { Op } from 'sequelize';
 import db from '../models/sequelize/index.js';
 import EventLogger from '../services/boleto/BoletoEventLogger.js';
-import { processBoletoWebhook } from '../services/boleto/BoletoGenerationService.js';
+import { processBoletoWebhook, _primitivos } from '../services/boleto/BoletoGenerationService.js';
 import { formatarAgendamento } from '../lib/boletoJanela.js';
 
 const { BoletoHistory } = db;
@@ -76,6 +76,11 @@ async function runTick() {
     if (processando) return; // fila anterior ainda escoando
     processando = true;
     try {
+        // Modulo pausado: nao toca na fila. Antes o registro era marcado como
+        // processado e a emissao desistia em silencio - ficava 'queued' para
+        // sempre (8392 e 8513, pausa de 29/09 a 05/10/2026).
+        const settings = await _primitivos.getSettings();
+        if (!settings.active) return;
         const pendentes = await BoletoHistory.findAll({
             where: {
                 status: 'queued',

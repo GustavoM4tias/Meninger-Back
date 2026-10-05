@@ -736,6 +736,15 @@ export async function processBoletoWebhook({ idreserva, idtransacao, manual = fa
         // vencimento, re-trigger) nao precisam saber qual e a forma.
         const serie = serieEntrada;
 
+        // Vencimento escolhido por gente (ex.: lote reemitido depois de uma pausa
+        // do modulo): ganha do vencimento da serie do CV. Os gates seguintes
+        // (limite D+N, passado, re-trigger) validam a data nova, nao a do CV.
+        if (history.vencimento_override) {
+            const vencOverride = String(history.vencimento_override).slice(0, 10);
+            console.log(`[BOLETO] Reserva ${idreserva}: vencimento ${serie.vencimento} do CV substituido por ${vencOverride} (definido manualmente).`);
+            serie.vencimento = vencOverride;
+        }
+
         if (formaPagamento === 'cartao') {
             // `valor` da serie e POR PARCELA; o total e `valor_serie`. Normalizar
             // AQUI faz o percentual, o teto e o re-trigger olharem o numero certo
