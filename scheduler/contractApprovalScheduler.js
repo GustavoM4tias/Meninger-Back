@@ -125,10 +125,17 @@ async function checkContractApprovals() {
     // ── Título com pagamento mas sem anexo no Sienge: anexa e finaliza a liberação ──
     const semAnexo = await db.PaymentLaunch.findAll({
         where: {
-            pipelineStage: 'awaiting_titulo_authorization',
             status: skipStatuses,
             siengeTituloNumber: { [Op.not]: null },
-            [Op.or]: [{ nfUrl: { [Op.not]: null } }, { boletoUrl: { [Op.not]: null } }],
+            [Op.and]: [
+                { [Op.or]: [{ nfUrl: { [Op.not]: null } }, { boletoUrl: { [Op.not]: null } }] },
+                // aguardando pagamento, ou título ainda sem boleto (a nota já entra);
+                // título com boleto pendente é do retry do boleto, que anexa junto
+                { [Op.or]: [
+                    { pipelineStage: 'awaiting_titulo_authorization' },
+                    { pipelineStage: 'titulo_created', boletoBarcode: null },
+                ] },
+            ],
         },
         attributes: ['id'],
     });

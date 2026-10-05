@@ -165,7 +165,19 @@ async function preencherPagamento(page, f, { titulo, parcela, tipo, linha, descr
  * mesmo nome de arquivo, para reprocessar sem duplicar.
  * @param {object[]} anexos - [{ descricao, nome, buffer, mimeType }]
  */
-export async function anexarNoTitulo(page, { titulo, origem = "ME", anexos = [] }) {
+export async function anexarNoTitulo(page, params) {
+    // Às vezes o Sienge salva a tela sem o arquivo (upload ainda em curso):
+    // uma segunda volta reabre o título e manda só o que faltou.
+    try {
+        return await anexarUmaVez(page, params);
+    } catch (err) {
+        if (!/não apareceu no título/.test(err.message)) throw err;
+        log("ANEXO", `Primeira tentativa não gravou (${err.message}); tentando de novo...`);
+        return anexarUmaVez(page, params);
+    }
+}
+
+async function anexarUmaVez(page, { titulo, origem = "ME", anexos = [] }) {
     if (!anexos.length) return { anexados: 0 };
     let f = await abrirTitulo(page, titulo, origem);
     log("ANEXO", "Aba Anexos...");
@@ -187,8 +199,10 @@ export async function anexarNoTitulo(page, { titulo, origem = "ME", anexos = [] 
         await f.locator(`[id="anexos[${idx}].file_${idx}"]`).setInputFiles({
             name: String(a.nome || "anexo.pdf").slice(0, 100), mimeType: a.mimeType || "application/pdf", buffer: a.buffer,
         });
+        await page.waitForTimeout(1500);
     }
 
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => { });
     log("ANEXO", "Salvando...");
     await f.locator('input[name="pbEnviar"]').click();
     await settle(page, 4000);
@@ -197,7 +211,14 @@ export async function anexarNoTitulo(page, { titulo, origem = "ME", anexos = [] 
     f = await frameOf(page);
     const depois = await f.locator('input[type="hidden"][name$=".nmAnexo"]').evaluateAll(els => els.map(e => (e.value || "").toLowerCase())).catch(() => []);
     const faltando = novos.filter(a => !depois.some(n => n.includes(String(a.nome || "").toLowerCase().replace(/\.pdf$/, ""))));
-    if (faltando.length) throw new Error(`Anexo não apareceu no título depois de salvar: ${faltando.map(a => a.nome).join(", ")}.`);
+    if (faltando.length) {
+        const msg = await f.evaluate(() => {
+            const t = (document.body.innerText || "").replace(/\s+/g, " ");
+            const m = t.match(/Informação (.{0,250}?)IDENTIFICAÇÃO/i) || t.match(/(Erro|inválid|obrigatóri|não foi|não é)[^.]{0,200}/i);
+            return m ? (m[1] || m[0]).trim() : null;
+        }).catch(() => null);
+        throw new Error(`Anexo não apareceu no título depois de salvar: ${faltando.map(a => a.nome).join(", ")}${msg ? ` (Sienge: ${msg})` : ""}.`);
+    }
     success("ANEXO", `${novos.length} arquivo(s) anexado(s) ao título ${titulo}.`);
     return { anexados: novos.length };
 }

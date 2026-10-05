@@ -177,9 +177,12 @@ export async function completarAnexos(launchId) {
     if (!launch.siengeTituloNumber) return { ok: false, motivo: 'sem título' };
     const anexos = [...anexoDoDocumento(launch), ...anexoDoBoleto(launch)];
     if (!anexos.length) return { ok: false, motivo: 'sem arquivo no Office' };
-    const ja = await SiengeBillsService.getAttachments(launch.siengeTituloNumber);
-    if (ja.length) return { ok: true, jaTinha: true };
-    const gp = await gravarFormaPagamento(launch, { anexos });
+    // Arquivo por arquivo (pelo nome): título com o boleto e sem a nota também completa.
+    const nomes = (await SiengeBillsService.getAttachments(launch.siengeTituloNumber))
+        .map(a => String(a.name || '').toLowerCase());
+    const faltam = anexos.filter(a => !nomes.includes(String(a.nome || '').toLowerCase()));
+    if (!faltam.length) return { ok: true, jaTinha: true };
+    const gp = await gravarFormaPagamento(launch, { anexos: faltam });
     await patch(launch, { siengeTituloError: gp.avisoAnexo || null });
     return { ok: !gp.avisoAnexo, anexados: gp.anexados, aviso: gp.avisoAnexo };
 }
