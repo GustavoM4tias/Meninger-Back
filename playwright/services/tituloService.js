@@ -1,6 +1,7 @@
 // playwright/services/tituloService.js
 import { siengeLogin } from "../modules/sienge/login.js";
 import { createTitulo } from "../modules/sienge/titulo.js";
+import { comLoginNaFila } from "../core/filaSienge.js";
 import { log, success } from "../core/logger.js";
 import { dismissCommonPopups } from "../core/popups.js";
 
@@ -45,20 +46,11 @@ export async function runPlaywrightTitulo(params = {}) {
         departamento: params.departamento,
     })}`);
 
-    const credentials = params.credentials || {};
-    const { browser, page } = await siengeLogin(credentials);
-    registerGlobalDialogHandler(page);
-    await waitForPageReady(page);
-    await dismissCommonPopups(page, 3000).catch(() => {});
-
-    try {
+    // Na fila do login. Derrubado depois de salvar o título, a retomada acha o
+    // título já criado (liberação em andamento) e não cria outro.
+    return comLoginNaFila(params.credentials, `título ${params.documentType}/${params.contractNumber} medição ${params.measurementNumber}`, async (page) => {
         const result = await createTitulo(page, params);
         success("SERVICE", `Fluxo de título concluído. Nº: ${result.tituloNumber ?? "?"}`);
         return { success: true, tituloNumber: result.tituloNumber, avisos: result.avisos || [] };
-    } catch (error) {
-        log("SERVICE", `Falha no fluxo de título: ${error.message}`);
-        throw error;
-    } finally {
-        await browser.close().catch(() => {});
-    }
+    });
 }

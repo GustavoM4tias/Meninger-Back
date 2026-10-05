@@ -539,7 +539,10 @@ export async function pollContract(req, res, next) {
 export async function createTituloController(req, res, next) {
     try {
         const u = actor(req);
-        return res.json(await stepCreateTitulo(Number(req.params.id), u.id));
+        // Robô na fila do login: responde já; o card acompanha.
+        const id = Number(req.params.id);
+        stepCreateTitulo(id, u.id).catch(err => console.error(`[Pipeline] título #${id}: ${err.message}`));
+        return res.json({ success: true, emFila: true });
     } catch (err) { next(err); }
 }
 export async function registerBoletoController(req, res, next) {
@@ -551,7 +554,9 @@ export async function registerBoletoController(req, res, next) {
             const launch = await db.PaymentLaunch.findByPk(id, { attributes: ['id'] });
             if (launch) await launch.update({ siengeTituloNumber: Number(tituloNumber) });
         }
-        return res.json(await stepRegisterBoleto(id));
+        // Robô na fila do login: responde já; o card acompanha.
+        stepRegisterBoleto(id).catch(err => console.error(`[Pipeline] boleto #${id}: ${err.message}`));
+        return res.json({ success: true, emFila: true });
     } catch (err) { next(err); }
 }
 

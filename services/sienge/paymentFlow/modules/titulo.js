@@ -310,9 +310,18 @@ export async function stepUpdateBoleto(launchId, { boletoUrl, boletoPath, boleto
         boletoBarcode,
         boletoDueDate: boletoDueDate || launch.boletoDueDate,
         boletoAmount: boletoAmount || launch.boletoAmount,
-        siengeTituloError: null,
+        // O robô entra na fila do login (pode haver outro rodando): a tela recebe
+        // a resposta já, e o card mostra o andamento.
+        pipelineStage: 'titulo_created',
+        siengeTituloError: 'Na fila do robô: gravando o boleto e os anexos no Sienge (pode levar alguns minutos).',
     });
 
+    gravarBoletoNoSienge(launchId, launch, { boletoUrl, boletoFilename, boletoBarcode, boletoDueDate }, userId)
+        .catch(err => console.error(`❌ [Pipeline] #${launchId}: boleto em segundo plano: ${err.message}`));
+    return { success: true, emFila: true };
+}
+
+async function gravarBoletoNoSienge(launchId, launch, { boletoUrl, boletoFilename, boletoBarcode, boletoDueDate }, userId) {
     // 2. Atualiza o código de barras na parcela do Sienge
     try {
         const gp = await gravarFormaPagamento(launch, {

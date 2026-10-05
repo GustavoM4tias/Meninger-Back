@@ -30,7 +30,7 @@ import { recipeOf } from './recipe.js';
 import { patch } from './shared.js';
 import { candidateForMeasurement, createLaunchFromCandidate } from './siengeImport.js';
 import { stepCreateMeasurement } from './modules/medicao.js';
-import { stepCreateTitulo, gravarFormaPagamento, anexoDoBoleto, anexoDoDocumento } from './modules/titulo.js';
+import { stepCreateTitulo, stepRegisterBoleto } from './modules/titulo.js';
 
 export const ACOES = ['importar_medicao', 'medir_no_saldo', 'gerar_titulo', 'registrar_boleto'];
 
@@ -418,24 +418,18 @@ export async function executeAction(user, pedido) {
     if (pedido.acao === 'registrar_boleto') {
         const launchId = Number(pedido.launchId || novoId);
         const l = await db.PaymentLaunch.findByPk(launchId);
-        const gp = await gravarFormaPagamento(l, {
-            tipo: 'boleto', linhaDigitavel: _boleto.boletoBarcode, userId: user.id,
-            anexos: [...anexoDoDocumento(l), ...anexoDoBoleto(_boleto, _boleto.boletoDueDate)],
-        });
+        // Guarda o boleto e manda o robô (fila do login) em segundo plano: grava a
+        // forma de pagamento, anexa nota + boleto, finaliza a liberação e confere.
         await patch(l, {
             boletoBarcode: _boleto.boletoBarcode, boletoDueDate: _boleto.boletoDueDate || l.boletoDueDate,
             boletoAmount: _boleto.boletoAmount ?? l.boletoAmount,
             ...(_boleto.boletoUrl && { boletoUrl: _boleto.boletoUrl, boletoPath: _boleto.boletoPath, boletoFilename: _boleto.boletoFilename }),
-            pipelineStage: 'awaiting_titulo_authorization', status: 'titulo', siengeTituloError: gp.avisoAnexo || null,
+            pipelineStage: 'titulo_created', status: 'titulo',
+            siengeTituloError: 'Na fila do robô: gravando o boleto e os anexos no Sienge (pode levar alguns minutos).',
             updatedBy: user.id, updatedByName: user.username,
         });
-        // Conferência: a parcela tem forma de pagamento agora?
-        const depois = (await SiengeBillsService.getInstallments(l.siengeTituloNumber))[0];
-        if (!depois?.paymentType) {
-            await patch(l, { siengeTituloError: 'Conferência: o Sienge aceitou o pedido, mas a parcela continua sem forma de pagamento. Confira no Sienge.' });
-            return { ok: false, launchId, mensagem: 'O Sienge aceitou, mas a parcela ainda aparece sem forma de pagamento. Confira no Sienge.' };
-        }
-        return { ok: true, launchId, mensagem: `Boleto registrado no título ${l.siengeTituloNumber} (forma de pagamento: ${depois.paymentType}).` };
+        stepRegisterBoleto(launchId).catch(err => console.error(`[Ação] registrar_boleto #${launchId}: ${err.message}`));
+        return { ok: true, launchId, emAndamento: true, mensagem: `Boleto na fila do robô para o título ${l.siengeTituloNumber}. O lançamento mostra quando terminar.` };
     }
 
     const e = new Error('Ação não executável.');

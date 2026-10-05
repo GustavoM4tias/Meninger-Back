@@ -1,8 +1,6 @@
 // playwright/services/paymentInfoService.js
-import { siengeLogin } from "../modules/sienge/login.js";
 import { setPaymentInfo, anexarNoTitulo, finalizarLiberacao } from "../modules/sienge/paymentInfo.js";
-import { log } from "../core/logger.js";
-import { dismissCommonPopups } from "../core/popups.js";
+import { comLoginNaFila } from "../core/filaSienge.js";
 
 /**
  * Num login só: forma de pagamento da parcela (boleto ou PIX) e/ou anexos do título.
@@ -10,31 +8,23 @@ import { dismissCommonPopups } from "../core/popups.js";
  *   tipo ausente = só anexa; anexos vazio = só forma de pagamento.
  *   finalizar = { documentType, contractNumber, measurementNumber }: finaliza a
  *   liberação da medição no fim (o Sienge só finaliza com o título completo).
+ *
+ * Tudo aqui é idempotente (regrava a forma, anexo pula o que já está, liberação
+ * já finalizada é reconhecida): derrubado, a fila espera e refaz do começo.
  */
 export async function runPlaywrightPaymentInfo(params = {}) {
-    const { browser, page } = await siengeLogin(params.credentials || {});
-    page.on("dialog", async (dialog) => {
-        try {
-            log("DIALOG", `${dialog.type()}: ${dialog.message()}`);
-            await dialog.accept();
-        } catch (_) { }
-    });
-    try {
-        await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => { });
-        await dismissCommonPopups(page, 3000).catch(() => { });
+    return comLoginNaFila(params.credentials, `pagamento/anexo do título ${params.titulo}`, async (page, { sessao }) => {
         const out = {};
         if (params.tipo) out.pagamento = await setPaymentInfo(page, params);
         // Anexo falhar não desfaz a forma de pagamento já salva: volta como aviso.
         if (params.anexos?.length) {
             try { out.anexos = await anexarNoTitulo(page, params); }
-            catch (err) { out.anexoErro = err.message; }
+            catch (err) { if (await sessao.conferirTela()) throw err; out.anexoErro = err.message; }
         }
         if (params.finalizar?.measurementNumber && !out.anexoErro) {
             try { out.liberacao = await finalizarLiberacao(page, params.finalizar); }
-            catch (err) { out.liberacaoErro = err.message; }
+            catch (err) { if (await sessao.conferirTela()) throw err; out.liberacaoErro = err.message; }
         }
         return out;
-    } finally {
-        await browser.close().catch(() => { });
-    }
+    });
 }

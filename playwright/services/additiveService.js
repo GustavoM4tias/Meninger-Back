@@ -1,6 +1,7 @@
 // playwright/services/additiveService.js
 import { siengeLogin } from "../modules/sienge/login.js";
 import { createAdditive } from "../modules/sienge/additive.js";
+import { comLoginNaFila } from "../core/filaSienge.js";
 import { log, success } from "../core/logger.js";
 import { dismissCommonPopups } from "../core/popups.js";
 
@@ -52,20 +53,14 @@ export async function runPlaywrightAdditive(params = {}) {
         contaFinanceira: params.contaFinanceira,
     })}`);
 
-    const credentials = params.credentials || {};
-    const { browser, page } = await siengeLogin(credentials);
-    registerGlobalDialogHandler(page);
-    await waitForPageReady(page);
-    await dismissCommonPopups(page, 3000).catch(() => { });
-
-    try {
+    // Na fila do login. Aditivo NÃO é refeito depois de uma derrubada: ele pode
+    // ter sido salvo, e refazer duplicaria. Depois da espera, volta erro para conferir.
+    return comLoginNaFila(params.credentials, `aditivo ${params.documentType}/${params.contractNumber}`, async (page, { retomando }) => {
+        if (retomando) {
+            throw new Error("Aditivo interrompido: o robô foi derrubado no meio do aditivo. Confira no Sienge se ele ficou salvo antes de reprocessar.");
+        }
         await createAdditive(page, params);
         success("SERVICE", "Fluxo automático do aditivo concluído.");
         return { success: true };
-    } catch (error) {
-        log("SERVICE", `Falha no fluxo automático do aditivo: ${error.message}`);
-        throw error;
-    } finally {
-        await browser.close().catch(() => { });
-    }
+    });
 }

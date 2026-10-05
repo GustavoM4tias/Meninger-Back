@@ -9,6 +9,7 @@
 // cancelado; nenhuma outra ação de gravação é tocada.
 
 import { siengeLogin } from '../../../playwright/modules/sienge/login.js';
+import { naFilaDoSienge } from '../../../playwright/core/filaSienge.js';
 import { dismissCommonPopups } from '../../../playwright/core/popups.js';
 import { emptyRequiredFields } from '../../../playwright/core/formDiagnostics.js';
 import { getUserSiengeCredentials } from './shared.js';
@@ -55,6 +56,12 @@ async function visible(target, selector, what, timeout = 20000) {
  */
 export async function runSiengeWatch(userId) {
     const credentials = await getUserSiengeCredentials(userId);
+    if (!credentials.email) return vigiar(credentials);
+    // Mesma fila dos robôs do login: o vigia não derruba um lançamento rodando.
+    return naFilaDoSienge(credentials, 'vigia do Sienge', () => vigiar(credentials));
+}
+
+async function vigiar(credentials) {
     const rodadoEm = new Date().toISOString();
     if (!credentials.email) {
         return {

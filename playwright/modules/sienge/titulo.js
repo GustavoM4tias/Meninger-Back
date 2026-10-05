@@ -119,6 +119,43 @@ function fmtDate(dateStr) {
  * @param {string|number} params.unitPrice         - Valor de mão de obra
  * @returns {{ tituloNumber: number|null }}
  */
+/**
+ * Número do título de uma medição com liberação EM ANDAMENTO (título salvo e
+ * não finalizado), lido na tela de liberação. null se não houver.
+ */
+async function tituloEmAndamento(page, contratoLabel, measurementNumber) {
+    await page.goto(TITULO_PAGE_URL, { waitUntil: "domcontentloaded" });
+    await waitForPageSettled(page);
+    let frame = await getMainFrame(page);
+    if (!(await frame.locator("#labelContrato").count())) {
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await waitForPageSettled(page);
+        frame = await getMainFrame(page);
+    }
+    await fillField(frame, "#labelContrato", contratoLabel);
+    if (await frame.locator("#dtInicioPeriodo").count()) await fillField(frame, "#dtInicioPeriodo", "01/01/2020");
+    await frame.locator("#flSitMedicoes").selectOption("A");
+    await frame.locator('input[name="btFiltrar"]').click();
+    await waitForPageSettled(page);
+    frame = await getMainFrame(page);
+    const rowId = await frame.evaluate((n) => {
+        for (const row of document.querySelectorAll('tr[id^="linhaRow_"]:not([id$="-1"])')) {
+            const s = row.querySelector('span[tipo="NUMBER"]');
+            if (s && parseInt(s.innerText.trim(), 10) === n) return row.id;
+        }
+        return null;
+    }, Number(measurementNumber));
+    if (!rowId) return null;
+    await frame.locator(`tr#${rowId} img[name_="editar"]`).first().click({ force: true });
+    await waitForPageSettled(page);
+    frame = await getMainFrame(page);
+    const num = await frame.evaluate(() => {
+        const m = (document.body.innerText || "").match(/T[ÍI]TULOS[\s\S]*?\n\s*(\d{5,})\s/);
+        return m ? Number(m[1]) : null;
+    });
+    return num || null;
+}
+
 export async function createTitulo(page, params = {}) {
     const {
         documentType = "PREM",
@@ -185,6 +222,14 @@ export async function createTitulo(page, params = {}) {
     }, Number(measurementNumber));
 
     if (!targetRowId) {
+        // Já tem título começado (liberação em andamento)? Acontece quando o robô
+        // foi derrubado depois de salvar o título: retoma lendo o número, em vez
+        // de criar outro.
+        const existente = await tituloEmAndamento(page, contratoLabel, measurementNumber).catch(() => null);
+        if (existente) {
+            log("TITULO", `Medição #${measurementNumber} já tem o título ${existente} (liberação em andamento): retomando sem criar outro.`);
+            return { tituloNumber: existente, avisos: [...avisos, `Título ${existente} já existia para a medição (retomado).`] };
+        }
         throw new Error(`Medição #${measurementNumber} não está entre as não liberadas do contrato ${contratoLabel} (aparecem: ${vistas.join(", ") || "nenhuma"}). Nada foi lançado.`);
     }
 

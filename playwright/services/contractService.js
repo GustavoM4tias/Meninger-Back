@@ -4,6 +4,8 @@ import { createInitialContract } from "../modules/sienge/createContract.js";
 import { itemsContract } from "../modules/sienge/itemsContract.js";
 import { financialForecastContract } from "../modules/sienge/financialForecastContract.js";
 import { deleteContract } from "../modules/sienge/deleteContract.js";
+import { comLoginNaFila } from "../core/filaSienge.js";
+import { SiengeContractService } from "../../services/sienge/SiengeContractService.js";
 import { cautionContract } from "../modules/sienge/cautionContract.js";
 import { log, success } from "../core/logger.js";
 import { dismissCommonPopups } from "../core/popups.js";
@@ -92,20 +94,33 @@ export async function runPlaywrightContract(params = {}) {
         dataVencimento: params.dataVencimento ?? params.dataVencimentoBase ?? null,
     })}`);
 
-    const credentials = params.credentials || {};
-    const { browser, page } = await siengeLogin(credentials);
-    registerGlobalDialogHandler(page);
-    await waitForPageReady(page);
-    await dismissCommonPopups(page, 3000).catch(() => { });
+    // Na fila do login. Antes de criar, anota os contratos do fornecedor na
+    // empresa: derrubado no meio, a retomada EXCLUI o contrato novo que ficou
+    // pela metade e cria de novo (o mesmo que já faz quando a etapa 2/3 falha).
+    const antes = new Set(await contratosDoFornecedor(params).catch(() => []));
+    return comLoginNaFila(params.credentials, `contrato ${params.documento} do fornecedor ${params.fornecedor}`, async (page, { retomando }) => {
+        if (retomando) {
+            const novos = (await contratosDoFornecedor(params)).filter(c => !antes.has(c));
+            for (const numero of novos) {
+                log("SERVICE", `Retomando: excluindo o contrato ${params.documento}/${numero} que ficou pela metade na queda...`);
+                await deleteContract(page, { documentType: params.documento, contractNumber: numero });
+            }
+        }
+        try {
+            return await _runWithRetry(page, params);
+        } catch (error) {
+            log("SERVICE", `Falha no fluxo automático: ${error.message}`);
+            throw error;
+        }
+    });
+}
 
-    try {
-        return await _runWithRetry(page, params);
-    } catch (error) {
-        log("SERVICE", `Falha definitiva no fluxo automático: ${error.message}`);
-        throw error;
-    } finally {
-        await browser.close().catch(() => { });
-    }
+/** Números dos contratos do fornecedor na empresa, no documento do tipo (API, só leitura). */
+async function contratosDoFornecedor({ fornecedor, empresa, documento }) {
+    const todos = await SiengeContractService.findAllBySupplierId(fornecedor, empresa);
+    return todos
+        .filter(c => String(c.documentId || "").trim().toUpperCase() === String(documento || "").trim().toUpperCase())
+        .map(c => String(c.contractNumber));
 }
 
 async function _runWithRetry(page, params, attempt = 1) {
