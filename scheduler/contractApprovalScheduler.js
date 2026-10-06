@@ -7,6 +7,7 @@ import db from '../models/sequelize/index.js';
 import { pollContractStatus, pollMeasurementStatus, pollTituloStatus, stepRegisterBoleto, isPermanentBoletoError } from '../services/sienge/PaymentFlowPipelineService.js';
 import { stepRegisterPix, completarAnexos } from '../services/sienge/paymentFlow/modules/titulo.js';
 import { recipeOfLaunch } from '../services/sienge/paymentFlow/shared.js';
+import { consultarAutorizacoes, atualizarAutorizacao } from '../services/sienge/paymentFlow/tituloAutorizacao.js';
 
 const CRON_EXP = process.env.CONTRACT_APPROVAL_CRON || '*/20 * * * *';
 
@@ -146,6 +147,28 @@ async function checkContractApprovals() {
         } catch (err) {
             console.error(`❌ [ContractApproval] Erro no anexo #${launch.id}:`, err.message);
         }
+    }
+
+    // ── Autorização de pagamento dos títulos em aberto ─────────────────────────
+    // Uma consulta só (API bulk-data; backup D-1 se ela falhar) para todos os
+    // títulos ainda não pagos. Também alimenta o cache que o pollTituloStatus
+    // usa logo abaixo, então não há uma chamada por lançamento.
+    try {
+        const abertos = await db.PaymentLaunch.findAll({
+            where: {
+                pipelineStage: ['titulo_created', 'awaiting_titulo_authorization'],
+                status: skipStatuses,
+                siengeTituloNumber: { [Op.not]: null },
+            },
+        });
+        if (abertos.length) {
+            const auts = await consultarAutorizacoes(abertos.map(l => l.siengeTituloNumber));
+            for (const launch of abertos) {
+                await atualizarAutorizacao(launch, auts.get(Number(launch.siengeTituloNumber)));
+            }
+        }
+    } catch (err) {
+        console.error('❌ [ContractApproval] Erro ao consultar autorização dos títulos:', err.message);
     }
 
     // ── Título aguardando pagamento ────────────────────────────────────────────

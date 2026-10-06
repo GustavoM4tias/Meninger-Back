@@ -244,7 +244,21 @@ export default (sequelize, DataTypes) => {
             siengeTituloStatus: {
                 field: "sienge_titulo_status",
                 type: DataTypes.STRING(10),
-                comment: "Status do título no Sienge (ex: A=Aberto, Q=Quitado)",
+                comment: "Consistência do título no Sienge (S=completo, N=incompleto, I=em inclusão). NÃO é autorização.",
+            },
+            // Autorização de pagamento das parcelas (API bulk-data, backup D-1 se a API falhar).
+            // Colunas garantidas por lib/ensurePaymentFlowRecipeSchema.js (fora do gate).
+            siengeTituloAuthorized: {
+                field: "sienge_titulo_authorized",
+                type: DataTypes.BOOLEAN,
+                allowNull: true,
+                comment: "true = todas as parcelas autorizadas; null = ainda não consultado",
+            },
+            siengeTituloAuthorization: {
+                field: "sienge_titulo_authorization",
+                type: DataTypes.JSONB,
+                allowNull: true,
+                comment: "{ autorizado, parcelas, autorizacoes: [{usuario,nome,data,ultimo}], fonte: api|backup, consultadoEm }",
             },
 
             // ── Contrato criado pela automação (flag imutável) ────────────────

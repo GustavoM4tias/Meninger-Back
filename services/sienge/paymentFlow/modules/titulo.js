@@ -13,6 +13,7 @@ import { SiengeBillsService } from '../../SiengeBillsService.js';
 import { runPlaywrightTitulo } from '../../../../playwright/services/tituloService.js';
 import { runPlaywrightPaymentInfo } from '../../../../playwright/services/paymentInfoService.js';
 import { checkDocument } from '../gate.js';
+import { consultarAutorizacoes, atualizarAutorizacao } from '../tituloAutorizacao.js';
 import {
     Model, loadLaunch, patch, getUserSiengeCredentials, recipeOfLaunch, gateMessage,
 } from '../shared.js';
@@ -279,10 +280,15 @@ export async function pollTituloStatus(launchId) {
     const isPaid = installments.length > 0
         && installments.every(i => i.situation === 'Totalmente paga');
 
+    // bill.status é a consistência (S completo / N incompleto), não a autorização.
     await launch.update({ siengeTituloStatus: bill.status || null });
 
+    // Autorização de pagamento: API ao vivo, backup D-1 só se a API falhar.
+    const aut = (await consultarAutorizacoes([launch.siengeTituloNumber])).get(Number(launch.siengeTituloNumber));
+    await atualizarAutorizacao(launch, aut);
+
     const situacoes = installments.map(i => i.situation).join(', ') || bill.status || '?';
-    console.log(`🔍 [Pipeline] #${launchId}: título #${launch.siengeTituloNumber} | parcelas=[${situacoes}] | pago=${isPaid}`);
+    console.log(`🔍 [Pipeline] #${launchId}: título #${launch.siengeTituloNumber} | parcelas=[${situacoes}] | pago=${isPaid} | autorizado=${aut ? `${aut.autorizado} (${aut.fonte})` : '?'}`);
 
     // Detecta pagamento mesmo quando o boleto falhou ao registrar (stage fica em 'titulo_created').
     // O erro de registro (siengeTituloError) é preservado — notificação e reenvio continuam disponíveis.

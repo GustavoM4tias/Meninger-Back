@@ -18,6 +18,7 @@ import apiSienge from '../../lib/apiSienge.js';
 import { registerTool } from './ToolRegistry.js';
 import { paymentActionBlock } from './blocks.js';
 import { SiengeCreditorService } from '../sienge/SiengeCreditorService.js';
+import { consultarAutorizacoes } from '../sienge/paymentFlow/tituloAutorizacao.js';
 import { SiengeContractService } from '../sienge/SiengeContractService.js';
 import { getScope, isErpAllowed } from '../permissions/accessScopeService.js';
 import { planAction, ACOES } from '../sienge/paymentFlow/actions.js';
@@ -171,6 +172,18 @@ registerTool({
             }
         }
 
+        // Autorização do pagamento (parcela) dos títulos em aberto: uma consulta
+        // só na API (backup D-1 se ela falhar). O status S/N do título é
+        // consistência, não autorização.
+        const auts = await consultarAutorizacoes(medicoes.filter(m => m.titulo && !m.pago).map(m => m.titulo)).catch(() => new Map());
+        for (const m of medicoes) {
+            const a = m.titulo && !m.pago ? auts.get(Number(m.titulo)) : null;
+            if (!a) continue;
+            m.pagamento_autorizado = a.autorizado;
+            m.pagamento_autorizado_por = a.autorizacoes.map(x => `${x.nome} (${String(x.data || '').slice(0, 10)})`);
+            if (a.fonte === 'backup') m.autorizacao_fonte = 'backup do Sienge (dia anterior)';
+        }
+
         // Próxima etapa sugerida para o que está aberto
         // A pendência que TRAVA o pagamento vem primeiro; acompanhar no Office
         // (importar) é complemento, nunca esconde a pendência real.
@@ -181,6 +194,7 @@ registerTool({
                 if (!m.autorizada) passos.push('aguardar a autorização da medição no Sienge');
                 else if (!m.titulo) passos.push(`gerar_titulo (precisa da nota em PDF)${m.lancamento_office ? ` no lançamento ${m.lancamento_office}` : ''}`);
                 else if (m.sem_forma_pagamento) passos.push(`registrar_boleto: o título ${m.titulo} está SEM forma de pagamento e não será pago assim (precisa do boleto em PDF)`);
+                else if (m.pagamento_autorizado === false) passos.push(`aguardar a autorização do pagamento do título ${m.titulo} no Sienge`);
                 else passos.push('aguardar o pagamento');
                 if (!m.lancamento_office) passos.push(`importar_medicao (contrato ${m.contrato}, obra ${m.obra}, medição ${m.medicao}) para o Office acompanhar`);
             }
@@ -195,6 +209,7 @@ registerTool({
                     id: l.id, tipo: l.launchType, fornecedor: l.providerName, valor: l.unitPrice, etapa: l.pipelineStage, status: l.status,
                     contrato: l.siengeContractNumber ? `${l.siengeDocumentId}/${l.siengeContractNumber}` : null,
                     medicao: l.siengeMeasurementNumber, titulo: l.siengeTituloNumber, nf: numOuTexto(l.nfNumber),
+                    pagamento_autorizado: l.siengeTituloNumber ? (l.siengeTituloAuthorized ?? undefined) : undefined,
                     erro: l.siengeTituloError || l.siengeMeasurementError || l.siengeContractError || null,
                 })),
                 sienge_abertas: abertas,

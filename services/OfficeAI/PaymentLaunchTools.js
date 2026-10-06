@@ -238,9 +238,23 @@ const ETAPAS = {
     creating_measurement: 'Criando medição', measurement_error: 'Erro na medição',
     awaiting_measurement_authorization: 'Aguardando autorização da medição', awaiting_document: 'Aguardando a nota fiscal',
     creating_titulo: 'Criando título', titulo_created: 'Título criado', titulo_error: 'Erro no título',
-    awaiting_titulo_authorization: 'Aguardando pagamento', titulo_pago: 'Pago', aborted: 'Interrompido',
+    awaiting_titulo_authorization: 'Título lançado no Sienge, não pago', titulo_pago: 'Pago', aborted: 'Interrompido',
     contract_manual_block: 'Contrato manual - verificar',
 };
+
+// Autorização do pagamento no Sienge (parcela), lida da API ao vivo pelo
+// agendador; 'backup' = veio do espelho D-1 porque a API falhou.
+function autorizacaoDoTitulo(r) {
+    if (!r.siengeTituloNumber || r.siengeTituloAuthorized == null) return undefined;
+    const a = r.siengeTituloAuthorization || {};
+    return {
+        autorizado: !!r.siengeTituloAuthorized,
+        situacao: r.siengeTituloAuthorized ? 'Autorizado, aguardando pagamento' : 'Aguardando autorização do pagamento',
+        autorizado_por: (a.autorizacoes || []).map(x => `${x.nome} (${String(x.data || '').slice(0, 10)})`),
+        fonte: a.fonte === 'backup' ? 'backup do Sienge (dia anterior)' : 'Sienge ao vivo',
+        consultado_em: a.consultadoEm || null,
+    };
+}
 
 registerTool({
     name: 'lancamento_pagamento_acompanhar',
@@ -275,7 +289,8 @@ registerTool({
             where, order: [['createdAt', 'DESC']], limit: limite,
             attributes: ['id', 'launchType', 'providerName', 'enterpriseName', 'unitPrice', 'nfNumber', 'status', 'pipelineStage',
                 'siengeDocumentId', 'siengeContractNumber', 'siengeMeasurementNumber', 'siengeTituloNumber',
-                'siengeContractError', 'siengeMeasurementError', 'siengeTituloError', 'origin', 'createdAt'],
+                'siengeContractError', 'siengeMeasurementError', 'siengeTituloError', 'origin', 'createdAt',
+                'siengeTituloAuthorized', 'siengeTituloAuthorization'],
         });
         return {
             result: rows.map(r => ({
@@ -283,6 +298,7 @@ registerTool({
                 valor: r.unitPrice, nf: r.nfNumber != null && /^\d{1,15}$/.test(String(r.nfNumber).trim()) ? Number(r.nfNumber) : r.nfNumber, etapa: ETAPAS[r.pipelineStage] || r.pipelineStage, status: r.status,
                 contrato: r.siengeContractNumber ? `${r.siengeDocumentId}/${r.siengeContractNumber}` : null,
                 medicao: r.siengeMeasurementNumber, titulo: r.siengeTituloNumber,
+                autorizacao_pagamento: autorizacaoDoTitulo(r),
                 erro: r.siengeTituloError || r.siengeMeasurementError || r.siengeContractError || null,
                 via_eme: r.origin === 'eme', criado_em: r.createdAt,
             })),
