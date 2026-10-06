@@ -136,7 +136,7 @@ export function anexoDoBoleto(l, dueDate = null) {
  * Forma de pagamento (tipo), anexos e finalização da liberação, num login só.
  * Falha da forma de pagamento lança; anexo e liberação voltam em `avisoAnexo`.
  */
-export async function gravarFormaPagamento(launch, { tipo = null, linhaDigitavel = '', descricao = '', userId = null, anexos = [] }) {
+export async function gravarFormaPagamento(launch, { tipo = null, linhaDigitavel = '', descricao = '', userId = null, anexos = [], vencimento = null }) {
     const titulo = launch.siengeTituloNumber;
     const bill = await SiengeBillsService.getBill(titulo).catch(() => null);
     const parcela = (await SiengeBillsService.getInstallments(titulo))[0];
@@ -145,15 +145,18 @@ export async function gravarFormaPagamento(launch, { tipo = null, linhaDigitavel
     const arquivos = await baixarAnexos(anexos).catch(err => { throw new Error(`não consegui baixar o anexo do Office (${err.message})`); });
     const r = await runPlaywrightPaymentInfo({
         credentials, titulo, parcela: parcela?.installmentNumber ?? 1,
-        origem: String(bill?.originId || 'ME').trim(), tipo, linhaDigitavel, descricao, anexos: arquivos,
+        origem: String(bill?.originId || 'ME').trim(), tipo, linhaDigitavel, descricao, anexos: arquivos, vencimento,
         finalizar: launch.siengeMeasurementNumber ? {
             documentType: launch.siengeDocumentId, contractNumber: launch.siengeContractNumber,
             measurementNumber: Number(launch.siengeMeasurementNumber),
         } : null,
     });
     let paymentType = null;
+    const depois = (tipo || vencimento) ? (await SiengeBillsService.getInstallments(titulo))[0] : null;
+    if (vencimento && String(depois?.dueDate || '').slice(0, 10) !== vencimento) {
+        throw new Error(`a tela foi salva, mas a parcela do título ${titulo} está vencendo em ${depois?.dueDate || '?'} (pedido ${vencimento})`);
+    }
     if (tipo) {
-        const depois = (await SiengeBillsService.getInstallments(titulo))[0];
         if (Number(depois?.paymentTypeId) !== TIPO_PAGTO[tipo]) {
             throw new Error(`a tela foi salva, mas a parcela do título ${titulo} está como "${depois?.paymentType || 'sem forma de pagamento'}"`);
         }

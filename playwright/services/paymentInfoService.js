@@ -1,11 +1,12 @@
 // playwright/services/paymentInfoService.js
-import { setPaymentInfo, anexarNoTitulo, finalizarLiberacao } from "../modules/sienge/paymentInfo.js";
+import { setPaymentInfo, setDueDate, anexarNoTitulo, finalizarLiberacao } from "../modules/sienge/paymentInfo.js";
 import { comLoginNaFila } from "../core/filaSienge.js";
 
 /**
  * Num login só: forma de pagamento da parcela (boleto ou PIX) e/ou anexos do título.
  * @param {object} params - { credentials, titulo, parcela, origem, tipo?, linhaDigitavel, descricao, anexos? }
  *   tipo ausente = só anexa; anexos vazio = só forma de pagamento.
+ *   vencimento ('YYYY-MM-DD') = troca o vencimento da parcela antes de tudo.
  *   finalizar = { documentType, contractNumber, measurementNumber }: finaliza a
  *   liberação da medição no fim (o Sienge só finaliza com o título completo).
  *
@@ -15,6 +16,7 @@ import { comLoginNaFila } from "../core/filaSienge.js";
 export async function runPlaywrightPaymentInfo(params = {}) {
     return comLoginNaFila(params.credentials, `pagamento/anexo do título ${params.titulo}`, async (page, { sessao }) => {
         const out = {};
+        if (params.vencimento) out.vencimento = await setDueDate(page, params);
         if (params.tipo) out.pagamento = await setPaymentInfo(page, params);
         // Anexo falhar não desfaz a forma de pagamento já salva: volta como aviso.
         if (params.anexos?.length) {

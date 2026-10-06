@@ -97,6 +97,72 @@ export async function abrirTitulo(page, titulo, origem = "ME") {
     throw new Error(`O Sienge abriu o título "${nu}" em vez do ${titulo}.`);
 }
 
+/**
+ * Vencimento da parcela: aba "Parcelas" do título -> campo Data de vencimento
+ * da linha -> Salvar. Só a data; valor e demais parcelas ficam como estão.
+ * @param {string} vencimento - 'YYYY-MM-DD' ou 'DD/MM/YYYY'
+ */
+export async function setDueDate(page, { titulo, parcela = 1, origem = "ME", vencimento }) {
+    const m = String(vencimento || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const data = m ? `${m[3]}/${m[2]}/${m[1]}` : String(vencimento || "");
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(data)) throw new Error(`Vencimento inválido: "${vencimento}".`);
+
+    let f = await abrirTitulo(page, titulo, origem);
+    log("PAGTO", "Aba Parcelas...");
+    await f.getByText("Parcelas", { exact: true }).first().click({ force: true });
+    await settle(page, 2000);
+
+    // A linha da parcela: o número fica em row[i].parcelaPK.nuParcela_i.
+    f = await noFrame(page, '[id$=".dtVencto_0"]', { oque: "as parcelas do título" });
+    let idx = null;
+    for (let i = 0; i < 60 && idx == null; i++) {
+        const nu = f.locator(byId(`row[${i}].parcelaPK.nuParcela_${i}`));
+        if (!(await nu.count())) break;
+        if (String(await nu.inputValue()).trim() === String(parcela)) idx = i;
+    }
+    if (idx == null) throw new Error(`Parcela ${parcela} não encontrada no título ${titulo}.`);
+
+    const campo = f.locator(byId(`row[${idx}].dtVencto_${idx}`));
+    const antes = String(await campo.inputValue()).trim();
+    if (antes === data) {
+        log("PAGTO", `Vencimento já é ${data}.`);
+        return { ok: true, antes, depois: data, alterado: false };
+    }
+    log("PAGTO", `Vencimento da parcela ${parcela}: ${antes} -> ${data}...`);
+    await campo.click();
+    await campo.fill("");
+    await campo.pressSequentially(data.replace(/\D/g, ""), { delay: 30 });
+    await campo.press("Tab");
+    await settle(page, 1000);
+    // A máscara às vezes guarda a data sem as barras: confere antes de salvar.
+    const digitado = String(await campo.inputValue()).trim();
+    if (digitado.replace(/\D/g, "") !== data.replace(/\D/g, "")) {
+        throw new Error(`O campo de vencimento ficou "${digitado}" em vez de ${data}; nada foi salvo.`);
+    }
+
+    // A tela tem texto fixo com "não pode ser alterado" (06/10 deu alarme falso
+    // com a data já salva): só conta mensagem que apareceu DEPOIS do Salvar.
+    const linhasDaTela = (fr) => fr.evaluate(() =>
+        (document.body.innerText || "").split("\n").map(l => l.trim()).filter(Boolean)).catch(() => []);
+    const antesDeSalvar = new Set(await linhasDaTela(f));
+
+    log("PAGTO", "Salvando...");
+    await f.locator(byId("btSalvar")).click();
+    await settle(page, 3000);
+    f = await frameOf(page);
+    const erro = (await linhasDaTela(f))
+        .find(x => !antesDeSalvar.has(x) && /erro|inválid[ao]|não é permitid[ao]|não pode/i.test(x));
+    if (erro) throw new Error(`O Sienge recusou o novo vencimento: ${erro.slice(0, 300)}`);
+
+    // Quem decide é o campo depois de salvar (a API ainda confere no service).
+    f = await noFrame(page, byId(`row[${idx}].dtVencto_${idx}`), { oque: "a parcela depois de salvar" }).catch(() => f);
+    const salvo = String(await f.locator(byId(`row[${idx}].dtVencto_${idx}`)).inputValue().catch(() => "")).trim();
+    if (salvo && salvo !== data) throw new Error(`Depois de salvar, a parcela ficou com vencimento ${salvo} em vez de ${data}.`);
+
+    success("PAGTO", `Vencimento do título ${titulo}, parcela ${parcela}: ${data}.`);
+    return { ok: true, antes, depois: data, alterado: true };
+}
+
 async function preencherPagamento(page, f, { titulo, parcela, tipo, linha, descricao }) {
 
     log("PAGTO", "Aba Inf. Pagamento...");
