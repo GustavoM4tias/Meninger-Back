@@ -13,6 +13,7 @@ import { listCostCenters, listCostCentersForUser } from './costCenterOptions.js'
 import {
     listStandSpendRows,
     listStandExpenseItems,
+    listPlanItemsOutsideDepartment,
     aggregateSpend,
     applyClassification,
     summarize,
@@ -252,17 +253,63 @@ const currentYm = () => {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
+const ymShift = (ym, delta) => {
+    const [y, m] = ym.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
 /**
- * Quanto o stand custa por mês para ficar de pé: média da recorrência nos
- * últimos meses FECHADOS (o mês corrente entra pela metade no backup e puxaria
- * a média para baixo).
+ * Quanto o stand custa por mês para ficar de pé, conta a conta.
+ *
+ * Para cada categoria de recorrência: a média dos meses em que ela foi paga
+ * dentro dos últimos 3 meses FECHADOS (o mês corrente entra pela metade no
+ * backup). Média sobre os meses PAGOS, não sobre os 3: aluguel que atrasou um
+ * mês não é aluguel mais barato. Categoria que só apareceu no mês corrente
+ * (a primeira conta de energia, por exemplo) entra pelo valor dela; categoria
+ * que parou de aparecer antes da janela não entra.
  */
-function recurringMonthly(summary, months = 3) {
+function recurringBreakdown(items, months = 3) {
     const now = currentYm();
-    const fechados = (summary.byMonth || []).filter((m) => m.ym < now && m.recorrencia > 0);
-    if (!fechados.length) return 0;
-    const ult = fechados.slice(-months);
-    return Math.round((ult.reduce((s, m) => s + m.recorrencia, 0) / ult.length) * 100) / 100;
+    const janela = new Set(Array.from({ length: months }, (_, i) => ymShift(now, -(i + 1))));
+    const grupos = new Map();
+    for (const item of items) {
+        if (item.kind !== 'recorrencia') continue;
+        const k = item.categoryId ? `cat:${item.categoryId}` : `conta:${item.contaCode}`;
+        const g = grupos.get(k) || {
+            key: k,
+            categoryId: item.categoryId || null,
+            name: item.categoryName || item.contaName || item.contaCode,
+            byMonth: new Map(),
+        };
+        for (const m of item.months) g.byMonth.set(m.ym, (g.byMonth.get(m.ym) || 0) + m.amount);
+        grupos.set(k, g);
+    }
+    const linhas = [];
+    for (const g of grupos.values()) {
+        const pagos = [...g.byMonth.entries()].filter(([ym]) => janela.has(ym)).sort();
+        let amount = 0;
+        let basis = '';
+        let used = [];
+        if (pagos.length) {
+            amount = pagos.reduce((acc, [, v]) => acc + v, 0) / pagos.length;
+            used = pagos.map(([ym]) => ym);
+            basis = pagos.length === 1 ? 'um mês fechado' : `média de ${pagos.length} meses fechados`;
+        } else if (g.byMonth.has(now)) {
+            amount = g.byMonth.get(now);
+            used = [now];
+            basis = 'só o mês corrente';
+        } else {
+            continue;
+        }
+        linhas.push({
+            key: g.key, categoryId: g.categoryId, name: g.name,
+            amount: Math.round(amount * 100) / 100, months: used, basis,
+        });
+    }
+    linhas.sort((x, y) => y.amount - x.amount);
+    const total = Math.round(linhas.reduce((acc, l) => acc + l.amount, 0) * 100) / 100;
+    return { total, lines: linhas };
 }
 
 // Lista stands com o gasto ao vivo agregado. Sienge fora do ar não derruba a
@@ -314,8 +361,9 @@ export async function listStands({ user } = {}) {
     const items = [];
     for (const s of stands) {
         let summary = { totals: { construcao: 0, recorrencia: 0, esporadica: 0, sem_classificacao: 0, total: 0 }, byMonth: [] };
+        let classified = [];
         try {
-            ({ summary } = await classifiedSpend(s, { categories, classesByStand }));
+            ({ summary, items: classified } = await classifiedSpend(s, { categories, classesByStand }));
         } catch (err) {
             console.warn('[salesStand.listStands] Sienge indisponível:', err?.message || err);
             unavailable = true;
@@ -333,7 +381,7 @@ export async function listStands({ user } = {}) {
             // Recorrência é a soma do que está classificado como tal — não é
             // mais "tudo que entrou depois da definição".
             maintenance_value: summary.totals.recorrencia,
-            recurring_monthly: recurringMonthly(summary),
+            recurring_monthly: recurringBreakdown(classified).total,
             sporadic_value: summary.totals.esporadica,
             unclassified_value: summary.totals.sem_classificacao,
             cover_url: capas.get(Number(s.id)) || null,
@@ -370,10 +418,17 @@ export async function getStandDetail({ id, user }) {
 
     let names = new Map();
     let spend = { items: [], summary: summarize([]), categories: [] };
+    let outside = [];
     let unavailable = false;
     try {
         names = await ccNameMap().catch(() => new Map());
         spend = await classifiedSpend(stand);
+        // Pendência, não gasto: fica fora de todos os totais (ver a função).
+        const fora = await listPlanItemsOutsideDepartment(stand.cost_center_ids).catch((err) => {
+            console.warn('[salesStand.getStandDetail] títulos fora do departamento:', err?.message || err);
+            return [];
+        });
+        outside = applyClassification(fora, spend.categories, []).map((i) => ({ ...i, outsideDepartment: true }));
     } catch (err) {
         console.warn('[salesStand.getStandDetail] Sienge indisponível:', err?.message || err);
         unavailable = true;
@@ -385,6 +440,7 @@ export async function getStandDetail({ id, user }) {
         order: [['sort_order', 'ASC'], ['id', 'ASC']],
     });
     const snapshot = stand.status === 'defined' ? Number(stand.construction_value) || 0 : null;
+    const monthly = recurringBreakdown(spend.items);
     const porCc = new Map((spend.summary.byCostCenter || []).map((c) => [Number(c.costCenterId), c.amount]));
 
     return {
@@ -402,13 +458,15 @@ export async function getStandDetail({ id, user }) {
             construction_value: snapshot !== null ? snapshot : spend.summary.totals.construcao,
             construction_live: spend.summary.totals.construcao,
             maintenance_value: spend.summary.totals.recorrencia,
-            recurring_monthly: recurringMonthly(spend.summary),
+            recurring_monthly: monthly.total,
+            recurring_breakdown: monthly.lines,
             sporadic_value: spend.summary.totals.esporadica,
             unclassified_value: spend.summary.totals.sem_classificacao,
             images: images.map(plain),
             images_max: MAX_IMAGES,
         },
         expenses: spend.items,
+        outside_department: outside,
         summary: spend.summary,
         patterns: detectPatterns(spend.items),
         categories: spend.categories,
@@ -553,6 +611,16 @@ export async function revalidateDepartmentAudit({ user, limit = 40, offset = 0 }
     };
 }
 
+// Data da inauguração: 'AAAA-MM-DD' ou nada. Data inválida é erro, não silêncio.
+function normDate(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const txt = String(v).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(txt) || Number.isNaN(Date.parse(txt))) {
+        throw httpError('Data de inauguração inválida.', 400);
+    }
+    return txt;
+}
+
 function validateStandPayload(payload) {
     const name = (payload.name || '').trim();
     if (!name) throw httpError('Nome do stand é obrigatório.', 400);
@@ -583,6 +651,7 @@ export async function createStand({ payload = {}, userId, user }) {
         model_id: payload.model_id ? Number(payload.model_id) : null,
         cost_center_ids: ccIds,
         notes: payload.notes?.trim() || null,
+        opened_at: normDate(payload.opened_at),
         created_by: userId || null,
         updated_by: userId || null,
     });
@@ -624,6 +693,7 @@ export async function updateStand({ id, payload = {}, userId, user }) {
         row.cost_center_ids = ccIds;
     }
     if ('notes' in payload) row.notes = payload.notes?.trim() || null;
+    if ('opened_at' in payload) row.opened_at = normDate(payload.opened_at);
     if ('maintenance_percent' in payload) {
         row.maintenance_percent = payload.maintenance_percent === null || payload.maintenance_percent === ''
             ? null : Number(payload.maintenance_percent);

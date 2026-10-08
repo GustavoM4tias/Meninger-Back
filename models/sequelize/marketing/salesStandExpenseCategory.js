@@ -19,6 +19,10 @@ export default (sequelize, DataTypes) => {
         conta_codes: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         description: { type: DataTypes.STRING(300), allowNull: true },
         sort_order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+        // Conta que vence TODO mês com o stand aberto (aluguel, energia, água,
+        // internet). Mês fechado sem pagamento dela vira aviso no relatório:
+        // ou a conta está fora do Sienge, ou foi lançada em outro lugar.
+        expected_monthly: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
         created_by: { type: DataTypes.INTEGER, allowNull: true },
         updated_by: { type: DataTypes.INTEGER, allowNull: true },

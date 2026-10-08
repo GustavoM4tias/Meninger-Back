@@ -138,6 +138,7 @@ import { ensureDeptSpendingSchema } from './lib/ensureDeptSpendingSchema.js';
 import { ensureDepartmentVisibilitySchema } from './lib/ensureDepartmentVisibilitySchema.js';
 import { ensureBoletoSchema } from './lib/ensureBoletoSchema.js';
 import { ensurePaymentFlowRecipeSchema } from './lib/ensurePaymentFlowRecipeSchema.js';
+import { ensureSalesStandReportSchema } from './lib/ensureSalesStandReportSchema.js';
 import { recoverInterruptedPaymentFlow } from './lib/recoverInterruptedPaymentFlow.js';
 import { ensureUseredeSchema } from './lib/ensureUseredeSchema.js';
 import { ensureReservaCancelSchema } from './lib/ensureReservaCancelSchema.js';
@@ -501,6 +502,10 @@ async function initBackground() {
   // chave da NF-e entraram nos models. Fora do gate pelo mesmo motivo do Boleto.
   await ensurePaymentFlowRecipeSchema().catch(err =>
       console.warn('⚠️  ensurePaymentFlowRecipeSchema falhou:', err.message));
+  // Relatório do Stand de Vendas (08/10): inauguração do stand e a marca de
+  // conta mensal nas categorias. A tela lê as duas na primeira chamada.
+  await ensureSalesStandReportSchema().catch(err =>
+      console.warn('⚠️  ensureSalesStandReportSchema falhou:', err.message));
   // Robô morto por reinício (deploy) deixava o lançamento preso em "Criando contrato...".
   await recoverInterruptedPaymentFlow();
   try {

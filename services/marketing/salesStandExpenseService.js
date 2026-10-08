@@ -160,11 +160,37 @@ export async function listStandExpenseItems(costCenterIds) {
     const filtros = [];
     if (usaDepto) filtros.push('d.nutitulo IS NOT NULL');
     if (usaPlano) filtros.push("TRIM(af.cdconta) LIKE $2 || '%'");
-    const where = `WHERE ${filtros.join(' AND ')}`;
     // No modo por departamento o valor entra rateado pela participação DELE no
     // título; no modo por plano, inteiro (o rateio já é o do centro de custo).
-    const fatorDepto = usaDepto ? ' * COALESCE(a.dep_pct, 0)' : '';
+    const result = await queryExpenseItems(views, cfg, {
+        where: `WHERE ${filtros.join(' AND ')}`,
+        fatorDepto: usaDepto ? ' * COALESCE(a.dep_pct, 0)' : '',
+    });
 
+    _itemsCache = { at: Date.now(), key, rows: result };
+    return result;
+}
+
+/**
+ * Títulos lançados numa conta do plano do stand que NÃO têm o departamento do
+ * stand. Só existem como pendência no modo 'departamento': lá eles ficam fora
+ * da soma, e quase sempre é o administrativo que esqueceu de marcar o
+ * departamento (ex.: aluguel reembolsado lançado no Comercial). O relatório
+ * mostra para alguém acertar no Sienge; acertado, o título entra sozinho.
+ */
+export async function listPlanItemsOutsideDepartment(costCenterIds) {
+    const views = normIds(costCenterIds);
+    if (!views.length) return [];
+    const cfg = await getSettings();
+    if (cfg.expense_source !== 'departamento') return [];
+    return queryExpenseItems(views, cfg, {
+        where: "WHERE d.nutitulo IS NULL AND TRIM(af.cdconta) LIKE $2 || '%'",
+        fatorDepto: '',
+    });
+}
+
+/** A consulta de lançamentos em si: recorte em `where`, rateio em `fatorDepto`. */
+async function queryExpenseItems(views, cfg, { where, fatorDepto }) {
     const sql = `
         WITH cc AS (
             SELECT cdempreend, cdempreendview
@@ -271,7 +297,6 @@ export async function listStandExpenseItems(costCenterIds) {
         lastYm: i.months.reduce((m, x) => (!m || x.ym > m ? x.ym : m), null),
     })).sort((a, b) => (b.lastYm || '').localeCompare(a.lastYm || '') || b.amount - a.amount);
 
-    _itemsCache = { at: Date.now(), key, rows: result };
     return result;
 }
 
@@ -366,6 +391,7 @@ export async function createCategory({ payload = {}, userId }) {
         conta_codes: contas,
         description: payload.description?.trim() || null,
         sort_order: Number(payload.sort_order) || 0,
+        expected_monthly: !!payload.expected_monthly,
         is_active: payload.is_active !== false,
         created_by: userId || null,
         updated_by: userId || null,
@@ -389,6 +415,7 @@ export async function updateCategory({ id, payload = {}, userId }) {
     }
     if ('description' in payload) row.description = payload.description?.trim() || null;
     if ('sort_order' in payload) row.sort_order = Number(payload.sort_order) || 0;
+    if ('expected_monthly' in payload) row.expected_monthly = !!payload.expected_monthly;
     if ('is_active' in payload) row.is_active = !!payload.is_active;
     row.updated_by = userId || null;
     await row.save();
@@ -905,10 +932,10 @@ const DEFAULT_CATEGORIES = [
     { name: 'Obra e empreiteiros', kind: 'construcao', conta_codes: ['2020703'], sort_order: 30, description: 'Serviços terceirizados e empreiteiros da montagem.' },
     { name: 'Comunicação visual', kind: 'construcao', conta_codes: ['2020710'], sort_order: 40, description: 'Impressos, plotagens e encadernação.' },
     { name: 'Fretes e transportes', kind: 'construcao', conta_codes: ['2020712'], sort_order: 50, description: 'Fretes e entregas da montagem do stand.' },
-    { name: 'Aluguel', kind: 'recorrencia', conta_codes: ['2020704'], sort_order: 60, description: 'Aluguel do imóvel ou do terreno do stand.' },
-    { name: 'Energia elétrica', kind: 'recorrencia', conta_codes: ['2020706'], sort_order: 70 },
-    { name: 'Água e esgoto', kind: 'recorrencia', conta_codes: ['2020705'], sort_order: 80 },
-    { name: 'Telefone e internet', kind: 'recorrencia', conta_codes: ['2020707'], sort_order: 90 },
+    { name: 'Aluguel', kind: 'recorrencia', conta_codes: ['2020704'], sort_order: 60, expected_monthly: true, description: 'Aluguel do imóvel ou do terreno do stand.' },
+    { name: 'Energia elétrica', kind: 'recorrencia', conta_codes: ['2020706'], sort_order: 70, expected_monthly: true },
+    { name: 'Água e esgoto', kind: 'recorrencia', conta_codes: ['2020705'], sort_order: 80, expected_monthly: true },
+    { name: 'Telefone e internet', kind: 'recorrencia', conta_codes: ['2020707'], sort_order: 90, expected_monthly: true },
     { name: 'Consumo e limpeza', kind: 'recorrencia', conta_codes: ['2020708'], sort_order: 100, description: 'Consumo, conservação e limpeza.' },
     { name: 'Manutenção e melhorias', kind: 'recorrencia', conta_codes: ['2020709'], sort_order: 110, description: 'Manutenção, reforma e melhorias depois do stand pronto.' },
     { name: 'Locação de equipamentos', kind: 'recorrencia', conta_codes: ['2020711', '2020713'], sort_order: 120, description: 'Impressoras, máquinas e equipamentos alugados.' },
@@ -942,6 +969,7 @@ export default {
     listDepartments,
     listStandSpendRows,
     listStandExpenseItems,
+    listPlanItemsOutsideDepartment,
     aggregateSpend,
     applyClassification,
     summarize,

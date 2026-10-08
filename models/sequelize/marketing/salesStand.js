@@ -22,6 +22,9 @@ export default (sequelize, DataTypes) => {
         // não existe no modelo entra com custom = true.
         items: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
         notes: { type: DataTypes.TEXT, allowNull: true },
+        // Inauguração do stand: marca o relatório (dias no ar, linha do tempo)
+        // e separa a montagem da operação na leitura do gasto.
+        opened_at: { type: DataTypes.DATEONLY, allowNull: true },
         is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
         created_by: { type: DataTypes.INTEGER, allowNull: true },
         updated_by: { type: DataTypes.INTEGER, allowNull: true },
