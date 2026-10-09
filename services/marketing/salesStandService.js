@@ -399,6 +399,7 @@ export async function listStands({ user } = {}) {
             unavailable = true;
         }
         const snapshot = s.status === 'defined' ? Number(s.construction_value) || 0 : null;
+        const mensal = recurringBreakdown(classified);
         items.push({
             ...s,
             items: mergeStandItems(s, s.model),
@@ -411,13 +412,24 @@ export async function listStands({ user } = {}) {
             // Recorrência é a soma do que está classificado como tal — não é
             // mais "tudo que entrou depois da definição".
             maintenance_value: summary.totals.recorrencia,
-            recurring_monthly: recurringBreakdown(classified).total,
+            recurring_monthly: mensal.total,
+            // As contas que mais pesam para manter (prévia da tela inicial).
+            recurring_top: mensal.lines.slice(0, 5).map((l) => ({ name: l.name, amount: l.amount })),
+            expense_count: classified.length,
             pending_count: pendencias,
             sporadic_value: summary.totals.esporadica,
             unclassified_value: summary.totals.sem_classificacao,
             cover_url: capas.get(Number(s.id)) || null,
             images_count: fotosPorStand.get(Number(s.id)) || 0,
             month_series: (summary.byMonth || []).map((m) => m.total),
+            // Mês a mês por tipo, para as mini-barras e a prévia do stand.
+            month_by_kind: (summary.byMonth || []).map((m) => ({
+                ym: m.ym,
+                c: Math.round(m.construcao * 100) / 100,
+                e: Math.round(m.esporadica * 100) / 100,
+                r: Math.round(m.recorrencia * 100) / 100,
+                s: Math.round(m.sem_classificacao * 100) / 100,
+            })),
         });
     }
 
