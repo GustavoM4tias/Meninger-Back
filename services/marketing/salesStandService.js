@@ -14,6 +14,8 @@ import {
     listStandSpendRows,
     listStandExpenseItems,
     listPlanItemsOutsideDepartment,
+    saveLiveFixes,
+    loadLiveFixes,
     aggregateSpend,
     applyClassification,
     classificationContext,
@@ -245,11 +247,30 @@ async function classifiedSpend(stand, { categories, classesByStand } = {}) {
         ? (classesByStand.get(Number(stand.id)) || [])
         : (await db.SalesStandExpenseClass.findAll({ where: { stand_id: stand.id }, raw: true }));
     const alvo = normIds(stand.cost_center_ids);
-    const raw = await listStandExpenseItems(alvo);
+    let raw = await listStandExpenseItems(alvo);
+    // Título corrigido no Sienge e confirmado pela conferência ao vivo entra já,
+    // rateado pelo percentual do departamento que a API devolveu.
+    const fixes = await loadLiveFixes(alvo).catch(() => new Map());
+    if (fixes.size) {
+        const fora = await listPlanItemsOutsideDepartment(alvo).catch(() => []);
+        const r2 = (v) => Math.round(v * 100) / 100;
+        const extra = fora.filter((i) => fixes.has(i.billId)).map((i) => {
+            const f = fixes.get(i.billId);
+            const k = Math.min(f.pct, 100) / 100;
+            return {
+                ...i,
+                amount: r2(i.amount * k),
+                months: i.months.map((m) => ({ ...m, amount: r2(m.amount * k) })),
+                liveFixed: true,
+                liveCheckedAt: f.checkedAt,
+            };
+        });
+        raw = [...raw, ...extra];
+    }
     const ccSet = new Set(alvo);
     const ctx = await classificationContext(stand, cats);
     const items = applyClassification(raw.filter((i) => ccSet.has(i.costCenterId)), cats, overrides, ctx);
-    return { items, summary: summarize(items), categories: cats, ctx };
+    return { items, summary: summarize(items), categories: cats, ctx, fixedIds: new Set(fixes.keys()) };
 }
 
 const currentYm = () => {
@@ -471,7 +492,8 @@ export async function getStandDetail({ id, user }) {
             console.warn('[salesStand.getStandDetail] títulos fora do departamento:', err?.message || err);
             return [];
         });
-        outside = applyClassification(fora, spend.categories, [], spend.ctx).map((i) => ({ ...i, outsideDepartment: true }));
+        outside = applyClassification(fora.filter((i) => !spend.fixedIds?.has(i.billId)), spend.categories, [], spend.ctx)
+            .map((i) => ({ ...i, outsideDepartment: true }));
     } catch (err) {
         console.warn('[salesStand.getStandDetail] Sienge indisponível:', err?.message || err);
         unavailable = true;
@@ -626,6 +648,8 @@ export async function revalidateDepartmentAudit({ user, limit = 40, offset = 0 }
     const ini = Math.max(0, Number(offset) || 0);
     const { bills, total } = await listDivergentBills(ccs, { limit: teto, offset: ini });
     const checked = await checkBillsDepartmentLive(bills);
+    await saveLiveFixes(checked, user?.id || null).catch((err) =>
+        console.warn('[salesStand.revalidate] não gravou a conferência ao vivo:', err?.message || err));
 
     const names = await ccNameMap().catch(() => new Map());
     const standDoCc = new Map();
@@ -651,6 +675,37 @@ export async function revalidateDepartmentAudit({ user, limit = 40, offset = 0 }
             costCenterName: names.get(c.costCenterId) || `CC ${c.costCenterId}`,
             standName: standDoCc.get(c.costCenterId) || null,
         })),
+    };
+}
+
+/**
+ * Confere na API do Sienge, agora, os títulos de stand deste stand que o
+ * espelho ainda mostra fora do departamento. O que já foi corrigido passa a
+ * contar no relatório na hora (ver loadLiveFixes). Só leitura no ERP.
+ */
+export async function liveCheckStand({ id, user }) {
+    const row = await loadStandForUser(id, user);
+    const stand = plain(row);
+    const alvo = normIds(stand.cost_center_ids);
+    const fora = await listPlanItemsOutsideDepartment(alvo);
+    const vistos = new Set();
+    const bills = [];
+    for (const i of fora) {
+        const k = `${i.billId}-${i.contaCode}`;
+        if (vistos.has(k)) continue;
+        vistos.add(k);
+        bills.push({ billId: i.billId, contaCode: i.contaCode, situacao: 'sem_departamento', costCenterId: i.costCenterId, valor: i.amount });
+    }
+    const lote = bills.slice(0, 40);
+    if (!lote.length) return { checked: 0, resolved: 0, pending: 0, errors: 0, total: 0 };
+    const checked = await checkBillsDepartmentLive(lote);
+    await saveLiveFixes(checked, user?.id || null);
+    return {
+        total: bills.length,
+        checked: checked.length,
+        resolved: checked.filter((c) => c.resolved === true).length,
+        pending: checked.filter((c) => c.resolved === false).length,
+        errors: checked.filter((c) => c.error).length,
     };
 }
 
@@ -1050,6 +1105,7 @@ export async function seedSalesStandModels() {
 
 export default {
     getAutoRules,
+    liveCheckStand,
     listCostCenters,
     listCostCentersForUser,
     listContas,

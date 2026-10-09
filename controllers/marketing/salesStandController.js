@@ -119,6 +119,12 @@ export default {
         catch (err) { fail(res, err); }
     },
 
+    // Conferência ao vivo dos títulos de um stand (só leitura no Sienge).
+    async liveCheckStand(req, res) {
+        try { res.json(await svc.liveCheckStand({ id: req.params.id, user: req.user })); }
+        catch (err) { fail(res, err); }
+    },
+
     async classifyExpenses(req, res) {
         try {
             res.json(await svc.classifyExpenses({

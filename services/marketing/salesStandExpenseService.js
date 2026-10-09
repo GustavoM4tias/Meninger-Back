@@ -758,6 +758,74 @@ export async function checkBillsDepartmentLive(bills, { concurrency = 4 } = {}) 
     return [...resultados.values()].sort((a, b) => b.valor - a.valor);
 }
 
+// ── Conferência ao vivo guardada ─────────────────────────────────────────────
+// O espelho do Sienge é recarregado uma vez por dia. Quando a API confirma que
+// um título já ganhou o departamento do stand, o relatório não precisa esperar
+// a carga: guarda o que a API disse e soma o título já. Quando o espelho for
+// recarregado DEPOIS da conferência, ele volta a ser a fonte (a conferência
+// fica velha e é ignorada).
+
+/** Grava o resultado da conferência ao vivo (um registro por título). */
+export async function saveLiveFixes(checked, userId = null) {
+    const cfg = await getSettings();
+    const alvo = Number(cfg.department_id);
+    const porTitulo = new Map();
+    for (const c of checked || []) {
+        if (c.error || !Array.isArray(c.live)) continue;
+        porTitulo.set(Number(c.billId), c);
+    }
+    for (const [billId, c] of porTitulo) {
+        const pct = c.live.filter((x) => x.departmentId === alvo).reduce((s, x) => s + (Number(x.percentage) || 0), 0);
+        await db.sequelize.query(
+            `INSERT INTO sales_stand_live_fixes (bill_id, cost_center_id, has_stand, stand_pct, departments, checked_at, checked_by)
+             VALUES (:billId, :cc, :has, :pct, CAST(:deps AS JSONB), NOW(), :uid)
+             ON CONFLICT (bill_id) DO UPDATE SET cost_center_id = EXCLUDED.cost_center_id, has_stand = EXCLUDED.has_stand,
+                 stand_pct = EXCLUDED.stand_pct, departments = EXCLUDED.departments, checked_at = NOW(), checked_by = EXCLUDED.checked_by`,
+            {
+                replacements: {
+                    billId, cc: Number(c.costCenterId) || null, has: pct > 0, pct: Math.min(pct, 100),
+                    deps: JSON.stringify(c.live), uid: userId,
+                },
+            },
+        );
+    }
+    clearSpendCache();
+    return porTitulo.size;
+}
+
+/**
+ * Conferências ao vivo ainda valendo para estes centros de custo: só as feitas
+ * DEPOIS da última carga do espelho e que acharam o departamento do stand.
+ * Devolve Map(billId -> { pct, checkedAt }).
+ */
+export async function loadLiveFixes(costCenterIds) {
+    const views = normIds(costCenterIds);
+    if (!views.length) return new Map();
+    let rows = [];
+    try {
+        [rows] = await db.sequelize.query(
+            `SELECT bill_id, stand_pct, checked_at FROM sales_stand_live_fixes
+              WHERE has_stand AND cost_center_id = ANY(ARRAY[:ccs]::int[])`,
+            { replacements: { ccs: views } },
+        );
+    } catch {
+        return new Map(); // tabela ainda não criada: segue só com o espelho
+    }
+    if (!rows.length) return new Map();
+    let carga = 0;
+    try {
+        const f = await getDataFreshness();
+        carga = f?.lastChange ? Date.parse(f.lastChange) : 0;
+    } catch { carga = 0; }
+    const out = new Map();
+    for (const r of rows) {
+        const quando = new Date(r.checked_at).getTime();
+        if (carga && quando <= carga) continue; // o espelho já foi recarregado depois
+        out.set(Number(r.bill_id), { pct: Number(r.stand_pct) || 100, checkedAt: new Date(r.checked_at).toISOString() });
+    }
+    return out;
+}
+
 /**
  * Até quando o espelho do Sienge está em dia. O backup é restaurado uma vez por
  * dia: correção feita hoje no Sienge só aparece aqui depois da próxima carga,
@@ -1127,6 +1195,8 @@ export default {
     listStandSpendRows,
     listStandExpenseItems,
     listPlanItemsOutsideDepartment,
+    saveLiveFixes,
+    loadLiveFixes,
     aggregateSpend,
     applyClassification,
     resolveRules,

@@ -75,6 +75,7 @@ router.post('/:id(\\d+)/undefine', ...canManage, ctrl.undefineStand);
 
 // Classificação dos lançamentos e itens do stand
 router.post('/:id(\\d+)/expenses/classify', ...canManage, ctrl.classifyExpenses);
+router.post('/:id(\\d+)/live-check', ...canManage, ctrl.liveCheckStand);
 router.put('/:id(\\d+)/items', ...canManage, ctrl.updateStandItems);
 
 // Fotos
