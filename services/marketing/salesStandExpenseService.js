@@ -201,6 +201,208 @@ export async function listPlanItemsOutsideDepartment(costCenterIds) {
     });
 }
 
+// Títulos que SUBSTITUÍRAM um provisório (PCT do contrato, PPC do pedido)
+// que estava no departamento do stand. Medição de contrato nasce como PCT; a
+// nota real que o substitui deveria herdar o departamento, e às vezes não herda.
+const SUBSTITUTOS_SQL = `
+    SELECT COALESCE(s.nutitulodestino, p.nutitulogerado)
+      FROM ecpgbaixa b
+      JOIN ecpgapropdepart adp ON adp.nutitulo = b.nutitulo AND adp.cddepartamento = $3::int
+      LEFT JOIN ecpgsubstituicao s ON s.nutitulo = b.nutitulo
+      LEFT JOIN ecpgvinctitprevisaosubs p ON p.nutitulo = b.nutitulo
+     WHERE b.cdtipobaixa = 5 AND b.nuseqestorno IS NULL`;
+
+/**
+ * Pagamentos de títulos que substituíram um provisório do stand, mas foram
+ * criados SEM o departamento do stand. Pendência, fora dos totais (como os de
+ * conta de stand sem departamento), até alguém acertar no Sienge.
+ */
+export async function listSubstitutesOutsideDepartment(costCenterIds) {
+    const views = normIds(costCenterIds);
+    if (!views.length) return [];
+    const cfg = await getSettings();
+    if (cfg.expense_source === 'plano') return [];
+    return queryExpenseItems(views, cfg, {
+        where: `WHERE d.nutitulo IS NULL AND af.nutitulo IN (${SUBSTITUTOS_SQL})`,
+        fatorDepto: '',
+    });
+}
+
+const ORIGENS = {
+    ME: 'Medição de contrato', CP: 'Contas a pagar (lançado direto)', AC: 'Pedido de compra',
+    GI: 'Guia de imposto retido', FP: 'Folha de pagamento', LO: 'Locação', CO: 'Compras',
+    DV: 'Devolução', CF: 'Comissão', AI: 'Aluguel/Imóvel',
+};
+export const originLabel = (o) => ORIGENS[String(o || '').trim()] || (o ? `Origem ${o}` : 'Origem não informada');
+
+/**
+ * A conferência do departamento, TÍTULO A TÍTULO, com tudo o que precisa para
+ * achar e corrigir no Sienge: empresa, centro de custo, conta, departamentos
+ * (com %), fornecedor, origem, como foi pago, o motivo e o passo da correção.
+ *
+ *   certo            no departamento do stand e numa conta do plano de stand
+ *   sem_conta        no departamento do stand, conta fora do plano de stand
+ *   sem_departamento conta do plano de stand, sem o departamento do stand
+ *   substituto       substituiu um provisório do stand e perdeu o departamento
+ */
+export async function listAuditTitles(costCenterIds) {
+    const views = normIds(costCenterIds);
+    if (!views.length) return [];
+    const cfg = await getSettings();
+    const sql = `
+        WITH cc AS (
+            SELECT cdempreend, cdempreendview, TRIM(nmempreend) AS nmempreend FROM ecadempreend WHERE cdempreendview = ANY($1::int[])
+        ),
+        pg AS (
+            SELECT b.nutitulo,
+                   SUM(b.vlpagto + COALESCE(b.vljuros,0) + COALESCE(b.vlmulta,0)
+                       + COALESCE(b.vlcormonetaria,0) - COALESCE(b.vldesconto,0)) AS v,
+                   MIN(b.dtpagto) AS primeiro, MAX(b.dtpagto) AS ultimo,
+                   string_agg(DISTINCT b.cdtipobaixa::text, ',') AS tipos,
+                   MAX(b.nuconta) AS nuconta, MAX(b.cdempresa) AS cdempresa_baixa
+            FROM ecpgbaixa b
+            WHERE b.cdtipobaixa IN (1, 10) AND b.nuseqestorno IS NULL
+            GROUP BY b.nutitulo
+        ),
+        dep AS (SELECT DISTINCT nutitulo FROM ecpgapropdepart WHERE cddepartamento = $3::int),
+        subst AS (
+            SELECT DISTINCT COALESCE(s.nutitulodestino, p.nutitulogerado) AS novo, b.nutitulo AS velho
+              FROM ecpgbaixa b
+              JOIN dep ON dep.nutitulo = b.nutitulo
+              LEFT JOIN ecpgsubstituicao s ON s.nutitulo = b.nutitulo
+              LEFT JOIN ecpgvinctitprevisaosubs p ON p.nutitulo = b.nutitulo
+             WHERE b.cdtipobaixa = 5 AND b.nuseqestorno IS NULL
+               AND COALESCE(s.nutitulodestino, p.nutitulogerado) IS NOT NULL
+        ),
+        base AS (
+            SELECT af.nutitulo, TRIM(af.cdconta) AS conta,
+                   (TRIM(af.cdconta) LIKE $2 || '%') AS conta_stand,
+                   (d.nutitulo IS NOT NULL) AS no_depto,
+                   cc.cdempreendview AS cc_id, cc.nmempreend AS cc_nome,
+                   SUM(pg.v * COALESCE(af.peparticipacao, 100) / 100.0) AS valor,
+                   MAX(af.peparticipacao) AS pct_cc
+              FROM ecpgapropfin af
+              JOIN cc ON cc.cdempreend = af.cdcentrocusto
+              JOIN pg ON pg.nutitulo = af.nutitulo
+              JOIN ecpgtitulo t ON t.nutitulo = af.nutitulo
+              LEFT JOIN dep d ON d.nutitulo = af.nutitulo
+             WHERE TRIM(t.cddocumento) NOT IN ('PCT')
+               AND (d.nutitulo IS NOT NULL OR TRIM(af.cdconta) LIKE $2 || '%'
+                    OR af.nutitulo IN (SELECT novo FROM subst))
+             GROUP BY af.nutitulo, TRIM(af.cdconta), d.nutitulo, cc.cdempreendview, cc.nmempreend
+        )
+        SELECT b.nutitulo, b.conta, b.conta_stand, b.no_depto, b.cc_id, b.cc_nome, ROUND(b.valor, 2) AS valor, b.pct_cc,
+               (SELECT MIN(velho) FROM subst WHERE subst.novo = b.nutitulo) AS substituiu,
+               t.cdempresa, COALESCE(NULLIF(TRIM(e.nmfantasia), ''), TRIM(e.nmempresa)) AS empresa,
+               TRIM(t.cddocumento) AS doc_type, TRIM(t.nudocumento) AS doc_number, TRIM(t.cdorigem) AS origem,
+               to_char(t.dtemissao, 'YYYY-MM-DD') AS emissao,
+               to_char(pg.primeiro, 'YYYY-MM-DD') AS pago_de, to_char(pg.ultimo, 'YYYY-MM-DD') AS pago_ate,
+               pg.tipos,
+               (SELECT TRIM(c2.nmconta) FROM ecadcontacorrente c2 WHERE c2.nuconta = pg.nuconta AND c2.cdempresa = pg.cdempresa_baixa LIMIT 1) AS conta_bancaria,
+               COALESCE(NULLIF(TRIM(cr.nmfantasia), ''), NULLIF(TRIM(cr.nmcredor), '')) AS credor,
+               TRIM(pf.nmconta) AS conta_nome,
+               NULLIF(TRIM(t.deobservacao), '') AS obs,
+               (SELECT json_agg(json_build_object('id', ad.cddepartamento, 'name', TRIM(dp.nmdepartamento), 'pct', ad.peapropriado)
+                       ORDER BY ad.peapropriado DESC)
+                  FROM ecpgapropdepart ad LEFT JOIN ecaddepartamento dp ON dp.cddepartamento = ad.cddepartamento
+                 WHERE ad.nutitulo = b.nutitulo) AS departamentos
+          FROM base b
+          JOIN ecpgtitulo t ON t.nutitulo = b.nutitulo
+          JOIN pg ON pg.nutitulo = b.nutitulo
+          LEFT JOIN ecadempresa e ON e.cdempresa = t.cdempresa
+          LEFT JOIN ecadcredor cr ON cr.cdcredor = t.cdcredor
+          LEFT JOIN ecadplanofin pf ON TRIM(pf.cdconta) = b.conta
+         ORDER BY b.valor DESC
+    `;
+    const { rows } = await siengeQuery(sql, [views, cfg.conta_prefix, cfg.department_id]);
+    const subIds = [...new Set(rows.map((r) => r.substituiu).filter(Boolean).map(Number))];
+    const provisorios = new Map();
+    if (subIds.length) {
+        const { rows: pr } = await siengeQuery(
+            `SELECT nutitulo, TRIM(cddocumento) AS doc, TRIM(nudocumento) AS num FROM ecpgtitulo WHERE nutitulo = ANY($1::int[])`, [subIds]);
+        for (const p of pr) provisorios.set(Number(p.nutitulo), { doc: p.doc, num: p.num });
+    }
+
+    // Conta de stand equivalente, pela categoria (ex.: 2020202 Aluguel Adm -> 2020704 Aluguel Stand).
+    const cats = await listCategories();
+    const prefixo = String(cfg.conta_prefix);
+    const contaStandDe = (conta) => {
+        const c = cats.find((x) => (x.conta_codes || []).map(String).includes(String(conta)));
+        return c ? { categoria: c.name, conta: (c.conta_codes || []).map(String).find((x) => x.startsWith(prefixo)) || null } : null;
+    };
+    const fmt = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+    return rows.map((r) => {
+        const deps = Array.isArray(r.departamentos) ? r.departamentos.map((d) => ({
+            id: Number(d.id), name: d.name || `Departamento ${d.id}`, pct: Math.round((Number(d.pct) || 0) * 10) / 10,
+        })) : [];
+        const depsTxt = deps.length ? deps.map((d) => `${d.name} (${d.pct}%)`).join(', ') : 'nenhum departamento';
+        const situacao = r.no_depto
+            ? (r.conta_stand ? 'certo' : 'sem_conta')
+            : (r.substituiu ? 'substituto' : 'sem_departamento');
+        const equiv = contaStandDe(r.conta);
+        const prov = r.substituiu ? provisorios.get(Number(r.substituiu)) : null;
+        let motivo = '';
+        let corrigir = [];
+        if (situacao === 'certo') {
+            motivo = `Está no departamento Stand de Vendas e na conta ${r.conta} (${r.conta_nome || 'sem nome'}), do plano de stand. Entra no relatório.`;
+        } else if (situacao === 'sem_conta') {
+            motivo = `Está no departamento Stand de Vendas, mas na conta ${r.conta} (${r.conta_nome || 'sem nome'}), que não é do plano de stand (${prefixo}). Entra no relatório pelo departamento, e a natureza sai da classificação automática.`;
+            corrigir = [
+                `Abra o título ${r.nutitulo} no Sienge (Financeiro > Contas a Pagar > Títulos).`,
+                equiv?.conta
+                    ? `Na apropriação financeira, troque a conta ${r.conta} pela conta de stand equivalente ${equiv.conta} (${equiv.categoria}).`
+                    : 'Na apropriação financeira, troque a conta pela conta de stand equivalente (plano 2.02.07).',
+                'Se o gasto não é do stand, tire o departamento Stand de Vendas da apropriação por departamento.',
+            ];
+        } else if (situacao === 'sem_departamento') {
+            motivo = `A conta ${r.conta} (${r.conta_nome || 'sem nome'}) é do plano de stand, mas o título está em ${depsTxt}, sem o departamento Stand de Vendas. Por isso está FORA do relatório: ${fmt(r.valor)} não entram.`;
+            corrigir = [
+                `Abra o título ${r.nutitulo} no Sienge (Financeiro > Contas a Pagar > Títulos).`,
+                'Na apropriação por departamento, inclua Stand de Vendas (100%, ou o percentual que for do stand).',
+                'Depois clique em "Conferir no Sienge agora": ele entra no relatório na hora, sem esperar a carga do espelho.',
+            ];
+        } else {
+            motivo = `Substituiu o título provisório ${r.substituiu}${prov ? ` (${prov.doc} ${prov.num})` : ''}, que era do departamento Stand de Vendas, mas foi criado em ${depsTxt}. O dinheiro saiu (${fmt(r.valor)}), mas está FORA do relatório.`;
+            corrigir = [
+                `Confirme se o título ${r.nutitulo} é mesmo gasto do stand (o provisório ${r.substituiu} era).`,
+                'Se for, abra o título no Sienge e inclua o departamento Stand de Vendas na apropriação por departamento.',
+                'Depois clique em "Conferir no Sienge agora": ele entra no relatório na hora.',
+            ];
+        }
+        return {
+            key: `${r.nutitulo}-${r.conta}-${r.cc_id}`,
+            billId: Number(r.nutitulo),
+            situacao,
+            costCenterId: Number(r.cc_id),
+            costCenterName: r.cc_nome || `CC ${r.cc_id}`,
+            costCenterPct: Number(r.pct_cc) || 100,
+            companyId: r.cdempresa ? Number(r.cdempresa) : null,
+            company: r.empresa || null,
+            contaCode: r.conta,
+            contaName: r.conta_nome || null,
+            contaSugerida: situacao === 'sem_conta' ? (equiv?.conta || null) : null,
+            departments: deps,
+            supplier: r.credor || 'Sem credor identificado',
+            docType: r.doc_type || null,
+            docNumber: r.doc_number || null,
+            origin: r.origem || null,
+            originLabel: originLabel(r.origem),
+            issuedAt: r.emissao || null,
+            paidFrom: r.pago_de || null,
+            paidTo: r.pago_ate || null,
+            paymentTypes: String(r.tipos || '').split(',').filter(Boolean).map((x) => (Number(x) === 10 ? 'Adiantamento' : 'Pagamento')),
+            bankAccount: r.conta_bancaria || null,
+            notes: r.obs || null,
+            substituiu: r.substituiu ? Number(r.substituiu) : null,
+            substituiuDoc: prov ? `${prov.doc} ${prov.num}` : null,
+            valor: round(r.valor),
+            motivo,
+            corrigir,
+        };
+    });
+}
+
 /** A consulta de lançamentos em si: recorte em `where`, rateio em `fatorDepto`. */
 async function queryExpenseItems(views, cfg, { where, fatorDepto }) {
     const sql = `
@@ -236,7 +438,10 @@ async function queryExpenseItems(views, cfg, { where, fatorDepto }) {
                    to_char(date_trunc('month', b.dtpagto), 'YYYY-MM') AS ym,
                    MAX(b.dtpagto) AS dtpagto,
                    SUM(b.vlpagto + COALESCE(b.vljuros,0) + COALESCE(b.vlmulta,0)
-                       + COALESCE(b.vlcormonetaria,0) - COALESCE(b.vldesconto,0)) AS valor_pago
+                       + COALESCE(b.vlcormonetaria,0) - COALESCE(b.vldesconto,0)) AS valor_pago,
+                   string_agg(DISTINCT b.cdtipobaixa::text, ',') AS tipos_baixa,
+                   MAX(b.nuconta) AS nuconta,
+                   MAX(b.cdempresa) AS cdempresa_baixa
             FROM ecpgbaixa b
             WHERE b.nutitulo IN (SELECT DISTINCT nutitulo FROM aprop)
               AND b.cdtipobaixa IN (1, 10)
@@ -254,16 +459,27 @@ async function queryExpenseItems(views, cfg, { where, fatorDepto }) {
                TRIM(t.nudocumento) AS doc_number,
                NULLIF(TRIM(t.deobservacao), '') AS notes,
                to_char(t.dtemissao, 'YYYY-MM-DD') AS issued_at,
+               t.cdempresa, TRIM(t.cdorigem) AS origem,
+               COALESCE(NULLIF(TRIM(e.nmfantasia), ''), TRIM(e.nmempresa)) AS empresa,
+               pg.tipos_baixa,
+               (SELECT TRIM(cc2.nmconta) FROM ecadcontacorrente cc2
+                 WHERE cc2.nuconta = pg.nuconta AND cc2.cdempresa = pg.cdempresa_baixa LIMIT 1) AS conta_bancaria,
+               (SELECT json_agg(json_build_object('id', ad.cddepartamento, 'name', TRIM(dp.nmdepartamento), 'pct', ad.peapropriado)
+                       ORDER BY ad.peapropriado DESC)
+                  FROM ecpgapropdepart ad LEFT JOIN ecaddepartamento dp ON dp.cddepartamento = ad.cddepartamento
+                 WHERE ad.nutitulo = pg.nutitulo) AS departamentos,
                SUM(pg.valor_pago * a.pct / 100.0${fatorDepto}) AS amount
         FROM pagamentos pg
         JOIN aprop a ON a.nutitulo = pg.nutitulo
         JOIN ecpgtitulo t ON t.nutitulo = pg.nutitulo
         LEFT JOIN ecadcredor cr ON cr.cdcredor = t.cdcredor
         LEFT JOIN ecadplanofin pf ON TRIM(pf.cdconta) = a.cdconta
+        LEFT JOIN ecadempresa e ON e.cdempresa = t.cdempresa
         WHERE TRIM(t.cddocumento) NOT IN ('PCT')
         GROUP BY pg.nutitulo, pg.nuparcela, pg.ym, pg.dtpagto, a.cdconta, pf.nmconta,
                  a.cost_center_id, cr.nmfantasia, cr.nmcredor, t.cddocumento,
-                 t.nudocumento, t.deobservacao, t.dtemissao
+                 t.nudocumento, t.deobservacao, t.dtemissao, t.cdempresa, t.cdorigem,
+                 e.nmfantasia, e.nmempresa, pg.tipos_baixa, pg.nuconta, pg.cdempresa_baixa
         HAVING SUM(pg.valor_pago * a.pct / 100.0${fatorDepto}) <> 0
         ORDER BY pg.ym DESC, amount DESC
     `;
@@ -290,11 +506,24 @@ async function queryExpenseItems(views, cfg, { where, fatorDepto }) {
                 notes: r.notes || null,
                 issuedAt: r.issued_at || null,
                 paidAt: r.paid_at || null,
+                companyId: r.cdempresa ? Number(r.cdempresa) : null,
+                company: r.empresa || null,
+                origin: r.origem || null,
+                departments: Array.isArray(r.departamentos) ? r.departamentos.map((d) => ({
+                    id: Number(d.id), name: d.name || `Departamento ${d.id}`, pct: Math.round((Number(d.pct) || 0) * 10) / 10,
+                })) : [],
+                paymentTypes: [],
+                bankAccounts: [],
                 amount: 0,
                 months: [],
             };
             byKey.set(k, item);
         }
+        for (const tp of String(r.tipos_baixa || '').split(',').filter(Boolean)) {
+            const nome = Number(tp) === 10 ? 'Adiantamento' : 'Pagamento';
+            if (!item.paymentTypes.includes(nome)) item.paymentTypes.push(nome);
+        }
+        if (r.conta_bancaria && !item.bankAccounts.includes(r.conta_bancaria)) item.bankAccounts.push(r.conta_bancaria);
         item.amount += amount;
         item.months.push({ ym: r.ym, amount: round(amount), paidAt: r.paid_at || null });
         // A data do lançamento é a do pagamento mais recente.
@@ -573,60 +802,17 @@ export async function listDepartmentDivergence(costCenterIds) {
  * para conferir cada um ao vivo na API do Sienge.
  */
 export async function listDivergentBills(costCenterIds, { limit = 300, offset = 0 } = {}) {
-    const views = normIds(costCenterIds);
-    if (!views.length) return { bills: [], total: 0 };
-    const cfg = await getSettings();
-
-    const sql = `
-        WITH cc AS (
-            SELECT cdempreend, cdempreendview FROM ecadempreend WHERE cdempreendview = ANY($1::int[])
-        ),
-        pg AS (
-            SELECT b.nutitulo,
-                   SUM(b.vlpagto + COALESCE(b.vljuros,0) + COALESCE(b.vlmulta,0)
-                       + COALESCE(b.vlcormonetaria,0) - COALESCE(b.vldesconto,0)) AS v
-            FROM ecpgbaixa b
-            WHERE b.cdtipobaixa IN (1, 10) AND b.nuseqestorno IS NULL
-            GROUP BY b.nutitulo
-        ),
-        dep AS (SELECT DISTINCT nutitulo FROM ecpgapropdepart WHERE cddepartamento = $2::int),
-        base AS (
-            SELECT af.nutitulo, TRIM(af.cdconta) AS conta,
-                   (TRIM(af.cdconta) LIKE $3 || '%') AS conta_stand,
-                   (d.nutitulo IS NOT NULL) AS no_depto,
-                   cc.cdempreendview AS cost_center_id,
-                   SUM(pg.v * COALESCE(af.peparticipacao, 100) / 100.0) AS valor
-            FROM ecpgapropfin af
-            JOIN cc ON cc.cdempreend = af.cdcentrocusto
-            JOIN pg ON pg.nutitulo = af.nutitulo
-            JOIN ecpgtitulo t ON t.nutitulo = af.nutitulo
-            LEFT JOIN dep d ON d.nutitulo = af.nutitulo
-            WHERE TRIM(t.cddocumento) NOT IN ('PCT')
-            GROUP BY af.nutitulo, TRIM(af.cdconta), d.nutitulo, cc.cdempreendview
-        )
-        SELECT b.nutitulo AS bill_id, b.cost_center_id, b.conta AS conta_code,
-               pf.nmconta AS conta_name, ROUND(b.valor, 2) AS valor,
-               CASE WHEN b.no_depto THEN 'sem_conta' ELSE 'sem_departamento' END AS situacao,
-               TRIM(t.cddocumento) AS doc_type, TRIM(t.nudocumento) AS doc_number,
-               (SELECT string_agg(DISTINCT ad.cddepartamento::text, ',')
-                  FROM ecpgapropdepart ad WHERE ad.nutitulo = b.nutitulo) AS deptos_espelho
-        FROM base b
-        JOIN ecpgtitulo t ON t.nutitulo = b.nutitulo
-        LEFT JOIN ecadplanofin pf ON TRIM(pf.cdconta) = b.conta
-        WHERE (b.no_depto AND NOT b.conta_stand) OR (NOT b.no_depto AND b.conta_stand)
-        ORDER BY b.valor DESC
-    `;
-    const { rows } = await siengeQuery(sql, [views, cfg.department_id, cfg.conta_prefix]);
-    const bills = rows.map((r) => ({
-        billId: Number(r.bill_id),
-        costCenterId: Number(r.cost_center_id),
-        contaCode: r.conta_code,
-        contaName: r.conta_name || null,
-        docType: r.doc_type || null,
-        docNumber: r.doc_number || null,
-        valor: round(r.valor),
-        situacao: r.situacao,
-        deptosEspelho: String(r.deptos_espelho || '').split(',').filter(Boolean).map(Number),
+    const titulos = await listAuditTitles(costCenterIds);
+    const bills = titulos.filter((t) => t.situacao !== 'certo').map((t) => ({
+        billId: t.billId,
+        costCenterId: t.costCenterId,
+        contaCode: t.contaCode,
+        contaName: t.contaName,
+        docType: t.docType,
+        docNumber: t.docNumber,
+        valor: t.valor,
+        situacao: t.situacao,
+        deptosEspelho: t.departments.map((d) => d.id),
     }));
     const ini = Math.max(0, Number(offset) || 0);
     return { bills: bills.slice(ini, ini + limit), total: bills.length, offset: ini };
@@ -708,7 +894,7 @@ export async function checkBillsDepartmentLive(bills, { concurrency = 4 } = {}) 
                 liveContas: null,
                 hasStandDepartment: temDepto,
                 hasStandConta: null,
-                resolved: b.situacao === 'sem_departamento' ? temDepto : !temDepto,
+                resolved: (b.situacao === 'sem_departamento' || b.situacao === 'substituto') ? temDepto : !temDepto,
                 error: null,
             });
         } catch (e) {
@@ -1195,6 +1381,8 @@ export default {
     listStandSpendRows,
     listStandExpenseItems,
     listPlanItemsOutsideDepartment,
+    listSubstitutesOutsideDepartment,
+    listAuditTitles,
     saveLiveFixes,
     loadLiveFixes,
     aggregateSpend,

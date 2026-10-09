@@ -119,6 +119,16 @@ export default {
         catch (err) { fail(res, err); }
     },
 
+    // Conferência ao vivo de um título (só leitura no Sienge).
+    async liveCheckTitle(req, res) {
+        try {
+            res.json(await svc.liveCheckTitle({
+                user: req.user, billId: req.body?.billId, contaCode: req.body?.contaCode,
+                costCenterId: req.body?.costCenterId, situacao: req.body?.situacao,
+            }));
+        } catch (err) { fail(res, err); }
+    },
+
     // Conferência ao vivo dos títulos de um stand (só leitura no Sienge).
     async liveCheckStand(req, res) {
         try { res.json(await svc.liveCheckStand({ id: req.params.id, user: req.user })); }

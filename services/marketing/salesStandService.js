@@ -14,6 +14,8 @@ import {
     listStandSpendRows,
     listStandExpenseItems,
     listPlanItemsOutsideDepartment,
+    listSubstitutesOutsideDepartment,
+    listAuditTitles,
     saveLiveFixes,
     loadLiveFixes,
     aggregateSpend,
@@ -238,6 +240,23 @@ export async function updateStandItems({ id, payload = {}, userId, user }) {
 // ── Gasto classificado ───────────────────────────────────────────────────────
 
 /**
+ * O que é do stand mas está fora do departamento no espelho: conta de stand
+ * sem o departamento, e título que substituiu um provisório do stand sem
+ * herdar o departamento. Um lançamento aparece uma vez só (motivo 'substituto'
+ * vence, porque explica melhor).
+ */
+async function listOutsideItems(alvo) {
+    const [plano, subs] = await Promise.all([
+        listPlanItemsOutsideDepartment(alvo).catch(() => []),
+        listSubstitutesOutsideDepartment(alvo).catch(() => []),
+    ]);
+    const map = new Map();
+    for (const i of plano) map.set(i.key, { ...i, outsideReason: 'plano' });
+    for (const i of subs) map.set(i.key, { ...i, outsideReason: 'substituto' });
+    return [...map.values()];
+}
+
+/**
  * Lançamentos do stand já com tipo (construção × recorrência) e categoria
  * resolvidos, mais o resumo.
  */
@@ -252,7 +271,7 @@ async function classifiedSpend(stand, { categories, classesByStand } = {}) {
     // rateado pelo percentual do departamento que a API devolveu.
     const fixes = await loadLiveFixes(alvo).catch(() => new Map());
     if (fixes.size) {
-        const fora = await listPlanItemsOutsideDepartment(alvo).catch(() => []);
+        const fora = await listOutsideItems(alvo);
         const r2 = (v) => Math.round(v * 100) / 100;
         const extra = fora.filter((i) => fixes.has(i.billId)).map((i) => {
             const f = fixes.get(i.billId);
@@ -488,7 +507,7 @@ export async function getStandDetail({ id, user }) {
         names = await ccNameMap().catch(() => new Map());
         spend = await classifiedSpend(stand);
         // Pendência, não gasto: fica fora de todos os totais (ver a função).
-        const fora = await listPlanItemsOutsideDepartment(stand.cost_center_ids).catch((err) => {
+        const fora = await listOutsideItems(normIds(stand.cost_center_ids)).catch((err) => {
             console.warn('[salesStand.getStandDetail] títulos fora do departamento:', err?.message || err);
             return [];
         });
@@ -602,8 +621,8 @@ export async function getDepartmentAudit({ user }) {
     const stands = rows.filter(canSee);
     const ccs = normIds(stands.flatMap((s) => s.cost_center_ids || []));
 
-    const [audit, freshness, names, cfg] = await Promise.all([
-        ccs.length ? listDepartmentDivergence(ccs) : Promise.resolve({ totals: {}, rows: [] }),
+    const [titulos, freshness, names, cfg] = await Promise.all([
+        ccs.length ? listAuditTitles(ccs) : Promise.resolve([]),
         getDataFreshness().catch(() => ({ lastChange: null })),
         ccNameMap().catch(() => new Map()),
         getSettings(),
@@ -617,11 +636,18 @@ export async function getDepartmentAudit({ user }) {
         for (const cc of st.cost_center_ids) if (!standDoCc.has(cc)) standDoCc.set(cc, st.name);
     }
 
+    const totals = {};
+    for (const t of titulos) {
+        const k = totals[t.situacao] || { titulos: 0, valor: 0 };
+        k.titulos += 1;
+        k.valor = Math.round((k.valor + t.valor) * 100) / 100;
+        totals[t.situacao] = k;
+    }
     return {
         settings: cfg,
         freshness,
-        totals: audit.totals,
-        rows: audit.rows.map((r) => ({
+        totals,
+        rows: titulos.map((r) => ({
             ...r,
             costCenterName: names.get(r.costCenterId) || r.costCenterName || `CC ${r.costCenterId}`,
             standName: standDoCc.get(r.costCenterId) || null,
@@ -687,14 +713,14 @@ export async function liveCheckStand({ id, user }) {
     const row = await loadStandForUser(id, user);
     const stand = plain(row);
     const alvo = normIds(stand.cost_center_ids);
-    const fora = await listPlanItemsOutsideDepartment(alvo);
+    const fora = await listOutsideItems(alvo);
     const vistos = new Set();
     const bills = [];
     for (const i of fora) {
         const k = `${i.billId}-${i.contaCode}`;
         if (vistos.has(k)) continue;
         vistos.add(k);
-        bills.push({ billId: i.billId, contaCode: i.contaCode, situacao: 'sem_departamento', costCenterId: i.costCenterId, valor: i.amount });
+        bills.push({ billId: i.billId, contaCode: i.contaCode, situacao: i.outsideReason === 'substituto' ? 'substituto' : 'sem_departamento', costCenterId: i.costCenterId, valor: i.amount });
     }
     const lote = bills.slice(0, 40);
     if (!lote.length) return { checked: 0, resolved: 0, pending: 0, errors: 0, total: 0 };
@@ -707,6 +733,25 @@ export async function liveCheckStand({ id, user }) {
         pending: checked.filter((c) => c.resolved === false).length,
         errors: checked.filter((c) => c.error).length,
     };
+}
+
+/**
+ * Confere UM título na API do Sienge, agora (só leitura). Usado no detalhe da
+ * conferência: corrigiu no Sienge, confere e já entra no relatório.
+ */
+export async function liveCheckTitle({ user, billId, contaCode, costCenterId, situacao }) {
+    const rows = await db.SalesStand.findAll({ where: { is_active: true }, raw: true });
+    const { canSee } = await standScope(user);
+    const ccs = new Set(normIds(rows.filter(canSee).flatMap((s) => s.cost_center_ids || [])));
+    if (!ccs.has(Number(costCenterId))) {
+        throw httpError('Este título é de um centro de custo fora da sua alçada.', 403, 'OUT_OF_SCOPE');
+    }
+    const [c] = await checkBillsDepartmentLive([{
+        billId: Number(billId), contaCode: String(contaCode || ''), costCenterId: Number(costCenterId),
+        situacao: String(situacao || 'sem_departamento'),
+    }]);
+    if (c && !c.error) await saveLiveFixes([c], user?.id || null);
+    return c || null;
 }
 
 // Data da inauguração: 'AAAA-MM-DD' ou nada. Data inválida é erro, não silêncio.
@@ -1106,6 +1151,7 @@ export async function seedSalesStandModels() {
 export default {
     getAutoRules,
     liveCheckStand,
+    liveCheckTitle,
     listCostCenters,
     listCostCentersForUser,
     listContas,

@@ -49,6 +49,7 @@ router.get('/conferencia', ...canView, ctrl.getDepartmentAudit);
 // Bate na API do Sienge (uma chamada por título): ação de quem cuida do stand,
 // não de todo leitor da tela.
 router.post('/conferencia/revalidar', ...canManage, ctrl.revalidateDepartmentAudit);
+router.post('/conferencia/titulo', ...canManage, ctrl.liveCheckTitle);
 router.patch('/settings', ...canConfigure, ctrl.updateSettings);
 
 // ── Stands modelo (categorias) ──
