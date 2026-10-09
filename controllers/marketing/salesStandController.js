@@ -22,11 +22,12 @@ export default {
     // Configuração do módulo: o que conta como gasto de stand.
     async getSettings(req, res) {
         try {
-            const [settings, departments] = await Promise.all([
+            const [settings, departments, auto] = await Promise.all([
                 svc.getSettings(),
                 svc.listDepartments().catch(() => []),
+                svc.getAutoRules(),
             ]);
-            res.json({ settings, departments });
+            res.json({ settings, departments, auto });
         } catch (err) { fail(res, err); }
     },
 

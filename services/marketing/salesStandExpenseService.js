@@ -36,6 +36,7 @@ import apiSienge from '../../lib/apiSienge.js';
 const DEFAULT_SOURCE = process.env.SALES_STAND_EXPENSE_SOURCE || 'departamento';
 const DEFAULT_DEPARTMENT = Number(process.env.SALES_STAND_DEPARTMENT_ID || 25);
 const DEFAULT_CONTA_PREFIX = process.env.SALES_STAND_CONTA_PREFIX || '20207';
+const DEFAULT_ASSEMBLY_DAYS = Number(process.env.SALES_STAND_ASSEMBLY_DAYS || 35);
 
 export const SOURCES = ['departamento', 'plano', 'ambos'];
 export const KINDS = ['construcao', 'recorrencia', 'esporadica'];
@@ -66,7 +67,10 @@ export async function getSettings() {
         expense_source: DEFAULT_SOURCE,
         department_id: DEFAULT_DEPARTMENT,
         conta_prefix: DEFAULT_CONTA_PREFIX,
+        assembly_days: DEFAULT_ASSEMBLY_DAYS,
+        auto_rules: null,
     };
+    if (!Number.isFinite(Number(settings.assembly_days))) settings.assembly_days = DEFAULT_ASSEMBLY_DAYS;
     if (!SOURCES.includes(settings.expense_source)) settings.expense_source = DEFAULT_SOURCE;
     _settingsCache = { at: Date.now(), row: settings };
     return settings;
@@ -84,6 +88,14 @@ export async function updateSettings({ payload = {}, userId }) {
         const v = Number(payload.department_id);
         if (!Number.isFinite(v) || v <= 0) throw httpError('Departamento inválido.', 400);
         row.department_id = v;
+    }
+    if ('assembly_days' in payload) {
+        const v = Number(payload.assembly_days);
+        if (!Number.isInteger(v) || v < 0 || v > 365) throw httpError('Janela de montagem: informe de 0 a 365 dias.', 400);
+        row.assembly_days = v;
+    }
+    if ('auto_rules' in payload) {
+        row.auto_rules = payload.auto_rules === null ? null : cleanRules(payload.auto_rules);
     }
     if ('conta_prefix' in payload) {
         const v = String(payload.conta_prefix || '').replace(/\D/g, '');
@@ -764,28 +776,136 @@ export async function getDataFreshness() {
 
 // ── Classificação ────────────────────────────────────────────────────────────
 
+// ── Regras automáticas ───────────────────────────────────────────────────────
+
+const normText = (v) => String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+const escapeRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** "CONSTRU*" = começo de palavra; "SINO" = palavra inteira (não pega SINOP). */
+function termRegex(term) {
+    const t = normText(term).trim();
+    if (!t) return null;
+    const prefixo = t.endsWith('*');
+    const corpo = escapeRe(prefixo ? t.slice(0, -1) : t).replace(/\s+/g, '\\s+');
+    return new RegExp(`(^|[^A-Z0-9])${corpo}${prefixo ? '' : '(?![A-Z0-9])'}`);
+}
+
+function cleanRules(list) {
+    if (!Array.isArray(list)) throw httpError('Regras inválidas.', 400);
+    return list.map((r, i) => {
+        const terms = [...new Set((Array.isArray(r?.terms) ? r.terms : String(r?.terms || '').split(','))
+            .map((t) => normText(t).trim()).filter(Boolean))];
+        const name = String(r?.name || '').trim();
+        if (!name) throw httpError(`Regra ${i + 1}: dê um nome.`, 400);
+        if (!terms.length) throw httpError(`Regra "${name}": informe ao menos uma palavra.`, 400);
+        if (!Number(r?.category_id)) throw httpError(`Regra "${name}": escolha a categoria.`, 400);
+        return {
+            id: String(r?.id || `r${Date.now().toString(36)}${i}`),
+            name,
+            terms,
+            category_id: Number(r.category_id),
+            is_active: r?.is_active !== false,
+        };
+    });
+}
+
+/** Regras em vigor: as gravadas na tela ou, sem elas, as padrão do código. */
+export function resolveRules(settings, categories) {
+    if (Array.isArray(settings?.auto_rules)) return settings.auto_rules;
+    const porNome = new Map(categories.map((c) => [c.name, c.id]));
+    return DEFAULT_RULES
+        .filter((r) => porNome.has(r.category))
+        .map((r) => ({ id: r.id, name: r.name, terms: r.terms, category_id: porNome.get(r.category), is_active: true }));
+}
+
+/** O que a tela de regras precisa: as regras (padrão ou gravadas) e se são as padrão. */
+export async function getAutoRules() {
+    const [cfg, cats] = await Promise.all([getSettings(), listCategories()]);
+    return {
+        rules: resolveRules(cfg, cats),
+        is_default: !Array.isArray(cfg.auto_rules),
+        assembly_days: Number(cfg.assembly_days ?? DEFAULT_ASSEMBLY_DAYS),
+    };
+}
+
+/** Contexto de classificação de um stand: regras compiladas + janela de montagem. */
+export async function classificationContext(stand, categories) {
+    const cfg = await getSettings();
+    const rules = resolveRules(cfg, categories)
+        .filter((r) => r.is_active !== false)
+        .map((r) => ({ ...r, regs: (r.terms || []).map(termRegex).filter(Boolean) }));
+    let windowEnd = null;
+    const days = Number(cfg.assembly_days ?? DEFAULT_ASSEMBLY_DAYS);
+    if (stand?.opened_at && Number.isFinite(days)) {
+        const d = new Date(`${String(stand.opened_at).slice(0, 10)}T12:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + days);
+        windowEnd = d.toISOString().slice(0, 10);
+    }
+    return { rules, windowEnd, assemblyDays: days };
+}
+
 /**
- * Devolve os itens com kind/categoria resolvidos.
- * source: 'manual' (classificado na tela) | 'categoria' (herdou da conta) | null
+ * Devolve os itens com kind/categoria resolvidos, nesta ordem de autoridade:
+ *
+ *   1) classificado à mão na tela (sales_stand_expense_classes)  source 'manual'
+ *   2) categoria da CONTA (sales_stand_expense_categories)        source 'categoria'
+ *   3) regra de palavra-chave (fornecedor + observação)           source 'regra'
+ *
+ * Depois, a janela de montagem ajusta o TIPO do que não foi feito à mão:
+ * pago até o fim da janela e não é recorrência → construção; pago depois dela
+ * e era construção → esporádico. Sem inauguração, não há janela.
  */
-export function applyClassification(items, categories, overrides) {
+export function applyClassification(items, categories, overrides, ctx = {}) {
     const catById = new Map(categories.map((c) => [Number(c.id), c]));
     const catByConta = new Map();
     for (const c of categories) {
         if (c.is_active === false) continue;
         for (const code of c.conta_codes || []) catByConta.set(String(code), c);
     }
-    const overrideByKey = new Map(overrides.map((o) => [o.expense_key, o]));
+    const overrideByKey = new Map((overrides || []).map((o) => [o.expense_key, o]));
+    const rules = ctx.rules || [];
+    const windowEnd = ctx.windowEnd || null;
 
     return items.map((item) => {
         const ov = overrideByKey.get(item.key);
-        const inherited = catByConta.get(String(item.contaCode)) || null;
-        const cat = ov?.category_id ? catById.get(Number(ov.category_id)) || null : inherited;
-        const kind = normKind(ov?.kind) || (cat ? cat.kind : null);
+        if (ov) {
+            const cat = ov.category_id ? catById.get(Number(ov.category_id)) || null : catByConta.get(String(item.contaCode)) || null;
+            return {
+                ...item,
+                kind: normKind(ov.kind) || (cat ? cat.kind : null),
+                source: 'manual', rule: null, phase: null,
+                categoryId: cat ? cat.id : null,
+                categoryName: cat ? cat.name : null,
+            };
+        }
+
+        let cat = catByConta.get(String(item.contaCode)) || null;
+        let source = cat ? 'categoria' : null;
+        let rule = null;
+        if (!cat && rules.length) {
+            const texto = normText(`${item.supplier || ''} ${item.notes || ''}`);
+            const hit = rules.find((r) => r.regs.some((re) => re.test(texto)));
+            const alvo = hit ? catById.get(Number(hit.category_id)) : null;
+            if (alvo && alvo.is_active !== false) { cat = alvo; source = 'regra'; rule = hit.name; }
+        }
+
+        let kind = cat ? normKind(cat.kind) : null;
+        let phase = null;
+        if (windowEnd && item.paidAt) {
+            if (item.paidAt <= windowEnd && kind !== 'recorrencia') {
+                if (kind !== 'construcao') phase = 'montagem';
+                kind = 'construcao';
+            } else if (item.paidAt > windowEnd && kind === 'construcao') {
+                kind = 'esporadica';
+                phase = 'pos_montagem';
+            }
+        }
         return {
             ...item,
             kind,
-            source: ov ? 'manual' : (kind ? 'categoria' : null),
+            source: kind ? (source || 'janela') : null,
+            rule,
+            phase,
             categoryId: cat ? cat.id : null,
             categoryName: cat ? cat.name : null,
         };
@@ -926,19 +1046,44 @@ export function detectPatterns(items) {
 // esporádica = o que acontece de vez em quando e não dá para contar como mensal.
 // Isto é só o PONTO DE PARTIDA: o tipo de cada categoria se edita na tela.
 
+// As contas de stand (2.02.07) e as equivalentes que o administrativo usa no
+// lugar delas (Adm 2.02.02 e Obra 2.01): o aluguel do stand de Sinop está em
+// "Aluguel a Pagar - Adm", os móveis de Sarandi em "Eletroeletrônicos - Obra".
 const DEFAULT_CATEGORIES = [
     { name: 'Decorado', kind: 'construcao', conta_codes: ['2020702'], sort_order: 10, description: 'Casa/apartamento decorado do stand.' },
-    { name: 'Móveis e decoração', kind: 'construcao', conta_codes: ['2020701'], sort_order: 20, description: 'Eletroeletrônicos, mobiliário e decoração.' },
-    { name: 'Obra e empreiteiros', kind: 'construcao', conta_codes: ['2020703'], sort_order: 30, description: 'Serviços terceirizados e empreiteiros da montagem.' },
-    { name: 'Comunicação visual', kind: 'construcao', conta_codes: ['2020710'], sort_order: 40, description: 'Impressos, plotagens e encadernação.' },
+    { name: 'Móveis e decoração', kind: 'construcao', conta_codes: ['2020701', '2010112'], sort_order: 20, description: 'Eletroeletrônicos, mobiliário, ar-condicionado e decoração.' },
+    { name: 'Obra e empreiteiros', kind: 'construcao', conta_codes: ['2020703', '2010304', '2010309', '2010406'], sort_order: 30, description: 'Serviços terceirizados, empreiteiros e material da montagem.' },
+    { name: 'Comunicação visual', kind: 'construcao', conta_codes: ['2020710'], sort_order: 40, description: 'Fachada, luminosos, painéis, impressos e plotagens.' },
     { name: 'Fretes e transportes', kind: 'construcao', conta_codes: ['2020712'], sort_order: 50, description: 'Fretes e entregas da montagem do stand.' },
-    { name: 'Aluguel', kind: 'recorrencia', conta_codes: ['2020704'], sort_order: 60, expected_monthly: true, description: 'Aluguel do imóvel ou do terreno do stand.' },
-    { name: 'Energia elétrica', kind: 'recorrencia', conta_codes: ['2020706'], sort_order: 70, expected_monthly: true },
-    { name: 'Água e esgoto', kind: 'recorrencia', conta_codes: ['2020705'], sort_order: 80, expected_monthly: true },
-    { name: 'Telefone e internet', kind: 'recorrencia', conta_codes: ['2020707'], sort_order: 90, expected_monthly: true },
-    { name: 'Consumo e limpeza', kind: 'recorrencia', conta_codes: ['2020708'], sort_order: 100, description: 'Consumo, conservação e limpeza.' },
-    { name: 'Manutenção e melhorias', kind: 'recorrencia', conta_codes: ['2020709'], sort_order: 110, description: 'Manutenção, reforma e melhorias depois do stand pronto.' },
-    { name: 'Locação de equipamentos', kind: 'recorrencia', conta_codes: ['2020711', '2020713'], sort_order: 120, description: 'Impressoras, máquinas e equipamentos alugados.' },
+    { name: 'Aluguel', kind: 'recorrencia', conta_codes: ['2020704', '2020202', '2010503'], sort_order: 60, expected_monthly: true, description: 'Aluguel do imóvel ou do terreno do stand.' },
+    { name: 'Energia elétrica', kind: 'recorrencia', conta_codes: ['2020706', '2020201'], sort_order: 70, expected_monthly: true },
+    { name: 'Água e esgoto', kind: 'recorrencia', conta_codes: ['2020705', '2020231'], sort_order: 80, expected_monthly: true },
+    { name: 'Telefone e internet', kind: 'recorrencia', conta_codes: ['2020707', '2020210'], sort_order: 90, expected_monthly: true },
+    { name: 'Consumo e limpeza', kind: 'recorrencia', conta_codes: ['2020708', '2020205', '2020284'], sort_order: 100, description: 'Consumo, café, alimentação, conservação e limpeza.' },
+    { name: 'Manutenção e melhorias', kind: 'esporadica', conta_codes: ['2020709'], sort_order: 110, description: 'Manutenção, reforma e melhorias. Na janela de montagem conta como construção.' },
+    { name: 'Locação de equipamentos', kind: 'recorrencia', conta_codes: ['2020711', '2020713', '2020223'], sort_order: 120, description: 'Impressoras, máquinas, bebedouros e equipamentos alugados.' },
+    { name: 'Segurança e alarme', kind: 'recorrencia', conta_codes: ['2020243', '2010514'], sort_order: 125, description: 'Monitoramento, alarme e CFTV. A instalação cai na janela de montagem.' },
+    { name: 'Escritório e despesas gerais', kind: 'recorrencia', conta_codes: ['2020220', '2020216', '2020298', '2020236', '20313'], sort_order: 130, description: 'Papelaria, sistemas e despesas diversas do stand.' },
+    { name: 'Impostos retidos', kind: 'esporadica', conta_codes: ['20603', '20605'], sort_order: 140, description: 'INSS e ISS retidos de prestador de serviço do stand.' },
+];
+
+// Regras padrão por palavra-chave, para o lançamento que a CONTA não
+// categoriza (adiantamento a fornecedor, brindes e promoções...). Olham o nome
+// do fornecedor e a observação do título. A ordem importa: vale a primeira que
+// casar. "*" no fim = começo de palavra ("CONSTRU*" pega construção e
+// construtora). Fallback: a tela grava as dela em sales_stand_settings.auto_rules.
+const DEFAULT_RULES = [
+    // Imposto primeiro: a observação de DARF costuma citar "construção civil"
+    // e cairia na regra de obra.
+    { id: 'impostos', name: 'Imposto e retenção', category: 'Impostos retidos', terms: ['RECEITA FEDERAL', 'DARF', 'INSS', 'ISS', 'ISSQN', 'PREFEITURA*', 'SECRETARIA DA FAZENDA'] },
+    { id: 'aluguel', name: 'Aluguel do imóvel', category: 'Aluguel', terms: ['ALUGUEL', 'LOCACAO DE IMOVEL', 'IMOVEL COMERCIAL'] },
+    { id: 'comunicacao', name: 'Comunicação visual e fachada', category: 'Comunicação visual', terms: ['COMUNICACAO VISUAL', 'LUMINOSO*', 'FACHADA*', 'PLOTAG*', 'ADESIV*', 'GRAFICA*', 'LETREIRO*', 'BANNER*'] },
+    { id: 'seguranca', name: 'Alarme e monitoramento', category: 'Segurança e alarme', terms: ['ALARME*', 'CFTV', 'CERCA ELETRICA', 'MONITORAMENTO'] },
+    { id: 'locacao', name: 'Equipamento alugado', category: 'Locação de equipamentos', terms: ['SUPRIMENTO*', 'COPIADORA*', 'IMPRESSORA*', 'LOCACAO DE EQUIPAMENTO*'] },
+    { id: 'escritorio', name: 'Papelaria e escritório', category: 'Escritório e despesas gerais', terms: ['PAPELARIA*', 'KALUNGA', 'INFORMATICA', 'ESCRITORIO'] },
+    { id: 'limpeza', name: 'Limpeza, café e lanche', category: 'Consumo e limpeza', terms: ['LIMPEZA', 'LIMPA', 'CAFE', 'BOLO*', 'PADARIA'] },
+    { id: 'obra', name: 'Obra, material e instalação', category: 'Obra e empreiteiros', terms: ['CONSTRU*', 'TINTA*', 'PINTURA', 'ELETRIC*', 'GESSO', 'HIDRO*', 'INSTALAC*', 'PORTAS', 'JANELAS', 'PREDIAL', 'QUARTZITO', 'MARMORE*', 'GRANITO*', 'REFORMA', 'BOMBEIRO*', 'INCENDIO'] },
+    { id: 'moveis', name: 'Móveis, decoração e equipamentos', category: 'Móveis e decoração', terms: ['MOVEIS', 'MOVEL', 'MOBILI*', 'PLANEJAD*', 'DECORA*', 'VASO*', 'PLANTAS', 'CARPETE', 'SINO', 'AR CONDICIONADO', 'ARCONDICIONADO', 'CLIMATIZ*', 'PURIFICADOR', 'ELETRONICO*', 'ELETRODOMESTICO*', 'SMARTPHONE', 'GAZIN', 'HOLZMOBEL', 'STORE'] },
 ];
 
 export async function seedSalesStandExpenseCategories() {
@@ -948,16 +1093,28 @@ export async function seedSalesStandExpenseCategories() {
         console.log(`✅ Stand de Vendas: ${DEFAULT_CATEGORIES.length} categorias de gasto padrão criadas.`);
         return;
     }
-    // Já populada: só repõe a descrição/ordem das que ninguém editou na tela
-    // (updated_by null). Categoria editada ou excluída fica intocada.
+    // Já populada: só repõe tipo/contas/descrição/ordem das que ninguém editou
+    // na tela (updated_by null). Categoria editada fica intocada. Padrão que
+    // ainda não existe (nome novo na lista) nasce aqui.
     for (const def of DEFAULT_CATEGORIES) {
-        const row = await db.SalesStandExpenseCategory.findOne({ where: { name: def.name, updated_by: null } });
-        if (!row) continue;
-        row.kind = def.kind;
-        row.conta_codes = def.conta_codes;
-        row.description = def.description || null;
-        row.sort_order = def.sort_order;
-        await row.save();
+        const existe = await db.SalesStandExpenseCategory.findOne({ where: { name: def.name } });
+        if (!existe) {
+            // Conta que alguém já pôs em outra categoria continua lá.
+            const usadas = new Set((await db.SalesStandExpenseCategory.findAll({ attributes: ['conta_codes'], raw: true }))
+                .flatMap((c) => c.conta_codes || []).map(String));
+            await db.SalesStandExpenseCategory.create({
+                ...def, conta_codes: def.conta_codes.filter((c) => !usadas.has(c)),
+            });
+            continue;
+        }
+        if (existe.updated_by !== null) continue;
+        const outras = new Set((await db.SalesStandExpenseCategory.findAll({ attributes: ['id', 'conta_codes'], raw: true }))
+            .filter((c) => c.id !== existe.id).flatMap((c) => c.conta_codes || []).map(String));
+        existe.kind = def.kind;
+        existe.conta_codes = def.conta_codes.filter((c) => !outras.has(c));
+        existe.description = def.description || null;
+        existe.sort_order = def.sort_order;
+        await existe.save();
     }
 }
 
@@ -972,6 +1129,9 @@ export default {
     listPlanItemsOutsideDepartment,
     aggregateSpend,
     applyClassification,
+    resolveRules,
+    getAutoRules,
+    classificationContext,
     summarize,
     detectPatterns,
     listCategories,

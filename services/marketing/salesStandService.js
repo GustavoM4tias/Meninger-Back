@@ -16,6 +16,8 @@ import {
     listPlanItemsOutsideDepartment,
     aggregateSpend,
     applyClassification,
+    classificationContext,
+    getAutoRules,
     summarize,
     detectPatterns,
     listCategories,
@@ -51,6 +53,7 @@ function httpError(message, status, code = null) {
 // Todo o gasto (leitura do Sienge, classificação e padrões) mora no
 // salesStandExpenseService; aqui fica o cadastro do stand em si.
 export {
+    getAutoRules,
     listStandSpendRows,
     listStandExpenseItems,
     clearSpendCache,
@@ -244,8 +247,9 @@ async function classifiedSpend(stand, { categories, classesByStand } = {}) {
     const alvo = normIds(stand.cost_center_ids);
     const raw = await listStandExpenseItems(alvo);
     const ccSet = new Set(alvo);
-    const items = applyClassification(raw.filter((i) => ccSet.has(i.costCenterId)), cats, overrides);
-    return { items, summary: summarize(items), categories: cats };
+    const ctx = await classificationContext(stand, cats);
+    const items = applyClassification(raw.filter((i) => ccSet.has(i.costCenterId)), cats, overrides, ctx);
+    return { items, summary: summarize(items), categories: cats, ctx };
 }
 
 const currentYm = () => {
@@ -258,6 +262,29 @@ const ymShift = (ym, delta) => {
     const d = new Date(y, m - 1 + delta, 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
+
+/**
+ * Contas que vencem todo mês (categoria com expected_monthly) sem pagamento em
+ * algum mês FECHADO com o stand aberto. Mesma régua do relatório na tela
+ * (report/reportModel.js > monthlyGaps): primeiro mês cheio = o seguinte ao da
+ * inauguração; sem inauguração, o primeiro mês com recorrência.
+ */
+function monthlyGaps(categories, items, openedAt) {
+    const mensais = (categories || []).filter((c) => c.expected_monthly && c.is_active !== false);
+    if (!mensais.length) return [];
+    const fechadoAte = ymShift(currentYm(), -1);
+    let inicio = openedAt ? ymShift(String(openedAt).slice(0, 7), 1) : null;
+    if (!inicio) {
+        inicio = items.filter((i) => i.kind === 'recorrencia').map((i) => i.firstYm).filter(Boolean).sort()[0] || null;
+    }
+    if (!inicio || inicio > fechadoAte) return [];
+    const meses = [];
+    for (let ym = inicio; ym <= fechadoAte && meses.length < 240; ym = ymShift(ym, 1)) meses.push(ym);
+    return mensais.filter((c) => {
+        const daCat = items.filter((i) => Number(i.categoryId) === Number(c.id));
+        return meses.some((ym) => !daCat.some((i) => (i.months || []).some((m) => m.ym === ym)));
+    });
+}
 
 /**
  * Quanto o stand custa por mês para ficar de pé, conta a conta.
@@ -362,8 +389,11 @@ export async function listStands({ user } = {}) {
     for (const s of stands) {
         let summary = { totals: { construcao: 0, recorrencia: 0, esporadica: 0, sem_classificacao: 0, total: 0 }, byMonth: [] };
         let classified = [];
+        let pendencias = 0;
         try {
             ({ summary, items: classified } = await classifiedSpend(s, { categories, classesByStand }));
+            pendencias = classified.filter((i) => !i.kind).length
+                + monthlyGaps(categories, classified, s.opened_at).length;
         } catch (err) {
             console.warn('[salesStand.listStands] Sienge indisponível:', err?.message || err);
             unavailable = true;
@@ -382,6 +412,7 @@ export async function listStands({ user } = {}) {
             // mais "tudo que entrou depois da definição".
             maintenance_value: summary.totals.recorrencia,
             recurring_monthly: recurringBreakdown(classified).total,
+            pending_count: pendencias,
             sporadic_value: summary.totals.esporadica,
             unclassified_value: summary.totals.sem_classificacao,
             cover_url: capas.get(Number(s.id)) || null,
@@ -428,7 +459,7 @@ export async function getStandDetail({ id, user }) {
             console.warn('[salesStand.getStandDetail] títulos fora do departamento:', err?.message || err);
             return [];
         });
-        outside = applyClassification(fora, spend.categories, []).map((i) => ({ ...i, outsideDepartment: true }));
+        outside = applyClassification(fora, spend.categories, [], spend.ctx).map((i) => ({ ...i, outsideDepartment: true }));
     } catch (err) {
         console.warn('[salesStand.getStandDetail] Sienge indisponível:', err?.message || err);
         unavailable = true;
@@ -1006,6 +1037,7 @@ export async function seedSalesStandModels() {
 }
 
 export default {
+    getAutoRules,
     listCostCenters,
     listCostCentersForUser,
     listContas,

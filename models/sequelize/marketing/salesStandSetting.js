@@ -22,6 +22,14 @@ export default (sequelize, DataTypes) => {
         department_id: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 25 },
         // Prefixo do plano financeiro do stand — 20207 = "DESPESAS COM STAND".
         conta_prefix: { type: DataTypes.STRING(20), allowNull: false, defaultValue: '20207' },
+        // Janela de montagem: até N dias depois da inauguração, o que não é
+        // conta mensal conta como CONSTRUÇÃO; depois dela, construção vira
+        // esporádico (o stand já está pronto).
+        assembly_days: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 35 },
+        // Regras de palavra-chave para lançamento sem categoria pela conta
+        // (adiantamento, brindes...): [{ id, name, terms[], category_id, is_active }].
+        // null = usa as regras padrão do código (fallback).
+        auto_rules: { type: DataTypes.JSONB, allowNull: true },
         updated_by: { type: DataTypes.INTEGER, allowNull: true },
     }, {
         tableName: 'sales_stand_settings',
