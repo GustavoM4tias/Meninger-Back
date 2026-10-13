@@ -9,7 +9,9 @@ import Historico from './historicoService.js';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { sendEmail, renderEmail } from '../../email/email.service.js';
 
-const OFFICE_URL = process.env.FRONTEND_URL || 'https://office.menin.com.br';
+// Endereço público fixo: o e-mail sai da máquina de quem gera (o .eml baixado),
+// e FRONTEND_URL aponta para localhost em desenvolvimento.
+const OFFICE_URL = process.env.OFFICE_PUBLIC_URL || 'https://office.menin.com.br';
 const MAX_DESTINATARIOS = 20;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -36,6 +38,16 @@ function balde(r) {
     if (ps === 'cancelled' || ps === 'expired' || ps === 'denied') return 'evasao';
     if (ps === 'refunded') return 'estornado';
     return 'pendente';
+}
+
+/** Link para a tela já com o mesmo recorte do e-mail. */
+function linkDaTela(f) {
+    const q = new URLSearchParams();
+    for (const k of ['status', 'paymentStatus', 'forma', 'empreendimento', 'dateFrom', 'dateTo', 'paidFrom', 'paidTo']) {
+        if (f[k]) q.set(k, Array.isArray(f[k]) ? f[k].join(',') : String(f[k]));
+    }
+    const qs = q.toString();
+    return `${OFFICE_URL}/financeiro/cobranca/ato${qs ? `?${qs}` : ''}`;
 }
 
 export async function montarResumo(user, filtros = {}) {
@@ -126,7 +138,7 @@ export async function montarResumo(user, filtros = {}) {
                 pendente: brl(e.pendente), evasao: brl(e.evasao), evasaoPct: pct(e.qEvasao, e.qEmitidos),
             })),
         vencidos: vencidos.sort((a, b) => a.vencimento.localeCompare(b.vencimento)),
-        link: `${OFFICE_URL}/financeiro/cobranca/ato`,
+        link: linkDaTela(filtros),
     };
 }
 

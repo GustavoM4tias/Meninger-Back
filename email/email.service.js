@@ -127,6 +127,9 @@ const META = {
         subject: (d) => `Cobrança do Ato - resumo de ${d.periodo || ''}`,
         preview: (d) => `Pagos ${d.pagos?.valor || ''} · a receber ${d.aReceber?.valor || ''} · evasão ${d.evasao?.pct || ''}`,
         file: 'cobranca.ato.resumo.hbs',
+        // Documento completo, feito para o Outlook (tabelas): não passa pelo
+        // layout padrão, que usa CSS que o Outlook ignora e diz "não responda".
+        semLayout: true,
     },
     'meeting.report': {
         subject: (d) => `Relatório de Reunião: ${d.subject || 'Reunião'}`,
@@ -215,7 +218,7 @@ export function renderEmail(type, data = {}) {
     const cfg = META[type];
     if (!cfg) throw new Error(`Tipo desconhecido: ${type}`);
     const tpl = compileTemplateOnce(cfg.file);
-    const html = wrapWithLayout(tpl(data), {
+    const html = cfg.semLayout ? tpl(data) : wrapWithLayout(tpl(data), {
         title: cfg.subject(data),
         previewText: cfg.preview(data),
         headerLight: !!cfg.headerLight,
