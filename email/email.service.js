@@ -207,6 +207,23 @@ function compileTemplateOnce(file) {
 }
 
 /**
+ * Monta assunto e HTML final (template + layout) sem enviar. É o que o
+ * sendEmail envia; serve também para quem entrega o e-mail de outro jeito
+ * (ex.: rascunho .eml que a pessoa abre no Outlook).
+ */
+export function renderEmail(type, data = {}) {
+    const cfg = META[type];
+    if (!cfg) throw new Error(`Tipo desconhecido: ${type}`);
+    const tpl = compileTemplateOnce(cfg.file);
+    const html = wrapWithLayout(tpl(data), {
+        title: cfg.subject(data),
+        previewText: cfg.preview(data),
+        headerLight: !!cfg.headerLight,
+    });
+    return { subject: cfg.subject(data), html };
+}
+
+/**
  * Envia um e-mail por tipo.
  * @param {string} type
  * @param {string|string[]} to
@@ -216,21 +233,12 @@ function compileTemplateOnce(file) {
  * @param {Array}           [options.attachments] - Nodemailer attachments array
  */
 export async function sendEmail(type, to, data = {}, options = {}) {
-    const cfg = META[type];
-    if (!cfg) throw new Error(`Tipo desconhecido: ${type}`);
-
-    const tpl = compileTemplateOnce(cfg.file);
-    const innerHtml = tpl(data);
-    const html = wrapWithLayout(innerHtml, {
-        title: cfg.subject(data),
-        previewText: cfg.preview(data),
-        headerLight: !!cfg.headerLight,
-    });
+    const { subject, html } = renderEmail(type, data);
 
     const mailOptions = {
         from: EMAIL_FROM,
         to: Array.isArray(to) ? to.join(',') : to,
-        subject: cfg.subject(data),
+        subject,
         html,
     };
 

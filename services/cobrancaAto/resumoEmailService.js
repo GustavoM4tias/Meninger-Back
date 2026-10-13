@@ -6,7 +6,8 @@
 // empreendimento. Quem envia é a pessoa, pelo botão da tela; o escopo de
 // empreendimentos é o dela (historicoService já recorta).
 import Historico from './historicoService.js';
-import { sendEmail } from '../../email/email.service.js';
+import MailComposer from 'nodemailer/lib/mail-composer/index.js';
+import { sendEmail, renderEmail } from '../../email/email.service.js';
 
 const OFFICE_URL = process.env.FRONTEND_URL || 'https://office.menin.com.br';
 const MAX_DESTINATARIOS = 20;
@@ -159,4 +160,28 @@ export async function enviarResumo(user, filtros, { para, observacao } = {}) {
     return { enviados: emails, periodo: resumo.periodo };
 }
 
-export default { montarResumo, enviarResumo, normalizarDestinatarios };
+/**
+ * O mesmo e-mail como RASCUNHO .eml (`X-Unsent: 1`): o Outlook abre como
+ * mensagem nova, editável, e quem envia é a própria pessoa, da conta dela.
+ * Destinatários são opcionais aqui - dá para escolher no Outlook.
+ */
+export async function rascunhoEml(user, filtros, { para, observacao } = {}) {
+    const { emails } = normalizarDestinatarios(para);
+    const resumo = await montarResumo(user, filtros);
+    const { subject, html } = renderEmail('cobranca.ato.resumo', {
+        ...resumo,
+        observacao: String(observacao || '').trim().slice(0, 2000) || null,
+        remetente: user?.username || user?.name || user?.email || null,
+    });
+    const buffer = await new MailComposer({
+        to: emails.slice(0, MAX_DESTINATARIOS).join(', ') || undefined,
+        subject,
+        html,
+        headers: { 'X-Unsent': '1' },
+    }).compile().build();
+    // Nome só ASCII: vai no header Content-Disposition.
+    const nomeArquivo = `resumo-ato-${resumo.periodo.normalize('NFD').replace(/[^\w]+/g, '_')}.eml`;
+    return { buffer, nomeArquivo };
+}
+
+export default { montarResumo, enviarResumo, rascunhoEml, normalizarDestinatarios };

@@ -2,7 +2,7 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireCapability from '../middlewares/requireCapability.js';
-import { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline, sendResumoEmail } from '../controllers/cobrancaAto/cobrancaAtoController.js';
+import { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline, sendResumoEmail, downloadResumoEml } from '../controllers/cobrancaAto/cobrancaAtoController.js';
 import P from '../controllers/cobrancaAto/atoParcelasController.js';
 
 const router = express.Router();
@@ -22,6 +22,8 @@ router.get('/timeline/:idreserva', ...ver, getReservaTimeline);
 // Resumo dos cartões por e-mail (mesmos filtros da tela). Envia para fora da
 // tela, então pede `operate`, não só `view`.
 router.post('/resumo-email', ...operar, sendResumoEmail);
+// O mesmo e-mail como rascunho .eml, para abrir e enviar pelo Outlook.
+router.post('/resumo-email/eml', ...operar, downloadResumoEml);
 
 // ── Parcelas mensais (plano por reserva) ─────────────────────────────────────
 // view: lista, KPIs, detalhe. operate: criar/sincronizar/pausar/encerrar plano,

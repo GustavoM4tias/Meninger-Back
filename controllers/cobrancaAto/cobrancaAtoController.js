@@ -97,4 +97,18 @@ export async function sendResumoEmail(req, res) {
     }
 }
 
-export default { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline, sendResumoEmail };
+/** O resumo como rascunho .eml para abrir no Outlook (body: para, observacao). */
+export async function downloadResumoEml(req, res) {
+    try {
+        const { para, observacao } = req.body || {};
+        const { buffer, nomeArquivo } = await Resumo.rascunhoEml(req.user, filtrosDaQuery(req), { para, observacao });
+        res.setHeader('Content-Type', 'message/rfc822');
+        res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
+        return res.send(buffer);
+    } catch (err) {
+        console.error('[COBRANCA_ATO] downloadResumoEml:', err);
+        return res.status(500).json({ error: 'Falha ao montar o rascunho do e-mail.' });
+    }
+}
+
+export default { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline, sendResumoEmail, downloadResumoEml };
