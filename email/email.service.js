@@ -123,6 +123,11 @@ const META = {
         preview: (d) => `Solicitado por ${d.requesterName || 'usuário do sistema'}`,
         file: 'supplier.rid.request.hbs',
     },
+    'cobranca.ato.resumo': {
+        subject: (d) => `Cobrança do Ato - resumo de ${d.periodo || ''}`,
+        preview: (d) => `Pagos ${d.pagos?.valor || ''} · a receber ${d.aReceber?.valor || ''} · evasão ${d.evasao?.pct || ''}`,
+        file: 'cobranca.ato.resumo.hbs',
+    },
     'meeting.report': {
         subject: (d) => `Relatório de Reunião: ${d.subject || 'Reunião'}`,
         preview: (d) => d.resumoPreview || 'Resumo e ações gerados por IA',

@@ -2,7 +2,7 @@
 import express from 'express';
 import authenticate from '../middlewares/authMiddleware.js';
 import requireCapability from '../middlewares/requireCapability.js';
-import { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline } from '../controllers/cobrancaAto/cobrancaAtoController.js';
+import { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline, sendResumoEmail } from '../controllers/cobrancaAto/cobrancaAtoController.js';
 import P from '../controllers/cobrancaAto/atoParcelasController.js';
 
 const router = express.Router();
@@ -19,6 +19,9 @@ router.get('/history-facets', ...ver, getHistoryFacets);
 // Timeline por RESERVA, nao por registro: a historia da cobranca do ato
 // atravessa tentativas e ate a troca de forma.
 router.get('/timeline/:idreserva', ...ver, getReservaTimeline);
+// Resumo dos cartões por e-mail (mesmos filtros da tela). Envia para fora da
+// tela, então pede `operate`, não só `view`.
+router.post('/resumo-email', ...operar, sendResumoEmail);
 
 // ── Parcelas mensais (plano por reserva) ─────────────────────────────────────
 // view: lista, KPIs, detalhe. operate: criar/sincronizar/pausar/encerrar plano,

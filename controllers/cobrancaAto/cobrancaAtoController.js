@@ -5,6 +5,7 @@
 // com um link é diferente (baixar x excluir, por exemplo).
 import Historico from '../../services/cobrancaAto/historicoService.js';
 import Eventos from '../../services/cobrancaAto/eventoService.js';
+import Resumo from '../../services/cobrancaAto/resumoEmailService.js';
 
 function filtrosDaQuery(req) {
     return {
@@ -81,4 +82,19 @@ export async function getReservaTimeline(req, res) {
     }
 }
 
-export default { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline };
+/**
+ * Envia o resumo dos cartões por e-mail, com os filtros da tela (query string)
+ * e os destinatários digitados (body). O escopo é o de quem envia.
+ */
+export async function sendResumoEmail(req, res) {
+    try {
+        const { para, observacao } = req.body || {};
+        return res.json(await Resumo.enviarResumo(req.user, filtrosDaQuery(req), { para, observacao }));
+    } catch (err) {
+        if (err.status === 400) return res.status(400).json({ error: err.message });
+        console.error('[COBRANCA_ATO] sendResumoEmail:', err);
+        return res.status(500).json({ error: 'Falha ao enviar o resumo por e-mail.' });
+    }
+}
+
+export default { listHistory, getHistoryStats, getHistoryFacets, getReservaTimeline, sendResumoEmail };

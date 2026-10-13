@@ -1,0 +1,118 @@
+<div style="max-width:640px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827">
+
+  <h2 style="font-size:18px;font-weight:700;margin:0 0 4px">Cobrança do Ato - resumo</h2>
+  <p style="font-size:13px;color:#6b7280;margin:0 0 20px">
+    Emitidos de {{periodo}} · gerado em {{geradoEm}}{{#if remetente}} por {{remetente}}{{/if}}
+  </p>
+
+  {{#if observacao}}
+  <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:12px 16px;margin-bottom:20px">
+    <p style="font-size:13px;color:#0c4a6e;margin:0;line-height:1.6;white-space:pre-wrap">{{observacao}}</p>
+  </div>
+  {{/if}}
+
+  <!-- Indicadores -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:8px;margin:0 -8px 12px">
+    <tr>
+      <td width="50%" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;vertical-align:top">
+        <div style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Emitidos</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px">{{emitidos.valor}}</div>
+        <div style="font-size:12px;color:#6b7280">{{emitidos.qty}} cobranças de ato</div>
+      </td>
+      <td width="50%" style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:14px 16px;vertical-align:top">
+        <div style="font-size:11px;font-weight:600;color:#047857;text-transform:uppercase;letter-spacing:.05em">Pagos</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px;color:#065f46">{{pagos.valor}}</div>
+        <div style="font-size:12px;color:#047857">{{pagos.qty}} · {{pagos.pct}} dos emitidos</div>
+      </td>
+    </tr>
+    <tr>
+      <td width="50%" style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;vertical-align:top">
+        <div style="font-size:11px;font-weight:600;color:#b45309;text-transform:uppercase;letter-spacing:.05em">A receber</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px;color:#92400e">{{aReceber.valor}}</div>
+        <div style="font-size:12px;color:#b45309">{{aReceber.qty}} · a vencer {{aVencer.valor}} ({{aVencer.qty}})</div>
+        <div style="font-size:12px;color:#b45309">vencidos aguardando baixa {{vencidosAguardando.valor}} ({{vencidosAguardando.qty}})</div>
+      </td>
+      <td width="50%" style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;vertical-align:top">
+        <div style="font-size:11px;font-weight:600;color:#b91c1c;text-transform:uppercase;letter-spacing:.05em">Evasão</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px;color:#991b1b">{{evasao.pct}}</div>
+        <div style="font-size:12px;color:#b91c1c">{{evasao.qty}} baixados sem pagamento · {{evasao.valor}}</div>
+      </td>
+    </tr>
+  </table>
+
+  {{#if entradas}}
+  <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:13px;line-height:1.6">
+    <b>Entradas no período (caixa):</b> {{entradas.valor}} em {{entradas.qty}} atos pagos entre essas datas.
+    {{#if entradas.foraDoPeriodo}}Inclui {{entradas.foraDoPeriodo}} emitidos antes do período ({{entradas.valorForaDoPeriodo}}).{{/if}}
+  </div>
+  {{/if}}
+
+  {{#if erros.qty}}
+  <p style="font-size:13px;color:#374151;margin:0 0 20px">
+    <b>{{erros.qty}} não emitidos</b> ({{erros.valor}}) por erro de cadastro ou condição no CV.
+  </p>
+  {{/if}}
+
+  <!-- Por empreendimento -->
+  {{#if empreendimentos.length}}
+  <h3 style="font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px;padding-bottom:6px;border-bottom:2px solid #e5e7eb">Por empreendimento</h3>
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;margin-bottom:24px">
+    <thead>
+      <tr style="background:#f9fafb">
+        <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#6b7280">Empreendimento</th>
+        <th style="text-align:right;padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#6b7280">Emitido</th>
+        <th style="text-align:right;padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#6b7280">Pago</th>
+        <th style="text-align:right;padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#6b7280">A receber</th>
+        <th style="text-align:right;padding:6px 8px;border-bottom:1px solid #e5e7eb;color:#6b7280">Evasão</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{#each empreendimentos}}
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6">{{nome}}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right;white-space:nowrap">{{emitidos}}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right;white-space:nowrap">{{pagos}}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right;white-space:nowrap">{{pendente}}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right;white-space:nowrap">{{evasao}} ({{evasaoPct}})</td>
+      </tr>
+      {{/each}}
+    </tbody>
+  </table>
+  {{/if}}
+
+  {{#if vencidos.length}}
+  <h3 style="font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px;padding-bottom:6px;border-bottom:2px solid #e5e7eb">Vencidos aguardando baixa</h3>
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;margin-bottom:24px">
+    {{#each vencidos}}
+    <tr>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;color:#6b7280;white-space:nowrap">#{{reserva}}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6">{{titular}}<br><span style="color:#6b7280">{{empreendimento}}</span></td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;text-align:right;white-space:nowrap">{{valor}}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;text-align:right;white-space:nowrap">venc. {{vencimento}}</td>
+    </tr>
+    {{/each}}
+  </table>
+  {{/if}}
+
+  {{#if erros.itens.length}}
+  <h3 style="font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px;padding-bottom:6px;border-bottom:2px solid #e5e7eb">Não emitidos</h3>
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;margin-bottom:24px">
+    {{#each erros.itens}}
+    <tr>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;color:#6b7280;white-space:nowrap">#{{reserva}}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6">{{titular}}<br><span style="color:#6b7280">{{motivo}}</span></td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;text-align:right;white-space:nowrap">{{valor}}</td>
+    </tr>
+    {{/each}}
+  </table>
+  {{/if}}
+
+  <p style="font-size:11px;color:#9ca3af;line-height:1.6;margin:0 0 16px">
+    Uma linha por reserva (a cobrança vigente). Pago = confirmado pela Caixa (liquidado) ou pela Rede.
+    A receber = emitido e ainda sem pagamento; "vencido aguardando baixa" é o que passou do vencimento e
+    a Caixa ainda não devolveu. Evasão = baixado por falta de pagamento sobre o total emitido; reserva
+    cancelada no CV não conta como evasão.
+  </p>
+
+  <a href="{{link}}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-size:13px;font-weight:600;padding:10px 16px;border-radius:8px">Abrir no Office</a>
+</div>
