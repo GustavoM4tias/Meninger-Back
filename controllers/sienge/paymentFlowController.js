@@ -292,10 +292,28 @@ export async function siengeWatchController(req, res, next) {
 }
 
 // ── LIST ──────────────────────────────────────────────────────────────────────
+// A tela pagina (100 por vez): ordenar só o lote carregado escondia quem estava
+// na página seguinte. Quem ordena é o banco, sobre todos os lançamentos.
+const ORDENAVEIS = {
+    launchType: ['launchType'],
+    providerName: ['providerName'],
+    status: ['status'],
+    enterpriseName: ['enterpriseName', 'companyName'],
+    unitPrice: ['unitPrice'],
+    createdByName: ['createdByName'],
+    createdAt: ['createdAt'],
+};
+function ordemDaListagem(sortBy, sortDir) {
+    const colunas = ORDENAVEIS[sortBy];
+    if (!colunas) return [['createdAt', 'DESC'], ['id', 'DESC']];
+    const dir = String(sortDir).toLowerCase() === 'asc' ? 'ASC NULLS LAST' : 'DESC NULLS LAST';
+    return [...colunas.map(c => [c, dir]), ['id', 'DESC']];
+}
+
 export async function listLaunches(req, res, next) {
     try {
         const { Op } = db.Sequelize;
-        const { status, excludeStatus, launchType, companyId, enterpriseId, search, createdBy, page = 1, limit = 20, dateFrom, dateTo } = req.query;
+        const { status, excludeStatus, launchType, companyId, enterpriseId, search, createdBy, page = 1, limit = 20, dateFrom, dateTo, sortBy, sortDir } = req.query;
         const isAdmin = req.user?.role === 'admin';
         const userId = req.user?.id;
 
@@ -366,7 +384,7 @@ export async function listLaunches(req, res, next) {
         const offset = (Number(page) - 1) * Number(limit);
         const { count, rows } = await Model().findAndCountAll({
             where,
-            order: [['createdAt', 'DESC']],
+            order: ordemDaListagem(sortBy, sortDir),
             limit: Number(limit),
             offset,
             attributes: { exclude: ['aiExtractedData', 'extraAttachments', 'siengeContractRaw', 'siengeItemsRaw'] },
