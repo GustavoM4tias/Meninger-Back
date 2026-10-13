@@ -274,8 +274,12 @@ export async function listar(user, filtros = {}) {
     const replacements = { ...escopo.replacements, ...estado.replacements };
     const cte = sqlAtual(escopo.sql);
 
-    const page = Math.max(1, Number(filtros.page) || 1);
-    const limit = Math.min(200, Math.max(1, Number(filtros.limit) || 20));
+    // `limit=all`: o período inteiro de uma vez. A tela recorta pelos cartões
+    // (Pagos, Com erro...) em memória; com só a 1a página carregada, o recorte
+    // mostrava parte do período e escondia o resto.
+    const todos = String(filtros.limit) === 'all';
+    const page = todos ? 1 : Math.max(1, Number(filtros.page) || 1);
+    const limit = todos ? null : Math.min(200, Math.max(1, Number(filtros.limit) || 20));
     const coluna = ORDENAVEIS[filtros.sortBy] || 'created_at';
     const direcao = String(filtros.sortDir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
@@ -289,13 +293,13 @@ export async function listar(user, filtros = {}) {
     const [rows] = await db.sequelize.query(
         `${cte} SELECT * FROM atual ${estado.sql}
           ORDER BY ${coluna} ${direcao} NULLS LAST, uid DESC
-          LIMIT :limit OFFSET :offset`,
-        { replacements: { ...replacements, limit, offset: (page - 1) * limit } },
+          ${todos ? '' : 'LIMIT :limit OFFSET :offset'}`,
+        { replacements: todos ? replacements : { ...replacements, limit, offset: (page - 1) * limit } },
     );
 
     await enriquecer(rows);
     await aplicarNomeAtual(rows);
-    return { total, page, limit, rows, grouped: true };
+    return { total, page, limit: limit ?? total, rows, grouped: true };
 }
 
 /**
