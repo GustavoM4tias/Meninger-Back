@@ -50,6 +50,10 @@ export const NotificationType = {
     // senha, e sem aviso o dado só envelhece calado.
     CV_PANEL_CREDENTIAL_FAILED: 'integracao.cv.credencial',
 
+    // Robô do painel do CV - a sessão que uma pessoa conectou caiu, e a
+    // reaprovação automática de reservas para até alguém conectar de novo.
+    CV_PANEL_SESSION_LOST: 'integracao.cv.sessao_painel',
+
     // Validador de contratos — o contrato que a automação NÃO conseguiu
     // resolver fica parado de propósito, e sem aviso ninguém percebe.
     CONTRACT_VALIDATOR_STUCK: 'validador.contrato.parado',
@@ -213,6 +217,16 @@ export const NOTIFICATION_CATALOG = {
         whatsapp: null,
         // Vale e-mail: quem conserta isso pode estar fora do Office, e a
         // integração fica parada até alguém agir.
+        defaults: { inapp: true, email: true, whatsapp: false },
+        userOptional: true,
+    },
+    [NotificationType.CV_PANEL_SESSION_LOST]: {
+        label: 'Robô do CV saiu do painel',
+        group: 'Sistema',
+        description: 'Quando a sessão do robô no painel do CV cai (o CV pediu login de novo). A reaprovação '
+            + 'automática de reservas fica parada até alguém conectar a sessão outra vez.',
+        emailType: 'generic.notification',
+        whatsapp: null,
         defaults: { inapp: true, email: true, whatsapp: false },
         userOptional: true,
     },

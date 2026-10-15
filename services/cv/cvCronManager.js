@@ -39,6 +39,7 @@ import cvExtrasScheduler from '../../scheduler/cvExtrasScheduler.js';
 import correspondentCvScheduler from '../../scheduler/correspondentCvScheduler.js';
 import imobiliariaCvScheduler from '../../scheduler/imobiliariaCvScheduler.js';
 import unitBlockReasonScheduler from '../../scheduler/unitBlockReasonScheduler.js';
+import cvRoboPainelScheduler from '../../scheduler/cvRoboPainelScheduler.js';
 
 const TZ = 'America/Sao_Paulo';
 const IS_PROD = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
@@ -179,6 +180,17 @@ export const CV_JOBS = [
         envCron: 'IMOBILIARIA_CV_CRON_EXPRESSION',
         envAtivo: 'ENABLE_CV_IMOBILIARIA_SCHEDULE',
         semear: () => ligadoPorPadraoEmProd('ENABLE_CV_IMOBILIARIA_SCHEDULE'),
+    },
+    {
+        key: 'robo_painel',
+        label: 'Robô do painel (sessão + reaprovação)',
+        descricao: 'Mantém viva a sessão do robô no painel do CV e reaprova as reservas que voltaram para dentro da regra. Nasce desligado: ligar aqui é decisão de quem administra o CV.',
+        modulo: cvRoboPainelScheduler,
+        padrao: '*/4 * * * *',
+        envCron: 'CV_ROBO_PAINEL_CRON_EXPRESSION',
+        envAtivo: 'ENABLE_CV_ROBO_PAINEL',
+        // Só liga por decisão explícita (tela ou ENABLE_CV_ROBO_PAINEL=true).
+        semear: () => ligadoSoComTrue('ENABLE_CV_ROBO_PAINEL'),
     },
 ];
 

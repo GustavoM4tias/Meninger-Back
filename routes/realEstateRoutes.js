@@ -29,6 +29,11 @@ import {
     updateCvJob,
     runCvJob,
     testCvApi,
+    getCvRobo,
+    conectarCvRobo,
+    desconectarCvRobo,
+    salvarCvRoboConfig,
+    simularCvRobo,
 } from '../controllers/realEstateController.js';
 
 
@@ -61,6 +66,14 @@ router.get('/cv-panel', podeConfigurar, getCvPanel);
 router.put('/cv-panel', podeConfigurar, updateCvPanel);
 router.post('/cv-panel/test', podeConfigurar, testCvPanel);
 router.post('/cv-panel/test-api', podeConfigurar, testCvApi);
+
+// Robô do painel: sessão colada por uma pessoa, regra e histórico da
+// reaprovação automática de reservas.
+router.get('/cv-robo', podeConfigurar, getCvRobo);
+router.put('/cv-robo/sessao', podeConfigurar, conectarCvRobo);
+router.delete('/cv-robo/sessao', podeConfigurar, desconectarCvRobo);
+router.put('/cv-robo/config', podeConfigurar, salvarCvRoboConfig);
+router.post('/cv-robo/simular', podeConfigurar, simularCvRobo);
 
 // Crons de dados do CV: o que roda e em que horário.
 router.get('/cv-jobs', podeConfigurar, getCvJobs);

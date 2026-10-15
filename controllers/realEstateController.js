@@ -725,3 +725,111 @@ export async function testCvApi(req, res) {
         return res.status(500).json({ ok: false, error: 'Erro ao testar a conexão com o CV.' });
     }
 }
+
+// ── Robô do painel do CV ─────────────────────────────────────────────────────
+//
+// Aprovar reserva no CV só existe no formulário do painel, e o login do painel
+// tem CAPTCHA. Uma pessoa conecta a sessão do usuário do robô colando o cookie;
+// o Office a mantém viva e reaprova as reservas que voltaram para dentro da
+// regra do empreendimento. Ver lib/cvPainelSessao.js e
+// services/cv/cvReaprovacaoService.js.
+
+const SITUACOES_ROBO = { 12: 'Análise Comercial', 31: 'Ajustes Financeiro', 18: 'Ajustes', 1: 'Nova Reserva' };
+
+const listaDeIds = (v) => (Array.isArray(v) ? [...new Set(v.map(Number).filter((n) => Number.isInteger(n) && n > 0))] : null);
+
+async function estadoDoRobo() {
+    const [{ statusSessao }, reap] = await Promise.all([
+        import('../lib/cvPainelSessao.js'),
+        import('../services/cv/cvReaprovacaoService.js'),
+    ]);
+    const [sessao, config, hist] = await Promise.all([statusSessao(), reap.lerConfig(), reap.historico({ limite: 60 })]);
+    return { sessao, config, historico: hist.itens, ultimos7dias: hist.ultimos7dias, situacoes_conhecidas: SITUACOES_ROBO };
+}
+
+export async function getCvRobo(req, res) {
+    try {
+        return res.json({ ok: true, ...(await estadoDoRobo()) });
+    } catch (err) {
+        console.error('[realestate] getCvRobo:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao ler o robô do CV.' });
+    }
+}
+
+/** Cola a sessão do robô. Testa antes de gravar; o cookie nunca volta. */
+export async function conectarCvRobo(req, res) {
+    try {
+        const { conectarSessao } = await import('../lib/cvPainelSessao.js');
+        const teste = await conectarSessao(req.body?.cookie, req.user);
+        return res.json({ ok: true, teste, ...(await estadoDoRobo()) });
+    } catch (err) {
+        console.error('[realestate] conectarCvRobo:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao conectar a sessão do robô.' });
+    }
+}
+
+export async function desconectarCvRobo(req, res) {
+    try {
+        const { desconectarSessao } = await import('../lib/cvPainelSessao.js');
+        const teste = await desconectarSessao();
+        return res.json({ ok: true, teste, ...(await estadoDoRobo()) });
+    } catch (err) {
+        console.error('[realestate] desconectarCvRobo:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao remover a sessão do robô.' });
+    }
+}
+
+export async function salvarCvRoboConfig(req, res) {
+    try {
+        const b = req.body || {};
+        const patch = {};
+
+        if (b.ativo !== undefined) patch.ativo = !!b.ativo;
+        if (b.modo !== undefined) {
+            if (!['simular', 'aprovar'].includes(b.modo)) return res.status(400).json({ ok: false, error: 'Modo inválido. Use simular ou aprovar.' });
+            patch.modo = b.modo;
+        }
+        for (const campo of ['situacoes', 'series_pro_soluto', 'series_bloqueiam']) {
+            if (b[campo] === undefined) continue;
+            const ids = listaDeIds(b[campo]);
+            if (!ids) return res.status(400).json({ ok: false, error: `Lista inválida em ${campo}.` });
+            if (campo === 'situacoes' && !ids.length) return res.status(400).json({ ok: false, error: 'Escolha ao menos uma situação.' });
+            patch[campo] = ids;
+        }
+        if (b.tolerancia_reais !== undefined) {
+            const t = Number(b.tolerancia_reais);
+            if (!Number.isFinite(t) || t < 0 || t > 1000) return res.status(400).json({ ok: false, error: 'Tolerância deve ficar entre R$ 0 e R$ 1.000.' });
+            patch.tolerancia_reais = t;
+        }
+        if (b.max_por_rodada !== undefined) {
+            const m = Number(b.max_por_rodada);
+            if (!Number.isInteger(m) || m < 1 || m > 200) return res.status(400).json({ ok: false, error: 'Máximo por rodada deve ficar entre 1 e 200.' });
+            patch.max_por_rodada = m;
+        }
+        if (b.comentario !== undefined) {
+            const c = String(b.comentario || '').trim();
+            if (c.length < 10 || c.length > 500) return res.status(400).json({ ok: false, error: 'O comentário deve ter entre 10 e 500 caracteres.' });
+            patch.comentario = c;
+        }
+        if (!Object.keys(patch).length) return res.status(400).json({ ok: false, error: 'Nada para salvar.' });
+
+        const { salvarConfig } = await import('../services/cv/cvReaprovacaoService.js');
+        await salvarConfig(patch, req.user);
+        return res.json({ ok: true, ...(await estadoDoRobo()) });
+    } catch (err) {
+        console.error('[realestate] salvarCvRoboConfig:', err);
+        return res.status(500).json({ ok: false, error: 'Erro ao salvar a regra do robô.' });
+    }
+}
+
+/** Roda a fila agora SEM aprovar nada: mostra o que o robô faria. */
+export async function simularCvRobo(req, res) {
+    try {
+        const { rodar } = await import('../services/cv/cvReaprovacaoService.js');
+        const resultado = await rodar({ forcarSimulacao: true });
+        return res.json({ ok: true, resultado, ...(await estadoDoRobo()) });
+    } catch (err) {
+        console.error('[realestate] simularCvRobo:', err);
+        return res.status(500).json({ ok: false, error: err?.message || 'Erro ao simular a reaprovação.' });
+    }
+}
