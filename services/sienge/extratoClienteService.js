@@ -2,29 +2,36 @@
 //
 // Extrato do cliente (/financeiro/extrato-cliente, Financeiro > Contas a Receber).
 //
-// Duas fontes, cada uma com um papel:
-//   - LISTA: a tabela `contracts` do Office (contratos de venda do Sienge,
-//     sincronizados de hora em hora). É ela que diz QUAIS contratos a pessoa
-//     pode consultar, recortada pela alçada antes de sair do banco.
+// Três fontes, cada uma com um papel:
+//   - LISTA, parte 1: a tabela `contracts` do Office (contratos de venda do
+//     Sienge, sincronizados de hora em hora).
+//   - LISTA, parte 2: o backup diário do Sienge (`ecrctitulo`), para os títulos
+//     a receber ligados a uma UNIDADE que não são contrato de venda no Office:
+//     adiantamento (AVC) de quem pagou o ato antes de o contrato sair, taxas
+//     (TX), IPTU, contrato antigo que a API de contratos não traz... Sem isso o
+//     cliente que só tem AVC não aparecia (caso Wagna, título 33721, 15/10/2026).
+//     Título sem unidade (mútuo entre empresas, aluguel, nota de serviço) fica de
+//     fora: não é de cliente de empreendimento.
 //   - EXTRATO: a API do Sienge AO VIVO, `/v1/customer-financial-statements`
 //     (o mesmo "Extrato Cliente" do ERP), e o `/pdf` dela para o relatório
 //     oficial. Nada é recalculado: parcela, saldo e baixa vêm como o Sienge
 //     devolve; aqui só se soma para o resumo do topo.
 //
 // Alçada: por centro de custo, via accessScopeService (o sub-CC 33058 herda do
-// base 33001, a mesma regra do Custos). O título pedido é conferido contra a
-// alçada ANTES de ir ao Sienge - o id do título vem do navegador e não vale
-// como prova de nada.
+// base 33001, a mesma regra do Custos), aplicada nas duas listas antes de sair
+// do banco. O título pedido é conferido contra a alçada ANTES de ir ao Sienge -
+// o id do título vem do navegador e não vale como prova de nada.
 import axios from 'axios';
 import db from '../../models/sequelize/index.js';
 import apiSienge from '../../lib/apiSienge.js';
+import { siengeQuery } from '../../lib/siengeReadDb.js';
 import { getScope, isErpAllowed } from '../permissions/accessScopeService.js';
 
 const { sequelize, Sequelize } = db;
 const Q = { type: Sequelize.QueryTypes.SELECT };
 
 // Sem empreendimento nem busca, a lista só sai inteira até este tamanho. Acima
-// disso a tela pede um filtro (admin sem filtro seriam ~16 mil contratos).
+// disso a tela pede um filtro (admin sem filtro seriam ~19 mil títulos).
 const LIMITE_SEM_FILTRO = 2000;
 
 // Baixas que são DINHEIRO entrando. Reparcelamento, distrato, cancelamento,
@@ -43,6 +50,11 @@ const soDigitos = (v) => String(v ?? '').replace(/\D/g, '');
 const num = (v) => (v == null || v === '' ? 0 : Number(v) || 0);
 const centavos = (v) => Math.round(v * 100) / 100;
 const hojeIso = () => new Date().toISOString().slice(0, 10);
+const dia = (v) => {
+    if (!v) return null;
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+    return String(v).slice(0, 10);
+};
 
 function parseIds(raw) {
     const lista = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
@@ -71,29 +83,114 @@ function erroSienge(e, oQue) {
     return erro(502, 'O Sienge não respondeu ao pedido do extrato. Tente de novo em instantes.');
 }
 
+// ── Títulos do backup (fora da tabela de contratos) ──────────────────────────
+
+/** Títulos que já são contrato no Office: o backup não os repete. */
+async function titulosDeContrato() {
+    const rows = await sequelize.query(
+        'SELECT DISTINCT receivable_bill_id AS b FROM contracts WHERE receivable_bill_id IS NOT NULL', Q);
+    return rows.map((r) => Number(r.b));
+}
+
+// Título do backup com a unidade principal, o empreendimento (CC) dela, a
+// empresa e o cliente. `$1` = títulos de contrato a excluir.
+const SQL_TITULOS = `
+    SELECT t.nutitulo, TRIM(t.cddocumento) AS documento, TRIM(t.nudocumento) AS nudocumento,
+           t.dtemissao, t.dtdistrato, t.vltotal, t.pemultamora, t.pejuromora,
+           t.cdcliente, c.nmcliente,
+           emp.cdempresaview, emp.nmempresa,
+           e.cdempreendview, e.nmempreend,
+           u.nuunidade
+      FROM ecrctitulo t
+      JOIN LATERAL (
+            SELECT un.cdempreend, un.nuunidade FROM ecrcunidade un
+             WHERE un.nutitulo = t.nutitulo
+             ORDER BY (un.flprincipal = 'S') DESC, un.nuunidade
+             LIMIT 1) u ON true
+      JOIN ecadempreend e   ON e.cdempreend = u.cdempreend
+      JOIN ecadempresa  emp ON emp.cdempresa = t.cdempresa
+      LEFT JOIN ecadcliente c ON c.cdcliente = t.cdcliente
+     WHERE NOT (t.nutitulo = ANY($1::int[]))`;
+
+/** Mesma regra do clausulaEscopo, em parâmetro posicional para o backup. */
+function escopoBackup(scope, add) {
+    if (scope.all) return '';
+    const p = add(scope.erpIds);
+    return ` AND (e.cdempreendview = ANY(${p}::int[]) OR (e.cdempreendview / 100) * 100 + 1 = ANY(${p}::int[]))`;
+}
+
+function linhaTitulo(r) {
+    const cliente = { id: Number(r.cdcliente), nome: r.nmcliente || '', principal: true, conjuge: false };
+    const unidade = r.nuunidade ? { id: null, nome: String(r.nuunidade).trim(), principal: true } : null;
+    return {
+        chave: `t-${r.nutitulo}`,
+        id: null,
+        titulo: Number(r.nutitulo),
+        contrato: null,
+        documento: [r.documento, r.nudocumento].filter(Boolean).join('.'),
+        tipoDocumento: r.documento,
+        avulso: true,
+        situacao: r.dtdistrato ? 'Cancelado' : 'Emitido',
+        data: dia(r.dtemissao),
+        cancelamento: dia(r.dtdistrato),
+        valor: num(r.vltotal),
+        empreendimento: { id: Number(r.cdempreendview), nome: r.nmempreend },
+        empresa: { id: Number(r.cdempresaview), nome: r.nmempresa },
+        clienteId: cliente.id,
+        cliente: cliente.nome,
+        clientes: [cliente],
+        unidade: unidade?.nome || '',
+        unidades: unidade ? [unidade] : [],
+    };
+}
+
 // ── Empreendimentos ──────────────────────────────────────────────────────────
 
-/** Empreendimentos (centros de custo) com contrato que a pessoa pode consultar. */
+/** Empreendimentos (centros de custo) com título que a pessoa pode consultar. */
 async function listarEmpreendimentos(user) {
     const scope = await getScope(user);
     const replacements = {};
     const escopo = clausulaEscopo(scope, replacements);
     if (escopo === null) return [];
 
-    const rows = await sequelize.query(
-        `SELECT c.enterprise_id AS id,
-                (ARRAY_AGG(c.enterprise_name ORDER BY c.id DESC))[1] AS nome,
-                COUNT(*)::int AS contratos
-           FROM contracts c
-          WHERE c.receivable_bill_id IS NOT NULL ${escopo}
-          GROUP BY c.enterprise_id
-          ORDER BY c.enterprise_id`,
-        { replacements, ...Q }
-    );
-    return rows.map((r) => ({ id: Number(r.id), nome: r.nome, contratos: r.contratos }));
+    const [contratos, excluir] = await Promise.all([
+        sequelize.query(
+            `SELECT c.enterprise_id AS id,
+                    (ARRAY_AGG(c.enterprise_name ORDER BY c.id DESC))[1] AS nome,
+                    COUNT(*)::int AS n
+               FROM contracts c
+              WHERE c.receivable_bill_id IS NOT NULL ${escopo}
+              GROUP BY c.enterprise_id`,
+            { replacements, ...Q }
+        ),
+        titulosDeContrato(),
+    ]);
+
+    const params = [excluir];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+    let avulsos = [];
+    try {
+        ({ rows: avulsos } = await siengeQuery(
+            `SELECT x.cdempreendview AS id, MAX(x.nmempreend) AS nome, COUNT(*)::int AS n
+               FROM (${SQL_TITULOS}${escopoBackup(scope, add)}) x
+              GROUP BY x.cdempreendview`, params));
+    } catch (e) {
+        // Backup fora do ar não pode esconder os contratos: segue só com eles.
+        console.error('[extrato-cliente] backup (empreendimentos):', e.message);
+    }
+
+    const porId = new Map();
+    for (const r of [...contratos, ...avulsos]) {
+        const id = Number(r.id);
+        const atual = porId.get(id) || { id, nome: r.nome, contratos: 0 };
+        atual.contratos += Number(r.n) || 0;
+        if (!atual.nome) atual.nome = r.nome;
+        porId.set(id, atual);
+    }
+    return [...porId.values()].sort((a, b) => a.id - b.id);
 }
 
-// ── Lista de contratos ───────────────────────────────────────────────────────
+// ── Lista ────────────────────────────────────────────────────────────────────
 
 /** CPF/CNPJ digitado na busca vira código de cliente pelo cadastro do Sienge. */
 async function clientesPorDocumento(doc) {
@@ -113,9 +210,13 @@ function linhaContrato(r) {
     const unidades = (Array.isArray(r.units) ? r.units : []).map((u) => ({ id: Number(u.id), nome: u.name || '', principal: !!u.main }));
     const unidade = unidades.find((u) => u.principal) || unidades[0] || null;
     return {
+        chave: `c-${r.id}`,
         id: Number(r.id),
         titulo: Number(r.receivable_bill_id),
         contrato: r.number,
+        documento: `CT.${r.number}`,
+        tipoDocumento: 'CT',
+        avulso: false,
         situacao: r.situation,
         data: r.contract_date,
         cancelamento: r.cancellation_date,
@@ -131,8 +232,9 @@ function linhaContrato(r) {
 }
 
 /**
- * Contratos consultáveis. Filtros: empreendimentos (ids de CC), busca (nome,
- * contrato, título, unidade; CPF/CNPJ vai ao Sienge) e situação.
+ * Títulos consultáveis: contratos do Office + títulos com unidade do backup.
+ * Filtros: empreendimentos (ids de CC) e busca (nome, contrato, título,
+ * documento, unidade; CPF/CNPJ vai ao Sienge).
  */
 async function listarContratos(user, filtros = {}) {
     const scope = await getScope(user);
@@ -143,16 +245,17 @@ async function listarContratos(user, filtros = {}) {
 
     const empreendimentos = parseIds(filtros.empreendimento);
     const busca = String(filtros.q || '').trim();
-    const situacao = ['Emitido', 'Cancelado'].includes(filtros.situacao) ? filtros.situacao : '';
 
+    // Filtros nas duas fontes: `where` (Office, nomeado) e `extra` (backup, posicional).
     let where = `c.receivable_bill_id IS NOT NULL ${escopo}`;
+    const params = [null]; // $1 = títulos de contrato a excluir, preenchido abaixo
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+    let extra = escopoBackup(scope, add);
+
     if (empreendimentos.length) {
         replacements.emps = empreendimentos;
         where += ' AND c.enterprise_id IN (:emps)';
-    }
-    if (situacao) {
-        replacements.situacao = situacao;
-        where += ' AND c.situation = :situacao';
+        extra += ` AND e.cdempreendview = ANY(${add(empreendimentos)}::int[])`;
     }
 
     let aviso = null;
@@ -171,6 +274,7 @@ async function listarContratos(user, filtros = {}) {
             replacements.clienteIds = ids.map(String);
             where += ` AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(c.customers, '[]'::jsonb)) x
                                     WHERE x->>'id' IN (:clienteIds))`;
+            extra += ` AND t.cdcliente = ANY(${add(ids)}::int[])`;
         } else {
             replacements.q = `%${busca}%`;
             where += ` AND (
@@ -180,37 +284,62 @@ async function listarContratos(user, filtros = {}) {
                             WHERE unaccent(upper(COALESCE(x->>'name', ''))) LIKE unaccent(upper(:q)))
                 OR EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(c.units, '[]'::jsonb)) u
                             WHERE unaccent(upper(COALESCE(u->>'name', ''))) LIKE unaccent(upper(:q))))`;
+            const q = add(`%${busca}%`);
+            extra += ` AND (
+                unaccent(upper(COALESCE(c.nmcliente, ''))) LIKE unaccent(upper(${q}))
+                OR t.nutitulo::text LIKE ${q}
+                OR upper(TRIM(t.cddocumento) || '.' || COALESCE(TRIM(t.nudocumento), '')) LIKE upper(${q})
+                OR unaccent(upper(COALESCE(u.nuunidade, ''))) LIKE unaccent(upper(${q})))`;
         }
     }
 
     const semFiltro = !empreendimentos.length && !busca;
-    replacements.limite = LIMITE_SEM_FILTRO + 1;
-    const rows = await sequelize.query(
-        `SELECT c.id, c.receivable_bill_id, c.number, c.situation, c.contract_date, c.cancellation_date,
-                c.value, c.enterprise_id, c.enterprise_name, c.company_id, c.company_name,
-                c.customers, c.units
-           FROM contracts c
-          WHERE ${where}
-          ORDER BY c.contract_date DESC NULLS LAST, c.id DESC
-          ${semFiltro ? 'LIMIT :limite' : ''}`,
-        { replacements, ...Q }
-    );
+    const limite = semFiltro ? LIMITE_SEM_FILTRO + 1 : null;
+    if (limite) replacements.limite = limite;
 
-    if (semFiltro && rows.length > LIMITE_SEM_FILTRO) {
-        return { ...vazio, precisaFiltro: true };
+    const [contratos, excluir] = await Promise.all([
+        sequelize.query(
+            `SELECT c.id, c.receivable_bill_id, c.number, c.situation, c.contract_date, c.cancellation_date,
+                    c.value, c.enterprise_id, c.enterprise_name, c.company_id, c.company_name,
+                    c.customers, c.units
+               FROM contracts c
+              WHERE ${where}
+              ORDER BY c.contract_date DESC NULLS LAST, c.id DESC
+              ${limite ? 'LIMIT :limite' : ''}`,
+            { replacements, ...Q }
+        ),
+        titulosDeContrato(),
+    ]);
+    if (limite && contratos.length >= limite) return { ...vazio, precisaFiltro: true };
+
+    params[0] = excluir;
+    let avulsos = [];
+    try {
+        ({ rows: avulsos } = await siengeQuery(
+            `${SQL_TITULOS}${extra} ORDER BY t.dtemissao DESC NULLS LAST, t.nutitulo DESC${limite ? ` LIMIT ${limite}` : ''}`,
+            params));
+    } catch (e) {
+        console.error('[extrato-cliente] backup (títulos):', e.message);
+        aviso = aviso || 'Os títulos sem contrato (adiantamento, taxas) não carregaram agora. Os contratos estão completos.';
     }
-    return { contratos: rows.map(linhaContrato), total: rows.length, precisaFiltro: false, aviso };
+
+    const linhas = [...contratos.map(linhaContrato), ...avulsos.map(linhaTitulo)];
+    if (limite && linhas.length >= limite) return { ...vazio, precisaFiltro: true };
+    return { contratos: linhas, total: linhas.length, precisaFiltro: false, aviso };
 }
 
 // ── Extrato ──────────────────────────────────────────────────────────────────
 
 /**
- * O contrato do título, já conferido contra a alçada. Mais de uma linha para o
- * mesmo título acontece (contrato refeito): vale a emitida mais recente.
+ * O título pedido, já conferido contra a alçada: primeiro como contrato do
+ * Office; se não for, como título com unidade do backup. Mais de uma linha de
+ * contrato para o mesmo título acontece (contrato refeito): vale a emitida
+ * mais recente.
+ * @returns {{ linha, condicoes: Array, multa, juros }}
  */
-async function contratoDoTitulo(user, titulo) {
+async function tituloConferido(user, titulo) {
     const id = Number(titulo);
-    if (!Number.isInteger(id) || id <= 0) throw erro(400, 'Informe o título do contrato.');
+    if (!Number.isInteger(id) || id <= 0) throw erro(400, 'Informe o título.');
 
     const [r] = await sequelize.query(
         `SELECT c.id, c.receivable_bill_id, c.number, c.situation, c.contract_date, c.cancellation_date,
@@ -222,17 +351,48 @@ async function contratoDoTitulo(user, titulo) {
           LIMIT 1`,
         { replacements: { id }, ...Q }
     );
-    if (!r) throw erro(404, 'Contrato não encontrado entre os contratos sincronizados do Sienge.');
+
+    let achado;
+    if (r) {
+        achado = {
+            linha: linhaContrato(r),
+            condicoes: Array.isArray(r.payment_conditions) ? r.payment_conditions : [],
+            multa: num(r.fine_rate),
+            juros: num(r.interest_percentage),
+        };
+    } else {
+        const { rows } = await siengeQuery(`${SQL_TITULOS} AND t.nutitulo = $2`, [[], id]);
+        if (!rows[0]) throw erro(404, 'Título não encontrado entre os contratos do Office nem no backup do Sienge.');
+        achado = {
+            linha: linhaTitulo(rows[0]),
+            condicoes: await condicoesConhecidas(),
+            multa: num(rows[0].pemultamora),
+            juros: num(rows[0].pejuromora),
+        };
+    }
 
     const scope = await getScope(user);
-    if (!isErpAllowed(scope, r.enterprise_id)) {
-        throw erro(403, 'Este contrato é de um empreendimento fora da sua alçada.');
+    if (!isErpAllowed(scope, achado.linha.empreendimento.id)) {
+        throw erro(403, 'Este título é de um empreendimento fora da sua alçada.');
     }
-    return r;
+    return achado;
 }
 
-/** Cliente do extrato: o pedido, se for do contrato; senão o principal. */
-function clienteDoContrato(linha, clienteId) {
+// Nome das condições (PM = Parcelas Mensais...) para título sem contrato no
+// Office: o mesmo dicionário que os contratos usam, lido de todos eles.
+let _condicoes = null;
+async function condicoesConhecidas() {
+    if (_condicoes && Date.now() - _condicoes.t < 60 * 60_000) return _condicoes.lista;
+    const lista = await sequelize.query(
+        `SELECT DISTINCT ON (pc->>'conditionTypeId') pc->>'conditionTypeId' AS "conditionTypeId", pc->>'conditionTypeName' AS "conditionTypeName"
+           FROM contracts, jsonb_array_elements(COALESCE(payment_conditions, '[]'::jsonb)) pc
+          WHERE pc->>'conditionTypeName' IS NOT NULL`, Q);
+    _condicoes = { t: Date.now(), lista };
+    return lista;
+}
+
+/** Cliente do extrato: o pedido, se for do título; senão o principal. */
+function clienteDoTitulo(linha, clienteId) {
     const pedido = Number(clienteId);
     if (Number.isInteger(pedido) && linha.clientes.some((c) => c.id === pedido)) return pedido;
     return linha.clienteId;
@@ -250,10 +410,10 @@ function situacaoParcela(p, hoje) {
     return { chave: 'baixada', rotulo: tipo ? `Baixa por ${tipo.toLowerCase()}` : 'Baixada' };
 }
 
-function montarExtrato(contrato, linha, clienteId, bills, cadastro) {
+function montarExtrato({ linha, condicoes, multa, juros }, clienteId, bills, cadastro) {
     const hoje = hojeIso();
     const nomesCondicao = new Map(
-        (Array.isArray(contrato.payment_conditions) ? contrato.payment_conditions : [])
+        condicoes
             .map((pc) => [String(pc.conditionTypeId || '').trim(), String(pc.conditionTypeName || '').trim()])
             .filter(([k, v]) => k && v)
     );
@@ -314,13 +474,16 @@ function montarExtrato(contrato, linha, clienteId, bills, cadastro) {
         cliente: { ...cliente, documento: cadastro?.documento || null },
         contrato: {
             numero: linha.contrato,
+            documento: linha.documento,
+            tipoDocumento: linha.tipoDocumento,
+            avulso: linha.avulso,
             titulo: linha.titulo,
             situacao: linha.situacao,
             data: linha.data,
             cancelamento: linha.cancelamento,
             valor: linha.valor,
-            multaPct: num(contrato.fine_rate) || num(bills[0]?.finePercent),
-            jurosPct: num(contrato.interest_percentage) || num(bills[0]?.interestPercent),
+            multaPct: multa || num(bills[0]?.finePercent),
+            jurosPct: juros || num(bills[0]?.interestPercent),
             subJudice: bills.some((b) => b.subJudice),
         },
         empreendimento: linha.empreendimento,
@@ -344,12 +507,12 @@ function montarExtrato(contrato, linha, clienteId, bills, cadastro) {
     };
 }
 
-/** Extrato de um contrato (título), lido ao vivo do Sienge. */
+/** Extrato de um título, lido ao vivo do Sienge. */
 async function getExtrato(user, titulo, clienteIdPedido) {
-    const contrato = await contratoDoTitulo(user, titulo);
-    const linha = linhaContrato(contrato);
-    const clienteId = clienteDoContrato(linha, clienteIdPedido);
-    if (!clienteId) throw erro(422, 'O contrato não tem cliente no Sienge.');
+    const achado = await tituloConferido(user, titulo);
+    const { linha } = achado;
+    const clienteId = clienteDoTitulo(linha, clienteIdPedido);
+    if (!clienteId) throw erro(422, 'O título não tem cliente no Sienge.');
 
     const [extrato, cadastro] = await Promise.all([
         apiSienge.get('/v1/customer-financial-statements', { params: { customerId: clienteId, billReceivableId: linha.titulo } })
@@ -362,7 +525,7 @@ async function getExtrato(user, titulo, clienteIdPedido) {
     ]);
 
     const bills = (extrato?.results?.[0]?.billsReceivable || []).filter((b) => Number(b.billReceivableId) === linha.titulo);
-    return montarExtrato(contrato, linha, clienteId, bills, cadastro);
+    return montarExtrato(achado, clienteId, bills, cadastro);
 }
 
 /**
@@ -371,10 +534,9 @@ async function getExtrato(user, titulo, clienteIdPedido) {
  * para a tela poder mostrar e salvar sem expor nem depender desse link.
  */
 async function getPdf(user, titulo, clienteIdPedido) {
-    const contrato = await contratoDoTitulo(user, titulo);
-    const linha = linhaContrato(contrato);
-    const clienteId = clienteDoContrato(linha, clienteIdPedido);
-    if (!clienteId) throw erro(422, 'O contrato não tem cliente no Sienge.');
+    const { linha } = await tituloConferido(user, titulo);
+    const clienteId = clienteDoTitulo(linha, clienteIdPedido);
+    if (!clienteId) throw erro(422, 'O título não tem cliente no Sienge.');
 
     let url;
     try {
