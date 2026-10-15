@@ -1,6 +1,6 @@
 // services/sienge/extratoClienteService.js
 //
-// Extrato do cliente (/comercial/relatorios/extrato-cliente).
+// Extrato do cliente (/financeiro/extrato-cliente, Financeiro > Contas a Receber).
 //
 // Duas fontes, cada uma com um papel:
 //   - LISTA: a tabela `contracts` do Office (contratos de venda do Sienge,

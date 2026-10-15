@@ -8,7 +8,7 @@ import authenticate from '../middlewares/authMiddleware.js';
 import requireCapability from '../middlewares/requireCapability.js';
 import P from '../controllers/sienge/extratoClienteController.js';
 
-const TELA = '/comercial/relatorios/extrato-cliente';
+const TELA = '/financeiro/extrato-cliente';
 
 const router = express.Router();
 
