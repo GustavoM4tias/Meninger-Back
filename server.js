@@ -32,6 +32,7 @@ import orgRegistryScheduler from './scheduler/orgRegistryScheduler.js';
 import reportExportLogRoutes from './routes/reportExportLogRoutes.js';
 import conditionsRoutes from './routes/conditionsRoutes.js';
 import recursoProprioRoutes from './routes/recursoProprioRoutes.js';
+import extratoClienteRoutes from './routes/extratoClienteRoutes.js';
 import eventPlanRoutes from './routes/eventPlanRoutes.js';
 import docusignOauthRoutes from './routes/docusignOauthRoutes.js';
 import boletoRoutes from './routes/boletoRoutes.js';
@@ -337,6 +338,7 @@ app.use('/api/realestate', realEstateRoutes); // cadastro de imobiliárias (CV)
 app.use('/api/correspondents', correspondentRoutes); // correspondentes (CV)
 app.use('/api/conditions', conditionsRoutes);
 app.use('/api/recurso-proprio', recursoProprioRoutes);
+app.use('/api/extrato-cliente', extratoClienteRoutes); // extrato do cliente (Sienge ao vivo)
 app.use('/api/event-plans', eventPlanRoutes); // Plano de Eventos (comercial)
 app.use('/api/boleto-caixa', boletoRoutes);
 app.use('/api/envio-sienge-watch', envioSiengeWatchRoutes);
