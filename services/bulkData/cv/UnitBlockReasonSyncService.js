@@ -1,124 +1,88 @@
 // services/bulkData/cv/UnitBlockReasonSyncService.js
 //
-// Lê o MOTIVO do bloqueio de cada unidade na listagem do painel do CV e o
-// grava em cv_unit_block_reasons. É a única fonte desse dado: a API do CV
-// devolve `situacao` e `data_bloqueio`, e nada sobre o porquê.
+// Lê o MOTIVO do bloqueio de cada unidade e o grava em cv_unit_block_reasons.
 //
-// A listagem (/gestor/cadastros/empreendimentos/<id>/unidades) tem as colunas
-// "Situação" e "Motivo bloqueio" e pagina de 300 em 300, seguindo o link
-// "Próxima →". Empreendimento grande tem 800 unidades: sem seguir a paginação,
-// a leitura enxergaria só o primeiro terço e concluiria que o resto não está
-// bloqueado — por isso o parser SÓ aceita a página quando encontra o cabeçalho
-// esperado, e o empreendimento só é gravado quando a varredura fecha inteira.
+// Até 16/10/2026 isto lia a listagem do PAINEL do CV, e parou de funcionar em
+// 23/09/2026: o login do painel ganhou CAPTCHA (Cloudflare Turnstile) e robô
+// nenhum passa. A tabela ficou vazia e o estoque comercial passou a viver só da
+// marcação manual. Medido em 01/10 e de novo em 16/10: a própria API do CV já
+// devolve o motivo em cada unidade - `situacao.bloqueada` ('S'),
+// `situacao.bloqueada_idmotivo` (3 = Estratégia Comercial, 4 = Administrada
+// pelo SIENGE, 2 = Negociação de Terreno) e `situacao.bloqueada_motivo` (o
+// nome). É o mesmo detalhe (/cvio/empreendimento/{id}) que o sync de
+// empreendimentos já lê, com a chave de integração: sem painel, sem sessão.
 //
-// Falha barulhenta e sem apagar: se o layout mudar, a rodada do empreendimento
-// é descartada com erro no log do job, e o Office continua com o último dado
-// bom em vez de zerar o estoque comercial de todo mundo.
+// Falha barulhenta e sem apagar: se a API não responder para um
+// empreendimento, a rodada dele é descartada com erro no log do job, e o Office
+// continua com o último dado bom em vez de zerar o estoque comercial.
 
-import * as cheerio from 'cheerio';
 import db from '../../../models/sequelize/index.js';
-import { getHtml, isConfigured } from '../../../lib/cvPanelWeb.js';
+import apiCv from '../../../lib/apiCv.js';
 
 const { CvEnterprise, sequelize } = db;
 
-const PAINEL = () => 'gestor';
-const MAX_PAGINAS = 20;     // 20 x 300 = 6000 unidades; o maior do grupo tem 810
+// O CV responde 429 quando várias leituras batem juntas (os crons de :00 e :30).
+// Uma pausa curta entre empreendimentos e uma segunda tentativa depois de
+// esperar resolvem sem transformar isto num cliente com fila própria.
+const PAUSA_ENTRE_EMPREENDIMENTOS_MS = 800;
+const ESPERA_APOS_429_MS = 15_000;
 
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const semAcento = (s) => norm(s)
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase();
-
-/** Índices das colunas que interessam, pelo cabeçalho. null = página não é a listagem. */
-function mapearColunas($) {
-    const tabela = $('table').filter((_, t) => /motivo\s*bloqueio/i.test($(t).text())).first();
-    if (!tabela.length) return null;
-
-    const cabecalhos = tabela.find('tr').first().find('th,td')
-        .map((_, th) => semAcento($(th).text())).get();
-
-    const achar = (...nomes) => cabecalhos.findIndex((h) => nomes.some((n) => h === n || h.startsWith(n)));
-
-    const cols = {
-        id: achar('id'),
-        nome: achar('nome'),
-        bloco: achar('bloco'),
-        situacao: achar('situacao'),
-        motivo: achar('motivo bloqueio'),
-        descricao: achar('desc motivo', 'descricao motivo'),
-    };
-
-    if (cols.id < 0 || cols.nome < 0 || cols.situacao < 0 || cols.motivo < 0) return null;
-    return { tabela, cols };
+async function buscarDetalhe(idempreendimento) {
+    const url = `/cvio/empreendimento/${idempreendimento}?limite_dados_unidade=1000`;
+    try {
+        return (await apiCv.get(url)).data;
+    } catch (err) {
+        if (err?.response?.status !== 429) throw err;
+        await esperar(ESPERA_APOS_429_MS);
+        return (await apiCv.get(url)).data;
+    }
 }
 
-function lerPagina(html) {
-    const $ = cheerio.load(html);
-    const mapa = mapearColunas($);
-    if (!mapa) return null;
-
-    const { tabela, cols } = mapa;
-    const linhas = [];
-
-    tabela.find('tr').each((_, tr) => {
-        const $tr = $(tr);
-        // Só linha de unidade: a listagem marca cada uma com o checkbox de ação.
-        if (!$tr.find('input[name^="unidades["]').length) return;
-
-        const tds = $tr.find('td').map((__, td) => norm($(td).text())).get();
-        const idunidade = Number(tds[cols.id]);
-        if (!Number.isFinite(idunidade) || idunidade <= 0) return;
-
-        linhas.push({
-            idunidade,
-            unidade: tds[cols.nome] || null,
-            bloco: cols.bloco >= 0 ? (tds[cols.bloco] || null) : null,
-            situacao: tds[cols.situacao] || null,
-            motivo: tds[cols.motivo] || null,
-            descricao: cols.descricao >= 0 ? (tds[cols.descricao] || null) : null,
-        });
-    });
-
-    // Link da próxima página, quando existe.
-    const proxima = $('a').filter((_, a) => /pr[óo]xima/i.test($(a).text())).first().attr('href') || null;
-    return { linhas, proxima };
+/** Todas as unidades do detalhe, onde quer que estejam (etapas > blocos > unidades). */
+function coletarUnidades(no, out = [], bloco = null) {
+    if (!no || typeof no !== 'object') return out;
+    if (Array.isArray(no)) {
+        if (no.length && no[0] && typeof no[0] === 'object' && 'idunidade' in no[0]) {
+            out.push(...no.map((u) => ({ ...u, _bloco: bloco })));
+        } else no.forEach((x) => coletarUnidades(x, out, bloco));
+        return out;
+    }
+    // O bloco é o objeto que carrega a lista `unidades`; a unidade não repete o nome dele.
+    const blocoAqui = Array.isArray(no.unidades) && no.nome ? norm(no.nome) : bloco;
+    for (const v of Object.values(no)) coletarUnidades(v, out, blocoAqui);
+    return out;
 }
 
-function urlAbsoluta(href, base) {
-    if (!href) return null;
-    if (/^https?:/i.test(href)) return href;
-    return new URL(href, base).pathname + new URL(href, base).search;
-}
-
-/** Varre TODAS as páginas de um empreendimento. Estoura se alguma página não for a listagem. */
-async function lerEmpreendimento(idempreendimento) {
-    const caminho = `/${PAINEL()}/cadastros/empreendimentos/${idempreendimento}/unidades`;
-    const baseUrl = `https://x${caminho}`;   // só para resolver href relativo
-
-    let url = caminho;
-    let todas = [];
-    let paginas = 0;
-
-    while (url && paginas < MAX_PAGINAS) {
-        // O `ok` diz ao cliente HTTP se veio conteúdo: a casca do painel é
-        // idêntica logada e deslogada, então é este teste que faz a sessão
-        // expirada virar "refaz login e tenta de novo" em vez de erro de parse.
-        const html = await getHtml(url, {}, (h) => /motivo\s*bloqueio/i.test(h));
-        const pagina = lerPagina(html);
-        if (!pagina) {
-            const semSessao = /name="txt_usuario"/i.test(html) && !/unidades\[/i.test(html);
-            throw new Error(semSessao
-                ? `o painel do CV não abriu a listagem do empreendimento ${idempreendimento}: a sessão não foi aceita (confira a credencial em CV CRM > Configurações)`
-                : `a página ${paginas + 1} do empreendimento ${idempreendimento} não é a listagem de unidades (layout mudou?)`);
-        }
-        todas = todas.concat(pagina.linhas);
-        paginas++;
-        url = urlAbsoluta(pagina.proxima, baseUrl);
+/** Lê o empreendimento na API e devolve só as unidades bloqueadas, com o motivo. */
+export async function lerEmpreendimento(idempreendimento) {
+    const detalhe = await buscarDetalhe(idempreendimento);
+    if (!detalhe || typeof detalhe !== 'object') {
+        throw new Error(`o CV não devolveu o empreendimento ${idempreendimento}`);
     }
 
-    return todas;
+    return coletarUnidades(detalhe)
+        // Bloqueada = mapa 4. O `bloqueada: 'S'` sozinho não basta: unidade
+        // vendida (mapa 3) carrega a marca antiga do bloqueio, sem motivo - 72
+        // assim só no Adhara em 16/10/2026. É a mesma conferência da contagem
+        // em unitStockService (data_bloqueio fora de reservada/vendida).
+        .filter((u) => {
+            const s = u?.situacao || {};
+            const mapa = Number(s.situacao_mapa_disponibilidade);
+            if (mapa === 4) return true;
+            return String(s.bloqueada || '').toUpperCase() === 'S' && ![2, 3, 5].includes(mapa);
+        })
+        .map((u) => ({
+            idunidade: Number(u.idunidade),
+            unidade: norm(u.nome) || null,
+            bloco: u._bloco || null,
+            situacao: 'Bloqueada',
+            motivo: norm(u.situacao?.bloqueada_motivo) || null,
+            descricao: null,
+        }))
+        .filter((l) => Number.isFinite(l.idunidade) && l.idunidade > 0);
 }
 
 /**
@@ -127,7 +91,7 @@ async function lerEmpreendimento(idempreendimento) {
  * continua sendo assunto de cv_enterprise_units.
  */
 async function gravar(idempreendimento, linhas) {
-    const bloqueadas = linhas.filter((l) => /bloque/i.test(semAcento(l.situacao)));
+    const bloqueadas = linhas.filter((l) => /bloque/i.test(l.situacao || ''));
 
     await sequelize.transaction(async (t) => {
         if (bloqueadas.length) {
@@ -196,17 +160,14 @@ export default class UnitBlockReasonSyncService {
 
     /** Todos os empreendimentos que o Office conhece. */
     async syncAll() {
-        if (!(await isConfigured())) {
-            throw new Error('Credencial do painel do CV não configurada (CV CRM > Configurações).');
-        }
-
         const emps = await CvEnterprise.findAll({
             attributes: ['idempreendimento', 'nome'],
             order: [['idempreendimento', 'ASC']],
         });
 
         let ok = 0; let falhas = 0; let total = 0;
-        for (const e of emps) {
+        for (const [i, e] of emps.entries()) {
+            if (i) await esperar(PAUSA_ENTRE_EMPREENDIMENTOS_MS);
             try {
                 total += await this.syncForEnterprise(e.idempreendimento);
                 ok++;
@@ -218,10 +179,10 @@ export default class UnitBlockReasonSyncService {
 
         console.log(`✅ [Motivos de bloqueio] ${ok} empreendimentos, ${total} unidades bloqueadas, ${falhas} falha(s)`);
 
-        // Falha em TODOS é problema de credencial/layout, não de um cadastro:
+        // Falha em TODOS é problema de credencial/API, não de um cadastro:
         // estourar aqui faz o job aparecer vermelho na tela em vez de "ok".
         if (ok === 0 && emps.length) {
-            throw new Error('nenhum empreendimento pôde ser lido do painel do CV');
+            throw new Error('nenhum empreendimento pôde ser lido do CV (confira a chave de integração em CV CRM > Configurações)');
         }
         return { empreendimentos: ok, unidades: total, falhas };
     }

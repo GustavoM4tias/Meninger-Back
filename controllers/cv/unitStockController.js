@@ -7,7 +7,7 @@
 //   GET  /cv/estoque-bloqueado              → foto: regras por motivo + leitura + totais
 //   PUT  /cv/estoque-bloqueado/regra        → liga/desliga um motivo (decisão da empresa)
 //   PUT  /cv/estoque-bloqueado/unidade/:id  → exceção de uma unidade, com observação
-//   POST /cv/estoque-bloqueado/sync         → lê o painel agora (o cron já faz de hora em hora)
+//   POST /cv/estoque-bloqueado/sync         → lê o CV agora (o cron já faz de hora em hora)
 //
 // Quem pode: a leitura acompanha a tela de empreendimentos; mudar regra ou
 // exceção é a capacidade `configure` de /crm/buildings, a mesma que edita o
@@ -123,7 +123,7 @@ export const getMotivosDoEmpreendimento = async (req, res) => {
     }
 };
 
-/** Lê o painel agora. O cron já faz de hora em hora; isto é para não esperar. */
+/** Lê o CV agora (API, sem painel). O cron já faz de hora em hora; isto é para não esperar. */
 export const syncMotivos = async (req, res) => {
     try {
         const svc = new UnitBlockReasonSyncService();
@@ -137,7 +137,7 @@ export const syncMotivos = async (req, res) => {
         return res.json({ ok: true, ...r });
     } catch (err) {
         console.error('[estoque-bloqueado] sync:', err);
-        return res.status(502).json({ ok: false, error: err.message || 'A leitura do painel do CV falhou.' });
+        return res.status(502).json({ ok: false, error: err.message || 'A leitura do CV falhou.' });
     }
 };
 

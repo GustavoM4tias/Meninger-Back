@@ -12,8 +12,8 @@
 // empreendimentos (que roda de 30 em 30 e recria as unidades). Bloqueio é
 // decisão humana no painel; não muda de minuto em minuto.
 //
-// O trabalho é leitura de TELA do painel do CV (a API não devolve o motivo),
-// então cada empreendimento custa algumas requisições. Falha de um não derruba
+// O trabalho é leitura do detalhe de cada empreendimento na API do CV (o motivo
+// vem em situacao.bloqueada_motivo de cada unidade). Falha de um não derruba
 // os outros; falha de todos estoura, para o job aparecer vermelho na tela.
 
 import UnitBlockReasonSyncService from '../services/bulkData/cv/UnitBlockReasonSyncService.js';

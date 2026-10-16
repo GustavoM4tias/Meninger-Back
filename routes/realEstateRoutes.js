@@ -35,6 +35,7 @@ import {
     salvarCvRoboConfig,
     simularCvRobo,
     avaliarCvRobo,
+    getCvRoboRegra,
 } from '../controllers/realEstateController.js';
 
 
@@ -76,6 +77,7 @@ router.delete('/cv-robo/sessao', podeConfigurar, desconectarCvRobo);
 router.put('/cv-robo/config', podeConfigurar, salvarCvRoboConfig);
 router.post('/cv-robo/simular', podeConfigurar, simularCvRobo);
 router.post('/cv-robo/avaliar', podeConfigurar, avaliarCvRobo);
+router.get('/cv-robo/regra/:id', podeConfigurar, getCvRoboRegra);
 
 // Crons de dados do CV: o que roda e em que horário.
 router.get('/cv-jobs', podeConfigurar, getCvJobs);

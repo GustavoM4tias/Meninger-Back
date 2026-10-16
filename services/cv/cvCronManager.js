@@ -8,7 +8,9 @@
 // reservas sincronizam" era mexer no Railway e reiniciar o processo, e quem
 // operava o sistema não tinha como nem ver a regra vigente.
 //
-// Agora a regra mora em `cv_sync_jobs` e a tela CV CRM > Configurações edita.
+// Agora a regra mora em `cv_sync_jobs` e a tela CV CRM > Integrações edita (o
+// robô e a leitura de motivos de bloqueio, nas telas Robô de aprovação e
+// Estoque bloqueado).
 // O ambiente vira SEMENTE: no primeiro boot cada job nasce com exatamente o
 // que as variáveis diziam, então o comportamento não muda na virada. Depois
 // disso o painel manda - trocar o default no código não mexe em quem já
@@ -164,7 +166,7 @@ export const CV_JOBS = [
     {
         key: 'motivos_bloqueio',
         label: 'Motivo do bloqueio das unidades',
-        descricao: 'Lê no painel do CV por que cada unidade está bloqueada. É o que separa estoque comercial segurado de propósito (conta como disponível) de trava do ERP. Alimenta espelho, ficha comercial, projeção e viabilidade.',
+        descricao: 'Lê pela API do CV por que cada unidade está bloqueada. É o que separa estoque comercial segurado de propósito (conta como disponível) de trava do ERP. Alimenta espelho, ficha comercial, projeção e viabilidade.',
         modulo: unitBlockReasonScheduler,
         padrao: '40 * * * *',
         envCron: 'UNIT_BLOCK_REASON_CRON_EXPRESSION',

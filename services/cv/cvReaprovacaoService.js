@@ -130,6 +130,55 @@ async function lerRegraDoEmpreendimento(idempreendimento) {
     return { automatica, regra, series };
 }
 
+/**
+ * A regra de um empreendimento como o robô a entende, para a tela mostrar
+ * "o que ele vai cobrar" antes de ligar a aprovação. Mesma leitura da rodada
+ * (nada de segunda cópia da regra no Office) e as mesmas conclusões do
+ * `avaliar`: o que faz a reserva ir sempre para o aprovador aparece em
+ * `vai_para_o_aprovador`.
+ */
+export async function resumoRegra(idempreendimento) {
+    if (!(await cookieAtivo())) throw new Error('O robô está sem sessão no painel do CV (CV CRM > Configurações).');
+    const { automatica, regra, series } = await lerRegraDoEmpreendimento(idempreendimento);
+    const cfg = await lerConfig();
+    const sim = (campo) => String(regra[campo] || '') === 'S';
+
+    const perfis = [
+        ['Corretor', 'simulacao_aprovacao_automatica_corretor', 'simulacao_porcentagem_aprovacao_corretor'],
+        ['Imobiliária', 'simulacao_aprovacao_imobiliaria', 'simulacao_porcentagem_aprovacao_imobiliaria'],
+        ['Gestor', 'aprovacao_gestor', 'porcentagem_aprovacao_gestor'],
+    ].map(([perfil, liga, pct]) => ({ perfil, ligado: sim(liga), desconto_pct: numeroBR(regra[pct]) ?? 0 }));
+
+    const ligados = perfis.filter((p) => p.ligado);
+    const vaiParaOAprovador = [];
+    const func = String(regra.funcionalidades_regras || '');
+    if (!['R', 'A'].includes(func)) vaiParaOAprovador.push('a regra do empreendimento no CV não vale para reserva');
+    if (!ligados.length) vaiParaOAprovador.push('a regra não tem aprovação automática para nenhum perfil');
+    for (const [campo, rotulo] of Object.entries(CAMPOS_NAO_AVALIADOS)) {
+        if (temValor(regra[campo])) vaiParaOAprovador.push(`a regra usa "${rotulo}", que o robô ainda não avalia`);
+    }
+    if (sim('simulacao_bloquear_por_quantidade')) vaiParaOAprovador.push('a regra bloqueia por quantidade de parcelas, que o robô ainda não avalia');
+    if (String(regra.tabela_aprovacao_gestor || 'TB') !== 'TB') vaiParaOAprovador.push('a regra compara com a tabela mínima, que o robô ainda não avalia');
+    if (String(regra.simulacao_calculo_usar_no_desconto || 'V') !== 'V') vaiParaOAprovador.push('a regra compara pelo VP, e o robô só compara pelo VGV');
+
+    return {
+        idempreendimento,
+        aprovacao_automatica_cv: automatica,
+        vale_para: { S: 'Simulação', R: 'Reserva', A: 'Simulação e reserva' }[func] || 'não definido',
+        perfis,
+        desconto_aceito_pct: ligados.length ? Math.min(...ligados.map((p) => p.desconto_pct)) : null,
+        pro_soluto_max_pct: numeroBR(regra.simulacao_percentual_total_prosoluto),
+        series: Object.entries(series).map(([id, s]) => ({
+            idserie: Number(id),
+            ...s,
+            sem_teto: !s.valor_max || s.valor_max >= SERIE_MAX_SEM_LIMITE,
+            sempre_aprovador: (cfg.series_bloqueiam || []).map(Number).includes(Number(id)),
+            conta_pro_soluto: (cfg.series_pro_soluto || []).map(Number).includes(Number(id)),
+        })),
+        vai_para_o_aprovador: vaiParaOAprovador,
+    };
+}
+
 // ── Tela de comparação da reserva ────────────────────────────────────────────
 
 async function lerComparacao(idreserva) {
@@ -535,4 +584,4 @@ export async function rodar({ forcarSimulacao = false } = {}) {
     return { modo, ...resumo };
 }
 
-export default { rodar, avaliar, avaliarReservas, lerConfig, salvarConfig, historico, numeroBR };
+export default { rodar, avaliar, avaliarReservas, resumoRegra, lerConfig, salvarConfig, historico, numeroBR };

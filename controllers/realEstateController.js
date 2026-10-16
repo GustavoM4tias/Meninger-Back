@@ -836,6 +836,19 @@ export async function avaliarCvRobo(req, res) {
     }
 }
 
+/** A regra de um empreendimento lida no CV, como o robô vai cobrar. Só leitura. */
+export async function getCvRoboRegra(req, res) {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok: false, error: 'Empreendimento inválido.' });
+        const { resumoRegra } = await import('../services/cv/cvReaprovacaoService.js');
+        return res.json({ ok: true, regra: await resumoRegra(id) });
+    } catch (err) {
+        console.error('[realestate] getCvRoboRegra:', err);
+        return res.status(502).json({ ok: false, error: err?.message || 'Erro ao ler a regra do empreendimento no CV.' });
+    }
+}
+
 /** Roda a fila agora SEM aprovar nada: mostra o que o robô faria. */
 export async function simularCvRobo(req, res) {
     try {
