@@ -518,6 +518,12 @@ export async function rodar({ forcarSimulacao = false } = {}) {
                 await registrar(reserva, 'erro', [motivoRecusa(envio)], r.detalhes);
             }
         } catch (err) {
+            // Limite de requisições do CV: insistir só derruba o resto da fila
+            // com o mesmo erro. Para a rodada; a próxima volta em 4 minutos.
+            if (err?.response?.status === 429) {
+                resumo.limite_cv = true;
+                break;
+            }
             resumo.erros++;
             const msg = String(err?.message || err).slice(0, 300);
             await registrar({ ...c }, 'erro', [msg]).catch(() => {});
