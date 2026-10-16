@@ -2842,6 +2842,236 @@ Havendo necessidade ou urgência, acione o **gestor do seu departamento** para a
 
 🔒 **Uso interno.** Dúvidas: Suprimentos - fornecedores@menin.com.br`,
     },
+
+    // ── Construtor de Vendas › Painel do Gestor - regras financeiras e tabela de preço (16/10/2026) ──
+    {
+        code: 'CVREG01',
+        slug: 'cv-regras-financeiras-e-tabela-de-preco',
+        title: 'Regras Financeiras e Tabela de Preço do Empreendimento (CV CRM)',
+        categorySlug: 'construtor-de-vendas',
+        subcategorySlug: 'painel-do-gestor',
+        authorUserId: 1,
+        status: 'PUBLISHED',
+        forceStatus: 'PUBLISHED', // pedido do Gustavo: a página precisa estar no ar
+        audiences: ['INTERNAL'],
+        aliases: [
+            'Regras Financeiras',
+            'Regras Financeiras do Empreendimento',
+            'Tabela de Preço',
+            'Tabela de Preço do Empreendimento',
+            'Regra de Reserva',
+            'Aba Séries',
+            'Séries do Empreendimento',
+            'Aprovação Automática',
+            'Robô de Aprovação',
+            'CVREG01',
+        ],
+        body: `# Regras Financeiras e Tabela de Preço do Empreendimento (CV CRM)
+
+> **Base de Conhecimento - Construtor de Vendas** · Painel do Gestor · Uso interno
+> Onde fica cada configuração que decide **qual condição de pagamento o CV aceita** numa reserva, e como mexer nela sem quebrar nada.
+> Situação medida e testada em **16/10/2026**.
+
+## Para que serve
+
+Toda reserva no CV CRM é conferida contra três coisas do empreendimento:
+
+1. a **tabela de preço** vigente (o preço e a condição "oficial" de cada unidade);
+2. a **regra de simulação/reserva** (quanto de desconto é aceito, se o CV só avisa ou bloqueia);
+3. a **lista de séries** do empreendimento (quais séries podem ser usadas e com quais limites).
+
+Se as três estiverem certas, a reserva que bate com a tabela nasce **aprovada** e o corretor não consegue lançar uma condição fora do combinado. Se uma delas estiver errada, aparecem mensagens como *"Valor da parcela maior que o permitido"* ou *"A série ... não está liberada"* - veja a seção **Mensagens do CV** no final.
+
+**Importante:** cada empreendimento tem a **sua própria** regra e lista de séries. Para mudar algo em todos, é preciso repetir em cada empreendimento.
+
+## Mapa rápido - onde fica cada coisa
+
+Todos os caminhos começam no Painel do Gestor: **Cadastros > Empreendimentos > abrir o empreendimento**.
+
+| O que você quer ajustar | Onde fica | Item |
+| --- | --- | --- |
+| Preço das unidades e condição padrão | **Tabelas de preço** | 1 |
+| Desconto aceito, Alertar ou Bloquear, pró-soluto | **Reservas e Simulações > Regras Simulações/Reservas** | 2 |
+| Quais séries podem ser usadas, valores mínimo e máximo, nº de linhas, % da renda | **Reservas e Simulações > Séries** | 3 |
+| Aprovação automática, remover aprovação ao editar, pré-cadastro | **Configurações** (bloco Reservas) | 4 |
+| Quem aprova reserva editada | Office: **CV CRM > Robô de aprovação** | 5 |
+| Prazo para a reserva vencer | **Período de vencimento reservas** | 6 |
+| Etapas, pré-requisitos e permissões | Configurações > **Workflows > Reservas** | 6 |
+
+---
+
+## 1. Tabela de preço
+
+**Onde:** Empreendimento > **Tabelas de preço**.
+
+A tabela define o valor de cada unidade e a condição padrão (as séries). Ela é a base de comparação de toda reserva.
+
+### Padrão das tabelas MCMV (loteamentos populares)
+
+| Item | Padrão |
+| --- | --- |
+| Frequência | **Uma tabela por mês**: a do mês é a anterior com nova revisão (REV+1) |
+| Vigência | Do **dia 1 ao último dia** do mês |
+| Nome | \`<EMPREENDIMENTO> - MÓD <n> - REVnn\` (ex.: *SANTA STELLA - MÓD 1 - REV01*) |
+| Ordem das séries | Ato, Parcelado, Subsídio, Financiamento |
+| Ato (Recurso Próprio à Vista) | 1x, valor fixo R$ 600, mínimo R$ 600, 1º vencimento no dia 1 do mês da tabela |
+| Parcelado (Recurso Próprio Parcelado) | 60x, 18%, mínimo R$ 500, 1º vencimento no mês seguinte |
+| Subsídio e Financiamento | 2% e 80%, com vencimento na data de previsão de entrega do empreendimento |
+| Marcações | Só Total e Reserva, sem juros, indexador REAL |
+| Programa estadual (Casa Paulista, Casa Fácil, Ser Família, Bônus Emendas) | Só quando o empreendimento participa; senão a série sai |
+
+No **alto padrão** (verticais e Boulevard), a tabela segue a **tabela de vendas aprovada pela diretoria** de cada mês.
+
+### Como criar a tabela do mês
+
+1. Abra a tabela vigente e use **Clonar**.
+2. Ajuste nome (REV+1), vigência e valores.
+3. Confira as séries e os valores das unidades.
+4. **Aprove** a tabela. Tabela não aprovada não vale para reserva.
+
+### Cuidados
+
+- **Editar uma tabela aprovada tira a aprovação dela na hora.** Depois de qualquer ajuste, aprove de novo.
+- **Tabela que já tem reservas fica com as séries travadas.** Para mudar a condição, crie a tabela do mês seguinte.
+- **Série nova na tabela precisa entrar também na lista de séries do empreendimento (item 3).** Se não entrar, o corretor não consegue lançar essa série à mão (*"não está liberada"*).
+- O valor e a condição que vêm da tabela **sempre passam** na criação da reserva, mesmo que a lista de séries esteja incompleta. O problema aparece quando alguém tenta ajustar.
+
+---
+
+## 2. Regra de simulação/reserva
+
+**Onde:** Empreendimento > **Reservas e Simulações > Regras Simulações/Reservas**. Salvar no botão **Salvar** do formulário.
+
+| Campo | Padrão atual | O que faz |
+| --- | --- | --- |
+| Funcionalidade | **Reserva** | Em que a regra vale |
+| Alertar / Bloquear | **Bloquear** | *Bloquear* recusa a série fora da regra na hora de montar a reserva. *Alertar* só avisa e deixa gravar |
+| Corretor / Imobiliária / Gestor realiza aprovação automática? | **Sim**, com **0%** de desconto | Até quanto abaixo da tabela a reserva ainda é aceita. Boulevard: gestor **11,5%** |
+| Comparar com | **Tabela** | Base da comparação |
+| Pró-soluto % máximo (base VGV) | **20%** nos populares; vazio no alto padrão | Teto do recurso próprio sobre o valor da unidade |
+
+Deixe vazios os demais campos (limites de ato, datas, % de financiamento etc.) a menos que exista uma regra combinada: o robô de aprovação (item 5) manda para o aprovador toda reserva de empreendimento que usa um campo que ele ainda não sabe conferir.
+
+---
+
+## 3. Séries do empreendimento (aba Séries)
+
+**Onde:** Empreendimento > **Reservas e Simulações > Séries**.
+
+### A chave do topo: "Bloquear para qualquer cadastro de séries"
+
+Padrão: **Sim**. Com Sim, a lista desta tela vira a **lista de séries permitidas**: série fora dela é recusada com *"A série ... não está liberada na Configuração do Empreendimento"*. Regra de ouro: **toda série que a tabela de preço usa precisa estar nesta lista.**
+
+### Incluir uma série na lista
+
+1. Escolha a série no seletor e clique em **Adicionar**.
+2. A linha nasce com **valor máximo 0,00**. Troque **na hora** por **999.999,99** (é o "sem teto").
+3. Preencha os demais limites e clique em **Salvar** da tabela.
+
+### Colunas de cada série
+
+| Coluna | Para que serve |
+| --- | --- |
+| Valor mínimo | Menor valor de parcela aceito |
+| Valor máximo | Maior valor de parcela aceito. **999.999,99 = sem teto.** Não deixe 0,00 |
+| Parcelas mínimas / máximas | Quantidade de parcelas da série (somando todas as linhas dela) |
+| Quantidade máxima de séries | Quantas **linhas** dessa série a reserva pode ter. **0 = sem limite** |
+| % da renda | Parcela máxima como % da renda familiar |
+| Bloquear cadastro pela mínima | Sim = valor abaixo do mínimo é recusado |
+
+### Padrão atual
+
+| Série | Limites |
+| --- | --- |
+| **Recurso Próprio Parcelado** | Mínimo R$ 500, até **60x**, no máximo **2 linhas**, parcela até **30% da renda** (populares) |
+| **Recurso Próprio à Vista (Ato)** | Mínimo **R$ 600** com bloqueio pela mínima, **1 linha** |
+| **Ato** (série do alto padrão) | Mínimo da ficha (Verona e Boulevard), **1 linha** |
+| **Financiamento** | **1 linha** |
+| **Subsídio Federal** | **1 linha** |
+| **Subsídio estadual** (Casa Paulista, Casa Fácil, Bônus Emendas, Ser Família) | **1 linha** |
+| Série principal do alto padrão (Parcelas Mensais) | Mínimo da ficha, até 100x (Urban: Parcelas Mensais Urban, até 20x) |
+| Demais séries da tabela (Semestrais, Chaves, Pré-Chaves etc.) | Sem limite, teto 999.999,99 |
+
+O limite de **2 linhas no Parcelado** existe porque o contrato só imprime duas séries de recurso próprio parcelado. Vale mesmo que a soma das parcelas fique abaixo de 60 (ex.: 20x + 19x + 1x é recusado na 3ª linha).
+
+---
+
+## 4. Configurações do empreendimento
+
+**Onde:** Empreendimento > **Configurações**, bloco Reservas.
+
+| Opção | Padrão | Por quê |
+| --- | --- | --- |
+| Aprovação automática | **Desligada** | A reserva que bate com a tabela já nasce aprovada pela regra; reserva editada é reaprovada pelo robô (item 5) |
+| Remover a aprovação/reprovação caso alguma informação seja alterada | **Ligada** | Toda edição de condição tira a aprovação e exige nova conferência |
+| Preencher valor de financiamento, FGTS e subsídio com o do pré-cadastro | **Desligadas** | Ligada, a reserva sem pré-cadastro fica com teto zero de financiamento e o Financiamento é recusado |
+
+---
+
+## 5. Robô de aprovação (Office)
+
+**Onde:** Office > **CV CRM > Robô de aprovação**. A sessão do robô no painel do CV fica em **CV CRM > Configurações**.
+
+O CV só aprova sozinho na **criação** da reserva. Depois que alguém edita a condição, a aprovação cai e só volta com um aprovador. O robô faz esse papel: a cada rodada ele lê **no próprio CV** a regra (item 2) e as séries (item 3) do empreendimento e aprova a reserva que estiver dentro delas. Mudou no CV, ele já cobra; não existe uma segunda cópia da regra no Office.
+
+| Configuração na tela | O que define |
+| --- | --- |
+| Ligado e modo (simular ou aprovar) | Se ele só registra o que faria ou aprova de verdade |
+| Situações | Em que etapas ele confere (Análise Comercial e Ajustes Financeiro) |
+| Séries de pró-soluto | Quais séries entram na conta do pró-soluto |
+| Séries que vão ao aprovador | Séries que sempre exigem uma pessoa (hoje nenhuma) |
+| Tolerância | Diferença em reais ignorada na comparação com a tabela |
+
+Para o robô conseguir aprovar num empreendimento, o usuário **Menin Office** precisa estar na **alçada** desse empreendimento (Configurações > Alçadas).
+
+---
+
+## 6. Outros lugares
+
+- **Vencimento da reserva:** Empreendimento > **Período de vencimento reservas** (dias por situação). A data de vencimento de cada reserva fica na aba **Informações** dela; reativar uma reserva vencida grava +5 dias.
+- **Workflow:** Configurações > **Workflows > Reservas**. Ali estão o pré-requisito **"Proposta aprovada"** para avançar e as permissões de quem pode alterar a condição em cada etapa.
+
+---
+
+## Como o CV se comporta
+
+| Momento | O que acontece |
+| --- | --- |
+| **Criação da reserva** (assistente Nova Reserva) | Com **Bloquear**, o CV recusa na hora: valor abaixo do mínimo, parcelas acima do máximo, linha a mais que o limite, série fora da lista e proposta abaixo da tabela. A condição que vem da tabela sempre passa |
+| **Reserva criada igual à tabela** | Nasce **aprovada** |
+| **Edição de uma reserva já criada** | O CV **só avisa e grava**, mesmo em Bloquear. A aprovação cai e a reserva volta para conferência: o robô reaprova se estiver dentro da regra; senão vai para o aprovador |
+| **Desconto Construtora automático** | Em alguns empreendimentos (ex.: Parque Norte) o CV coloca sozinho uma linha de Desconto Construtora na condição. Como ela não está na lista de séries, **trava qualquer inclusão manual no rascunho**: o corretor precisa remover a linha de desconto antes de incluir outra série (ela volta depois de cada inclusão). É o comportamento padrão |
+
+## Mensagens do CV
+
+| Mensagem | Causa provável | O que fazer |
+| --- | --- | --- |
+| *A série X não está liberada na Configuração do Empreendimento* | Série fora da lista do item 3 | Incluir a série na aba Séries (se ela deve ser usada) |
+| *O valor mínimo da série X não pode ser menor que R$ ...* | Valor abaixo do mínimo | Ajustar o valor ou rever o mínimo na aba Séries |
+| *A quantidade de parcelas máximas da série X não pode ser maior que N* | Soma das parcelas da série passou do máximo | Reduzir parcelas |
+| *Limite máximo da série X atingido. Verifique as regras.* | Linhas demais da mesma série | Juntar as linhas |
+| *Nessa condição sua reserva não será aprovada automaticamente* | Proposta abaixo da tabela (desconto maior que o aceito) | Ajustar valores; em Bloquear, nenhuma série nova entra enquanto isso não for resolvido |
+| *Valor da parcela maior que o permitido* | Teto da série (valor máximo) ou financiamento limitado pelo pré-cadastro | Conferir o valor máximo (999.999,99) e o item 4 |
+
+## Checklist - empreendimento novo
+
+1. Cadastrar e **aprovar** a tabela de preço (item 1).
+2. Copiar a **regra** (item 2) de um empreendimento parecido: Parque Norte para MCMV, Mond para vertical.
+3. Na **aba Séries**, incluir **todas** as séries da tabela, pôr teto 999.999,99, os limites do padrão e ligar **"Bloquear para qualquer cadastro de séries"** (item 3).
+4. Conferir as **Configurações** (item 4).
+5. Colocar o usuário **Menin Office** na alçada do empreendimento (item 5).
+6. Fazer uma **reserva de teste** com a condição da tabela: ela deve nascer aprovada.
+
+## Checklist - tabela do mês
+
+1. Clonar, ajustar e aprovar a tabela nova (item 1).
+2. Se a tabela trouxer **série nova**, incluir na aba Séries com teto 999.999,99 (item 3).
+3. Se o **mínimo do ato ou da parcela** mudou, atualizar o valor mínimo na aba Séries.
+
+---
+
+🔒 **Uso interno.** Dúvidas: Comercial - Gustavo Diniz.`,
+    },
 ];
 
 function kebab(s) {
@@ -2890,6 +3120,7 @@ const LINK_TARGETS = [
     { slug: 'cv-vincular-corretor-empreendimento', category: 'construtor-de-vendas', aliases: ['Vincular Corretor ao Empreendimento'] },
     { slug: 'cv-campos-obrigatorios-reservas', category: 'construtor-de-vendas', aliases: ['Campos Obrigatórios nas Reservas', 'Campos obrigatórios'] },
     { slug: 'boleto-de-ato', category: 'procedimentos', aliases: ['Boleto de Ato', 'Boleto Ato'] },
+    { slug: 'cv-regras-financeiras-e-tabela-de-preco', category: 'construtor-de-vendas', aliases: ['Regras Financeiras do Empreendimento', 'Regras Financeiras', 'Tabela de Preço', 'Robô de Aprovação'] },
 ];
 
 function escapeRe(s) {
