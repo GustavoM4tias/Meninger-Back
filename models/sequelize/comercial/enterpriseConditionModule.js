@@ -98,6 +98,23 @@ export default (sequelize, DataTypes) => {
         fontes_snapshot:        { type: DataTypes.JSONB, allowNull: true },
         fontes_snapshot_at:     { type: DataTypes.DATE, allowNull: true },
         fontes_snapshot_reason: { type: DataTypes.STRING(20), allowNull: true }, // 'authorize' | 'month_end'
+
+        // ── Decisões do Office em campo fixo (no lugar do texto livre) ─────────
+        // Os textos antigos (min_demand_note, installment_*, delivery_deadline_note,
+        // commission_note) continuam: a tela nova regrava o texto a partir daqui.
+        demand_mode:             { type: DataTypes.STRING(12), allowNull: true },  // 'fracionada' | 'integral'
+        indexer_until:           { type: DataTypes.STRING(12), allowNull: true },  // INCC | IPCA | IGPM | FIXO
+        indexer_after:           { type: DataTypes.STRING(12), allowNull: true },
+        interest_after_pct:      { type: DataTypes.DECIMAL(6, 3), allowNull: true }, // % ao mês depois do habite-se
+        deadline_milestone:      { type: DataTypes.STRING(20), allowNull: true },  // contrato_caixa | inicio_obra | data_fixa | entregue
+        commission_base:         { type: DataTypes.STRING(12), allowNull: true },  // 'venda' | 'tabela'
+        commission_apartada:     { type: DataTypes.BOOLEAN, allowNull: true },     // paga pelo cliente, à parte
+        commission_payment_days: { type: DataTypes.INTEGER, allowNull: true },     // dias após o contrato Caixa
+        commission_nf_from:      { type: DataTypes.INTEGER, allowNull: true },     // janela da nota fiscal (dia do mês)
+        commission_nf_to:        { type: DataTypes.INTEGER, allowNull: true },
+        state_program_id:        { type: DataTypes.INTEGER, allowNull: true },     // comercial_state_programs
+        cca_provider_id:         { type: DataTypes.INTEGER, allowNull: true },     // comercial_providers (tipo cca)
+        cert_provider_id:        { type: DataTypes.INTEGER, allowNull: true },     // comercial_providers (tipo certificadora)
     }, {
         tableName: 'enterprise_condition_modules',
         underscored: true,

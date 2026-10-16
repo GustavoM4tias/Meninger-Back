@@ -5,6 +5,7 @@ import requireCapability from '../middlewares/requireCapability.js';
 import * as ctrl from '../controllers/comercial/enterpriseConditionController.js';
 import * as ds from '../controllers/comercial/docusignController.js';
 import * as fontes from '../controllers/comercial/conditionFontesController.js';
+import * as cad from '../controllers/comercial/conditionCadastrosController.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -38,6 +39,12 @@ router.get('/correspondents', ctrl.listCorrespondents);
 router.get('/correspondents/companies', ctrl.listCorrespondentCompanies);
 router.get('/office-users', ctrl.listOfficeUsers);
 router.get('/cost-report', ctrl.getCostReport);     // relatório consolidado Menin x cliente (gestão)
+
+// ── Cadastros únicos (programa estadual, custos por cidade, CCA e certificadora)
+router.get('/cadastros', cad.listCadastros);
+router.post('/cadastros/:tipo(programas|cidades|prestadores)', cad.saveCadastro);
+router.put('/cadastros/:tipo(programas|cidades|prestadores)/:id(\\d+)', cad.saveCadastro);
+router.delete('/cadastros/:tipo(programas|cidades|prestadores)/:id(\\d+)', cad.removeCadastro);
 
 // ── DocuSign: settings (admin) + assinatura por ficha ────────────────────────
 router.get('/docusign-settings', configurar, ds.getDocusignSettings);

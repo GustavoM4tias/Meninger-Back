@@ -105,24 +105,38 @@ const LATEST_INCLUDE = [{
 // Monta o payload da ficha nova herdando os campos da ficha origem.
 function buildInheritedCondition(latest, targetMonth, identity) {
     const inheritedFields = pickInherit(latest.toJSON(), CONDITION_NO_INHERIT);
+    const origem = String(latest.reference_month).substring(0, 7);
+    const agora = new Date().toISOString();
+    // O que vem do CV não passa por autorização: a ficha só reúne o que o CV
+    // já diz. Autorizar vale para as DECISÕES do Office (quem paga, campanha,
+    // comissão), e elas chegam iguais às do mês anterior. Então, se o mês
+    // anterior estava autorizado, o novo já nasce autorizado.
+    const herdaAutorizacao = latest.status === 'approved';
+    const history = [{
+        action: 'auto_created',
+        user_id: null,
+        username: 'Sistema',
+        at: agora,
+        note: `Gerada automaticamente, herdada de ${origem} (tabelas de preço vigentes pré-selecionadas no novo mês)`,
+    }];
+    if (herdaAutorizacao) {
+        history.push({ action: 'approved', user_id: null, username: 'Sistema', at: agora, note: `Autorizada automaticamente: as decisões são as mesmas de ${origem}, que estava autorizada` });
+    }
     return {
         ...inheritedFields,
         ...identity, // { idempreendimento, display_name, series_id }
         reference_month: targetMonth,
-        status: 'draft',
+        status: herdaAutorizacao ? 'approved' : 'draft',
+        ...(herdaAutorizacao ? { approved_at: new Date() } : {}),
         price_table_ids: [], // CV reseleciona vigentes na 1ª abertura
-        approval_history: [{
-            action: 'auto_created',
-            user_id: null,
-            username: 'Sistema',
-            at: new Date().toISOString(),
-            note: `Gerada automaticamente, herdada de ${String(latest.reference_month).substring(0, 7)} (tabelas de preço vigentes pré-selecionadas no novo mês)`,
-        }],
+        approval_history: history,
     };
 }
 
 // Replica módulos e campanhas da ficha origem para a ficha nova (dentro da transação).
 async function cloneModulesAndCampaigns(latest, newCond, vigentePriceTableIds, t) {
+    // Campanha que acabou antes do mês novo não vai para ele.
+    const inicioMes = String(newCond.reference_month).slice(0, 10);
     for (const mod of (latest.modules ?? [])) {
         const modJson = typeof mod.toJSON === 'function' ? mod.toJSON() : mod;
         const modFields = pickInherit(modJson, MODULE_NO_INHERIT);
@@ -135,6 +149,7 @@ async function cloneModulesAndCampaigns(latest, newCond, vigentePriceTableIds, t
         }, { transaction: t });
 
         for (const camp of (modJson.campaigns ?? [])) {
+            if (camp.end_date && String(camp.end_date).slice(0, 10) < inicioMes) continue;
             const campFields = pickInherit(camp, CAMPAIGN_NO_INHERIT);
             await EnterpriseConditionCampaign.create({
                 ...campFields,

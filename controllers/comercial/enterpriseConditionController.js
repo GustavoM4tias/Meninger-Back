@@ -117,6 +117,7 @@ const MODULE_DIFF_IGNORE = new Set([
     'id', 'condition_id', 'sort_order', 'idetapa',
     'createdAt', 'updatedAt', 'created_at', 'updated_at',
     'unit_snapshot', 'appraisal_faixas',
+    'fontes_snapshot', 'fontes_snapshot_at', 'fontes_snapshot_reason',
 ]);
 const MODULE_FIELD_LABELS = {
     module_name: 'Nome', total_units: 'Unidades totais', min_demand: 'Demanda mínima', min_demand_note: 'Obs. demanda',
@@ -139,6 +140,11 @@ const MODULE_FIELD_LABELS = {
     adm_user_id: 'Administrativo',
     contract_registration_by: 'Registro por', enterprise_files_url: 'Arquivos', notes: 'Observações',
     price_table_ids: 'Tabelas CV', manual_price_tables: 'Tabelas manuais', price_premise_note: 'Premissa de preço',
+    product_type_override: 'Tipo de produto', demand_mode: 'Assinatura da demanda',
+    indexer_until: 'Correção até o habite-se', indexer_after: 'Correção depois do habite-se', interest_after_pct: 'Juros depois do habite-se (% a.m.)',
+    deadline_milestone: 'Prazo conta a partir de', commission_base: 'Base da comissão', commission_apartada: 'Comissão apartada',
+    commission_payment_days: 'Comissão paga em (dias)', commission_nf_from: 'NF a partir do dia', commission_nf_to: 'NF até o dia',
+    state_program_id: 'Programa estadual', cca_provider_id: 'CCA', cert_provider_id: 'Certificadora',
 };
 function buildModuleDiffNote(before, after, moduleName) {
     const changes = [];
@@ -227,6 +233,31 @@ function validateModuleRules(mod) {
     // Registro por outros: nome de contato obrigatório
     if (mod.contract_registration_by === 'outros' && !mod.outros_contact_name) {
         errors.push(`${name}: informe o nome do contato externo quando o registro é feito por terceiros`);
+    }
+
+    // Campos fixos: só as opções conhecidas.
+    const opcoes = {
+        product_type_override: ['loteamento_mcmv', 'vertical_mcmv', 'vertical_alto_padrao', 'lote_urbanizado'],
+        demand_mode: ['fracionada', 'integral'],
+        indexer_until: ['INCC', 'IPCA', 'IGPM', 'FIXO'],
+        indexer_after: ['INCC', 'IPCA', 'IGPM', 'FIXO'],
+        deadline_milestone: ['contrato_caixa', 'inicio_obra', 'data_fixa', 'entregue'],
+        commission_base: ['venda', 'tabela'],
+    };
+    for (const [campo, validos] of Object.entries(opcoes)) {
+        if (mod[campo] != null && mod[campo] !== '' && !validos.includes(mod[campo])) {
+            errors.push(`${name}: valor inválido em "${MODULE_FIELD_LABELS[campo] || campo}"`);
+        }
+    }
+    const dia = (v) => v == null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 31);
+    if (!dia(mod.commission_nf_from) || !dia(mod.commission_nf_to)) {
+        errors.push(`${name}: a janela da nota fiscal vai do dia 1 ao dia 31`);
+    }
+    if (mod.commission_payment_days != null && mod.commission_payment_days !== '' && (Number(mod.commission_payment_days) < 0 || Number(mod.commission_payment_days) > 365)) {
+        errors.push(`${name}: prazo de pagamento da comissão entre 0 e 365 dias`);
+    }
+    if (mod.interest_after_pct != null && mod.interest_after_pct !== '' && (Number(mod.interest_after_pct) < 0 || Number(mod.interest_after_pct) > 10)) {
+        errors.push(`${name}: juros depois do habite-se entre 0% e 10% ao mês`);
     }
 
     return errors;
@@ -1226,6 +1257,8 @@ export const copyModuleFromSource = async (req, res) => {
             'appraisal_note', 'appraisal_file_url',
             'commission_pct', 'commission_source', 'commission_note',
             'delivery_deadline_months', 'delivery_deadline_note',
+            'product_type_override', 'demand_mode', 'deadline_milestone',
+            'commission_base', 'commission_apartada', 'commission_payment_days', 'commission_nf_from', 'commission_nf_to',
         ];
         // ── Negociação: parcelas, regras, subsídio
         const NEGOTIATION_FIELDS = [
@@ -1233,6 +1266,7 @@ export const copyModuleFromSource = async (req, res) => {
             'max_installments', 'rp_rule', 'installment_until_habite_se', 'installment_post_habite_se',
             'has_state_subsidy', 'state_subsidy_note', 'state_subsidy_state', 'state_subsidy_program',
             'state_subsidy_custom_state', 'state_subsidy_rules', 'state_subsidy_conditions',
+            'indexer_until', 'indexer_after', 'interest_after_pct', 'state_program_id',
         ];
         // ── Preços: tabelas (CV só copia se mesmo empreendimento) e manuais
         const PRICE_FIELDS_CV = ['price_table_ids'];
@@ -1241,7 +1275,7 @@ export const copyModuleFromSource = async (req, res) => {
         const DOCS_FIELDS = [
             'cef_package_paid_by', 'cef_package_avg_value',
             'itbi_exempt', 'itbi_avg_value', 'itbi_exemption_doc_url',
-            'cartorio_prenotacao_value', 'cartorio_registration_value', 'cartorio_paid_by',
+            'cartorio_prenotacao_value', 'cartorio_registration_value', 'cartorio_paid_by', 'itbi_paid_by',
         ];
         // ── Operacional: gestor, registro, CCA, certificação digital (+custo), arquivos, notes
         const OPERATIONAL_FIELDS = [
@@ -1249,10 +1283,10 @@ export const copyModuleFromSource = async (req, res) => {
             'adm_user_id',
             'contract_registration_by', 'contract_registered_by_user_id',
             'outros_contact_name', 'outros_contact_email', 'outros_contact_phone',
-            'cca_company_name', 'cca_cost', 'cca_charges_company',
+            'cca_company_name', 'cca_cost', 'cca_charges_company', 'cca_paid_by', 'cca_provider_id',
             'correspondent_id',
             'has_digital_cert', 'digital_cert_provider', 'digital_cert_contact',
-            'digital_cert_has_cost', 'digital_cert_cost',
+            'digital_cert_has_cost', 'digital_cert_cost', 'digital_cert_paid_by', 'cert_provider_id',
             'enterprise_files_url',
             'notes',
         ];
