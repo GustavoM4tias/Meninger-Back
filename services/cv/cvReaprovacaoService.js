@@ -361,6 +361,50 @@ async function aprovarNoPainel(idreserva, comparacao, comentario) {
 }
 
 /**
+ * Só a conferência, para reservas escolhidas - inclusive as já aprovadas e as
+ * fora das situações da fila. Não aprova nada e não grava histórico. Serve para
+ * calibrar a conta do robô contra a decisão que o próprio CV tomou na criação.
+ */
+export async function avaliarReservas(ids = []) {
+    await ensureCvRoboSchema();
+    const cfg = await lerConfig();
+    const regras = new Map();
+    const saida = [];
+    for (const id of [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 60)) {
+        try {
+            const viva = await reservaAoVivo(id);
+            if (!viva) { saida.push({ idreserva: id, erro: 'reserva não encontrada' }); continue; }
+            const idemp = Number(viva.unidade?.idempreendimento_cv) || null;
+            if (!regras.has(idemp)) regras.set(idemp, await lerRegraDoEmpreendimento(idemp));
+            const comparacao = await lerComparacao(id);
+            const condicoes = (viva.condicoes?.series || []).map((s) => ({
+                idserie: Number(s.idserie),
+                nome: s.serie || null,
+                quantidade: Number(s.quantidade || 0),
+                valor: Number(s.valor || 0),
+                subtotal: Number(s.valor || 0) * Number(s.quantidade || 0),
+            }));
+            if (!comparacao.vgvProposta) comparacao.vgvProposta = Number(viva.condicoes?.valor_contrato || 0) || null;
+            if (!comparacao.vgvTabela) comparacao.vgvTabela = Number(viva.condicoes?.vgv_tabela || 0) || null;
+            const r = avaliar({ regraEmp: regras.get(idemp), comparacao, condicoes, rendaApi: Number(viva.titular?.renda_familiar || 0) || null, cfg });
+            saida.push({
+                idreserva: id,
+                empreendimento: viva.unidade?.empreendimento || null,
+                situacao: viva.situacao?.situacao || null,
+                condicao_aprovada: viva.condicao_aprovada || null,
+                dentro_da_regra: r.ok,
+                motivos: r.motivos,
+                detalhes: r.detalhes,
+                series: condicoes.map((c) => `${c.idserie}:${c.quantidade}x${c.valor}`),
+            });
+        } catch (err) {
+            saida.push({ idreserva: id, erro: String(err?.message || err).slice(0, 200) });
+        }
+    }
+    return saida;
+}
+
+/**
  * Uma rodada. `forcarSimulacao` deixa a tela testar sem aprovar nada, mesmo
  * com o modo "aprovar" ligado.
  */
@@ -466,4 +510,4 @@ export async function rodar({ forcarSimulacao = false } = {}) {
     return { modo, ...resumo };
 }
 
-export default { rodar, avaliar, lerConfig, salvarConfig, historico, numeroBR };
+export default { rodar, avaliar, avaliarReservas, lerConfig, salvarConfig, historico, numeroBR };

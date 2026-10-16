@@ -822,6 +822,20 @@ export async function salvarCvRoboConfig(req, res) {
     }
 }
 
+/** Confere reservas escolhidas contra a regra, sem aprovar nem gravar nada. */
+export async function avaliarCvRobo(req, res) {
+    try {
+        const ids = listaDeIds(req.body?.ids);
+        if (!ids?.length) return res.status(400).json({ ok: false, error: 'Informe os números das reservas.' });
+        if (ids.length > 60) return res.status(400).json({ ok: false, error: 'No máximo 60 reservas por vez.' });
+        const { avaliarReservas } = await import('../services/cv/cvReaprovacaoService.js');
+        return res.json({ ok: true, resultado: await avaliarReservas(ids) });
+    } catch (err) {
+        console.error('[realestate] avaliarCvRobo:', err);
+        return res.status(500).json({ ok: false, error: err?.message || 'Erro ao avaliar as reservas.' });
+    }
+}
+
 /** Roda a fila agora SEM aprovar nada: mostra o que o robô faria. */
 export async function simularCvRobo(req, res) {
     try {
