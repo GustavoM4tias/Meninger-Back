@@ -364,6 +364,21 @@ async function aprovarNoPainel(idreserva, comparacao, comentario) {
     return postPainel(alvo, campos, comparacao.caminho);
 }
 
+// O CV responde 200 mesmo quando recusa: devolve um form que se auto-envia
+// com o código do erro num hidden (`erro`), e a tela mostra a mensagem depois.
+const RECUSAS_CV = {
+    erro_alcada_nao_encontrada: 'o CV não achou alçada para o usuário do robô (Usuários Administrativos > Menin Office > Aprovação Reserva/Simulação > Personalização de alçada)',
+};
+
+function motivoRecusa(envio) {
+    const html = String(envio?.html || '');
+    const erro = html.match(/name="erro"[^>]*value="([^"]+)"/i)?.[1];
+    const msg = html.match(/name="msg"[^>]*value="([^"]+)"/i)?.[1];
+    if (erro) return `${RECUSAS_CV[erro] || 'o CV recusou a aprovação'} [${erro}]`;
+    if (msg) return `o CV não confirmou a aprovação: ${msg.slice(0, 200)}`;
+    return `o CV não confirmou a aprovação (HTTP ${envio?.status})`;
+}
+
 /**
  * Só a conferência, para reservas escolhidas - inclusive as já aprovadas e as
  * fora das situações da fila. Não aprova nada e não grava histórico. Serve para
@@ -500,7 +515,7 @@ export async function rodar({ forcarSimulacao = false } = {}) {
                 console.log(`[CV robô] reserva ${c.idreserva} aprovada (dentro da regra).`);
             } else {
                 resumo.erros++;
-                await registrar(reserva, 'erro', [`o CV não confirmou a aprovação (HTTP ${envio.status})`], r.detalhes);
+                await registrar(reserva, 'erro', [motivoRecusa(envio)], r.detalhes);
             }
         } catch (err) {
             resumo.erros++;
