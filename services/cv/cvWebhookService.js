@@ -106,7 +106,15 @@ const PROCESSADORES = {
     async reservas(idreserva) {
         // skipDead: false — um id que já foi 404 pode passar a existir, e se o
         // CV está avisando sobre ele agora, é porque existe.
-        return sweep.run({ ids: [idreserva], skipDead: false });
+        const r = await sweep.run({ ids: [idreserva], skipDead: false });
+        // Entrou numa situação da fila do robô de aprovação? Confere já, sem
+        // esperar o cron de 4 minutos. Em segundo plano: a fila do webhook não
+        // espera a leitura do painel. As travas (ligado, sessão, situação,
+        // empreendimento fora) estão dentro do conferirAgora.
+        import('./cvReaprovacaoService.js')
+            .then((m) => m.conferirAgora(idreserva))
+            .catch((err) => console.warn(`[CV robô] conferência pelo webhook da reserva ${idreserva}: ${err?.message || err}`));
+        return r;
     },
 
     // O id do aviso de repasse pode ser idrepasse ou idreserva; o serviço

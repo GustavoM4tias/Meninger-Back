@@ -58,6 +58,10 @@ const CAMPOS_NAO_AVALIADOS = {
 
 const SERIE_MAX_SEM_LIMITE = 999999.99;   // como "sem máximo" foi gravado no CV
 
+/** 1234.5 -> "R$ 1.234,50" (texto das mensagens que vão para o CV). */
+const brl = (n) => `R$ ${Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const pctBR = (n) => `${Number(n || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
+
 /** "235.000,00" -> 235000 ; "" -> null */
 export function numeroBR(txt) {
     const s = String(txt ?? '').replace(/[^\d,.-]/g, '');
@@ -266,7 +270,10 @@ async function lerComparacao(idreserva) {
  */
 export function avaliar({ regraEmp, comparacao, condicoes, rendaApi, cfg }) {
     const motivos = [];
-    const det = {};
+    // O que foi conferido e passou: vira a mensagem de aprovação na reserva
+    // ("aprovou porque X está dentro da regra Y").
+    const conferencias = [];
+    const det = { conferencias };
     const { regra, series, automatica } = regraEmp;
 
     // A aprovação automática NATIVA do CV ficou desligada de propósito
@@ -308,7 +315,9 @@ export function avaliar({ regraEmp, comparacao, condicoes, rendaApi, cfg }) {
         const piso = vgvTabela * (1 - descontoPct / 100) - Number(cfg.tolerancia_reais || 0);
         det.vgv_piso = Math.round(piso * 100) / 100;
         if (vgvProposta < piso) {
-            motivos.push(`o valor da proposta (R$ ${vgvProposta.toFixed(2)}) ficou abaixo do aceito pela regra (R$ ${piso.toFixed(2)})`);
+            motivos.push(`o valor da proposta (${brl(vgvProposta)}) ficou abaixo do aceito pela regra (${brl(piso)})`);
+        } else {
+            conferencias.push(`Valor da proposta ${brl(vgvProposta)}; tabela ${brl(vgvTabela)}; mínimo aceito pela regra ${brl(piso)} (desconto máximo ${pctBR(descontoPct)}).`);
         }
     }
 
@@ -329,10 +338,11 @@ export function avaliar({ regraEmp, comparacao, condicoes, rendaApi, cfg }) {
         if (!linhas.length) continue;
         const nome = lim.nome || `série ${id}`;
         const qtd = linhas.reduce((s, c) => s + Number(c.quantidade || 0), 0);
+        const antes = motivos.length;
         for (const c of linhas) {
             const v = Number(c.valor || 0);
-            if (lim.valor_min && v + 0.005 < lim.valor_min) motivos.push(`${nome}: parcela de R$ ${v.toFixed(2)} abaixo do mínimo de R$ ${lim.valor_min.toFixed(2)}`);
-            if (lim.valor_max && lim.valor_max < SERIE_MAX_SEM_LIMITE && v - 0.005 > lim.valor_max) motivos.push(`${nome}: parcela de R$ ${v.toFixed(2)} acima do máximo de R$ ${lim.valor_max.toFixed(2)}`);
+            if (lim.valor_min && v + 0.005 < lim.valor_min) motivos.push(`${nome}: parcela de ${brl(v)} abaixo do mínimo de ${brl(lim.valor_min)}`);
+            if (lim.valor_max && lim.valor_max < SERIE_MAX_SEM_LIMITE && v - 0.005 > lim.valor_max) motivos.push(`${nome}: parcela de ${brl(v)} acima do máximo de ${brl(lim.valor_max)}`);
         }
         if (lim.parcelas_max && qtd > lim.parcelas_max) motivos.push(`${nome}: ${qtd} parcelas, acima do máximo de ${lim.parcelas_max}`);
         if (lim.parcelas_min && qtd < lim.parcelas_min) motivos.push(`${nome}: ${qtd} parcelas, abaixo do mínimo de ${lim.parcelas_min}`);
@@ -340,8 +350,19 @@ export function avaliar({ regraEmp, comparacao, condicoes, rendaApi, cfg }) {
             const maior = Math.max(...linhas.map((c) => Number(c.valor || 0)));
             if (!renda) motivos.push(`${nome}: a regra limita a parcela a ${lim.renda_pct}% da renda, e a reserva não tem renda informada`);
             else if (maior - 0.005 > renda * lim.renda_pct / 100) {
-                motivos.push(`${nome}: parcela de R$ ${maior.toFixed(2)} passa de ${lim.renda_pct}% da renda (R$ ${(renda * lim.renda_pct / 100).toFixed(2)})`);
+                motivos.push(`${nome}: parcela de ${brl(maior)} passa de ${lim.renda_pct}% da renda (${brl((renda * lim.renda_pct / 100))})`);
             }
+        }
+        if (motivos.length === antes) {
+            const regraTxt = [
+                lim.valor_min ? `mínimo ${brl(lim.valor_min)}` : null,
+                lim.valor_max && lim.valor_max < SERIE_MAX_SEM_LIMITE ? `máximo ${brl(lim.valor_max)}` : null,
+                lim.parcelas_min ? `ao menos ${lim.parcelas_min} parcelas` : null,
+                lim.parcelas_max ? `até ${lim.parcelas_max} parcelas` : null,
+                lim.renda_pct && renda ? `até ${pctBR(lim.renda_pct)} da renda (${brl(renda * lim.renda_pct / 100)})` : null,
+            ].filter(Boolean).join(', ');
+            const linhasTxt = linhas.map((c) => `${Number(c.quantidade || 0)}x ${brl(c.valor)}`).join(' + ');
+            conferencias.push(`${nome}: ${linhasTxt}${regraTxt ? ` - regra: ${regraTxt}` : ' - sem limite na regra'}.`);
         }
     }
 
@@ -356,7 +377,8 @@ export function avaliar({ regraEmp, comparacao, condicoes, rendaApi, cfg }) {
                 .reduce((s, c) => s + Number(c.subtotal ?? (Number(c.valor || 0) * Number(c.quantidade || 0))), 0);
             const pct = (total / vgvProposta) * 100;
             det.pro_soluto = { total: Math.round(total * 100) / 100, pct: Math.round(pct * 100) / 100, max: psMax };
-            if (pct - 0.005 > psMax) motivos.push(`pró-soluto de ${pct.toFixed(2)}% do VGV, acima do máximo de ${psMax}%`);
+            if (pct - 0.005 > psMax) motivos.push(`pró-soluto de ${pctBR(pct)} do VGV, acima do máximo de ${pctBR(psMax)}`);
+            else conferencias.push(`Pró-soluto ${brl(total)} = ${pctBR(pct)} do VGV - regra: máximo ${pctBR(psMax)}.`);
         }
     }
 
@@ -375,7 +397,10 @@ export async function lerConfig() {
         situacoes: Array.isArray(c.situacoes) ? c.situacoes.map(Number) : [],
         series_pro_soluto: Array.isArray(c.series_pro_soluto) ? c.series_pro_soluto.map(Number) : [],
         series_bloqueiam: Array.isArray(c.series_bloqueiam) ? c.series_bloqueiam.map(Number) : [],
-        tolerancia_reais: Number(c.tolerancia_reais ?? 1),
+        tolerancia_reais: Number(c.tolerancia_reais ?? 0),
+        empreendimentos_fora: Array.isArray(c.empreendimentos_fora) ? c.empreendimentos_fora.map(Number) : [],
+        mensagem_cv: c.mensagem_cv !== false,
+        mensagem_reprovacao_minutos: Number(c.mensagem_reprovacao_minutos ?? 10),
         max_por_rodada: Number(c.max_por_rodada || 40),
         comentario: c.comentario || COMENTARIO_PADRAO,
         updated_at: c.updated_at || null,
@@ -386,7 +411,7 @@ export async function salvarConfig(patch, user) {
     await ensureCvRoboSchema();
     const campos = Object.keys(patch);
     if (!campos.length) return lerConfig();
-    const jsonb = new Set(['situacoes', 'series_pro_soluto', 'series_bloqueiam']);
+    const jsonb = new Set(['situacoes', 'series_pro_soluto', 'series_bloqueiam', 'empreendimentos_fora']);
     const sets = campos.map((c) => (jsonb.has(c) ? `${c} = CAST(:${c} AS jsonb)` : `${c} = :${c}`)).join(', ');
     const rep = { ...patch, updated_by: user?.id || null };
     for (const c of campos) if (jsonb.has(c)) rep[c] = JSON.stringify(patch[c]);
@@ -399,13 +424,14 @@ async function registrar(reserva, decisao, motivos = [], detalhes = null) {
     // Uma linha por MUDANÇA: a mesma reserva fora da regra pelo mesmo motivo a
     // cada 4 minutos encheria o histórico de repetição.
     const [ult] = await db.sequelize.query(
-        'SELECT assinatura FROM cv_reaprovacao_log WHERE idreserva = :id ORDER BY created_at DESC LIMIT 1',
+        'SELECT id, assinatura FROM cv_reaprovacao_log WHERE idreserva = :id ORDER BY created_at DESC LIMIT 1',
         { replacements: { id: reserva.idreserva } }
     );
-    if (ult[0]?.assinatura === assinatura && decisao !== 'aprovada') return false;
-    await db.sequelize.query(`
+    if (ult[0]?.assinatura === assinatura && decisao !== 'aprovada') return { novo: false, id: ult[0].id, assinatura };
+    const [ins] = await db.sequelize.query(`
         INSERT INTO cv_reaprovacao_log (idreserva, idempreendimento, empreendimento, situacao, decisao, motivos, detalhes, assinatura)
         VALUES (:idreserva, :idempreendimento, :empreendimento, :situacao, :decisao, CAST(:motivos AS jsonb), CAST(:detalhes AS jsonb), :assinatura)
+        RETURNING id
     `, {
         replacements: {
             idreserva: reserva.idreserva,
@@ -418,13 +444,14 @@ async function registrar(reserva, decisao, motivos = [], detalhes = null) {
             assinatura,
         },
     });
-    return true;
+    return { novo: true, id: ins[0]?.id, assinatura };
 }
 
 export async function historico({ limite = 60 } = {}) {
     await ensureCvRoboSchema();
     const [rows] = await db.sequelize.query(`
-        SELECT id, idreserva, idempreendimento, empreendimento, situacao, decisao, motivos, detalhes, created_at
+        SELECT id, idreserva, idempreendimento, empreendimento, situacao, decisao, motivos, detalhes, created_at,
+               mensagem_cv_em, mensagem_cv_erro
           FROM cv_reaprovacao_log ORDER BY created_at DESC LIMIT :limite
     `, { replacements: { limite: Math.min(Math.max(Number(limite) || 60, 1), 300) } });
     const [cont] = await db.sequelize.query(`
@@ -517,6 +544,182 @@ export async function avaliarReservas(ids = []) {
     return saida;
 }
 
+// ── Mensagem na reserva do CV ────────────────────────────────────────────────
+
+const quando = () => new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' });
+
+async function nomeDaTabela(idtabela) {
+    if (!idtabela) return null;
+    const [rows] = await db.sequelize.query('SELECT nome FROM cv_enterprise_price_tables WHERE idtabela = :id LIMIT 1', { replacements: { id: Number(idtabela) } });
+    return rows[0]?.nome || `tabela ${idtabela}`;
+}
+
+function textoAprovacao({ tabela, detalhes }) {
+    return [
+        'PROPOSTA APROVADA AUTOMATICAMENTE (Office)',
+        `Conferida em ${quando()} contra a regra de reservas do empreendimento no CV${tabela ? ` e a tabela ${tabela}` : ''}. Tudo dentro da regra:`,
+        ...(detalhes?.conferencias || []).map((c) => `- ${c}`),
+    ].join('\n');
+}
+
+function textoReprovacao({ tabela, motivos }) {
+    return [
+        'PROPOSTA NÃO APROVADA AUTOMATICAMENTE (Office) - ficou para o aprovador',
+        `Conferida em ${quando()} contra a regra de reservas do empreendimento no CV${tabela ? ` e a tabela ${tabela}` : ''}. Fora da regra:`,
+        ...motivos.map((m) => `- ${m}`),
+        'Se a condição for ajustada para dentro da regra, o Office aprova sozinho em poucos minutos.',
+    ].join('\n');
+}
+
+/** Posta na timeline da reserva e marca a linha do histórico (enviada ou o erro). */
+async function postarMensagem(idreserva, logId, mensagem) {
+    let erro = null;
+    try {
+        const resp = await apiCv.post('/v2/comercial/reservas/mensagens', { idreserva, mensagem: mensagem.slice(0, 3900) });
+        const d = resp?.data;
+        if (d?.erro === true || d?.sucesso === false || d?.success === false) erro = String(d?.mensagem || d?.erro || 'o CV recusou a mensagem').slice(0, 300);
+    } catch (err) {
+        erro = `HTTP ${err?.response?.status || '??'}: ${String(err?.response?.data?.mensagem || err?.message || err).slice(0, 250)}`;
+    }
+    if (logId) {
+        await db.sequelize.query(
+            `UPDATE cv_reaprovacao_log SET mensagem_cv_em = ${erro ? 'NULL' : 'NOW()'}, mensagem_cv_erro = :erro WHERE id = :id`,
+            { replacements: { id: logId, erro } }
+        );
+    }
+    if (erro) console.warn(`[CV robô] mensagem na reserva ${idreserva} falhou: ${erro}`);
+    return !erro;
+}
+
+const hashCondicao = (condicoes, comparacao) => crypto.createHash('sha1')
+    .update(JSON.stringify([condicoes.map((c) => [c.idserie, c.quantidade, c.valor]), comparacao.vgvProposta]))
+    .digest('hex');
+
+/**
+ * Fora da regra: guarda desde quando a condição está parada e, passados os
+ * minutos configurados sem mexerem nela, posta UMA mensagem por motivo. Mexeu
+ * na condição (mesmo sem mudar o motivo) = o relógio recomeça.
+ */
+async function acompanharReprovacao({ reserva, log, condHash, motivos, tabela, cfg, modo }) {
+    const [rows] = await db.sequelize.query('SELECT * FROM cv_reaprovacao_estado WHERE idreserva = :id', { replacements: { id: reserva.idreserva } });
+    const est = rows[0];
+    if (!est || est.assinatura !== log.assinatura || est.condicao_hash !== condHash) {
+        await db.sequelize.query(`
+            INSERT INTO cv_reaprovacao_estado (idreserva, assinatura, condicao_hash, condicao_desde, conferida_em, log_id)
+            VALUES (:id, :a, :h, NOW(), NOW(), :log)
+            ON CONFLICT (idreserva) DO UPDATE SET assinatura = :a, condicao_hash = :h, condicao_desde = NOW(), conferida_em = NOW(), log_id = :log
+        `, { replacements: { id: reserva.idreserva, a: log.assinatura, h: condHash, log: log.id } });
+        return;
+    }
+    if (!cfg.mensagem_cv || modo !== 'aprovar') return;
+    const parada = (Date.now() - new Date(est.condicao_desde).getTime()) / 60000;
+    if (parada < cfg.mensagem_reprovacao_minutos) return;
+    const [lg] = await db.sequelize.query('SELECT mensagem_cv_em FROM cv_reaprovacao_log WHERE id = :id', { replacements: { id: log.id } });
+    if (!lg[0] || lg[0].mensagem_cv_em) return;
+    await postarMensagem(reserva.idreserva, log.id, textoReprovacao({ tabela, motivos }));
+}
+
+async function marcarConferida(idreserva) {
+    await db.sequelize.query(`
+        INSERT INTO cv_reaprovacao_estado (idreserva, conferida_em) VALUES (:id, NOW())
+        ON CONFLICT (idreserva) DO UPDATE SET conferida_em = NOW()
+    `, { replacements: { id: idreserva } });
+}
+
+// ── Rodada ───────────────────────────────────────────────────────────────────
+
+const MOTIVO_FORA = 'empreendimento fora do robô (configurado na tela): vai sempre para o aprovador';
+
+// Cron e webhook podem pegar a mesma reserva ao mesmo tempo: aprovaria e
+// postaria mensagem duas vezes. Uma reserva por vez neste processo.
+const emConferencia = new Set();
+
+async function conferirReserva(c, { cfg, modo, regras, resumo }) {
+    if (emConferencia.has(c.idreserva)) return;
+    emConferencia.add(c.idreserva);
+    try {
+        const viva = await reservaAoVivo(c.idreserva);
+        if (!viva) return;
+        const idSit = Number(viva.situacao?.idsituacao);
+        if (!cfg.situacoes.includes(idSit)) return;           // espelho atrasado
+        await marcarConferida(c.idreserva);
+        if (String(viva.condicao_aprovada || '').toUpperCase() === 'S') { resumo.ja_aprovadas++; return; }
+
+        const reserva = {
+            idreserva: c.idreserva,
+            idempreendimento: Number(viva.unidade?.idempreendimento_cv || c.idempreendimento) || null,
+            empreendimento: viva.unidade?.empreendimento || c.empreendimento,
+            situacao: viva.situacao?.situacao || c.situacao,
+        };
+        if (!reserva.idempreendimento) {
+            await registrar(reserva, 'ignorada', ['a reserva não informa o empreendimento']);
+            return;
+        }
+        if (cfg.empreendimentos_fora.includes(reserva.idempreendimento)) {
+            await registrar(reserva, 'ignorada', [MOTIVO_FORA]);
+            return;
+        }
+
+        if (!regras.has(reserva.idempreendimento)) regras.set(reserva.idempreendimento, await lerRegraDoEmpreendimento(reserva.idempreendimento));
+        const regraEmp = regras.get(reserva.idempreendimento);
+
+        const comparacao = await lerComparacao(c.idreserva);
+        if (comparacao.jaAprovada) { resumo.ja_aprovadas++; return; }
+        if (!comparacao.temForm) {
+            await registrar(reserva, 'ignorada', [
+                'a tela de comparação do CV não mostrou o botão Aprovar para o usuário do robô '
+                + '(ele precisa estar na alçada do empreendimento; se acabou de entrar, conecte uma sessão nova)',
+            ], { botoes: comparacao.botoes, titulo: comparacao.titulo });
+            return;
+        }
+
+        // Séries da condição pela v1 (idserie, quantidade e valor de cada
+        // linha). A v3 marca todas as linhas como `ativo: false`, então não
+        // dá para confiar nela para saber o que vale.
+        const condicoes = (viva.condicoes?.series || []).map((s) => ({
+            idserie: Number(s.idserie),
+            nome: s.serie || null,
+            quantidade: Number(s.quantidade || 0),
+            valor: Number(s.valor || 0),
+            subtotal: Number(s.valor || 0) * Number(s.quantidade || 0),
+        }));
+        // Valores da tela de comparação (o que o aprovador vê); a v1 é reserva.
+        if (!comparacao.vgvProposta) comparacao.vgvProposta = Number(viva.condicoes?.valor_contrato || 0) || null;
+        if (!comparacao.vgvTabela) comparacao.vgvTabela = Number(viva.condicoes?.vgv_tabela || 0) || null;
+        const rendaApi = Number(viva.titular?.renda_familiar || 0) || null;
+        const tabela = await nomeDaTabela(viva.condicoes?.idtabela_origem || viva.condicoes?.idtabela).catch(() => null);
+
+        const r = avaliar({ regraEmp, comparacao, condicoes, rendaApi, cfg });
+        r.detalhes.tabela = tabela;
+        if (!r.ok) {
+            resumo.fora_da_regra++;
+            const log = await registrar(reserva, 'fora_da_regra', r.motivos, r.detalhes);
+            await acompanharReprovacao({ reserva, log, condHash: hashCondicao(condicoes, comparacao), motivos: r.motivos, tabela, cfg, modo });
+            return;
+        }
+
+        if (modo !== 'aprovar') {
+            resumo.simuladas++;
+            await registrar(reserva, 'simulada', [], r.detalhes);
+            return;
+        }
+
+        const envio = await aprovarNoPainel(c.idreserva, comparacao, cfg.comentario);
+        const depois = await reservaAoVivo(c.idreserva);
+        if (String(depois?.condicao_aprovada || '').toUpperCase() === 'S') {
+            resumo.aprovadas++;
+            const log = await registrar(reserva, 'aprovada', [], { ...r.detalhes, http: envio.status });
+            console.log(`[CV robô] reserva ${c.idreserva} aprovada (dentro da regra).`);
+            if (cfg.mensagem_cv) await postarMensagem(c.idreserva, log.id, textoAprovacao({ tabela, detalhes: r.detalhes }));
+        } else {
+            resumo.erros++;
+            await registrar(reserva, 'erro', [motivoRecusa(envio)], r.detalhes);
+        }
+    } finally {
+        emConferencia.delete(c.idreserva);
+    }
+}
+
 /**
  * Uma rodada. `forcarSimulacao` deixa a tela testar sem aprovar nada, mesmo
  * com o modo "aprovar" ligado.
@@ -529,88 +732,35 @@ export async function rodar({ forcarSimulacao = false } = {}) {
     if (!cfg.situacoes.length) return { pulado: 'nenhuma situação configurada' };
 
     const modo = forcarSimulacao ? 'simular' : cfg.modo;
-    const [candidatos] = await db.sequelize.query(`
-        SELECT idreserva, idempreendimento_cv AS idempreendimento, empreendimento,
-               situacao->>'situacao' AS situacao
+    // Empreendimentos fora do robô: uma linha no histórico (sem chamar o CV) e
+    // não ocupam vaga na rodada.
+    const fora = cfg.empreendimentos_fora.length ? cfg.empreendimentos_fora : [0];
+    const [ignoradas] = await db.sequelize.query(`
+        SELECT idreserva, idempreendimento_cv AS idempreendimento, empreendimento, situacao->>'situacao' AS situacao
           FROM reservas
-         WHERE (situacao->>'idsituacao')::int IN (:situacoes)
-         ORDER BY updated_at DESC
+         WHERE (situacao->>'idsituacao')::int IN (:situacoes) AND idempreendimento_cv IN (:fora)
+    `, { replacements: { situacoes: cfg.situacoes, fora } });
+    for (const c of ignoradas) await registrar(c, 'ignorada', [MOTIVO_FORA]).catch(() => {});
+
+    // A fila anda pela conferência mais antiga: com mais reservas que o
+    // máximo por rodada, nenhuma fica esquecida no fim da fila.
+    const [candidatos] = await db.sequelize.query(`
+        SELECT r.idreserva, r.idempreendimento_cv AS idempreendimento, r.empreendimento,
+               r.situacao->>'situacao' AS situacao
+          FROM reservas r
+          LEFT JOIN cv_reaprovacao_estado e ON e.idreserva = r.idreserva
+         WHERE (r.situacao->>'idsituacao')::int IN (:situacoes)
+           AND (r.idempreendimento_cv IS NULL OR r.idempreendimento_cv NOT IN (:fora))
+         ORDER BY e.conferida_em ASC NULLS FIRST, r.updated_at DESC
          LIMIT :lim
-    `, { replacements: { situacoes: cfg.situacoes, lim: cfg.max_por_rodada } });
+    `, { replacements: { situacoes: cfg.situacoes, fora, lim: cfg.max_por_rodada } });
 
     const regras = new Map();
     const resumo = { candidatos: candidatos.length, ja_aprovadas: 0, fora_da_regra: 0, simuladas: 0, aprovadas: 0, erros: 0 };
 
     for (const c of candidatos) {
         try {
-            const viva = await reservaAoVivo(c.idreserva);
-            if (!viva) continue;
-            const idSit = Number(viva.situacao?.idsituacao);
-            if (!cfg.situacoes.includes(idSit)) continue;           // espelho atrasado
-            if (String(viva.condicao_aprovada || '').toUpperCase() === 'S') { resumo.ja_aprovadas++; continue; }
-
-            const reserva = {
-                idreserva: c.idreserva,
-                idempreendimento: Number(viva.unidade?.idempreendimento_cv || c.idempreendimento) || null,
-                empreendimento: viva.unidade?.empreendimento || c.empreendimento,
-                situacao: viva.situacao?.situacao || c.situacao,
-            };
-            if (!reserva.idempreendimento) {
-                await registrar(reserva, 'ignorada', ['a reserva não informa o empreendimento']);
-                continue;
-            }
-
-            if (!regras.has(reserva.idempreendimento)) regras.set(reserva.idempreendimento, await lerRegraDoEmpreendimento(reserva.idempreendimento));
-            const regraEmp = regras.get(reserva.idempreendimento);
-
-            const comparacao = await lerComparacao(c.idreserva);
-            if (comparacao.jaAprovada) { resumo.ja_aprovadas++; continue; }
-            if (!comparacao.temForm) {
-                await registrar(reserva, 'ignorada', [
-                    'a tela de comparação do CV não mostrou o botão Aprovar para o usuário do robô '
-                    + '(ele precisa estar na alçada do empreendimento; se acabou de entrar, conecte uma sessão nova)',
-                ], { botoes: comparacao.botoes, titulo: comparacao.titulo });
-                continue;
-            }
-
-            // Séries da condição pela v1 (idserie, quantidade e valor de cada
-            // linha). A v3 marca todas as linhas como `ativo: false`, então não
-            // dá para confiar nela para saber o que vale.
-            const condicoes = (viva.condicoes?.series || []).map((s) => ({
-                idserie: Number(s.idserie),
-                nome: s.serie || null,
-                quantidade: Number(s.quantidade || 0),
-                valor: Number(s.valor || 0),
-                subtotal: Number(s.valor || 0) * Number(s.quantidade || 0),
-            }));
-            // Valores da tela de comparação (o que o aprovador vê); a v1 é reserva.
-            if (!comparacao.vgvProposta) comparacao.vgvProposta = Number(viva.condicoes?.valor_contrato || 0) || null;
-            if (!comparacao.vgvTabela) comparacao.vgvTabela = Number(viva.condicoes?.vgv_tabela || 0) || null;
-            const rendaApi = Number(viva.titular?.renda_familiar || 0) || null;
-
-            const r = avaliar({ regraEmp, comparacao, condicoes, rendaApi, cfg });
-            if (!r.ok) {
-                resumo.fora_da_regra++;
-                await registrar(reserva, 'fora_da_regra', r.motivos, r.detalhes);
-                continue;
-            }
-
-            if (modo !== 'aprovar') {
-                resumo.simuladas++;
-                await registrar(reserva, 'simulada', [], r.detalhes);
-                continue;
-            }
-
-            const envio = await aprovarNoPainel(c.idreserva, comparacao, cfg.comentario);
-            const depois = await reservaAoVivo(c.idreserva);
-            if (String(depois?.condicao_aprovada || '').toUpperCase() === 'S') {
-                resumo.aprovadas++;
-                await registrar(reserva, 'aprovada', [], { ...r.detalhes, http: envio.status });
-                console.log(`[CV robô] reserva ${c.idreserva} aprovada (dentro da regra).`);
-            } else {
-                resumo.erros++;
-                await registrar(reserva, 'erro', [motivoRecusa(envio)], r.detalhes);
-            }
+            await conferirReserva(c, { cfg, modo, regras, resumo });
         } catch (err) {
             // Limite de requisições do CV: insistir só derruba o resto da fila
             // com o mesmo erro. Para a rodada; a próxima volta em 4 minutos.
@@ -629,4 +779,52 @@ export async function rodar({ forcarSimulacao = false } = {}) {
     return { modo, ...resumo };
 }
 
-export default { rodar, avaliar, avaliarReservas, resumoRegra, lerConfig, salvarConfig, historico, numeroBR, lerRegraDoEmpreendimento, atualizarRegrasDasFichas };
+/**
+ * Confere uma reserva na hora, sem esperar o cron. Chamado pelo webhook do CV
+ * quando a reserva entra numa situação da fila: a aprovação sai em segundos.
+ * Mesmas travas da rodada (ligado, sessão viva, situação, empreendimento).
+ */
+export async function conferirAgora(idreserva) {
+    await ensureCvRoboSchema();
+    const cfg = await lerConfig();
+    if (!cfg.ativo || !cfg.situacoes.length) return { pulado: 'reaprovação desligada' };
+    if (!(await cookieAtivo())) return { pulado: 'robô sem sessão no painel' };
+    const [rows] = await db.sequelize.query(`
+        SELECT idreserva, idempreendimento_cv AS idempreendimento, empreendimento, situacao->>'situacao' AS situacao,
+               (situacao->>'idsituacao')::int AS idsituacao
+          FROM reservas WHERE idreserva = :id
+    `, { replacements: { id: Number(idreserva) } });
+    const c = rows[0];
+    if (!c || !cfg.situacoes.includes(Number(c.idsituacao))) return { pulado: 'fora das situações da fila' };
+    const resumo = { candidatos: 1, ja_aprovadas: 0, fora_da_regra: 0, simuladas: 0, aprovadas: 0, erros: 0 };
+    try {
+        await conferirReserva(c, { cfg, modo: cfg.modo, regras: new Map(), resumo });
+    } catch (err) {
+        if (err?.response?.status === 429) return { ...resumo, limite_cv: true };   // o cron pega depois
+        await registrar(c, 'erro', [String(err?.message || err).slice(0, 300)]).catch(() => {});
+        resumo.erros++;
+    }
+    return { modo: cfg.modo, ...resumo };
+}
+
+/** A fila de agora, para a tela: o que está esperando, desde quando e a última decisão. */
+export async function filaAtual() {
+    await ensureCvRoboSchema();
+    const cfg = await lerConfig();
+    if (!cfg.situacoes.length) return [];
+    const [rows] = await db.sequelize.query(`
+        SELECT r.idreserva, r.empreendimento, r.idempreendimento_cv AS idempreendimento, r.situacao->>'situacao' AS situacao,
+               (SELECT max((s->>'captured_at')::timestamptz) FROM jsonb_array_elements(r.status) s
+                 WHERE (s->>'idsituacao_reserva')::int = (r.situacao->>'idsituacao')::int) AS na_situacao_desde,
+               e.conferida_em, e.condicao_desde,
+               l.decisao, l.motivos, l.created_at AS decidida_em, l.mensagem_cv_em, l.mensagem_cv_erro
+          FROM reservas r
+          LEFT JOIN cv_reaprovacao_estado e ON e.idreserva = r.idreserva
+          LEFT JOIN LATERAL (SELECT * FROM cv_reaprovacao_log x WHERE x.idreserva = r.idreserva ORDER BY x.created_at DESC LIMIT 1) l ON true
+         WHERE (r.situacao->>'idsituacao')::int IN (:situacoes)
+         ORDER BY na_situacao_desde ASC NULLS LAST
+    `, { replacements: { situacoes: cfg.situacoes } });
+    return rows.map((r) => ({ ...r, fora_do_robo: cfg.empreendimentos_fora.includes(Number(r.idempreendimento)) }));
+}
+
+export default { rodar, conferirAgora, filaAtual, avaliar, avaliarReservas, resumoRegra, lerConfig, salvarConfig, historico, numeroBR, lerRegraDoEmpreendimento, atualizarRegrasDasFichas };

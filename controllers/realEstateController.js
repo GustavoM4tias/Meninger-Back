@@ -743,8 +743,8 @@ async function estadoDoRobo() {
         import('../lib/cvPainelSessao.js'),
         import('../services/cv/cvReaprovacaoService.js'),
     ]);
-    const [sessao, config, hist] = await Promise.all([statusSessao(), reap.lerConfig(), reap.historico({ limite: 60 })]);
-    return { sessao, config, historico: hist.itens, ultimos7dias: hist.ultimos7dias, situacoes_conhecidas: SITUACOES_ROBO };
+    const [sessao, config, hist, fila] = await Promise.all([statusSessao(), reap.lerConfig(), reap.historico({ limite: 200 }), reap.filaAtual()]);
+    return { sessao, config, fila, historico: hist.itens, ultimos7dias: hist.ultimos7dias, situacoes_conhecidas: SITUACOES_ROBO };
 }
 
 export async function getCvRobo(req, res) {
@@ -789,7 +789,13 @@ export async function salvarCvRoboConfig(req, res) {
             if (!['simular', 'aprovar'].includes(b.modo)) return res.status(400).json({ ok: false, error: 'Modo inválido. Use simular ou aprovar.' });
             patch.modo = b.modo;
         }
-        for (const campo of ['situacoes', 'series_pro_soluto', 'series_bloqueiam']) {
+        if (b.mensagem_cv !== undefined) patch.mensagem_cv = !!b.mensagem_cv;
+        if (b.mensagem_reprovacao_minutos !== undefined) {
+            const m = Number(b.mensagem_reprovacao_minutos);
+            if (!Number.isInteger(m) || m < 1 || m > 1440) return res.status(400).json({ ok: false, error: 'A espera da mensagem de reprovação deve ficar entre 1 e 1.440 minutos.' });
+            patch.mensagem_reprovacao_minutos = m;
+        }
+        for (const campo of ['situacoes', 'series_pro_soluto', 'series_bloqueiam', 'empreendimentos_fora']) {
             if (b[campo] === undefined) continue;
             const ids = listaDeIds(b[campo]);
             if (!ids) return res.status(400).json({ ok: false, error: `Lista inválida em ${campo}.` });
