@@ -144,8 +144,16 @@ async function lerComparacao(idreserva) {
     const contratos = [...texto.matchAll(/Valor do contrato:\s*R\$\s*([\d.,]+)/gi)].map((m) => numeroBR(m[1]));
     const renda = numeroBR(texto.match(/Renda Total\s*R\$\s*([\d.,]+)/i)?.[1]);
 
+    // Diagnóstico para quando o formulário não vem: quais botões a tela trouxe.
+    // Sem o botão Aprovar, o usuário do robô não é aprovador desta reserva
+    // (alçada do empreendimento) ou a sessão foi aberta antes de ele entrar
+    // na alçada - o CV guarda as permissões no login.
+    const botoes = [...new Set($('button, input[type="submit"], input[type="button"]').map((_, b) => ($(b).text() || $(b).attr('value') || '').replace(/\s+/g, ' ').trim()).get().filter(Boolean))].slice(0, 8);
+
     return {
         caminho,
+        botoes,
+        titulo: $('title').text().replace(/\s+/g, ' ').trim().slice(0, 80),
         jaAprovada: /Reserva j[áa] aprovada/i.test(texto),
         temForm: form.length > 0,
         campos: form.length ? camposDoForm($, form) : null,
@@ -401,7 +409,10 @@ export async function rodar({ forcarSimulacao = false } = {}) {
             const comparacao = await lerComparacao(c.idreserva);
             if (comparacao.jaAprovada) { resumo.ja_aprovadas++; continue; }
             if (!comparacao.temForm) {
-                await registrar(reserva, 'ignorada', ['a tela de comparação do CV não mostrou o formulário de aprovação']);
+                await registrar(reserva, 'ignorada', [
+                    'a tela de comparação do CV não mostrou o botão Aprovar para o usuário do robô '
+                    + '(ele precisa estar na alçada do empreendimento; se acabou de entrar, conecte uma sessão nova)',
+                ], { botoes: comparacao.botoes, titulo: comparacao.titulo });
                 continue;
             }
 
