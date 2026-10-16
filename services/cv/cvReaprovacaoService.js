@@ -175,7 +175,11 @@ export function avaliar({ regraEmp, comparacao, condicoes, rendaApi, cfg }) {
     const det = {};
     const { regra, series, automatica } = regraEmp;
 
-    if (!automatica) motivos.push('o empreendimento não tem a aprovação automática ligada no CV');
+    // A aprovação automática NATIVA do CV ficou desligada de propósito
+    // (16/10/2026): ela aprovava na criação, com a proposta ainda zerada, sem
+    // conferir série nenhuma - 12 de 12 casos medidos. Quem aprova é o robô;
+    // o empreendimento entra quando a regra dele vale para reserva.
+    det.aprovacao_automatica_cv = automatica;
     if (!['R', 'A'].includes(String(regra.funcionalidades_regras || ''))) {
         motivos.push('a regra do empreendimento no CV não vale para reserva');
     }
