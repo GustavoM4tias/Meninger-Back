@@ -53,7 +53,7 @@ function userIdInList(req, list) {
 }
 
 // Admin sempre pode. Demais usuários precisam estar na lista correspondente.
-async function canEditConditions(req) {
+export async function canEditConditions(req) {
     if (isAdmin(req)) return true;
     const s = await getComercialSettings();
     return userIdInList(req, s.editor_user_ids);
@@ -64,7 +64,7 @@ export async function canAuthorizeConditions(req) {
     return userIdInList(req, s.authorizer_user_ids);
 }
 // Visão privilegiada (enxerga qualquer status, como admin): editores e autorizadores.
-async function isPrivilegedViewer(req) {
+export async function isPrivilegedViewer(req) {
     if (isAdmin(req)) return true;
     const s = await getComercialSettings();
     return userIdInList(req, s.editor_user_ids) || userIdInList(req, s.authorizer_user_ids);
@@ -845,6 +845,13 @@ export const authorizeCondition = async (req, res) => {
         if (!count) {
             return res.status(409).json({ error: 'A ficha já mudou de status. Recarregue a página.' });
         }
+
+        // Foto das fontes (preço, fluxo, regra do CV, estoque) no momento da
+        // autorização: é o que a ficha autorizada passa a mostrar. Em segundo
+        // plano, para a resposta não esperar o CV.
+        import('./conditionFontesController.js')
+            .then(({ congelarFontes }) => congelarFontes(condition.id, 'authorize'))
+            .catch((err) => console.warn(`[conditions] foto das fontes da ficha ${condition.id} falhou: ${err.message}`));
 
         return res.json({ ok: true, status: 'approved' });
     } catch (e) {

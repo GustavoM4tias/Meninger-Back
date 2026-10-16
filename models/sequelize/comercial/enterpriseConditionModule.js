@@ -88,6 +88,16 @@ export default (sequelize, DataTypes) => {
 
         // ── Snapshot de unidades (congelado ao enviar para autorização) ────────
         unit_snapshot: { type: DataTypes.JSONB, defaultValue: null },
+
+        // ── Fontes (o que a ficha mostra sem ninguém digitar) ─────────────────
+        // Tipo de produto quando o automático (tipo + segmento do CV) erra:
+        // loteamento_mcmv | vertical_mcmv | vertical_alto_padrao | lote_urbanizado
+        product_type_override:  { type: DataTypes.STRING(30), allowNull: true },
+        // Foto das fontes (preço, fluxo, regra do CV, estoque...) congelada ao
+        // autorizar e no fechamento do mês. Mês aberto lê ao vivo.
+        fontes_snapshot:        { type: DataTypes.JSONB, allowNull: true },
+        fontes_snapshot_at:     { type: DataTypes.DATE, allowNull: true },
+        fontes_snapshot_reason: { type: DataTypes.STRING(20), allowNull: true }, // 'authorize' | 'month_end'
     }, {
         tableName: 'enterprise_condition_modules',
         underscored: true,

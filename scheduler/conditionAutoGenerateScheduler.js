@@ -55,6 +55,8 @@ const CONDITION_NO_INHERIT = new Set([
 // price_table_ids: idem CONDITION_NO_INHERIT — frontend reseleciona vigentes.
 const MODULE_NO_INHERIT = new Set([
     'id', 'condition_id', 'unit_snapshot',
+    // Foto das fontes é do mês dela; o mês novo lê ao vivo.
+    'fontes_snapshot', 'fontes_snapshot_at', 'fontes_snapshot_reason',
     'createdAt', 'updatedAt', 'created_at', 'updated_at',
     'price_table_ids',
 ]);
@@ -305,6 +307,28 @@ async function autoGenerateConditions() {
     }
 
     console.log(`📋 [ConditionAutoGenerate] Concluído — ${created} criada(s), ${skipped} já existiam, ${closed} encerradas, ${errors} erro(s).`);
+
+    await congelarMesAnterior(currentMonth).catch((err) =>
+        console.error('[ConditionAutoGenerate] foto do mês anterior falhou:', err.message));
+}
+
+// Foto do mês que acabou: o que a ficha mostrava (preço, fluxo, regra do CV,
+// estoque) fica guardado para a navegação por mês. Só no começo do mês: num
+// catch-up do dia 16, a "foto de setembro" seria o estado de outubro.
+async function congelarMesAnterior(currentMonth) {
+    const dia = Number(new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE, day: '2-digit' }).format(new Date()));
+    if (dia > 2) return;
+    const [y, m] = currentMonth.split('-').map(Number);
+    const anterior = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 10);
+    const { Op } = db.Sequelize;
+    const fichas = await EnterpriseCondition.findAll({
+        attributes: ['id'],
+        where: { reference_month: anterior, idempreendimento: { [Op.not]: null } },
+    });
+    const { congelarFontes } = await import('../controllers/comercial/conditionFontesController.js');
+    let total = 0;
+    for (const f of fichas) total += (await congelarFontes(f.id, 'month_end', { soSemFoto: true })).congelados;
+    console.log(`📋 [ConditionAutoGenerate] Foto de ${anterior.slice(0, 7)}: ${total} módulo(s) congelado(s).`);
 }
 
 // Serializa a auto-geração entre instâncias (Railway pode reiniciar/escalar): usa

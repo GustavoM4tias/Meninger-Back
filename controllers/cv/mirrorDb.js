@@ -183,10 +183,11 @@ function decomporHorizontal(nome) {
 const ehHorizontal = (tipoNome) => /horizontal|loteamento|\bcasas?\b|\blotes?\b/i.test(String(tipoNome || ''));
 
 // Tabela de preço que serve de referência: vigente mais recente com unidades;
-// sem vigente, a mais recente que tenha unidades.
-async function tabelaReferencia(idempreendimento) {
+// sem vigente, a mais recente que tenha unidades. `idtabela` força uma tabela
+// (a ficha comercial usa a tabela vigente da etapa do módulo).
+async function tabelaReferencia(idempreendimento, idtabela = null) {
   const rows = await CvEnterprisePriceTable.findAll({
-    where: { idempreendimento },
+    where: idtabela ? { idempreendimento, idtabela } : { idempreendimento },
     order: [['data_vigencia_de', 'DESC NULLS LAST'], ['idtabela', 'DESC']],
   });
   const hoje = new Date().toISOString().slice(0, 10);
@@ -201,7 +202,12 @@ async function tabelaReferencia(idempreendimento) {
   if (!t) return null;
   const unidades = t.raw?.unidades?.length ? t.raw.unidades : t.raw.metadados.unidades;
   const porId = new Map();
-  for (const u of unidades) if (u.idunidade != null) porId.set(Number(u.idunidade), num(u.valor_total));
+  const seriesPorId = new Map();
+  for (const u of unidades) {
+    if (u.idunidade == null) continue;
+    porId.set(Number(u.idunidade), num(u.valor_total));
+    if (Array.isArray(u.series)) seriesPorId.set(Number(u.idunidade), u.series);
+  }
   return {
     idtabela: t.idtabela,
     nome: t.nome,
@@ -209,7 +215,30 @@ async function tabelaReferencia(idempreendimento) {
     data_vigencia_de: ymd(t.data_vigencia_de),
     data_vigencia_ate: ymd(t.data_vigencia_ate),
     porId,
+    seriesPorId,
   };
+}
+
+// Última reserva que não foi cancelada, por unidade (etapa do workflow, data e
+// imobiliária). O vínculo é o id da unidade no CV gravado na própria reserva.
+async function reservasPorUnidade(idempreendimento) {
+  const [rows] = await db.sequelize.query(`
+    SELECT DISTINCT ON ((unidade_json->>'idunidade_cv')::int)
+           (unidade_json->>'idunidade_cv')::int AS idunidade,
+           idreserva, data_reserva, situacao->>'situacao' AS situacao,
+           imobiliaria->>'nome' AS imobiliaria
+      FROM reservas
+     WHERE idempreendimento_cv = :id
+       AND unidade_json->>'idunidade_cv' ~ '^[0-9]+$'
+       AND COALESCE(situacao->>'situacao', '') NOT IN ('Cancelada', 'Vencida', 'Distrato', 'Distratada')
+     ORDER BY (unidade_json->>'idunidade_cv')::int, data_reserva DESC NULLS LAST
+  `, { replacements: { id: Number(idempreendimento) } });
+  return new Map(rows.map((r) => [Number(r.idunidade), {
+    idreserva: r.idreserva,
+    data: r.data_reserva ? new Date(r.data_reserva).toISOString().slice(0, 10) : null,
+    situacao: r.situacao || null,
+    imobiliaria: r.imobiliaria || null,
+  }]));
 }
 
 async function loadSettings(idempreendimento) {
@@ -218,16 +247,23 @@ async function loadSettings(idempreendimento) {
 }
 
 // ── Montagem ─────────────────────────────────────────────────────────────────
-export async function montarEspelho(idempreendimento) {
-  const [{ settings, row }, ent, etapas, tabela, adimplencia, motivos] = await Promise.all([
+// Opções (todas opcionais; sem elas o espelho é o de sempre):
+//   idetapa       → só as unidades dessa etapa (a ficha comercial é por módulo)
+//   idtabela      → usa essa tabela de preço como referência
+//   precoDaTabela → o preço da tabela vem antes do valor da unidade no CV
+//   comReserva    → cada unidade traz a última reserva ativa
+export async function montarEspelho(idempreendimento, opts = {}) {
+  const { idetapa = null, idtabela = null, precoDaTabela = false, comReserva = false } = opts;
+  const [{ settings, row }, ent, etapas, tabela, adimplencia, motivos, reservas] = await Promise.all([
     loadSettings(idempreendimento),
     CvEnterprise.findByPk(idempreendimento, { attributes: ['idempreendimento', 'tipo_empreendimento_nome'] }),
-    CvEnterpriseStage.findAll({ where: { idempreendimento }, order: [['idetapa', 'ASC']] }),
-    tabelaReferencia(idempreendimento),
+    CvEnterpriseStage.findAll({ where: idetapa ? { idempreendimento, idetapa } : { idempreendimento }, order: [['idetapa', 'ASC']] }),
+    tabelaReferencia(idempreendimento, idtabela),
     mapaVigente(idempreendimento).catch(() => new Map()),
     // Motivo do bloqueio por unidade (núcleo do estoque comercial). Falhar aqui
     // não pode derrubar o espelho: sem o mapa, toda bloqueada é só bloqueada.
     mapaMotivos(idempreendimento).catch(() => new Map()),
+    comReserva ? reservasPorUnidade(idempreendimento).catch(() => new Map()) : Promise.resolve(new Map()),
   ]);
   const etapaIds = etapas.map((e) => e.idetapa);
   const blocos = etapaIds.length
@@ -281,8 +317,10 @@ export async function montarEspelho(idempreendimento) {
     const valorCv = num(u.valor);
     const m2Andar = andar != null ? settings.valor_m2_andar?.[String(andar)] : null;
     let valor = null, fonte = null;
-    if (valorCv && valorCv > 0) { valor = valorCv; fonte = 'cv'; fonteCv++; }
-    else if (tabela?.porId.has(u.idunidade) && tabela.porId.get(u.idunidade) > 0) { valor = tabela.porId.get(u.idunidade); fonte = 'tabela'; fonteTabela++; }
+    const valorTabela = tabela?.porId.get(Number(u.idunidade));
+    if (precoDaTabela && valorTabela > 0) { valor = valorTabela; fonte = 'tabela'; fonteTabela++; }
+    else if (valorCv && valorCv > 0) { valor = valorCv; fonte = 'cv'; fonteCv++; }
+    else if (valorTabela > 0) { valor = valorTabela; fonte = 'tabela'; fonteTabela++; }
     else if (m2Andar && area) { valor = Math.round(m2Andar * area * 100) / 100; fonte = 'estimado'; fonteEstimado++; }
     else semPreco++;
 
@@ -343,6 +381,8 @@ export async function montarEspelho(idempreendimento) {
       valor_cheio: valorCheio,
       adimplencia_premiada: adimpl,
       valor_m2: valor != null && area ? valor / area : null,
+      ...(precoDaTabela ? { series: tabela?.seriesPorId.get(Number(u.idunidade)) || null } : {}),
+      ...(comReserva ? { reserva: reservas.get(Number(u.idunidade)) || null } : {}),
     });
   }
 

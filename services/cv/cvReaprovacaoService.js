@@ -31,6 +31,7 @@ import db from '../../models/sequelize/index.js';
 import apiCv from '../../lib/apiCv.js';
 import { ensureCvRoboSchema, COMENTARIO_PADRAO } from '../../lib/ensureCvRoboSchema.js';
 import { cookieAtivo, getPainel, postPainel, painelAtual } from '../../lib/cvPainelSessao.js';
+import { salvarSnapshotRegra, empreendimentosComRegraVencida } from './cvRegraSnapshotService.js';
 
 // Campos da regra do CV que o robô ainda NÃO avalia. Preenchido num
 // empreendimento = reserva fica no manual, com o nome do campo no motivo.
@@ -96,7 +97,47 @@ function camposDoForm($, form) {
 
 // ── Regra do empreendimento, lida do painel ──────────────────────────────────
 
-async function lerRegraDoEmpreendimento(idempreendimento) {
+// Valor de um campo do formulário: select (opção marcada), checkbox (marcado)
+// ou input comum.
+function valorCampo($, el) {
+    if (!el || !el.length) return null;
+    const node = el.get(0);
+    if (node?.tagName === 'select') {
+        const sel = el.find('option[selected]').first();
+        return sel.length ? (sel.attr('value') ?? sel.text()) : null;
+    }
+    const tipo = String(el.attr('type') || '').toLowerCase();
+    if (tipo === 'checkbox' || tipo === 'radio') return el.attr('checked') !== undefined ? (el.attr('value') ?? 'S') : 'N';
+    return el.attr('value') ?? null;
+}
+
+export async function lerRegraDoEmpreendimento(idempreendimento) {
+    const leitura = await lerRegraNoPainel(idempreendimento);
+    // A ficha comercial mostra a última leitura; gravar nunca pode atrapalhar o robô.
+    salvarSnapshotRegra(idempreendimento, leitura).catch((err) =>
+        console.warn(`[CV robô] foto da regra do empreendimento ${idempreendimento} não gravada: ${err.message}`));
+    return leitura;
+}
+
+/**
+ * Atualiza a foto da regra dos empreendimentos com ficha em aberto, poucos por
+ * vez (o job do robô roda a cada 4 minutos; o CV devolve 429 se apertar).
+ */
+export async function atualizarRegrasDasFichas({ horas = 20, limite = 2 } = {}) {
+    if (!(await cookieAtivo())) return { pulado: 'robô sem sessão no painel' };
+    const ids = await empreendimentosComRegraVencida({ horas, limite });
+    let lidas = 0;
+    for (const id of ids) {
+        try { await lerRegraDoEmpreendimento(id); lidas++; }
+        catch (err) {
+            if (err?.response?.status === 429) break;
+            console.warn(`[CV robô] regra do empreendimento ${id} não lida: ${err.message}`);
+        }
+    }
+    return { lidas, pendentes: ids.length - lidas };
+}
+
+async function lerRegraNoPainel(idempreendimento) {
     const p = await painelAtual();
     const base = `/${p}/cadastros/empreendimentos/${idempreendimento}`;
 
@@ -124,10 +165,14 @@ async function lerRegraDoEmpreendimento(idempreendimento) {
             parcelas_min: v('parcela_minimo'),
             parcelas_max: v('parcela['),
             renda_pct: v('porcentagem_renda'),
+            linhas_max: v('qtd_series_max'),
+            bloqueia_minimo: valorCampo($s, $tr.find('[name^="bloquear_cadastro_minimo"]').first()) === 'S',
         };
     });
+    // "Bloquear para qualquer cadastro de séries" (topo da aba Séries).
+    const bloqueioSeries = valorCampo($s, $s('[name="bloqueio_serie"]').first());
 
-    return { automatica, regra, series };
+    return { automatica, regra, series, bloqueioSeries };
 }
 
 /**
@@ -584,4 +629,4 @@ export async function rodar({ forcarSimulacao = false } = {}) {
     return { modo, ...resumo };
 }
 
-export default { rodar, avaliar, avaliarReservas, resumoRegra, lerConfig, salvarConfig, historico, numeroBR };
+export default { rodar, avaliar, avaliarReservas, resumoRegra, lerConfig, salvarConfig, historico, numeroBR, lerRegraDoEmpreendimento, atualizarRegrasDasFichas };

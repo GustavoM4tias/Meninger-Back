@@ -4,6 +4,7 @@ import authenticate from '../middlewares/authMiddleware.js';
 import requireCapability from '../middlewares/requireCapability.js';
 import * as ctrl from '../controllers/comercial/enterpriseConditionController.js';
 import * as ds from '../controllers/comercial/docusignController.js';
+import * as fontes from '../controllers/comercial/conditionFontesController.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -69,6 +70,8 @@ router.post('/:id(\\d+)/cancel-approval', ctrl.cancelApproval);   // pending_app
 router.post('/:id(\\d+)/unlock', ctrl.unlockCondition);           // approved/closed → draft (autorizador)
 router.post('/:id(\\d+)/link-to-cv', ctrl.linkSeriesToCv);        // avulsa → CV (promove a série inteira)
 router.post('/:id(\\d+)/modules/:moduleId(\\d+)/unit-snapshot', ctrl.refreshUnitSnapshot); // regrava só a foto de unidades, sem mexer no status
+router.get('/:id(\\d+)/modules/:moduleId(\\d+)/fontes', fontes.getFontes);            // o que vem do CV e do Office, sem digitação
+router.post('/:id(\\d+)/modules/:moduleId(\\d+)/fontes/regra', fontes.refreshRegra);  // relê a regra de reservas no painel do CV
 
 // ── Assinatura (DocuSign) da ficha autorizada ─────────────────────────────────
 router.get('/:id(\\d+)/signature', ds.getConditionSignature);

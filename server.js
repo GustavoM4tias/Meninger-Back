@@ -481,6 +481,11 @@ async function initBackground() {
   // sempre, e o espelho mostraria todo estoque segurado como bloqueado.
   await ensureUnitStockSchema().catch(err =>
       console.warn('⚠️  ensureUnitStockSchema falhou:', err.message));
+  // Fichas Comerciais (16/10): colunas novas do módulo (fontes e tipo de
+  // produto). O model já as declara, então toda leitura de módulo quebraria
+  // até o ALTER rodar; com o gate pulando a fase em prod, nunca rodaria.
+  await ensureComercialConditionsSchema().catch(err =>
+      console.warn('⚠️  ensureComercialConditionsSchema falhou:', err.message));
   // Busca de adimplência no CV (01/10): o botão e o cron consultam a tabela
   // na primeira chamada; com o gate pulando a fase ela nunca nasceria.
   await ensureAdimplenciaBuscaSchema().catch(err =>
