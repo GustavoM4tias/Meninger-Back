@@ -12,6 +12,7 @@ import { Op } from 'sequelize';
 import db from '../../models/sequelize/index.js';
 import { buildSiteContext } from './emeAtendeSiteSource.js';
 import EmeAtendeSettingsService from './EmeAtendeSettingsService.js';
+import { regraCvDoEmpreendimento, negociacaoEfetiva } from '../comercial/fichaEfetiva.js';
 
 const DEFAULT_SOURCES = { basic: true, delivery: true, negotiation: true, subsidy: true, benefits: true, campaigns: true };
 
@@ -44,6 +45,48 @@ function buildBasic(ent) {
         line('Unidades disponíveis', ent.unidades_disponiveis != null ? String(ent.unidades_disponiveis) : null),
         ent.descricao ? `- Sobre: ${String(ent.descricao).replace(/\s+/g, ' ').trim().slice(0, 600)}` : null,
     ]);
+}
+
+// A ficha nova guarda tudo no MÓDULO e a negociação vem da regra de reservas
+// do CV. Este contexto foi escrito para os campos antigos da ficha (que a tela
+// não preenche mais): monta esse formato a partir do primeiro módulo, com o CV
+// por cima. Campo antigo preenchido continua valendo quando o novo está vazio.
+async function fichaParaContexto(row, entId) {
+    const base = row.toJSON();
+    const mod = (base.modules || [])[0] || {};
+    const cv = await regraCvDoEmpreendimento(entId).catch(() => null);
+    const neg = negociacaoEfetiva(mod, cv);
+    const pick = (k) => (mod[k] !== null && mod[k] !== undefined && mod[k] !== '' ? mod[k] : base[k]);
+    const numero = (v) => (v === null || v === undefined || v === '' ? 0 : Number(v) || 0);
+    return {
+        ...base,
+        delivery_deadline_months: pick('delivery_deadline_months'),
+        delivery_deadline_note: pick('delivery_deadline_note'),
+        max_entry_value: null, // é percentual do VGV: vai na regra, não como valor em R$
+        act_installment_value: neg.act_installment_value ?? base.act_installment_value,
+        rp_installment_value: neg.rp_installment_value ?? base.rp_installment_value,
+        min_installment_value: neg.rp_installment_value ?? base.min_installment_value,
+        max_installments: neg.max_installments ?? base.max_installments,
+        installment_until_habite_se: pick('installment_until_habite_se'),
+        installment_post_habite_se: pick('installment_post_habite_se'),
+        rp_rule: [
+            neg.max_entry_value ? `Parcelado com a construtora até ${neg.max_entry_value}% do valor` : null,
+            neg.limite_renda_pct ? `parcela até ${neg.limite_renda_pct}% da renda` : null,
+        ].filter(Boolean).join('; ') || pick('rp_rule'),
+        price_premise_note: null,
+        has_state_subsidy: pick('has_state_subsidy'),
+        state_subsidy_program: pick('state_subsidy_program'),
+        state_subsidy_state: pick('state_subsidy_state'),
+        state_subsidy_rules: pick('state_subsidy_rules'),
+        state_subsidy_conditions: pick('state_subsidy_conditions'),
+        pays_cef_package: mod.cef_package_paid_by ? mod.cef_package_paid_by === 'menin' : base.pays_cef_package,
+        cef_package_value: mod.cef_package_avg_value ?? base.cef_package_value,
+        pays_cartorio: mod.cartorio_paid_by ? mod.cartorio_paid_by === 'menin' : base.pays_cartorio,
+        cartorio_value: mod.cartorio_paid_by ? (numero(mod.cartorio_prenotacao_value) + numero(mod.cartorio_registration_value)) || null : base.cartorio_value,
+        itbi_exempt: mod.itbi_exempt ?? base.itbi_exempt,
+        pays_itbi: mod.itbi_paid_by ? mod.itbi_paid_by === 'menin' : base.pays_itbi,
+        itbi_value: mod.itbi_avg_value ?? base.itbi_value,
+    };
 }
 
 function buildDelivery(ficha) {
@@ -149,11 +192,15 @@ async function buildContext(flow) {
 
         const wantsFicha = sources.delivery || sources.negotiation || sources.subsidy || sources.benefits || sources.campaigns;
         if (wantsFicha) {
-            const ficha = await db.EnterpriseCondition.findOne({
+            const fichaRow = await db.EnterpriseCondition.findOne({
                 where: { idempreendimento: entId, status: { [Op.in]: ['approved', 'closed'] } },
                 order: [['reference_month', 'DESC']],
-                include: [{ model: db.EnterpriseConditionCampaign, as: 'campaigns' }],
+                include: [
+                    { model: db.EnterpriseConditionCampaign, as: 'campaigns' },
+                    { model: db.EnterpriseConditionModule, as: 'modules', separate: true, order: [['sort_order', 'ASC']] },
+                ],
             });
+            const ficha = fichaRow ? await fichaParaContexto(fichaRow, entId) : null;
             if (ficha) {
                 meta.ficha_month = ficha.reference_month;
                 meta.ficha_status = ficha.status;

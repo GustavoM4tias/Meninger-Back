@@ -34,6 +34,7 @@ import { getScope } from '../permissions/accessScopeService.js';
 import { nomeAtual } from '../org/enterpriseNames.js';
 import { summarizeUnitsFromDb, classifyUnitStatus } from '../cv/enterpriseUnitsSummaryService.js';
 import { setEstoqueComercial } from '../cv/unitStockService.js';
+import { regraCvDoEmpreendimento } from './fichaEfetiva.js';
 
 const sequelize = db.sequelize;
 const Q = { type: db.Sequelize.QueryTypes.SELECT };
@@ -314,15 +315,17 @@ async function carregarFichas(idemp) {
     return { fichas, porMes, maisRecente: fichas[0], primeiroMes: mesDe(fichas[fichas.length - 1].reference_month) };
 }
 
-function regraDaFicha(ficha, idetapa) {
+// `cv`: regra de reservas do CV (fichaEfetiva). O CV manda; o campo da ficha
+// só vale quando o CV não tem o dado.
+function regraDaFicha(ficha, idetapa, cv = null) {
     if (!ficha) return null;
     const mods = ficha.modulos || [];
     const m = mods.find((x) => x.idetapa && Number(x.idetapa) === Number(idetapa))
         || (mods.length === 1 ? mods[0] : null);
-    return { ...regrasDoModulo(ficha, m), ficha: { id: ficha.id, mes: diaDe(ficha.reference_month), status: ficha.status } };
+    return { ...regrasDoModulo(ficha, m, cv), ficha: { id: ficha.id, mes: diaDe(ficha.reference_month), status: ficha.status } };
 }
 
-function regrasDoModulo(base, modulo) {
+function regrasDoModulo(base, modulo, cv = null) {
     const pick = (k) => {
         const v = modulo?.[k];
         return v !== null && v !== undefined && v !== '' ? v : base?.[k] ?? null;
@@ -331,12 +334,13 @@ function regrasDoModulo(base, modulo) {
     const textoRp = pick('rp_rule');
     return {
         modulo: modulo ? { id: modulo.id, nome: modulo.module_name, idetapa: modulo.idetapa } : null,
-        atoMinimo: n(pick('act_installment_value')),
-        parcelaMinima: n(pick('rp_installment_value')),
-        maxParcelas: n(pick('max_installments')),
-        maxEntradaPct: n(pick('max_entry_value')),
+        atoMinimo: cv?.atoMinimo ?? n(pick('act_installment_value')),
+        parcelaMinima: cv?.parcelaMinima ?? n(pick('rp_installment_value')),
+        maxParcelas: cv?.maxParcelas ?? n(pick('max_installments')),
+        maxEntradaPct: cv?.proSolutoPct ?? n(pick('max_entry_value')),
         regraRp: textoRp || null,
-        limiteRendaPct: limiteRendaDoTexto(textoRp),
+        limiteRendaPct: cv?.limiteRendaPct ?? limiteRendaDoTexto(textoRp),
+        origem: cv ? 'cv' : 'ficha',
     };
 }
 
@@ -587,11 +591,12 @@ export async function getRelatorio(user, idempRaw, idetapaRaw = null) {
 
     // Regra: a ficha mais recente, para reservas do tempo das fichas (ver carregarFichas).
     const fr = await carregarFichas(idemp);
+    const cvRegra = await regraCvDoEmpreendimento(idemp).catch(() => null);
     const regraDe = (dataReserva, idetapa) => {
         if (!fr) return null;
         const mes = diaDe(dataReserva).slice(0, 7);
         if (!mes || mes < fr.primeiroMes) return null;
-        return regraDaFicha(fr.maisRecente, idetapa);
+        return regraDaFicha(fr.maisRecente, idetapa, cvRegra);
     };
 
     // Recebido
@@ -740,7 +745,7 @@ export async function getRelatorio(user, idempRaw, idetapaRaw = null) {
             foraDaRegra: regra ? conferir(c, regra) : [],
             // Limite da renda pela ficha ATUAL do módulo, mesmo em reserva antiga
             // (só pinta a coluna; acusar regra continua só para quem é conferido).
-            limiteRendaPct: (fr ? regraDaFicha(fr.maisRecente, r.idetapa)?.limiteRendaPct : null) ?? null,
+            limiteRendaPct: (fr ? regraDaFicha(fr.maisRecente, r.idetapa, cvRegra)?.limiteRendaPct : null) ?? null,
             nota: r.nota_texto ? { texto: r.nota_texto, tom: r.nota_tom, por: r.nota_por, em: r.nota_em } : null,
         };
     });

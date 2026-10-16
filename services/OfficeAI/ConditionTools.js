@@ -26,6 +26,7 @@ import db from '../../models/sequelize/index.js';
 import { computeModuleCostSummary, aggregateCostSummaries } from '../comercial/conditionCostSummary.js';
 import { visibleCvIds } from '../permissions/accessScopeService.js';
 import { loadManagerMap, managerOf, managersOfCondition } from '../comercial/conditionManagers.js';
+import { regraCvDoEmpreendimento, negociacaoEfetiva } from '../comercial/fichaEfetiva.js';
 import { datasetBlock, abrirTela } from './blocks.js';
 // Empreendimento é o id do CV; o termo vira id no resolvedor (nome atual ou
 // antigo). O LIKE por nome/cidade fica como complemento.
@@ -366,7 +367,8 @@ async function loadCorrespondentMap(modules = []) {
     }]));
 }
 
-function buildModulePayload(mod, ptMap, mgrMap, corrMap) {
+function buildModulePayload(mod, ptMap, mgrMap, corrMap, cv = null) {
+    const neg = negociacaoEfetiva(mod, cv);
     const custo = computeModuleCostSummary(mod.toJSON ? mod.toJSON() : mod);
     const faixas = Array.isArray(mod.appraisal_faixas)
         ? mod.appraisal_faixas.filter(f => f?.enabled).map(f => ({
@@ -399,13 +401,17 @@ function buildModulePayload(mod, ptMap, mgrMap, corrMap) {
             })),
             premissa: mod.price_premise_note,
         },
+        // O CV manda: ato, parcela, parcelas, % da renda e limite do parcelado
+        // vêm da regra de reservas do CV; o campo antigo só vale sem ela.
         negociacao: {
-            entrada_maxima: numOrNull(mod.max_entry_value),
-            parcela_rp: numOrNull(mod.rp_installment_value),
-            parcela_ato: numOrNull(mod.act_installment_value),
-            parcela_minima: numOrNull(mod.min_installment_value),
-            max_parcelas: mod.max_installments,
-            regra_rp: mod.rp_rule,
+            fonte: neg.fonte_negociacao,
+            parcelado_max_pct_vgv: neg.max_entry_value,
+            parcelado_max_valor: neg.limite_parcelado_valor,
+            parcela_rp_minima: neg.rp_installment_value,
+            ato_minimo: neg.act_installment_value,
+            max_parcelas: neg.max_installments,
+            parcela_max_pct_renda: neg.limite_renda_pct,
+            regra_rp: cv ? undefined : mod.rp_rule,
             correcao_ate_habite_se: mod.installment_until_habite_se,
             correcao_pos_habite_se: mod.installment_post_habite_se,
         },
@@ -644,6 +650,7 @@ async function executeGetSheet(args, user) {
     const mgrMap = await loadManagerMap(fichas.flatMap(c => c.modules || []));
     const corrMap = await loadCorrespondentMap(fichas.flatMap(c => c.modules || []));
 
+    const cvRegra = cond?.idempreendimento ? await regraCvDoEmpreendimento(cond.idempreendimento).catch(() => null) : null;
     const buildConditionPayload = (c) => {
         const custoTotal = aggregateCostSummaries((c.modules || []).map(m => m.toJSON()));
         return clean({
@@ -653,7 +660,7 @@ async function executeGetSheet(args, user) {
             fonte_comissao: c.commission_source,
             premissa_preco: c.price_premise_note,
             observacoes: c.notes ? String(c.notes).slice(0, 500) : undefined,
-            modulos: (c.modules || []).map(m => buildModulePayload(m, ptMap, mgrMap, corrMap)),
+            modulos: (c.modules || []).map(m => buildModulePayload(m, ptMap, mgrMap, corrMap, cvRegra)),
             custos_totais: (custoTotal.totalMenin || custoTotal.totalClient) ? {
                 menin: Object.fromEntries(custoTotal.menin.map(i => [i.label, round2(i.value)])),
                 cliente: Object.fromEntries(custoTotal.client.map(i => [i.label, round2(i.value)])),

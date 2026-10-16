@@ -34,6 +34,7 @@
 // justamente para o dia em que virarem campo de tela: muda aqui, não no front.
 
 import db from '../../models/sequelize/index.js';
+import { tabelaDaEtapa } from './fichaFontesService.js';
 
 const { Op } = db.Sequelize || {};
 
@@ -182,10 +183,20 @@ export async function tabelaVigente(idempreendimento) {
         ].map(Number).filter(Number.isFinite);
     }
 
+    // O CV manda: a tabela vigente e aprovada do empreendimento (a mesma que a
+    // ficha mostra), mesmo que tenha sido aprovada depois da ficha nascer. As
+    // tabelas marcadas na ficha só desempatam.
+    let tabelas = [];
+    const doCv = await tabelaDaEtapa(idempreendimento, null, ids).catch(() => null);
+    if (doCv?.vigente && doCv.aprovado) {
+        const row = await db.CvEnterprisePriceTable.findByPk(doCv.idtabela);
+        if (row) tabelas = [row];
+    }
+
     const where = { idempreendimento, aprovado: true, ativo_painel: true };
     if (ids.length) where.idtabela = { [Op.in]: [...new Set(ids)] };
 
-    let tabelas = await db.CvEnterprisePriceTable.findAll({
+    if (!tabelas.length) tabelas = await db.CvEnterprisePriceTable.findAll({
         where,
         order: [['data_vigencia_de', 'DESC']],
         limit: 5,
